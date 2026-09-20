@@ -13,6 +13,13 @@ export interface AnswerRunObserver {
 export interface AnswerRunOptions {
   runId?: string
   sessionId?: string
+  /**
+   * Eval refactor Ticket 01: optional evaluation-case correlation id. When
+   * set, it is stamped on every emitted AnswerRunEvent (base.caseId) so
+   * injected observers can correlate observation data to run, case, and
+   * round. Normal chat never sets it.
+   */
+  caseId?: string
   signal?: AbortSignal
   accessContext?: AccessContext
 }

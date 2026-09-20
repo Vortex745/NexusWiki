@@ -119,6 +119,7 @@ import {
   citationIdsByChunk,
   referencesForReply,
 } from "../answer/evidence"
+import { toRankedCandidateObservations } from "./runner_observation"
 import type { AccessContext } from "../access/context"
 import type {
   AgentMessage,
@@ -668,7 +669,7 @@ export function createComplexKnowledgeMastraRunner(
       // error mid-loop. Terminate with provider_error (mirrors legacy L865).
       if (complexLoopResult.stopReason === "provider-failure") {
         return {
-          reply: "Complex loop terminated: provider failure",
+          reply: "检索服务暂时出现故障，请您稍后重试。",
           status: "provider_error",
           references: [],
           degradation: {
@@ -795,7 +796,7 @@ export function createComplexKnowledgeMastraRunner(
       // Terminal provider_error (mirrors the "missing dependency" case).
       // ---------------------------------------------------------------------
       return {
-        reply: "Complex route requires either planner or complexLoopController",
+        reply: "复杂问答组件配置缺失（需要 planner 或 complexLoopController），无法完成该请求。",
         status: "provider_error",
         references: [],
         degradation: {
@@ -903,8 +904,27 @@ export function createComplexKnowledgeMastraRunner(
     // -------------------------------------------------------------------------
     // GATE 2: context assembly (T12 #4: bounded Context representation).
     // -------------------------------------------------------------------------
+    // Eval refactor Ticket 01: observation of the FINAL actual generation
+    // context (mirrors T11). Committed only when the draft generated from
+    // that context is accepted (citation check passed). For complex routes
+    // the candidates are the runner's ordered aggregation across tool
+    // retrievals (diversifySelect over result groups), not a single tool
+    // call's output.
+    let finalContextRound = 0
+    const commitFinalContext = (
+      candidates: RetrievalResult[],
+      citationIds: Map<string, string>
+    ): void => {
+      finalContextRound += 1
+      retrievalTrace = {
+        ...retrievalTrace,
+        finalContextCandidates: toRankedCandidateObservations(candidates, citationIds),
+        finalContextRound,
+      }
+    }
+    const initialCitationIds = citationIdsByChunk(evidence)
     let context = await abortable(
-      assembler.assemble(selectedResults, citationIdsByChunk(evidence)),
+      assembler.assemble(selectedResults, initialCitationIds),
       signal
     )
     let contextTrace: ContextTraceData = {
@@ -979,6 +999,9 @@ export function createComplexKnowledgeMastraRunner(
         validationTrace: {},
       }
     }
+    // Ticket 01: the initial draft was accepted — its context is the current
+    // final generation context.
+    commitFinalContext(selectedResults, initialCitationIds)
     let fullAnswer = initialAnswer
     let draftTokens: string[] = [...initialTokens]
     let validationTrace: ValidationTraceData = {}
@@ -1281,8 +1304,10 @@ export function createComplexKnowledgeMastraRunner(
       // Rebuild Evidence + Context from accumulated results, then
       // regenerate draft. Mirrors T11.
       evidence = buildEvidence(accumulatedResults)
+      const correctionCandidates = uniqueResults(accumulatedResults)
+      const correctionCitationIds = citationIdsByChunk(evidence)
       context = await abortable(
-        assembler.assemble(uniqueResults(accumulatedResults), citationIdsByChunk(evidence)),
+        assembler.assemble(correctionCandidates, correctionCitationIds),
         signal
       )
       // Optional compression for correction round.
@@ -1357,6 +1382,9 @@ export function createComplexKnowledgeMastraRunner(
       }
       fullAnswer = regenAnswer
       draftTokens = [...regenTokens]
+      // Ticket 01: the regenerated draft was accepted — commit its context as
+      // the final generation context (overwrites the previous round).
+      commitFinalContext(correctionCandidates, correctionCitationIds)
     }
 
     // -------------------------------------------------------------------------

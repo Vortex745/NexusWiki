@@ -119,6 +119,13 @@ export interface MastraRunnerInput {
   /** Route preparation produced once by the dispatch runner. Standalone
    * route runners may omit it and perform their own ownership check. */
   preparedRoute?: PreparedMastraRoute
+  /** Live streaming hook. Runners that stream tokens call it as each token
+   * arrives; the adapter turns these into answer_delta events with
+   * arrival-order sequence numbers while the runner is still executing.
+   * The output `tokens` array stays authoritative for the final replay —
+   * the adapter subtracts tokens already published live. Optional: runners
+   * that omit the hook keep the buffered end-of-run replay. */
+  onAnswerDelta?: (token: string) => void
 }
 
 export interface PreparedMastraRoute {
@@ -212,6 +219,8 @@ export function validateChatRequest(input: ChatRequestShape): {
 function makeBaseEvent(args: {
   runId: string
   sessionId: string
+  /** Eval refactor Ticket 01: stamped on the event when the caller set it. */
+  caseId?: string
   sequence: number
   stage: AnswerRunStage
   status: AnswerRunEvent["status"]
@@ -223,6 +232,7 @@ function makeBaseEvent(args: {
     schemaVersion: 1,
     sessionId: args.sessionId,
     runId: args.runId,
+    ...(args.caseId !== undefined ? { caseId: args.caseId } : {}),
     eventId: `${args.runId}:${args.sequence}`,
     sequence: args.sequence,
     createdAt: now,
@@ -347,6 +357,10 @@ export function createMastraChatEventAdapter(
     const accessContext: AccessContext =
       runOptions?.accessContext ?? singleTenantAccessContext()
 
+    // Eval refactor Ticket 01: optional case correlation stamped on every
+    // event (normal chat leaves it undefined — payload unchanged).
+    const caseId = runOptions?.caseId
+
     // T03 §7 checkpoint 1: before LLM call. (Moved inside try block so an
     // already-aborted signal produces a cancelled terminal event instead of
     // throwing out of the generator — T05 #5.)
@@ -395,6 +409,7 @@ export function createMastraChatEventAdapter(
       const base = makeBaseEvent({
         runId,
         sessionId,
+        caseId,
         sequence: nextSequence(),
         stage,
         status: "completed",
@@ -426,36 +441,100 @@ export function createMastraChatEventAdapter(
       // When budgetMs is omitted: pass `signal` directly (pre-P7.2
       // behavior — backward compat).
       let runnerOutput: MastraRunnerOutput
-      if (budgetMs !== undefined || resourceBudget !== undefined) {
-        const ctx: RunContext = createRunContext({
-          budgetMs: budgetMs ?? Number.POSITIVE_INFINITY,
-          externalSignal: signal,
-          resourceBudget,
-        })
-        runContext = ctx
-        runnerOutput = await runWithRunContext(
-          ctx,
-          () => withBudget(
-            (ctxSignal) =>
-              runner({
-                message: validatedMessage,
-                runId,
-                sessionId,
-                signal: ctxSignal,
-                accessContext,
-              }),
-            ctx
-          )
-        )
-      } else {
-        runnerOutput = await runner({
+      // Live answer-delta bridge: streaming runners publish tokens through
+      // input.onAnswerDelta as they arrive; the adapter drains that queue and
+      // yields answer_delta events while the runner is still executing, so
+      // the transport sees true token-level streaming. Tokens already
+      // published live are subtracted from the runnerOutput.tokens replay —
+      // runners that ignore the hook keep the buffered end-of-run replay.
+      const liveDeltas: string[] = []
+      let deltasPublished = 0
+      let runnerSettled = false
+      let wakeDrainer: (() => void) | null = null
+      const onAnswerDelta = (token: string): void => {
+        liveDeltas.push(token)
+        wakeDrainer?.()
+        wakeDrainer = null
+      }
+      const markRunnerSettled = (): void => {
+        runnerSettled = true
+        wakeDrainer?.()
+        wakeDrainer = null
+      }
+      const invokeRunner = (ctxSignal: AbortSignal): Promise<MastraRunnerOutput> =>
+        runner({
           message: validatedMessage,
           runId,
           sessionId,
-          signal,
+          signal: ctxSignal,
           accessContext,
+          onAnswerDelta,
+        })
+
+      // Early route progress: lights up downstream thinking UIs during the
+      // route/retrieval latency window instead of after the whole run.
+      if (!terminalEmitted) {
+        const base = makeBaseEvent({
+          runId,
+          sessionId,
+          caseId,
+          sequence: nextSequence(),
+          stage: "route",
+          status: "running",
+          runStartedAt,
+        })
+        const event = makeProgressEvent(base, {
+          type: "progress",
+          stage: "route",
+          message: "Routing query",
+          data: {} as RouteTraceData,
+        })
+        notifyObservers(event)
+        yield event
+      }
+
+      const runnerPromise = (async (): Promise<MastraRunnerOutput> => {
+        if (budgetMs !== undefined || resourceBudget !== undefined) {
+          const ctx: RunContext = createRunContext({
+            budgetMs: budgetMs ?? Number.POSITIVE_INFINITY,
+            externalSignal: signal,
+            resourceBudget,
+          })
+          runContext = ctx
+          return runWithRunContext(
+            ctx,
+            () => withBudget((ctxSignal) => invokeRunner(ctxSignal), ctx)
+          )
+        }
+        return invokeRunner(signal)
+      })()
+      runnerPromise.then(markRunnerSettled, markRunnerSettled)
+
+      // Drain live deltas until the runner settles and the queue empties.
+      while (true) {
+        if (liveDeltas.length > 0) {
+          deltasPublished += 1
+          const base = makeBaseEvent({
+            runId,
+            sessionId,
+            caseId,
+            sequence: nextSequence(),
+            stage: "answer",
+            status: "running",
+            runStartedAt,
+          })
+          const event = makeAnswerDeltaEvent(base, liveDeltas.shift()!)
+          notifyObservers(event)
+          yield event
+          continue
+        }
+        if (runnerSettled) break
+        await new Promise<void>((resolve) => {
+          wakeDrainer = resolve
         })
       }
+
+      runnerOutput = await runnerPromise
 
       // The runner owns route/retrieval/context execution and persistence.
       // Once it returns, its output is authoritative: a later transport abort
@@ -478,11 +557,14 @@ export function createMastraChatEventAdapter(
         )
       }
 
-      // Only validated tokens are publishable knowledge output.
-      for (const token of runnerOutput.tokens) {
+      // Only validated tokens are publishable knowledge output. Tokens that
+      // were already streamed live are skipped — replay covers runners that
+      // ignored the onAnswerDelta hook (deltasPublished === 0).
+      for (const token of runnerOutput.tokens.slice(deltasPublished)) {
         const base = makeBaseEvent({
           runId,
           sessionId,
+          caseId,
           sequence: nextSequence(),
           stage: "answer",
           status: "running",
@@ -502,6 +584,7 @@ export function createMastraChatEventAdapter(
         const base = makeBaseEvent({
           runId,
           sessionId,
+          caseId,
           sequence: nextSequence(),
           stage: "done",
           status: terminalStatusToRunStatus(runnerOutput.status),
@@ -546,6 +629,7 @@ export function createMastraChatEventAdapter(
         const base = makeBaseEvent({
           runId,
           sessionId,
+          caseId,
           sequence: nextSequence(),
           stage: "done",
           status: isAbort ? "cancelled" : "failed",

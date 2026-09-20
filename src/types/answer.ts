@@ -107,6 +107,12 @@ export interface AnswerRunEventBase {
   schemaVersion: 1
   sessionId: string
   runId: string
+  /**
+   * Eval refactor Ticket 01: optional correlation to an evaluation case.
+   * Set only when the caller injected `AnswerRunOptions.caseId` (evaluation
+   * runs). Normal chat never sets it, so the transport payload is unchanged.
+   */
+  caseId?: string
   eventId: string
   sequence: number
   createdAt: string
@@ -285,6 +291,45 @@ export interface RetrievalTraceData {
    * from the legacy non-fallback path. Always paired with `correction: true`.
    */
   fallback?: boolean
+  /**
+   * Eval refactor Ticket 01: the ordered candidates that fed the FINAL
+   * generation context — the assembler input list of the generation round
+   * that produced the final reply (initial round, or the last correction
+   * round that regenerated the answer). For complex routes with multiple
+   * tool retrievals this is the runner's existing ordered aggregation, not
+   * an arbitrary single tool call.
+   *
+   * Present only when a draft was accepted (the citation check passed) —
+   * terminals that never accepted any draft omit the field.
+   * Observers must use THIS list for retrieval ranking — the done event's
+   * `references` are citation-derived and are NOT a retrieval ranking.
+   * Note: across correction rounds the same chunk may be hit again on a
+   * different channel; this observation keeps the FIRST hit's channels and
+   * score (single-round channel merging matches the round's assembler view).
+   */
+  finalContextCandidates?: RankedCandidateObservation[]
+  /**
+   * Eval refactor Ticket 01: 1-based generation round whose context produced
+   * the final reply (1 = initial draft; +1 per correction regeneration).
+   * Pairs with `finalContextCandidates`.
+   */
+  finalContextRound?: number
+}
+
+/**
+ * Eval refactor Ticket 01: one ranked retrieval candidate as observed on the
+ * final generation context. Identity is the chunk/document pair the runner
+ * deduplicates on; `rank` is the 1-based position in the ordered candidate
+ * list fed to the context assembler.
+ */
+export interface RankedCandidateObservation {
+  rank: number
+  documentId: string
+  chunkId: string
+  score: number
+  channels: RetrievalResult["source"][]
+  /** Eval refactor Ticket 01: Evidence id assigned by buildEvidence, when built. */
+  evidenceId?: string
 }
 
 export interface ContextTraceData {

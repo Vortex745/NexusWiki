@@ -81,6 +81,7 @@ import {
   citationIdsByChunk,
   referencesForReply,
 } from "../answer/evidence"
+import { toRankedCandidateObservations } from "./runner_observation"
 import type { AccessContext } from "../access/context"
 import type {
   AgentMessage,
@@ -649,8 +650,27 @@ export function createSimpleKnowledgeMastraRunner(
     // -------------------------------------------------------------------------
     // GATE 2: context assembly (T11 #2: bounded Context representation).
     // -------------------------------------------------------------------------
+    // Eval refactor Ticket 01: observation of the FINAL actual generation
+    // context. Committed only when the draft generated from that context is
+    // accepted (citation check passed), so the observed candidates always
+    // correspond to the round that produced the published reply — never to a
+    // context whose draft was rejected. Round numbers are 1-based generation
+    // rounds (1 = initial draft, +1 per correction regeneration).
+    let finalContextRound = 0
+    const commitFinalContext = (
+      candidates: RetrievalResult[],
+      citationIds: Map<string, string>
+    ): void => {
+      finalContextRound += 1
+      retrievalTrace = {
+        ...retrievalTrace,
+        finalContextCandidates: toRankedCandidateObservations(candidates, citationIds),
+        finalContextRound,
+      }
+    }
+    const initialCitationIds = citationIdsByChunk(evidence)
     let context = await abortable(
-      assembler.assemble(selectedResults, citationIdsByChunk(evidence)),
+      assembler.assemble(selectedResults, initialCitationIds),
       signal
     )
     let contextTrace: ContextTraceData = {
@@ -727,6 +747,9 @@ export function createSimpleKnowledgeMastraRunner(
         validationTrace: {},
       }
     }
+    // Ticket 01: the initial draft was accepted — its context is the current
+    // final generation context.
+    commitFinalContext(selectedResults, initialCitationIds)
     let fullAnswer = initialAnswer
     let draftTokens: string[] = [...initialTokens]
     let validationTrace: ValidationTraceData = {}
@@ -884,8 +907,10 @@ export function createSimpleKnowledgeMastraRunner(
 
       // Rebuild Evidence + Context from accumulated results, then regenerate draft.
       evidence = buildEvidence(accumulatedResults)
+      const correctionCandidates = uniqueResults(accumulatedResults)
+      const correctionCitationIds = citationIdsByChunk(evidence)
       context = await abortable(
-        assembler.assemble(uniqueResults(accumulatedResults), citationIdsByChunk(evidence)),
+        assembler.assemble(correctionCandidates, correctionCitationIds),
         signal
       )
       // Optional compression for correction round.
@@ -960,6 +985,9 @@ export function createSimpleKnowledgeMastraRunner(
       }
       fullAnswer = regenAnswer
       draftTokens = [...regenTokens]
+      // Ticket 01: the regenerated draft was accepted — commit its context as
+      // the final generation context (overwrites the previous round).
+      commitFinalContext(correctionCandidates, correctionCitationIds)
     }
 
     // -------------------------------------------------------------------------
