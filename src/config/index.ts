@@ -38,6 +38,21 @@ export interface AppConfig {
   imageAssetPath?: string
   accessMode: "single_tenant" | "enforced"
   /**
+   * Eval refactor Ticket 03: dedicated rerank endpoint (Edgefn-compatible
+   * `POST {base}/rerank`). Independent from the Chat/Embedding settings on
+   * purpose — the reranker is its own provider and model. An empty key means
+   * "no dedicated reranker configured": retrieval then publishes the fused
+   * order and reports `rerank reason: not_configured` instead of silently
+   * falling back to Chat per-fragment scoring (which no longer exists).
+   */
+  rerankApiKey: string
+  rerankBaseUrl: string
+  rerankModel: string
+  /** Per-rerank hard ceiling (ms) independent of the run deadline. */
+  rerankTimeoutMs: number
+  /** Max characters of one candidate sent to the reranker. */
+  rerankMaxDocumentChars: number
+  /**
    * Ticket 11 P1 (spec §11 L1574): ACTIVATION_MODE controls whether completed
    * ingestion candidates become active immediately (`auto`, default) or
    * require explicit human review (`review`). `auto` is the default
@@ -75,6 +90,8 @@ export interface AppConfig {
   langfuseBaseUrl?: string
   /** Optional whole-Answer-run model call limit. */
   answerRunMaxModelCalls?: number
+  /** Optional whole-run deadline budget in milliseconds; defaults to DEFAULT_RUN_BUDGET_MS. */
+  answerRunBudgetMs?: number
   /** Optional whole-Answer-run aggregate token limit. */
   answerRunMaxTokens?: number
   /** Optional whole-Answer-run aggregate cost limit in integer micro-USD. */
@@ -94,27 +111,32 @@ function required(key: string): string {
 
 let _config: AppConfig | null = null
 
-function positiveInteger(key: string, fallback: number): number {
-  const value = process.env[key] ? Number(process.env[key]) : fallback
-  if (!Number.isInteger(value) || value <= 0) {
-    throw new Error(`${key} must be a positive integer`)
-  }
-  return value
-}
-
-function nonNegativeInteger(key: string, fallback: number): number {
-  const value = process.env[key] ? Number(process.env[key]) : fallback
-  if (!Number.isInteger(value) || value < 0) {
-    throw new Error(`${key} must be a non-negative integer`)
-  }
-  return value
-}
-
-function optionalNonNegativeInteger(key: string): number | undefined {
-  if (!process.env[key]) return undefined
+/**
+ * Shared integer env parser. Replaces the three former near-identical
+ * validators (positiveInteger / nonNegativeInteger /
+ * optionalNonNegativeInteger) with one parameterized helper:
+ *   - kind "positive"      → value must be an integer > 0
+ *   - kind "non-negative"  → value must be an integer >= 0
+ *   - fallback omitted     → unset env yields undefined (optional field)
+ */
+function integerEnv(
+  key: string,
+  kind: "positive" | "non-negative",
+  fallback: number
+): number
+function integerEnv(
+  key: string,
+  kind: "positive" | "non-negative"
+): number | undefined
+function integerEnv(
+  key: string,
+  kind: "positive" | "non-negative",
+  fallback?: number
+): number | undefined {
+  if (!process.env[key]) return fallback
   const value = Number(process.env[key])
-  if (!Number.isInteger(value) || value < 0) {
-    throw new Error(`${key} must be a non-negative integer`)
+  if (!Number.isInteger(value) || (kind === "positive" ? value <= 0 : value < 0)) {
+    throw new Error(`${key} must be a ${kind} integer`)
   }
   return value
 }
@@ -172,8 +194,8 @@ export function loadConfig(): AppConfig {
     embeddingBaseUrl: process.env.EMBEDDING_BASE_URL || openaiBaseUrl,
     embeddingModel: process.env.EMBEDDING_MODEL || "text-embedding-3-small",
     embeddingDimensions,
-    openaiRequestTimeoutMs: positiveInteger("OPENAI_REQUEST_TIMEOUT_MS", 200_000),
-    openaiMaxRetries: nonNegativeInteger("OPENAI_MAX_RETRIES", 1),
+    openaiRequestTimeoutMs: integerEnv("OPENAI_REQUEST_TIMEOUT_MS", "positive", 200_000),
+    openaiMaxRetries: integerEnv("OPENAI_MAX_RETRIES", "non-negative", 1),
     neo4jUri: process.env.NEO4J_URI || "bolt://localhost:7687",
     neo4jUser: process.env.NEO4J_USER || "neo4j",
     neo4jPassword: process.env.NEO4J_PASSWORD || "",
@@ -183,27 +205,36 @@ export function loadConfig(): AppConfig {
     markitdownCommand: process.env.MARKITDOWN_COMMAND || "markitdown",
     markerCommand: process.env.MARKER_COMMAND || "marker_single",
     mineruCommand: process.env.MINERU_COMMAND || "mineru",
-    parserTimeoutMs: positiveInteger("PARSER_TIMEOUT_MS", 120_000),
-    parserInputLimitBytes: positiveInteger("PARSER_INPUT_LIMIT_BYTES", 20 * 1024 * 1024),
-    parserOutputLimitBytes: positiveInteger("PARSER_OUTPUT_LIMIT_BYTES", 20 * 1024 * 1024),
+    parserTimeoutMs: integerEnv("PARSER_TIMEOUT_MS", "positive", 120_000),
+    parserInputLimitBytes: integerEnv("PARSER_INPUT_LIMIT_BYTES", "positive", 20 * 1024 * 1024),
+    parserOutputLimitBytes: integerEnv("PARSER_OUTPUT_LIMIT_BYTES", "positive", 20 * 1024 * 1024),
     imageAssetPath: process.env.IMAGE_ASSET_PATH || "./data/image-assets",
     accessMode: process.env.ACCESS_MODE === "enforced" ? "enforced" : "single_tenant",
+    // Ticket 03: dedicated rerank provider (defaults match the verified
+    // Edgefn endpoint + bge-reranker-v2-m3 protocol; the key has no default
+    // — an absent key disables dedicated rerank explicitly).
+    rerankApiKey: process.env.RERANK_API_KEY || "",
+    rerankBaseUrl: process.env.RERANK_BASE_URL || "https://api.edgefn.net/v1",
+    rerankModel: process.env.RERANK_MODEL || "bge-reranker-v2-m3",
+    rerankTimeoutMs: integerEnv("RERANK_TIMEOUT_MS", "positive", 30_000),
+    rerankMaxDocumentChars: integerEnv("RERANK_MAX_DOCUMENT_CHARS", "positive", 4_000),
     // Ticket 11 P1 (spec §11 L1574): ACTIVATION_MODE=auto is default; only
     // the literal value "review" activates review mode. Any other value
     // (including unset) falls back to "auto" — same defensive pattern as
     // accessMode above.
     activationMode: process.env.ACTIVATION_MODE === "review" ? "review" : "auto",
-    conversationTtlDays: positiveInteger("CONVERSATION_TTL_DAYS", 30),
-    conversationGcIntervalMs: positiveInteger("CONVERSATION_GC_INTERVAL_MS", 86_400_000),
+    conversationTtlDays: integerEnv("CONVERSATION_TTL_DAYS", "positive", 30),
+    conversationGcIntervalMs: integerEnv("CONVERSATION_GC_INTERVAL_MS", "positive", 86_400_000),
     // T11: Langfuse env vars. Both LANGFUSE_PUBLIC_KEY and LANGFUSE_SECRET_KEY
     // must be set to enable real export; either missing → Noop. The factory
     // (`createLangfuseExporter`) enforces the partial-config-throws rule.
     langfusePublicKey: process.env.LANGFUSE_PUBLIC_KEY || undefined,
     langfuseSecretKey: process.env.LANGFUSE_SECRET_KEY || undefined,
     langfuseBaseUrl: process.env.LANGFUSE_BASE_URL || undefined,
-    answerRunMaxModelCalls: optionalNonNegativeInteger("ANSWER_RUN_MAX_MODEL_CALLS"),
-    answerRunMaxTokens: optionalNonNegativeInteger("ANSWER_RUN_MAX_TOKENS"),
-    answerRunMaxCostMicros: optionalNonNegativeInteger("ANSWER_RUN_MAX_COST_MICROS"),
+    answerRunMaxModelCalls: integerEnv("ANSWER_RUN_MAX_MODEL_CALLS", "non-negative"),
+    answerRunBudgetMs: integerEnv("ANSWER_RUN_BUDGET_MS", "non-negative"),
+    answerRunMaxTokens: integerEnv("ANSWER_RUN_MAX_TOKENS", "non-negative"),
+    answerRunMaxCostMicros: integerEnv("ANSWER_RUN_MAX_COST_MICROS", "non-negative"),
     answerRunModelPricing: optionalPricingTable(),
   }
   return _config

@@ -1,27 +1,77 @@
 import type { Client } from "@elastic/elasticsearch"
 import type OpenAI from "openai"
 import type { Driver } from "neo4j-driver"
-import { getDriver } from "../../graph"
+import { int as neo4jInt } from "neo4j-driver"
+import { createDriver } from "../../graph"
 import type { PageIndexRepository } from "../../ingestion/tracking/page_index_repo"
 import type { ActiveVersionRepository } from "../../ingestion/tracking/active_version_repo"
 import type { AccessContext } from "../../access/context"
 import type { Query, RetrievalResult, Chunk } from "../../types"
 import type {
+  Reranker,
   RetrievalChannel,
+  RetrievalOrdering,
   SearchOptions,
   SearchOutcome,
   Searcher,
 } from "./interface"
-import { ALL_RETRIEVAL_CHANNELS, validateChannelSelection } from "./interface"
+import {
+  ALL_RETRIEVAL_CHANNELS,
+  RerankerNotConfiguredError,
+  validateChannelSelection,
+} from "./interface"
 import { rrf } from "./rrf"
-import { rerank } from "./reranker"
 
 const INDEX_NAME = "kefu-rag-chunks"
 const CHANNEL_TOP_K = 5
 const RESULT_TOP_K = 10
+/**
+ * Eval refactor Ticket 03 — explicit small-candidate policy: a single
+ * candidate has no ordering to decide, so the fused order is published with
+ * an honest `below_threshold` label. Two or more candidates are always sent
+ * to the configured dedicated reranker (there is no Chat-scoring path).
+ */
+const RERANK_MIN_CANDIDATES = 2
 const GRAPH_CANDIDATE_MULTIPLIER = 4
 const GRAPH_HOPS = 1
 const PAGE_INDEX_NODE_LIMIT = 5
+
+function abortError(message: string): Error {
+  const err = new Error(message)
+  err.name = "AbortError"
+  return err
+}
+
+/**
+ * Race a promise against an optional AbortSignal so a hung call (e.g. a
+ * Neo4j `session.run` that has no native signal support) cannot hold the
+ * retrieval stage open past the run deadline. The underlying promise is
+ * NOT cancelled — callers must still release resources (session.close in
+ * a finally block) — but the awaiting stage rejects promptly, converging
+ * cancellation to the single AbortError terminal.
+ */
+function raceAbort<T>(
+  promise: Promise<T>,
+  signal: AbortSignal | undefined,
+  message: string
+): Promise<T> {
+  if (!signal) return promise
+  if (signal.aborted) return Promise.reject(abortError(message))
+  return new Promise<T>((resolve, reject) => {
+    const onAbort = () => reject(abortError(message))
+    signal.addEventListener("abort", onAbort, { once: true })
+    promise.then(
+      (value) => {
+        signal.removeEventListener("abort", onAbort)
+        resolve(value)
+      },
+      (error) => {
+        signal.removeEventListener("abort", onAbort)
+        reject(error)
+      },
+    )
+  })
+}
 
 function childFilter() {
   return {
@@ -140,17 +190,36 @@ export interface SearchOperations {
 
 export interface RuntimeSearchDependencies {
   es: Client
-  chatClient: OpenAI
+  /**
+   * @deprecated Eval refactor Ticket 03: the Chat-per-fragment rerank was the
+   * only consumer of this client and has been removed. Accepted (and ignored)
+   * so existing construction sites keep compiling; do not add new readers.
+   */
+  chatClient?: OpenAI
   embeddingClient: OpenAI
-  chatModel: string
+  /**
+   * @deprecated See {@link RuntimeSearchDependencies.chatClient}.
+   */
+  chatModel?: string
   embeddingModel: string
   graphDriver?: Driver
   pageIndexRepo?: PageIndexRepository
   activeVersionRepo?: ActiveVersionRepository
+  /** Eval refactor Ticket 02: chunk index searched. Omitted → the business
+   * index (legacy default). */
+  indexName?: string
+  /** Eval refactor Ticket 03: dedicated reranker. Omitted → retrieval
+   * publishes the fused order and reports `rerank reason: not_configured`
+   * (degraded status) instead of falling back to any other scorer. */
+  reranker?: Reranker
 }
 
 export class RuntimeSearchOperations implements SearchOperations {
   constructor(private dependencies: RuntimeSearchDependencies) {}
+
+  private get indexName(): string {
+    return this.dependencies.indexName ?? INDEX_NAME
+  }
 
   private activeTermsFilter(): Array<Record<string, unknown>> {
     const repo = this.dependencies.activeVersionRepo
@@ -174,7 +243,7 @@ export class RuntimeSearchOperations implements SearchOperations {
       ...accessContextFilter(accessContext),
     ]
     const res = await this.dependencies.es.search({
-      index: INDEX_NAME,
+      index: this.indexName,
       knn: {
         field: "embedding",
         query_vector: emb.data[0].embedding,
@@ -196,7 +265,7 @@ export class RuntimeSearchOperations implements SearchOperations {
 
   async bm25Search(query: Query, topK: number, accessContext?: AccessContext, signal?: AbortSignal): Promise<RetrievalResult[]> {
     const res = await this.dependencies.es.search({
-      index: INDEX_NAME,
+      index: this.indexName,
       query: {
         bool: {
           must: [{ match: { content: query.text } }],
@@ -219,7 +288,9 @@ export class RuntimeSearchOperations implements SearchOperations {
   }
 
   async graphSearch(query: Query, topK: number, seeds?: string[], accessContext?: AccessContext, signal?: AbortSignal): Promise<RetrievalResult[]> {
-    const driver = this.dependencies.graphDriver ?? getDriver()
+    // createDriver() lazily initializes the singleton (idempotent) so a fresh
+    // server process can serve graph queries without a prior ingestion run.
+    const driver = this.dependencies.graphDriver ?? createDriver()
     const session = driver.session()
     const candidateLimit = topK * GRAPH_CANDIDATE_MULTIPLIER
     const graphQuery = query.text.normalize("NFKC").trim().toLowerCase().slice(0, 512)
@@ -228,8 +299,9 @@ export class RuntimeSearchOperations implements SearchOperations {
       ? seeds.map((s) => String(s)).filter((s) => s.length > 0).slice(0, 16)
       : []
     try {
-      const res = await session.run(
-        `MATCH (e:Entity)
+      const res = await raceAbort(
+        session.run(
+          `MATCH (e:Entity)
            WHERE toLower($query) CONTAINS toLower(e.name)
               OR any(a IN e.aliases WHERE toLower($query) CONTAINS toLower(a))
               OR any(term IN $queryTerms WHERE
@@ -259,9 +331,14 @@ export class RuntimeSearchOperations implements SearchOperations {
           query: graphQuery,
           queryTerms,
           seeds: seedList,
-          entityLimit: candidateLimit,
-          relationshipLimit: candidateLimit,
+          // Neo4j LIMIT parameters must be driver Integers — a plain JS number
+          // serializes as Float (e.g. 20.0) and the server rejects it.
+          entityLimit: neo4jInt(candidateLimit),
+          relationshipLimit: neo4jInt(candidateLimit),
         }
+        ),
+        signal,
+        "Answer run cancelled during graph query"
       )
       const names = [...new Set(
         res.records.flatMap((record) => record.get("names") as string[])
@@ -313,7 +390,7 @@ export class RuntimeSearchOperations implements SearchOperations {
       })
 
       const esRes = await this.dependencies.es.search({
-        index: INDEX_NAME,
+        index: this.indexName,
         query: provenance.length > 0
           ? {
               bool: {
@@ -386,7 +463,7 @@ export class RuntimeSearchOperations implements SearchOperations {
     }).slice(0, topK)
     if (unique.length === 0) return []
     const esRes = await this.dependencies.es.search({
-      index: INDEX_NAME,
+      index: this.indexName,
       query: {
         bool: {
           minimum_should_match: 1,
@@ -417,13 +494,13 @@ export class RuntimeSearchOperations implements SearchOperations {
   }
 
   async rerank(query: string, results: RetrievalResult[], signal?: AbortSignal): Promise<RetrievalResult[]> {
-    return rerank(
-      this.dependencies.chatClient,
-      this.dependencies.chatModel,
-      query,
-      results,
-      signal
-    )
+    const reranker = this.dependencies.reranker
+    if (!reranker) {
+      // No dedicated reranker configured. Treated exactly like a provider
+      // failure so the caller degrades visibly — never silently.
+      throw new RerankerNotConfiguredError()
+    }
+    return reranker.rerank(query, results, signal)
   }
 
   async loadParents(
@@ -434,7 +511,7 @@ export class RuntimeSearchOperations implements SearchOperations {
     if (identities.length === 0) return []
     const aclFilters = accessContextFilter(accessContext)
     const res = await this.dependencies.es.search({
-      index: INDEX_NAME,
+      index: this.indexName,
       query: {
         bool: {
           minimum_should_match: 1,
@@ -581,14 +658,30 @@ export class SearcherImpl implements Searcher {
     }
 
     const fused = rrf(resultSets)
+    // Ticket 03: the published ordering carries its own score source. A fused
+    // fallback is never presented as a dedicated-rerank result.
     let reranked = fused
     let rerankerFailed = false
-    try {
-      reranked = await this.operations.rerank(query.text, fused, signal)
-    } catch (error) {
-      rerankerFailed = true
-      const message = error instanceof Error ? error.message : String(error)
-      console.warn("[search] reranker unavailable:", message)
+    let ordering: RetrievalOrdering
+    if (fused.length < RERANK_MIN_CANDIDATES) {
+      ordering = { source: "fused", reason: "below_threshold" }
+    } else {
+      try {
+        reranked = await this.operations.rerank(query.text, fused, signal)
+        ordering = { source: "dedicated_rerank" }
+      } catch (error) {
+        // P7.2: a cancellation that fires mid-rerank must terminate the run,
+        // not degrade to "reranker unavailable" — aborts are rethrown so the
+        // run converges to the single AbortError terminal.
+        if (signal?.aborted) throw error
+        rerankerFailed = true
+        ordering = {
+          source: "fused",
+          reason: error instanceof RerankerNotConfiguredError ? "not_configured" : "unavailable",
+        }
+        const message = error instanceof Error ? error.message : String(error)
+        console.warn("[search] reranker unavailable:", message)
+      }
     }
     const results = reranked.slice(0, RESULT_TOP_K)
     const identities = [...new Map(
@@ -604,6 +697,10 @@ export class SearcherImpl implements Searcher {
     try {
       parents = await this.operations.loadParents(identities, accessContext, signal)
     } catch (error) {
+      // P7.2: same boundary as rerank — a mid-parent-load cancellation
+      // terminates the run instead of degrading to
+      // "parent expansion unavailable".
+      if (signal?.aborted) throw error
       parentExpansionFailed = true
       const message = error instanceof Error ? error.message : String(error)
       console.warn("[search] parent expansion unavailable:", message)
@@ -642,6 +739,7 @@ export class SearcherImpl implements Searcher {
         : "degraded",
       results,
       unavailableChannels,
+      ordering,
       ...(graphBudget ? { graphBudget } : {}),
       ...(degradationReasons.length > 0
         ? { degradationReasons }

@@ -46,6 +46,10 @@ import {
   SearcherImpl,
   type SearchOperations,
 } from "../retrieval/search/searcher"
+import {
+  createDedicatedReranker,
+  type Reranker,
+} from "../retrieval/search/dedicated_reranker"
 import { ContextAssemblerImpl } from "../retrieval/context/assembler"
 import { PlannerImpl } from "../retrieval/planner/planner"
 import { ComplexLoopControllerImpl } from "../retrieval/complex_loop"
@@ -100,6 +104,12 @@ export interface SharedAnswerEntryOptions {
    * Default: RuntimeSearchOperations on the shared clients.
    */
   searchOperations?: SearchOperations
+  /**
+   * Dedicated reranker (Ticket 03). Default: built from the RERANK_* config
+   * (undefined when no key is configured). Injected by evaluation when a task
+   * overrides the rerank model (Ticket 11).
+   */
+  reranker?: Reranker
   /** Handoff persistence. Default: SQLite on the shared process db. */
   handoffStore?: HandoffStore
   /**
@@ -174,16 +184,27 @@ export async function createSharedAnswerEntry(
     answerRuntime.processRuntime
   const conversationStore =
     options.conversationStore ?? new SqliteConversationStore(db)
+  // Ticket 03: the dedicated reranker is shared by normal chat and evaluation.
+  // No key configured → undefined → retrieval degrades visibly
+  // (`rerank.reason = "not_configured"`), never a different scorer.
+  const reranker =
+    options.reranker ??
+    createDedicatedReranker({
+      baseUrl: cfg.rerankBaseUrl,
+      apiKey: cfg.rerankApiKey,
+      model: cfg.rerankModel,
+      timeoutMs: cfg.rerankTimeoutMs,
+      maxDocumentChars: cfg.rerankMaxDocumentChars,
+    })
   const searchOperations =
     options.searchOperations ??
     new RuntimeSearchOperations({
       es: elasticsearch,
-      chatClient,
       embeddingClient,
-      chatModel: cfg.openaiChatModel,
       embeddingModel: cfg.embeddingModel,
       pageIndexRepo: new PageIndexRepository(db),
       activeVersionRepo: new ActiveVersionRepository(db),
+      ...(reranker ? { reranker } : {}),
     })
   const handoffStore = options.handoffStore ?? new SqliteHandoffStore(db)
   const resolveTenantId = (accessContext: AccessContext) =>

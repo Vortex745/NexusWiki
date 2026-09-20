@@ -34,7 +34,13 @@ import { AsyncLocalStorage } from "node:async_hooks"
  * context (downstream stages in P7.2) read `signal` and never touch the
  * controller — the controller is the producer side.
  */
-export type ModelCallKind = "chat" | "embedding"
+/**
+ * Provider call kinds that consume the run resource budget. `rerank` covers
+ * the dedicated rerank adapter (eval refactor Ticket 03), which is a direct
+ * HTTP call rather than an OpenAI SDK surface but is still a billable
+ * provider call and therefore reserves/settles like the others.
+ */
+export type ModelCallKind = "chat" | "embedding" | "rerank"
 
 export interface ModelCallDescriptor {
   readonly kind: ModelCallKind

@@ -46,6 +46,51 @@ export interface GraphBudget {
   candidates: number
 }
 
+/**
+ * Eval refactor Ticket 03: how the published (post-fusion) evidence ordering
+ * was produced. This is the honest score source of the ranking — evaluation
+ * (tickets 06/13) must not present a fused fallback as a dedicated-rerank
+ * result.
+ */
+export interface RetrievalOrdering {
+  /** "dedicated_rerank" → the configured web reranker scored this ordering;
+   *  "fused" → the RRF-fused order was published unchanged. */
+  source: "dedicated_rerank" | "fused"
+  /** Why the fused order was published. Absent for dedicated_rerank. */
+  reason?: "not_configured" | "below_threshold" | "unavailable"
+}
+
+/**
+ * Dedicated rerank boundary: transport + protocol live in the adapter, the
+ * searcher only sees "reorder or throw". Implementations MUST rethrow
+ * cancellation (AbortError) instead of swallowing it, and MUST reject on
+ * malformed responses (illegal index, non-finite score) rather than
+ * degrading silently.
+ */
+export interface Reranker {
+  /** Provider model identity (no credentials). */
+  readonly model: string
+  rerank(
+    query: string,
+    results: RetrievalResult[],
+    signal?: AbortSignal
+  ): Promise<RetrievalResult[]>
+}
+
+/**
+ * Thrown when a rerank seam has no dedicated reranker configured. Kept
+ * distinct from a provider failure so the published ordering can say
+ * "not_configured" instead of "unavailable".
+ */
+export class RerankerNotConfiguredError extends Error {
+  constructor(
+    message = "dedicated reranker is not configured (set RERANK_API_KEY and RERANK_BASE_URL)"
+  ) {
+    super(message)
+    this.name = "RerankerNotConfiguredError"
+  }
+}
+
 export interface SearchOutcome {
   status: "ok" | "degraded" | "insufficient"
   results: RetrievalResult[]
@@ -61,6 +106,11 @@ export interface SearchOutcome {
   unselectedChannels?: RetrievalChannel[]
   degradationReasons?: string[]
   graphBudget?: GraphBudget
+  /**
+   * Ticket 03: score source of `results`. Always present on a real result
+   * set; omitted on the `insufficient` early return (no results to rank).
+   */
+  ordering?: RetrievalOrdering
 }
 
 export interface Searcher {
