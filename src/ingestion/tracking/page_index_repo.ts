@@ -1,5 +1,6 @@
 import type { DB } from "./db"
 import type { PageIndexNode } from "../../types"
+import { defaultKnowledgeBaseId } from "../../types/knowledge_base"
 
 interface StoredRow {
   document_id: string
@@ -14,6 +15,7 @@ interface StoredRow {
   linked_chunk_ids: string
   tenant_id: string
   allowed_groups: string
+  knowledge_base_id: string
 }
 
 /**
@@ -23,6 +25,12 @@ interface StoredRow {
 export interface PageIndexAccessMetadata {
   tenantId?: string
   allowedGroups?: string[]
+  /**
+   * Ticket 03 (KB-02A): the owning knowledge base. Optional so legacy callers
+   * fall back to the tenant's deterministic default knowledge base — never to
+   * an unowned row (criterion 4).
+   */
+  knowledgeBaseId?: string
 }
 
 function parsePath(value: string): string[] {
@@ -48,6 +56,7 @@ function toNode(row: StoredRow): PageIndexNode {
     linkedChunkIds: parsePath(row.linked_chunk_ids),
     tenantId: row.tenant_id,
     allowedGroups: parsePath(row.allowed_groups),
+    knowledgeBaseId: row.knowledge_base_id,
   }
 }
 
@@ -65,11 +74,13 @@ export class PageIndexRepository {
         `INSERT INTO page_index_nodes (
           document_id, node_id, title, section_path, page_start, page_end,
           summary, parent_id, child_ids, linked_chunk_ids,
-          tenant_id, allowed_groups
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+          tenant_id, allowed_groups, knowledge_base_id
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       )
       const tenantId = accessMetadata?.tenantId ?? "default"
       const allowedGroups = JSON.stringify(accessMetadata?.allowedGroups ?? [])
+      const knowledgeBaseId = accessMetadata?.knowledgeBaseId ??
+        defaultKnowledgeBaseId(tenantId)
       for (const node of nodes) {
         insert.run(
           node.documentId,
@@ -83,7 +94,8 @@ export class PageIndexRepository {
           JSON.stringify(node.childIds),
           JSON.stringify(node.linkedChunkIds),
           tenantId,
-          allowedGroups
+          allowedGroups,
+          knowledgeBaseId
         )
       }
     })

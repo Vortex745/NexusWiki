@@ -1,8 +1,13 @@
-import { Client } from "@elastic/elasticsearch"
-import OpenAI from "openai"
+import { type Client } from "@elastic/elasticsearch"
+import { type OpenAI } from "openai"
 import type { Driver } from "neo4j-driver"
 import type { Chunk, Entity, Wikilink } from "../../types"
 import { loadConfig } from "../../config"
+import {
+  createElasticsearchClient,
+  createOpenAIClient,
+  openaiClientOptions,
+} from "../../clients"
 import { getDriver } from "../../graph"
 
 const INDEX_NAME = "kefu-rag-chunks"
@@ -12,6 +17,7 @@ const CHUNK_KEYWORD_PROPERTIES = {
   childrenIds: { type: "keyword" as const },
   tenantId: { type: "keyword" as const },
   allowedGroups: { type: "keyword" as const },
+  knowledgeBaseId: { type: "keyword" as const },
 }
 
 /**
@@ -27,11 +33,20 @@ export interface KnowledgePersistenceDependencies {
   embeddingModel: string
   embeddingDimensions: number
   graphDriver?: Driver
+  /** Eval refactor Ticket 02: chunk index written by this store. Omitted →
+   * the business index (legacy default). */
+  indexName?: string
 }
 
 export interface KnowledgeAccessMetadata {
   tenantId: string
   allowedGroups: string[]
+  /**
+   * Ticket 03 (KB-02A): the knowledge base that owns the persisted artifact.
+   * Required — persistence fails loudly rather than writing an unowned chunk
+   * or provenance record (criterion 4).
+   */
+  knowledgeBaseId: string
 }
 
 export type ChunkAccessMetadata = KnowledgeAccessMetadata
@@ -41,12 +56,14 @@ export class ESStore {
   private embeddingClient: OpenAI
   private embeddingModel: string
   private embeddingDimensions: number
+  private indexName: string
 
   constructor(clients?: {
     client?: Client
     embeddingClient?: OpenAI
     embeddingModel?: string
     embeddingDimensions?: number
+    indexName?: string
   }) {
     if (clients?.client && clients.embeddingClient && clients.embeddingModel && clients.embeddingDimensions) {
       this.client = clients.client
@@ -55,44 +72,42 @@ export class ESStore {
       this.embeddingDimensions = clients.embeddingDimensions
     } else {
       const cfg = loadConfig()
-      this.client = clients?.client ?? new Client({
+      this.client = clients?.client ?? createElasticsearchClient({
         node: cfg.esNode,
-        ...(cfg.esApiKey ? { auth: { apiKey: cfg.esApiKey } } : {}),
-        // ES client v9 ↔ server v8/v7 compat: pin media-type headers to
-        // compatible-with=8 so the server doesn't reject with
-        // media_type_header_exception. Mirrors process_runtime.ts.
-        headers: {
-          accept: "application/vnd.elasticsearch+json; compatible-with=8",
-          "content-type": "application/vnd.elasticsearch+json; compatible-with=8",
-        },
+        apiKey: cfg.esApiKey || undefined,
       })
-      this.embeddingClient = clients?.embeddingClient ?? new OpenAI({
+      this.embeddingClient = clients?.embeddingClient ?? createOpenAIClient({
         apiKey: cfg.embeddingApiKey,
         baseURL: cfg.embeddingBaseUrl || undefined,
-        timeout: cfg.openaiRequestTimeoutMs,
-        maxRetries: cfg.openaiMaxRetries,
+        ...openaiClientOptions(cfg),
       })
       this.embeddingModel = clients?.embeddingModel ?? cfg.embeddingModel
       this.embeddingDimensions = clients?.embeddingDimensions ?? cfg.embeddingDimensions
     }
+    this.indexName = clients?.indexName ?? INDEX_NAME
+  }
+
+  /** Eval refactor Ticket 02: the chunk index this store reads/writes. */
+  get chunkIndexName(): string {
+    return this.indexName
   }
 
   async ensureIndex(): Promise<void> {
-    const exists = await this.client.indices.exists({ index: INDEX_NAME })
+    const exists = await this.client.indices.exists({ index: this.indexName })
     if (exists) {
-      const mapping = await this.client.indices.getMapping({ index: INDEX_NAME })
-      const embedding = mapping[INDEX_NAME]?.mappings.properties?.embedding as
+      const mapping = await this.client.indices.getMapping({ index: this.indexName })
+      const embedding = mapping[this.indexName]?.mappings.properties?.embedding as
         | { dims?: number }
         | undefined
       if (embedding?.dims !== this.embeddingDimensions) {
         throw new Error(
-          `Elasticsearch index ${INDEX_NAME} has ${embedding?.dims ?? "unknown"} embedding dimensions; expected ${this.embeddingDimensions}`
+          `Elasticsearch index ${this.indexName} has ${embedding?.dims ?? "unknown"} embedding dimensions; expected ${this.embeddingDimensions}`
         )
       }
-      const properties = mapping[INDEX_NAME]?.mappings.properties ?? {}
+      const properties = mapping[this.indexName]?.mappings.properties ?? {}
       if (Object.keys(CHUNK_KEYWORD_PROPERTIES).some((name) => !(name in properties))) {
         await this.client.indices.putMapping({
-          index: INDEX_NAME,
+          index: this.indexName,
           properties: CHUNK_KEYWORD_PROPERTIES,
         })
       }
@@ -100,7 +115,7 @@ export class ESStore {
     }
 
     await this.client.indices.create({
-      index: INDEX_NAME,
+      index: this.indexName,
       settings: { number_of_shards: 1, number_of_replicas: 0 },
       mappings: {
         properties: {
@@ -125,11 +140,15 @@ export class ESStore {
     accessMetadata: KnowledgeAccessMetadata
   ): Promise<void> {
     if (chunks.length === 0) return
-    if (!accessMetadata?.tenantId || !Array.isArray(accessMetadata.allowedGroups)) {
+    if (
+      !accessMetadata?.tenantId ||
+      !Array.isArray(accessMetadata.allowedGroups) ||
+      !accessMetadata.knowledgeBaseId
+    ) {
       throw new Error("Chunk access metadata is required")
     }
 
-    const { tenantId, allowedGroups } = accessMetadata
+    const { tenantId, allowedGroups, knowledgeBaseId } = accessMetadata
     const passages = chunks.filter((chunk) => chunk.metadata.kind !== "parent")
     const embeddings = new Map<string, number[]>()
     if (passages.length > 0) {
@@ -144,12 +163,13 @@ export class ESStore {
     }
 
     const body = chunks.flatMap((c) => [
-      { index: { _index: INDEX_NAME, _id: `${c.documentId}:${c.id}` } },
+      { index: { _index: this.indexName, _id: `${c.documentId}:${c.id}` } },
       {
         id: c.id,
         documentId: c.documentId,
         tenantId,
         allowedGroups,
+        knowledgeBaseId,
         kind: c.metadata.kind,
         content: c.content,
         ...(embeddings.has(`${c.documentId}\0${c.id}`)
@@ -196,11 +216,15 @@ export class Neo4jStore {
     accessMetadata: KnowledgeAccessMetadata
   ): Promise<void> {
     if (wikilinks.length === 0) return
-    if (!accessMetadata?.tenantId || !Array.isArray(accessMetadata.allowedGroups)) {
+    if (
+      !accessMetadata?.tenantId ||
+      !Array.isArray(accessMetadata.allowedGroups) ||
+      !accessMetadata.knowledgeBaseId
+    ) {
       throw new Error("Graph provenance access metadata is required")
     }
 
-    const { tenantId, allowedGroups } = accessMetadata
+    const { tenantId, allowedGroups, knowledgeBaseId } = accessMetadata
     const driver = this.driver ?? getDriver()
     const session = driver.session()
     try {
@@ -222,8 +246,22 @@ export class Neo4jStore {
             targetId,
             relation,
             weight: w.weight,
+            // Each entry is [documentId, chunkId, tenantId, allowedGroups,
+            // weight, knowledgeBaseId] — the contributor's own weight travels
+            // with its provenance so a scope that releases its share (eval
+            // refactor ticket 02) can recompute the relation weight from the
+            // remaining contributors instead of leaving `r.weight` raised.
+            // Ticket 03 (KB-02A) appends knowledgeBaseId as the 6th element;
+            // the leading five keep their positions for existing readers.
             provenance: (w.provenance ?? []).map(({ documentId, chunkId }) =>
-              JSON.stringify([documentId, chunkId, tenantId, allowedGroups])
+              JSON.stringify([
+                documentId,
+                chunkId,
+                tenantId,
+                allowedGroups,
+                w.weight,
+                knowledgeBaseId,
+              ])
             ),
           }
         )
@@ -245,6 +283,7 @@ export class IngestionStoreImpl {
         embeddingClient: deps.embeddingClient,
         embeddingModel: deps.embeddingModel,
         embeddingDimensions: deps.embeddingDimensions,
+        ...(deps.indexName ? { indexName: deps.indexName } : {}),
       })
       this.neo4j = new Neo4jStore(deps.graphDriver)
     } else {
@@ -274,5 +313,10 @@ export class IngestionStoreImpl {
 
   async close(): Promise<void> {
     await this.es.close()
+  }
+
+  /** Eval refactor Ticket 02: the chunk index this store writes to. */
+  get chunkIndexName(): string {
+    return this.es.chunkIndexName
   }
 }

@@ -63,6 +63,12 @@ export interface SubmitIngestionInput {
   source?: string
   sourceIdentity?: SourceIdentityInput
   legacySourceAliases?: string[]
+  /**
+   * Ticket 03 (KB-02A): the knowledge base that owns this import. Omitted →
+   * the tenant's deterministic default knowledge base (legacy callers keep
+   * working); the resolved value is always carried on the submission.
+   */
+  knowledgeBaseId?: string
 }
 
 export type IngestionSubmission = {
@@ -70,11 +76,15 @@ export type IngestionSubmission = {
   taskId: number
   status: "pending"
   version: number
+  /** Ticket 03 (KB-02A): the knowledge base the import was filed under. */
+  knowledgeBaseId: string
 } | {
   docId: string
   taskId: null
   status: "unchanged"
   version: number
+  /** Ticket 03 (KB-02A): the knowledge base the import was filed under. */
+  knowledgeBaseId: string
 }
 
 export interface SpanNode {
@@ -229,7 +239,8 @@ export class IngestionLifecycle {
     const identity = resolveSourceIdentity(
       input.sourceIdentity,
       input.source,
-      docId
+      docId,
+      input.knowledgeBaseId
     )
     const sourceKey = sourceIdentityKey(identity)
 
@@ -238,6 +249,10 @@ export class IngestionLifecycle {
       if (identity.kind === "file" && input.legacySourceAliases?.length) {
         const matches = this.docRepo.listLegacySources().filter((candidate) =>
           candidate.tenantId === identity.tenantId &&
+          // Ticket 03 (KB-02A): a legacy Source may only be adopted into the
+          // knowledge base it belongs to — the same file in two knowledge
+          // bases stays two Source identities (criterion 2).
+          candidate.knowledgeBaseId === identity.knowledgeBaseId &&
           resolveSourceIdentity(
             { kind: "file", uriOrExternalId: candidate.uri, namespace: "local" },
             undefined,
@@ -271,6 +286,7 @@ export class IngestionLifecycle {
               namespace: identity.namespace,
               tenantId: identity.tenantId,
               allowedGroups: identity.allowedGroups,
+              knowledgeBaseId: identity.knowledgeBaseId,
             },
             preferred?.active?.id ?? null
           )
@@ -286,6 +302,7 @@ export class IngestionLifecycle {
           namespace: identity.namespace,
           tenantId: identity.tenantId,
           allowedGroups: identity.allowedGroups,
+          knowledgeBaseId: identity.knowledgeBaseId,
         })
       }
 
@@ -297,6 +314,7 @@ export class IngestionLifecycle {
           taskId: null,
           status: "unchanged",
           version: active.version,
+          knowledgeBaseId: identity.knowledgeBaseId,
         }
       }
 
@@ -309,6 +327,7 @@ export class IngestionLifecycle {
             taskId: task.id,
             status: "pending",
             version: inFlight.version,
+            knowledgeBaseId: identity.knowledgeBaseId,
           }
         }
       }
@@ -331,6 +350,7 @@ export class IngestionLifecycle {
         // real values — 'default' / '[]' in single-tenant mode.
         tenantId: source.tenantId,
         allowedGroups: source.allowedGroups,
+        knowledgeBaseId: source.knowledgeBaseId,
       })
       const taskId = this.taskRepo.enqueue({
         docId,
@@ -344,7 +364,7 @@ export class IngestionLifecycle {
         },
       })
       this.docRepo.recordOutcome(source.sourceId, docId, "pending")
-      return { docId, taskId, status: "pending", version }
+      return { docId, taskId, status: "pending", version, knowledgeBaseId: identity.knowledgeBaseId }
     })()
   }
 

@@ -1,9 +1,18 @@
 import express, { Request, Response, Router } from "express"
 import { randomUUID } from "node:crypto"
 import { singleTenantAccessContext, type AccessContext } from "../access/context"
+import { loadConfig } from "../config"
 import { createIngestionLifecycle } from "../ingestion/pipeline"
 import type { SourceIdentityInput } from "../ingestion/source_identity"
 import { openDb } from "../ingestion/tracking"
+import type { DB } from "../ingestion/tracking/db"
+import { SqliteKnowledgeBaseRepo } from "../knowledge/knowledge_base_repo"
+import {
+  InvalidKnowledgeBaseScopeError,
+  KnowledgeBaseNotFoundError,
+  KnowledgeBaseServiceImpl,
+} from "../knowledge/knowledge_base_service"
+import { knowledgeBaseEmbeddingProfile } from "../types/knowledge_base"
 import {
   fetchSingleUrl,
   fetchSitemapUrls,
@@ -21,6 +30,12 @@ interface IngestRequestBody {
     uriOrExternalId: string
     namespace?: string
   }
+  /**
+   * Ticket 03 (KB-02A): the owning knowledge base. Omitted → tenant default.
+   * `unknown` because this is untrusted JSON: the resolver validates the type
+   * instead of trusting the cast.
+   */
+  knowledgeBaseId?: unknown
 }
 
 interface IngestUrlRequestBody {
@@ -64,6 +79,62 @@ function requestSourceIdentity(body: IngestRequestBody): Omit<SourceIdentityInpu
     : { kind: "legacy", uriOrExternalId: source }
 }
 
+type KnowledgeBaseResolution =
+  | { ok: true; knowledgeBaseId: string }
+  | { ok: false; status: number; body: { error: string } }
+
+/**
+ * Ticket 03 (KB-02A): resolve EXACTLY ONE authorized knowledge base for an
+ * import. An absent field resolves to the tenant's deterministic default
+ * knowledge base; an unknown or cross-tenant id is a 404 and a malformed one
+ * (blank, or not a string at all) a 400 — never a silent widening to "all
+ * knowledge bases" and never a silent fallback to the default.
+ */
+function resolveRequestKnowledgeBaseId(
+  res: Response,
+  db: DB,
+  requested: unknown
+): KnowledgeBaseResolution {
+  const accessContext =
+    (res.locals.accessContext as AccessContext | undefined) ?? singleTenantAccessContext()
+  let scope: readonly string[] | undefined
+  if (requested === undefined) {
+    scope = undefined
+  } else if (typeof requested === "string") {
+    scope = [requested.trim()]
+  } else {
+    // A non-string field (e.g. a number in the JSON body) is malformed input,
+    // not an absent field: treating it as absent would silently file the
+    // import under the default knowledge base.
+    return {
+      ok: false,
+      status: 400,
+      body: { error: "knowledgeBaseId must be a non-empty string" },
+    }
+  }
+  try {
+    const cfg = loadConfig()
+    const service = new KnowledgeBaseServiceImpl(
+      new SqliteKnowledgeBaseRepo(db),
+      knowledgeBaseEmbeddingProfile(cfg.embeddingModel, cfg.embeddingDimensions)
+    )
+    const { knowledgeBaseIds } = service.resolveScope(accessContext.tenantId, scope)
+    const [knowledgeBaseId] = knowledgeBaseIds
+    if (!knowledgeBaseId) {
+      throw new InvalidKnowledgeBaseScopeError("a knowledge base is required")
+    }
+    return { ok: true, knowledgeBaseId }
+  } catch (error) {
+    if (error instanceof KnowledgeBaseNotFoundError) {
+      return { ok: false, status: 404, body: { error: "knowledge base not found" } }
+    }
+    if (error instanceof InvalidKnowledgeBaseScopeError) {
+      return { ok: false, status: 400, body: { error: error.message } }
+    }
+    throw error
+  }
+}
+
 rawIngestRouter.post(
   "/ingest/file",
   express.raw({ type: "application/octet-stream", limit: RAW_FILE_LIMIT }),
@@ -83,7 +154,12 @@ rawIngestRouter.post(
     }
 
     const sourceExternalId = req.get("x-source-id")?.trim() || fileName
-    const lifecycle = createIngestionLifecycle(openDb())
+    const db = openDb()
+    const resolved = resolveRequestKnowledgeBaseId(res, db, req.get("x-knowledge-base-id"))
+    if (!resolved.ok) {
+      return res.status(resolved.status).json(resolved.body)
+    }
+    const lifecycle = createIngestionLifecycle(db)
     return res.json(lifecycle.submit({
       title: req.get("x-document-title")?.trim() || fileName,
       content: "",
@@ -91,6 +167,7 @@ rawIngestRouter.post(
       fileName,
       mimeType: req.get("x-file-mime-type")?.trim() || "application/octet-stream",
       parserOverride,
+      knowledgeBaseId: resolved.knowledgeBaseId,
       sourceIdentity: trustedSourceIdentity(res, {
         kind: req.get("x-source-kind")?.trim() || "file",
         uriOrExternalId: sourceExternalId,
@@ -106,12 +183,19 @@ router.post("/ingest", (req: Request, res: Response) => {
     return res.status(400).json({ error: "title and content are required" })
   }
 
-  const lifecycle = createIngestionLifecycle(openDb())
+  const db = openDb()
+  const resolved = resolveRequestKnowledgeBaseId(res, db, body.knowledgeBaseId)
+  if (!resolved.ok) {
+    return res.status(resolved.status).json(resolved.body)
+  }
+
+  const lifecycle = createIngestionLifecycle(db)
   return res.json(
     lifecycle.submit({
       title: body.title,
       content: body.content,
       source: body.source,
+      knowledgeBaseId: resolved.knowledgeBaseId,
       sourceIdentity: trustedSourceIdentity(res, requestSourceIdentity(body)),
     })
   )

@@ -1142,7 +1142,7 @@ test("Ticket 02: business data and two eval scopes with identical content stay i
         provenance: [{ documentId: "biz-doc-1", chunkId: "biz-chunk-1" }],
       },
     ],
-    { tenantId: "default", allowedGroups: [] }
+    { tenantId: "default", allowedGroups: [], knowledgeBaseId: "kb-default-default" }
   )
   const businessProvenanceBefore = graph.tenantProvenance("default")
 

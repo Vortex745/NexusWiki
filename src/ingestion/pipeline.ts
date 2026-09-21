@@ -30,6 +30,17 @@ import { LLMWikifier } from "./wikify/wikifier"
 
 export type ParserResolver = (type: ParserType) => Parser
 
+/**
+ * Eval refactor Ticket 02: the LLM boundary of the wikify stage. Extraction
+ * and link building are external LLM calls — tests and isolated evaluation
+ * scopes may inject a controlled implementation. Omitted → the production
+ * `LLMWikifier` (config-based client), unchanged behavior.
+ */
+export interface WikifierLike {
+  extractEntities(chunks: Chunk[]): Promise<Entity[]>
+  buildWikilinks(entities: Entity[], chunks: Chunk[]): Promise<Wikilink[]>
+}
+
 interface ChunkStageResult {
   chunks: Chunk[]
   blocks: NormalizedBlock[]
@@ -101,17 +112,31 @@ function recordParserMetadata(
 export class PipelineStageRunner implements IngestionStageRunner {
   private documentRepo: DocumentRepo
   private store: IngestionStoreImpl | null
+  private readonly injectedWikifier?: WikifierLike
+  private defaultWikifier: WikifierLike | null = null
 
   constructor(
     private db: DB,
     private resolveParser: ParserResolver = configuredParser,
-    store?: IngestionStoreImpl
+    store?: IngestionStoreImpl,
+    wikifier?: WikifierLike
   ) {
     this.documentRepo = new DocumentRepo(db)
     // T21: accept an injected store for sharing across runs; lazily create one
     // on first run() if not provided so construction stays cheap and tests
     // that never reach storeChunks don't need env vars.
     this.store = store ?? null
+    // Ticket 02: same laziness for the wikifier — constructing the stage
+    // runner must stay side-effect free. `LLMWikifier` loads config (and
+    // requires OPENAI_API_KEY) in its constructor, so it is only built at
+    // first wikify use when no override was injected.
+    this.injectedWikifier = wikifier
+  }
+
+  private resolveWikifier(): WikifierLike {
+    if (this.injectedWikifier) return this.injectedWikifier
+    if (!this.defaultWikifier) this.defaultWikifier = new LLMWikifier()
+    return this.defaultWikifier
   }
 
   private ensureStore(): IngestionStoreImpl {
@@ -228,7 +253,7 @@ export class PipelineStageRunner implements IngestionStageRunner {
         "wikify",
         { chunkCount: chunks.length },
         async (): Promise<{ entities: Entity[]; wikilinks: Wikilink[] }> => {
-          const wikifier = new LLMWikifier()
+          const wikifier = this.resolveWikifier()
           const entities = await wikifier.extractEntities(chunks)
           const wikilinks = await wikifier.buildWikilinks(entities, chunks)
           return { entities, wikilinks }
@@ -244,26 +269,32 @@ export class PipelineStageRunner implements IngestionStageRunner {
         "storeChunks",
         { chunkCount: chunks.length },
         async (): Promise<Chunk[]> => {
-          if (document.tenantId === undefined || document.allowedGroups === undefined) {
+          if (
+            document.tenantId === undefined ||
+            document.allowedGroups === undefined ||
+            document.knowledgeBaseId === undefined
+          ) {
             throw new Error("Document access metadata is required before chunk persistence")
           }
           const store = this.ensureStore()
           await store.storeChunks(chunks, {
             tenantId: document.tenantId,
             allowedGroups: document.allowedGroups,
+            knowledgeBaseId: document.knowledgeBaseId,
           })
           const nodes = buildPageIndex(document, chunks)
           if (nodes.length > 0) {
             new PageIndexRepository(this.db).replaceNodes(document.id, nodes, {
               tenantId: document.tenantId,
               allowedGroups: document.allowedGroups,
+              knowledgeBaseId: document.knowledgeBaseId,
             })
           }
           return chunks
         },
         (storedChunks) => ({
           chunkCount: storedChunks.length,
-          indexName: "kefu-rag-chunks",
+          indexName: this.ensureStore().chunkIndexName,
         })
       )
 
@@ -274,7 +305,11 @@ export class PipelineStageRunner implements IngestionStageRunner {
           wikilinkCount: wikified.wikilinks.length,
         },
         async () => {
-          if (document.tenantId === undefined || document.allowedGroups === undefined) {
+          if (
+            document.tenantId === undefined ||
+            document.allowedGroups === undefined ||
+            document.knowledgeBaseId === undefined
+          ) {
             throw new Error("Document access metadata is required before graph persistence")
           }
           const store = this.ensureStore()
@@ -282,6 +317,7 @@ export class PipelineStageRunner implements IngestionStageRunner {
           await store.storeWikilinks(wikified.wikilinks, {
             tenantId: document.tenantId,
             allowedGroups: document.allowedGroups,
+            knowledgeBaseId: document.knowledgeBaseId,
           })
           return wikified
         },

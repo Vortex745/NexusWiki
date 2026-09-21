@@ -1,5 +1,6 @@
 import type { DB } from "./db"
 import type { Document, DocumentStatus } from "../../types"
+import { defaultKnowledgeBaseId } from "../../types/knowledge_base"
 
 interface DocumentRow {
   doc_id: string
@@ -20,6 +21,7 @@ interface DocumentRow {
   updated_at: string
   tenant_id: string
   allowed_groups: string
+  knowledge_base_id: string
 }
 
 function rowToDocument(row: DocumentRow): Document {
@@ -39,6 +41,7 @@ function rowToDocument(row: DocumentRow): Document {
     createdAt: new Date(row.created_at),
     tenantId: row.tenant_id,
     allowedGroups: JSON.parse(row.allowed_groups),
+    knowledgeBaseId: row.knowledge_base_id,
   }
 }
 
@@ -62,6 +65,12 @@ export interface InsertDocumentInput {
    */
   tenantId?: string
   allowedGroups?: string[]
+  /**
+   * Ticket 03 (KB-02A): the knowledge base that owns this document. Optional
+   * so legacy callers fall back to the tenant's deterministic default
+   * knowledge base — never to an unowned row (criterion 4).
+   */
+  knowledgeBaseId?: string
 }
 
 export interface SourceIdentityInput {
@@ -72,6 +81,8 @@ export interface SourceIdentityInput {
   namespace: string
   tenantId?: string
   allowedGroups?: string[]
+  /** Ticket 03 (KB-02A): the owning knowledge base (defaults to the tenant default). */
+  knowledgeBaseId?: string
 }
 
 export interface SourceRecord {
@@ -84,6 +95,8 @@ export interface SourceRecord {
    */
   tenantId: string
   allowedGroups: string[]
+  /** Ticket 03 (KB-02A): the owning knowledge base, always populated. */
+  knowledgeBaseId: string
 }
 
 export interface LegacySourceRecord extends SourceRecord {
@@ -106,8 +119,8 @@ export class DocumentRepo {
         doc_id, source_id, content_hash, version, activation_order,
         title, source, content, raw_content, file_name, mime_type, parser_override,
         metadata, status, created_at, updated_at,
-        tenant_id, allowed_groups
-       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?)`
+        tenant_id, allowed_groups, knowledge_base_id
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?)`
     ).run(
       input.docId,
       input.sourceId,
@@ -125,7 +138,8 @@ export class DocumentRepo {
       now,
       now,
       input.tenantId ?? "default",
-      JSON.stringify(input.allowedGroups ?? [])
+      JSON.stringify(input.allowedGroups ?? []),
+      input.knowledgeBaseId ?? defaultKnowledgeBaseId(input.tenantId ?? "default")
     )
   }
 
@@ -149,8 +163,8 @@ export class DocumentRepo {
       `INSERT INTO sources (
         source_id, source_key, source_kind, source_uri, namespace,
         active_doc_id, last_doc_id, last_outcome, created_at, updated_at,
-        tenant_id, allowed_groups
-       ) VALUES (?, ?, ?, ?, ?, NULL, NULL, NULL, ?, ?, ?, ?)`
+        tenant_id, allowed_groups, knowledge_base_id
+       ) VALUES (?, ?, ?, ?, ?, NULL, NULL, NULL, ?, ?, ?, ?, ?)`
     ).run(
       input.sourceId,
       input.sourceKey,
@@ -160,15 +174,22 @@ export class DocumentRepo {
       now,
       now,
       input.tenantId ?? "default",
-      JSON.stringify(input.allowedGroups ?? [])
+      JSON.stringify(input.allowedGroups ?? []),
+      input.knowledgeBaseId ?? defaultKnowledgeBaseId(input.tenantId ?? "default")
     )
     const row = this.db.prepare(
-      `SELECT tenant_id, allowed_groups FROM sources WHERE source_id = ?`
-    ).get(input.sourceId) as { tenant_id: string; allowed_groups: string }
+      `SELECT tenant_id, allowed_groups, knowledge_base_id
+       FROM sources WHERE source_id = ?`
+    ).get(input.sourceId) as {
+      tenant_id: string
+      allowed_groups: string
+      knowledge_base_id: string
+    }
     return {
       sourceId: input.sourceId,
       tenantId: row.tenant_id,
       allowedGroups: JSON.parse(row.allowed_groups),
+      knowledgeBaseId: row.knowledge_base_id,
     }
   }
 
@@ -179,7 +200,7 @@ export class DocumentRepo {
     const info = this.db.prepare(
       `UPDATE sources
        SET source_key = ?, source_kind = ?, source_uri = ?, namespace = ?,
-           tenant_id = ?, allowed_groups = ?, updated_at = ?
+           tenant_id = ?, allowed_groups = ?, knowledge_base_id = ?, updated_at = ?
        WHERE source_id = ?`
     ).run(
       input.sourceKey,
@@ -188,6 +209,7 @@ export class DocumentRepo {
       input.namespace,
       input.tenantId ?? "default",
       JSON.stringify(input.allowedGroups ?? []),
+      input.knowledgeBaseId ?? defaultKnowledgeBaseId(input.tenantId ?? "default"),
       new Date().toISOString(),
       sourceId
     )
@@ -199,23 +221,29 @@ export class DocumentRepo {
   getSourceByKey(sourceKey: string): SourceRecord | null {
     const row = this.db.prepare(
       `SELECT COALESCE(canonical_source_id, source_id) AS source_id,
-              tenant_id, allowed_groups
+              tenant_id, allowed_groups, knowledge_base_id
        FROM sources WHERE source_key = ?`
     ).get(sourceKey) as
-      | { source_id: string; tenant_id: string; allowed_groups: string }
+      | {
+          source_id: string
+          tenant_id: string
+          allowed_groups: string
+          knowledge_base_id: string
+        }
       | undefined
     return row
       ? {
           sourceId: row.source_id,
           tenantId: row.tenant_id,
           allowedGroups: JSON.parse(row.allowed_groups),
+          knowledgeBaseId: row.knowledge_base_id,
         }
       : null
   }
 
   listLegacySources(): LegacySourceRecord[] {
     const rows = this.db.prepare(
-      `SELECT source_id, source_uri, tenant_id, allowed_groups
+      `SELECT source_id, source_uri, tenant_id, allowed_groups, knowledge_base_id
        FROM sources
        WHERE source_kind = 'legacy' AND namespace = 'default'
          AND canonical_source_id IS NULL`
@@ -224,12 +252,14 @@ export class DocumentRepo {
       source_uri: string
       tenant_id: string
       allowed_groups: string
+      knowledge_base_id: string
     }>
     return rows.map((row) => ({
       sourceId: row.source_id,
       uri: row.source_uri,
       tenantId: row.tenant_id,
       allowedGroups: JSON.parse(row.allowed_groups),
+      knowledgeBaseId: row.knowledge_base_id,
     }))
   }
 
@@ -269,11 +299,12 @@ export class DocumentRepo {
     this.updateSourceIdentity(sourceId, input)
     this.db.prepare(
       `UPDATE documents
-       SET tenant_id = ?, allowed_groups = ?, updated_at = ?
+       SET tenant_id = ?, allowed_groups = ?, knowledge_base_id = ?, updated_at = ?
        WHERE source_id = ?`
     ).run(
       input.tenantId ?? "default",
       JSON.stringify(input.allowedGroups ?? []),
+      input.knowledgeBaseId ?? defaultKnowledgeBaseId(input.tenantId ?? "default"),
       new Date().toISOString(),
       sourceId
     )

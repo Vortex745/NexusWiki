@@ -4,6 +4,7 @@ import * as fs from "fs"
 import * as path from "path"
 import { loadConfig } from "../../config"
 import { resolveStoredSourceIdentity, sourceIdentityKey } from "../source_identity"
+import { defaultKnowledgeBaseId } from "../../types/knowledge_base"
 
 export type DB = Database.Database
 
@@ -22,7 +23,8 @@ const SCHEMA = [
     updated_at TEXT NOT NULL,
     tenant_id TEXT NOT NULL DEFAULT 'default',
     allowed_groups TEXT NOT NULL DEFAULT '[]',
-    lifecycle_state TEXT NOT NULL DEFAULT 'active'
+    lifecycle_state TEXT NOT NULL DEFAULT 'active',
+    knowledge_base_id TEXT NOT NULL DEFAULT ''
   )`,
   `CREATE TABLE IF NOT EXISTS documents (
     doc_id TEXT PRIMARY KEY,
@@ -46,7 +48,8 @@ const SCHEMA = [
     candidate_state TEXT NOT NULL DEFAULT 'approved',
     reviewed_by TEXT,
     reviewed_at TEXT,
-    review_reason TEXT
+    review_reason TEXT,
+    knowledge_base_id TEXT NOT NULL DEFAULT ''
   )`,
   `CREATE TABLE IF NOT EXISTS task_pending_ops (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -113,6 +116,7 @@ const SCHEMA = [
     linked_chunk_ids TEXT NOT NULL DEFAULT '[]',
     tenant_id TEXT NOT NULL DEFAULT 'default',
     allowed_groups TEXT NOT NULL DEFAULT '[]',
+    knowledge_base_id TEXT NOT NULL DEFAULT '',
     PRIMARY KEY (document_id, node_id)
   )`,
   `CREATE INDEX IF NOT EXISTS idx_page_index_doc ON page_index_nodes(document_id)`,
@@ -300,6 +304,11 @@ export function openDb(dbPath?: string): DB {
   if (!sourceColumns.some(({ name }) => name === "lifecycle_state")) {
     db.exec("ALTER TABLE sources ADD COLUMN lifecycle_state TEXT NOT NULL DEFAULT 'active'")
   }
+  // Ticket 03 (KB-02A): additive migration — knowledge-base ownership. The
+  // column starts empty and is backfilled below to the row's tenant default.
+  if (!sourceColumns.some(({ name }) => name === "knowledge_base_id")) {
+    db.exec("ALTER TABLE sources ADD COLUMN knowledge_base_id TEXT NOT NULL DEFAULT ''")
+  }
   if (!documentColumns.some(({ name }) => name === "candidate_state")) {
     db.exec("ALTER TABLE documents ADD COLUMN candidate_state TEXT NOT NULL DEFAULT 'approved'")
   }
@@ -312,6 +321,10 @@ export function openDb(dbPath?: string): DB {
   if (!documentColumns.some(({ name }) => name === "review_reason")) {
     db.exec("ALTER TABLE documents ADD COLUMN review_reason TEXT")
   }
+  // Ticket 03 (KB-02A): additive migration — knowledge-base ownership.
+  if (!documentColumns.some(({ name }) => name === "knowledge_base_id")) {
+    db.exec("ALTER TABLE documents ADD COLUMN knowledge_base_id TEXT NOT NULL DEFAULT ''")
+  }
   // Ticket 06 P3: additive migration — page_index_nodes access metadata.
   const pageIndexColumns = db.pragma("table_info(page_index_nodes)") as Array<{ name: string }>
   if (!pageIndexColumns.some(({ name }) => name === "tenant_id")) {
@@ -319,6 +332,10 @@ export function openDb(dbPath?: string): DB {
   }
   if (!pageIndexColumns.some(({ name }) => name === "allowed_groups")) {
     db.exec("ALTER TABLE page_index_nodes ADD COLUMN allowed_groups TEXT NOT NULL DEFAULT '[]'")
+  }
+  // Ticket 03 (KB-02A): additive migration — knowledge-base ownership.
+  if (!pageIndexColumns.some(({ name }) => name === "knowledge_base_id")) {
+    db.exec("ALTER TABLE page_index_nodes ADD COLUMN knowledge_base_id TEXT NOT NULL DEFAULT ''")
   }
   // Ticket 08 P5: additive migration — kind discriminator absorbs pending
   // clarification into the same Conversation state (spec §7 L1538). Existing
@@ -419,6 +436,19 @@ export function openDb(dbPath?: string): DB {
   db.exec(
     "UPDATE documents SET activation_order = version WHERE activation_order IS NULL"
   )
+  // Ticket 03 (KB-02A, criterion 4): no artifact may exist without ownership.
+  // Runs AFTER upgradeLegacyDocuments() so the rows that migration just created
+  // are owned too. A legacy row belongs to its tenant's deterministic default
+  // knowledge base; the id prefix comes from defaultKnowledgeBaseId so the
+  // format has exactly one definition.
+  const defaultKnowledgeBaseIdPrefix = defaultKnowledgeBaseId("")
+  for (const table of ["sources", "documents", "page_index_nodes"]) {
+    db.exec(
+      `UPDATE ${table}
+       SET knowledge_base_id = '${defaultKnowledgeBaseIdPrefix}' || tenant_id
+       WHERE knowledge_base_id = ''`
+    )
+  }
   const taskColumns = db.pragma("table_info(task_pending_ops)") as Array<{ name: string }>
   if (!taskColumns.some(({ name }) => name === "next_attempt_at")) {
     db.exec("ALTER TABLE task_pending_ops ADD COLUMN next_attempt_at TEXT")

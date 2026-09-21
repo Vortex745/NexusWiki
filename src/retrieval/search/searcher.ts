@@ -558,7 +558,22 @@ function parseGraphProvenance(values: unknown): NonNullable<
               tenantId: parsed[2],
               allowedGroups: parsed[3],
             }
-          : null
+          // Ticket 03 (KB-02A): current writers append knowledgeBaseId as the
+          // 6th element (index 5); the leading five keep their meaning. The
+          // 2/4-element legacy branches above are untouched.
+          : parsed.length === 6 &&
+              parsed.slice(0, 3).every((part) => typeof part === "string") &&
+              Array.isArray(parsed[3]) &&
+              parsed[3].every((part) => typeof part === "string") &&
+              typeof parsed[5] === "string"
+            ? {
+                documentId: parsed[0],
+                chunkId: parsed[1],
+                tenantId: parsed[2],
+                allowedGroups: parsed[3],
+                knowledgeBaseId: parsed[5],
+              }
+            : null
       if (!item) continue
       const key = `${item.documentId}\0${item.chunkId}`
       const existing = provenance.get(key)
