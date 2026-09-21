@@ -83,9 +83,14 @@ interface FakeScopeOptions {
   reply?: string
   /**
    * Ticket 09: per-case delay before the fake starts answering, so a test can
-   * force a completion order different from the dataset order.
+   * force a completion order different from the dataset order. The wait honors
+   * the case signal, so an injected case timeout behaves like a real one.
    */
   delayByCaseMs?: Record<string, number>
+  /** Ticket 10: per-case failure — that case throws with this message. */
+  throwByCase?: Record<string, string>
+  /** Ticket 10: terminal status the done event reports (default "completed"). */
+  doneStatus?: string
 }
 
 class FakeScope implements IsolatedEvalResources {
@@ -166,7 +171,9 @@ class FakeScope implements IsolatedEvalResources {
           scope.maxInFlight = Math.max(scope.maxInFlight, scope.inFlight)
           try {
           const delay = options.delayByCaseMs?.[runOptions.caseId ?? ""]
-          if (delay) await new Promise((resolve) => setTimeout(resolve, delay))
+          if (delay) await waitFor(delay, runOptions.signal)
+          const caseFailure = options.throwByCase?.[runOptions.caseId ?? ""]
+          if (caseFailure) throw new Error(caseFailure)
           if (options.caseThrows) throw new Error(options.caseThrows)
           const ranking = options.ranking ?? FAKE_RANKING
           const candidates: RankedCandidateObservation[] = options.noObservation
@@ -193,7 +200,11 @@ class FakeScope implements IsolatedEvalResources {
           yield progressEvent(runOptions, {
             type: "done",
             stage: "done",
-            result: runResult(runOptions, options.reply ?? FAKE_REPLY),
+            result: runResult(
+              runOptions,
+              options.reply ?? FAKE_REPLY,
+              (options.doneStatus ?? "completed") as AnswerRunResult["status"]
+            ),
           })
           // Keep the unused helper referenced for type clarity.
           void passageIdForChunk
@@ -251,13 +262,33 @@ function progressEvent(
   } as AnswerRunEvent
 }
 
+/** A delay that honours the case signal, like a cancellable provider call. */
+function waitFor(ms: number, signal?: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (signal?.aborted) {
+      reject(new Error("aborted"))
+      return
+    }
+    const timer = setTimeout(resolve, ms)
+    signal?.addEventListener(
+      "abort",
+      () => {
+        clearTimeout(timer)
+        reject(new Error("aborted"))
+      },
+      { once: true }
+    )
+  })
+}
+
 function runResult(
   options: { runId?: string; caseId?: string },
-  reply: string
+  reply: string,
+  status: string = "completed"
 ): AnswerRunResult {
   return {
     runId: options.runId ?? "run",
-    status: "completed",
+    status,
     reply,
     references: [],
     degradation: { status: "none", unavailableChannels: [] },
@@ -291,7 +322,12 @@ function identityMiddleware(req: Request, res: Response, next: NextFunction): vo
 
 async function buildHarness(
   scopeOptions: FakeScopeOptions = {},
-  serviceOptions: { maxCasesPerTask?: number; maxRetainedTasks?: number } = {}
+  serviceOptions: {
+    maxCasesPerTask?: number
+    maxRetainedTasks?: number
+    caseTimeoutMs?: number
+    taskTimeoutMs?: number
+  } = {}
 ): Promise<Harness> {
   const scopes: FakeScope[] = []
   let server: import("node:http").Server | undefined
@@ -979,6 +1015,195 @@ test("an honest refusal keeps its own text and its own low BLEU (the reference i
     for (const key of ["bleu-1", "bleu-2", "bleu-4", "rouge-1", "rouge-2", "rouge-l"]) {
       assert.ok(Number.isFinite(metrics[key]), `${key} must never be NaN or Infinity`)
     }
+  } finally {
+    await harness.close()
+  }
+})
+
+// ---------------------------------------------------------------------------
+// Ticket 10 — a batch keeps going and classifies each case honestly
+// ---------------------------------------------------------------------------
+
+const NULL_METRICS = {
+  precision: null,
+  recall: null,
+  "ndcg@3": null,
+  "ndcg@10": null,
+  mrr: null,
+  map: null,
+  "bleu-1": null,
+  "bleu-2": null,
+  "bleu-4": null,
+  "rouge-1": null,
+  "rouge-2": null,
+  "rouge-l": null,
+}
+
+/** Three cases; the per-case options above decide how each one behaves. */
+function partialFailureDataset() {
+  return {
+    schemaVersion: 1,
+    name: "partial failure",
+    version: "1.0.0",
+    corpus: [{ passageId: "p1", content: "退款在审核通过后 3 个工作日内到账。" }],
+    cases: [
+      { caseId: "slow", question: "退款多久到账？", referenceAnswer: "3 个工作日。", relevantPassageIds: ["p1"] },
+      { caseId: "broken", question: "配送多久？", referenceAnswer: "2 至 4 个工作日。", relevantPassageIds: ["p1"] },
+      { caseId: "fine", question: "要审核吗？", referenceAnswer: "需要审核。", relevantPassageIds: ["p1"] },
+    ],
+  }
+}
+
+test("a timed-out case and a provider failure do not stop the batch, and neither invents an answer", async () => {
+  const harness = await buildHarness(
+    {
+      ranking: [{ passageId: "p1", relevant: true }],
+      delayByCaseMs: { slow: 5_000 },
+      throwByCase: { broken: "provider unavailable" },
+      ordering: { source: "fused", reason: "unavailable" },
+    },
+    { caseTimeoutMs: 150 }
+  )
+  try {
+    const created = await createTask(harness.port, { dataset: partialFailureDataset() })
+    const detail = await pollTerminal(harness.port, created.body.id as string)
+
+    assert.equal(detail.stage, "completed_with_errors", "a partial success is not a failed task")
+    assert.deepEqual(detail.progress, { finished: 3, total: 3 })
+    assert.deepEqual(detail.counts, { answered: 1, failed: 2, degraded: 1 })
+
+    const cases = detail.cases as Array<Record<string, unknown>>
+    assert.deepEqual(cases.map((item) => item.caseId), ["slow", "broken", "fine"])
+
+    assert.equal(cases[0].outcome, "failed", "the timed-out case failed")
+    assert.match(String(cases[0].error), /budget/)
+    assert.equal(cases[0].answer, "", "a failed case never falls back to the reference answer")
+    assert.deepEqual(cases[0].metrics, NULL_METRICS)
+    assert.equal(cases[0].ordering, undefined)
+
+    assert.equal(cases[1].outcome, "failed", "the provider failure is recorded, not swallowed")
+    assert.match(String(cases[1].error), /provider unavailable/)
+
+    assert.equal(cases[2].outcome, "answered")
+    assert.equal(cases[2].answer, FAKE_REPLY)
+    assert.deepEqual(
+      cases[2].ordering,
+      { source: "fused", reason: "unavailable" },
+      "the degraded ranking is recorded instead of being presented as a rerank"
+    )
+    assert.equal((cases[2].metrics as Record<string, number>).precision, 1)
+
+    // Counts and sample sizes always add up over the settled cases.
+    const summary = detail.metrics as {
+      metrics: Record<string, { value: number | null; sampleSize: number; notApplicable: number }>
+    }
+    for (const key of Object.keys(summary.metrics)) {
+      assert.equal(
+        summary.metrics[key].sampleSize + summary.metrics[key].notApplicable,
+        3,
+        `${key} must account for every settled case`
+      )
+    }
+    assert.equal(summary.metrics.precision.sampleSize, 1)
+    assert.equal(summary.metrics.precision.notApplicable, 2)
+  } finally {
+    await harness.close()
+  }
+})
+
+test("a task that runs out of budget marks the cases it never started, without losing any", async () => {
+  // Every case hangs, so the task budget expires with the third case still
+  // queued — it must be reported explicitly, not silently dropped.
+  const harness = await buildHarness(
+    { delayByCaseMs: { slow: 5_000, broken: 5_000, fine: 5_000 } },
+    { taskTimeoutMs: 100, caseTimeoutMs: 60_000 }
+  )
+  try {
+    const created = await createTask(harness.port, { dataset: partialFailureDataset() })
+    const detail = await pollTerminal(harness.port, created.body.id as string)
+
+    assert.equal(detail.stage, "failed")
+    assert.deepEqual(detail.progress, { finished: 3, total: 3 })
+    assert.deepEqual(detail.counts, { answered: 0, failed: 3, degraded: 0 })
+
+    const cases = detail.cases as Array<Record<string, unknown>>
+    assert.equal(cases.length, 3, "no case is silently dropped")
+    for (const item of cases) {
+      assert.equal(item.outcome, "failed")
+      assert.equal(item.answer, "", "an aborted case never borrows the reference answer")
+      assert.deepEqual(item.metrics, NULL_METRICS)
+      assert.ok(String(item.error).length > 0, "every failure carries a reason")
+    }
+    assert.match(
+      String(cases[2].error),
+      /before this case started/,
+      "a case that never started says exactly that"
+    )
+  } finally {
+    await harness.close()
+  }
+})
+
+test("a low score is not an execution failure", async () => {
+  const dataset = {
+    schemaVersion: 1,
+    name: "low score",
+    version: "1.0.0",
+    corpus: [
+      { passageId: "gt", content: "退款在审核通过后 3 个工作日内到账。" },
+      { passageId: "other", content: "配送需要 2 至 4 个工作日。" },
+    ],
+    cases: [
+      { caseId: "c1", question: "退款多久到账？", referenceAnswer: "3 个工作日。", relevantPassageIds: ["gt"] },
+    ],
+  }
+  // Only the distractor is retrieved → every retrieval metric is a real 0.
+  const harness = await buildHarness({ ranking: [{ passageId: "other", relevant: false }] })
+  try {
+    const created = await createTask(harness.port, { dataset })
+    const detail = await pollTerminal(harness.port, created.body.id as string)
+
+    assert.equal(detail.stage, "completed", "a miss is a completed run")
+    assert.deepEqual(detail.counts, { answered: 1, failed: 0, degraded: 0 })
+    const cases = detail.cases as Array<Record<string, unknown>>
+    assert.equal(cases[0].outcome, "answered")
+    assert.equal((cases[0].metrics as Record<string, number>).precision, 0)
+    assert.equal((cases[0].metrics as Record<string, number>).recall, 0)
+    const summary = detail.metrics as {
+      metrics: Record<string, { value: number | null; sampleSize: number; notApplicable: number }>
+    }
+    assert.equal(summary.metrics.precision.value, 0, "a real 0, not a fake 100%")
+    assert.equal(summary.metrics.precision.sampleSize, 1)
+  } finally {
+    await harness.close()
+  }
+})
+
+test("an honest refusal keeps its terminal status and reply instead of looking like a provider failure", async () => {
+  const refusal = "抱歉，知识库里没有足够信息回答这个问题。"
+  const harness = await buildHarness({
+    ranking: [{ passageId: "refund-policy", relevant: true }],
+    reply: refusal,
+    doneStatus: "insufficient_retrieval",
+    ordering: { source: "dedicated_rerank" },
+  })
+  try {
+    const created = await createTask(harness.port, { datasetId: "refund-single-case" })
+    const detail = await pollTerminal(harness.port, created.body.id as string)
+
+    assert.equal(detail.stage, "completed", "a refusal is a completed run")
+    assert.deepEqual(detail.counts, { answered: 1, failed: 0, degraded: 0 })
+    const cases = detail.cases as Array<Record<string, unknown>>
+    assert.equal(cases[0].outcome, "answered")
+    assert.equal(
+      cases[0].terminalStatus,
+      "insufficient_retrieval",
+      "the real terminal status survives"
+    )
+    assert.equal(cases[0].answer, refusal, "the refusal text is the real reply")
+    assert.equal(cases[0].error, undefined, "no provider error is invented for a refusal")
+    assert.deepEqual(cases[0].ordering, { source: "dedicated_rerank" })
+    assert.equal((cases[0].metrics as Record<string, number>).precision, 1)
   } finally {
     await harness.close()
   }

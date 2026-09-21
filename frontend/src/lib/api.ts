@@ -134,6 +134,8 @@ export interface EvaluationTaskSummary {
   }
   stage: EvaluationTaskStage
   progress: { finished: number; total: number }
+  /** Ticket 10: answered / failed / degraded among the settled cases. */
+  counts: { answered: number; failed: number; degraded: number }
   createdAt: string
   startedAt?: string
   finishedAt?: string

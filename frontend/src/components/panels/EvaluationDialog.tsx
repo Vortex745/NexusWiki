@@ -449,6 +449,10 @@ export function EvaluationDialog({ open, onClose }: { open: boolean; onClose: ()
                 {task.progress.total > 0 ? (
                   <span className="font-mono text-[11px] text-muted/70">
                     已完成 {task.progress.finished}/{task.progress.total}
+                    <span className="ml-2 text-muted/50">
+                      成功 {task.counts.answered} · 失败 {task.counts.failed} · 降级{" "}
+                      {task.counts.degraded}
+                    </span>
                   </span>
                 ) : null}
                 <StageBadge stage={task.stage} />
@@ -481,7 +485,11 @@ export function EvaluationDialog({ open, onClose }: { open: boolean; onClose: ()
                         : "bg-red-100 text-red-600 dark:bg-red-950 dark:text-red-400",
                     )}
                   >
-                    {item.outcome === "answered" ? "已回答" : "失败"}
+                    {item.outcome === "answered"
+                      ? item.terminalStatus && item.terminalStatus !== "completed"
+                        ? `已回答（${item.terminalStatus}）`
+                        : "已回答"
+                      : "失败"}
                   </span>
                 </header>
                 {item.answer ? (

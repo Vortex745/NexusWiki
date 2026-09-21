@@ -116,6 +116,14 @@ export interface EvalTaskSummary {
   dataset: EvalTaskDatasetRef
   stage: EvalTaskStage
   progress: { finished: number; total: number }
+  /**
+   * Ticket 10: how the settled cases ended. `degraded` is a subset of
+   * `answered` — a case whose published ranking was NOT scored by the
+   * dedicated reranker (fused fallback, unavailable reranker, merged order).
+   * A low score is never counted as a failure: only a case that never produced
+   * a reply is `failed`.
+   */
+  counts: { answered: number; failed: number; degraded: number }
   createdAt: string
   startedAt?: string
   finishedAt?: string

@@ -533,6 +533,22 @@ export class EvaluationService {
   }
 
   private toSummary(record: TaskRecord): EvalTaskSummary {
+    // Ticket 10: counts come from the cases that actually settled, so a
+    // running batch reports 0/0/0 for the ones still in flight and the
+    // numbers always add up to `progress.finished`.
+    const settled = record.cases.filter(Boolean)
+    const counts = {
+      answered: settled.filter((item) => item.outcome === "answered").length,
+      failed: settled.filter((item) => item.outcome === "failed").length,
+      // Only cases that actually carry a ranking label can be called
+      // degraded — an unlabelled answer is unknown, not a degradation claim.
+      degraded: settled.filter(
+        (item) =>
+          item.outcome === "answered" &&
+          item.ordering !== undefined &&
+          item.ordering.source !== "dedicated_rerank"
+      ).length,
+    }
     return {
       id: record.id,
       dataset: {
@@ -545,6 +561,7 @@ export class EvaluationService {
       },
       stage: record.stage,
       progress: { finished: record.finished, total: record.total },
+      counts,
       createdAt: record.createdAt,
       ...(record.startedAt ? { startedAt: record.startedAt } : {}),
       ...(record.finishedAt ? { finishedAt: record.finishedAt } : {}),

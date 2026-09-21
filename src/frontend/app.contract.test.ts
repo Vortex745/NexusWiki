@@ -196,6 +196,22 @@ test("the evaluation dialog shows all six retrieval metrics and the ranking's sc
   assert.match(dialog, /task\.metrics\.version/, "the metric version stamp is displayed")
 })
 
+test("the evaluation dialog reports how the batch ended and keeps every case reason visible", () => {
+  const dialog = read("frontend/src/components/panels/EvaluationDialog.tsx")
+  assert.match(
+    dialog,
+    /成功 \{task\.counts\.answered\} · 失败 \{task\.counts\.failed\} · 降级/,
+    "answered/failed/degraded counts are shown next to the progress"
+  )
+  assert.match(
+    dialog,
+    /已回答（\$\{item\.terminalStatus\}）/,
+    "a refusal or handoff keeps its real terminal status instead of looking like a failure"
+  )
+  assert.match(dialog, /item\.error/, "each failed case shows its own reason")
+  assert.match(dialog, /formatScore\(item\.metrics\[key\] \?\? null\)/, "a missing metric renders as 不适用")
+})
+
 test("the evaluation dialog presents BLEU and ROUGE as text similarity with their fixed text rules", () => {
   const dialog = read("frontend/src/components/panels/EvaluationDialog.tsx")
   const similarityKeys = ["bleu-1", "bleu-2", "bleu-4", "rouge-1", "rouge-2", "rouge-l"]
