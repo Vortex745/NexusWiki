@@ -1109,3 +1109,83 @@ test("cancelling through another lifecycle aborts the running parser signal", as
     db.close()
   }
 })
+
+// Ticket 04 (KB-02B) criterion 3: 归属写在 Source/Document 行上，重试、取消与
+// 自动激活都只按 doc_id 操作，因此不得丢失或改写知识库归属。
+test("Ticket 04 KB-02B: knowledge ownership survives retry, cancellation and activation", async () => {
+  const db = openDb(":memory:")
+  let failFirstAttempt = true
+  const runner: IngestionStageRunner = {
+    close: async () => {},
+    async run(_document, execution): Promise<void> {
+      if (failFirstAttempt) {
+        failFirstAttempt = false
+        await execution.runStage(
+          "chunk",
+          {},
+          async () => {
+            throw new Error("temporary provider failure")
+          },
+          () => ({})
+        )
+        return
+      }
+      for (const stage of ["chunk", "wikify", "storeChunks", "storeGraph"] as const) {
+        await execution.runStage(stage, {}, async () => undefined, () => ({ stage }))
+      }
+    },
+  }
+  let now = Date.parse("2026-07-15T00:00:00.000Z")
+  const lifecycle = new IngestionLifecycle(db, runner, () => new Date(now))
+  const sourceKnowledgeBase = (sourceId: string) =>
+    (
+      db.prepare("SELECT knowledge_base_id FROM sources WHERE source_id = ?").get(sourceId) as
+        { knowledge_base_id: string }
+    ).knowledge_base_id
+
+  try {
+    const submitted = lifecycle.submit({
+      title: "Web policy",
+      content: "policy content",
+      knowledgeBaseId: "kb-policies",
+      sourceIdentity: { kind: "web", uriOrExternalId: "http://example.com/policy", namespace: "web" },
+    })
+    assert.equal(submitted.status, "pending")
+    assert.equal(submitted.knowledgeBaseId, "kb-policies")
+
+    const repo = new DocumentRepo(db)
+    const sourceId = repo.get(submitted.docId)!.sourceId
+    assert.equal(repo.get(submitted.docId)?.knowledgeBaseId, "kb-policies")
+    assert.equal(sourceKnowledgeBase(sourceId), "kb-policies")
+
+    // 失败并排入重试：归属不变。
+    const failed = await lifecycle.runNext()
+    assert.equal(failed?.success, false)
+    assert.equal(lifecycle.getStatus(submitted.docId)?.task?.failCount, 1)
+    assert.equal(repo.get(submitted.docId)?.knowledgeBaseId, "kb-policies")
+    assert.equal(sourceKnowledgeBase(sourceId), "kb-policies")
+
+    // 重试成功并自动激活：归属不变，且激活的仍是同一个 doc。
+    now += 2_000
+    const completed = await lifecycle.runNext()
+    assert.equal(completed?.success, true)
+    assert.equal(repo.get(submitted.docId)?.knowledgeBaseId, "kb-policies")
+    assert.equal(sourceKnowledgeBase(sourceId), "kb-policies")
+    assert.equal(repo.getActive(sourceId)?.id, submitted.docId)
+
+    // 取消另一个库里的在途导入：归属同样不变。
+    const toCancel = lifecycle.submit({
+      title: "Web policy copy",
+      content: "policy content copy",
+      knowledgeBaseId: "kb-other",
+      sourceIdentity: { kind: "web", uriOrExternalId: "http://example.com/other", namespace: "web" },
+    })
+    assert.equal(toCancel.knowledgeBaseId, "kb-other")
+    assert.equal(lifecycle.cancel(toCancel.docId)?.status, "cancelled")
+    assert.equal(repo.getStatus(toCancel.docId), "cancelled")
+    assert.equal(repo.get(toCancel.docId)?.knowledgeBaseId, "kb-other")
+    assert.equal(sourceKnowledgeBase(repo.get(toCancel.docId)!.sourceId), "kb-other")
+  } finally {
+    db.close()
+  }
+})

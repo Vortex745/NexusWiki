@@ -25,6 +25,7 @@ import type { IngestionLifecycle, IngestionStageRunner, IngestionSubmission } fr
 import { createIngestionLifecycle } from "../ingestion/pipeline"
 import { openDb, type DB } from "../ingestion/tracking/db"
 import type { ActivationMode } from "../types/governance"
+import { defaultKnowledgeBaseId } from "../types/knowledge_base"
 
 // ---------------------------------------------------------------------------
 // Revision derivation
@@ -205,6 +206,10 @@ export function createIngestionFixture(input: CreateIngestionFixtureInput): Inge
     // so the fixture never touches production tenant data. This is safe because
     // the fixture's db is a fresh in-memory instance — every row belongs to
     // this fixture.
+    //
+    // knowledge_base_id needs no rewrite: `ingestBounded` files every document
+    // under the acceptance tenant's own default knowledge base up front, so the
+    // rewritten tenant and the owner always agree.
     const now = new Date().toISOString()
     db.prepare(
       `UPDATE sources SET tenant_id = ?, updated_at = ? WHERE tenant_id = 'default'`
@@ -231,6 +236,11 @@ export function createIngestionFixture(input: CreateIngestionFixtureInput): Inge
     const submission = lifecycle.submit({
       title: boundedInput.title,
       content: boundedInput.content,
+      // Ticket 04 (KB-02B): file the import under the acceptance tenant's own
+      // default knowledge base. Leaving this out would file it under the
+      // production tenant's default (`kb-default-default`) and leave the row
+      // claiming an owner from a tenant it does not belong to.
+      knowledgeBaseId: defaultKnowledgeBaseId(tenantId),
       sourceIdentity: {
         kind: "submission",
         uriOrExternalId,

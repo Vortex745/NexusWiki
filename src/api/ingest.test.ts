@@ -807,3 +807,232 @@ test("Ticket 03 KB-02A: text imports fail loudly on unknown, cross-tenant or mal
     rmSync(directory, { recursive: true, force: true })
   }
 })
+
+// --- Ticket 04 (KB-02B) URL/sitemap knowledge-base ownership ---
+// URL 入口必须与 /ingest、/ingest/file 用同一份归属契约：缺省 → 默认库；
+// 显式 id 必须存在且属于本租户；同一 URL 进两个库是两条独立身份。
+
+/** 把 public.test 的请求转到本地测试服务器，其余交给注入的 fetchImpl。 */
+function localFetchImpl(port: number): typeof fetch {
+  return (input, init) => {
+    const url = input instanceof URL ? input : new URL(String(input))
+    return fetch(`http://127.0.0.1:${port}${url.pathname}${url.search}`, init)
+  }
+}
+
+const URL_IMPORT_HTML = `<!DOCTYPE html><html><head><title>政策</title></head><body><p>内容</p></body></html>`
+
+async function withLocalUpstream(
+  handler: (req: import("node:http").IncomingMessage, res: import("node:http").ServerResponse) => void
+): Promise<{ port: number; close: () => Promise<void> }> {
+  const upstream = createServer(handler)
+  await new Promise<void>((resolve) => upstream.listen(0, "127.0.0.1", resolve))
+  const address = upstream.address()
+  assert.ok(address && typeof address === "object")
+  return {
+    port: address.port,
+    close: () => new Promise<void>((resolve) => upstream.close(() => resolve())),
+  }
+}
+
+function knowledgeBaseIdOfSource(db: DB, sourceId: string): string {
+  return (
+    db.prepare("SELECT knowledge_base_id FROM sources WHERE source_id = ?").get(sourceId) as
+      { knowledge_base_id: string }
+  ).knowledge_base_id
+}
+
+test("Ticket 04 KB-02B: URL imports carry ownership and the same URL in two bases stays independent", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "kefu-rag-url-kb-"))
+  process.env.OPENAI_API_KEY = process.env.OPENAI_API_KEY || "test-key"
+  process.env.SQLITE_PATH = join(directory, "ingestion.db")
+
+  const upstream = await withLocalUpstream((_req, res) => {
+    res.writeHead(200, { "content-type": "text/html; charset=utf-8" })
+    res.end(URL_IMPORT_HTML)
+  })
+  _setTestDefaults({ resolver: PUBLIC_TEST_RESOLVER, fetchImpl: localFetchImpl(upstream.port) })
+
+  const db = openDb()
+  seedKnowledgeBase(db, "kb-policies", "tenant-a")
+  const server = createApp({ eventsSource, ingestAccessMiddleware: tenantAccessMiddleware }).listen(0)
+  try {
+    await new Promise<void>((resolve) => server.once("listening", resolve))
+    const address = server.address()
+    assert.ok(address && typeof address === "object")
+    const submit = async (body: Record<string, unknown>) => {
+      const response = await fetch(`http://127.0.0.1:${address.port}/api/ingest/url`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(body),
+      })
+      assert.equal(response.status, 200)
+      return response.json() as Promise<{ docId: string; status: string; knowledgeBaseId: string }>
+    }
+
+    const sameUrl = "http://public.test/policy"
+    const scoped = await submit({ url: sameUrl, knowledgeBaseId: "kb-policies" })
+    assert.equal(scoped.knowledgeBaseId, "kb-policies")
+    // 缺省字段 → 该租户的确定性默认库，旧调用方继续可用。
+    const fallback = await submit({ url: sameUrl })
+    assert.equal(fallback.knowledgeBaseId, "kb-default-tenant-a")
+
+    // criterion 2: 同一 URL 落在两个库里 = 两个 Source 身份、两个 Document，
+    // 而不是被后一次导入收养成同一个。
+    const repo = new DocumentRepo(db)
+    const scopedDoc = repo.get(scoped.docId)
+    const fallbackDoc = repo.get(fallback.docId)
+    assert.equal(scopedDoc?.knowledgeBaseId, "kb-policies")
+    assert.equal(fallbackDoc?.knowledgeBaseId, "kb-default-tenant-a")
+    assert.notEqual(scoped.docId, fallback.docId)
+    assert.notEqual(scopedDoc?.sourceId, fallbackDoc?.sourceId)
+    assert.equal(knowledgeBaseIdOfSource(db, scopedDoc!.sourceId), "kb-policies")
+    assert.equal(knowledgeBaseIdOfSource(db, fallbackDoc!.sourceId), "kb-default-tenant-a")
+  } finally {
+    _setTestDefaults({})
+    await new Promise<void>((resolve, reject) => {
+      server.close((error) => error ? reject(error) : resolve())
+    })
+    await upstream.close()
+    closeDb()
+    rmSync(directory, { recursive: true, force: true })
+  }
+})
+
+test("Ticket 04 KB-02B: URL imports reject bad ids before any outbound fetch", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "kefu-rag-url-kb-bad-"))
+  process.env.OPENAI_API_KEY = process.env.OPENAI_API_KEY || "test-key"
+  process.env.SQLITE_PATH = join(directory, "ingestion.db")
+
+  // 归属解析必须发生在 fetch 之前：被拒绝的导入不应产生任何出网请求。
+  let fetchCalls = 0
+  const fetchImpl: typeof fetch = () => {
+    fetchCalls += 1
+    return Promise.resolve(
+      new Response(URL_IMPORT_HTML, { status: 200, headers: { "content-type": "text/html" } })
+    )
+  }
+  _setTestDefaults({ resolver: PUBLIC_TEST_RESOLVER, fetchImpl })
+
+  const db = openDb()
+  seedKnowledgeBase(db, "kb-other", "tenant-b")
+  const server = createApp({ eventsSource, ingestAccessMiddleware: tenantAccessMiddleware }).listen(0)
+  try {
+    await new Promise<void>((resolve) => server.once("listening", resolve))
+    const address = server.address()
+    assert.ok(address && typeof address === "object")
+    const submit = (knowledgeBaseId: unknown, mode?: "sitemap") =>
+      fetch(`http://127.0.0.1:${address.port}/api/ingest/url`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          url: "http://public.test/policy",
+          knowledgeBaseId,
+          ...(mode ? { mode } : {}),
+        }),
+      })
+
+    const countRows = (table: string) =>
+      (db.prepare(`SELECT COUNT(*) AS count FROM ${table}`).get() as { count: number }).count
+    const before = { documents: countRows("documents"), sources: countRows("sources") }
+
+    // 未知 id 与跨租户 id 都是 404（不可区分，不能用来探测别的租户）。
+    for (const id of ["kb-missing", "kb-other"]) {
+      const denied = await submit(id)
+      assert.equal(denied.status, 404, `${id} must be rejected`)
+      assert.deepEqual(await denied.json(), { error: "knowledge base not found" })
+    }
+
+    // 空白与「非字符串」都是 400：非字符串尤其不能被当成“未提供”而落到默认库。
+    for (const malformed of ["   ", 123]) {
+      const rejected = await submit(malformed)
+      assert.equal(rejected.status, 400, `${JSON.stringify(malformed)} must be rejected`)
+      const body = await rejected.json() as { error: string }
+      assert.match(body.error, /non-empty string/i)
+    }
+
+    // sitemap 入口走同一份归属契约：坏 id 在抓取 sitemap.xml 之前就被拒绝。
+    const sitemapDenied = await submit("kb-missing", "sitemap")
+    assert.equal(sitemapDenied.status, 404)
+    assert.deepEqual(await sitemapDenied.json(), { error: "knowledge base not found" })
+
+    assert.equal(fetchCalls, 0, "被拒绝的 URL 导入不得发起任何出网请求")
+    assert.deepEqual(
+      { documents: countRows("documents"), sources: countRows("sources") },
+      before
+    )
+  } finally {
+    _setTestDefaults({})
+    await new Promise<void>((resolve, reject) => {
+      server.close((error) => error ? reject(error) : resolve())
+    })
+    closeDb()
+    rmSync(directory, { recursive: true, force: true })
+  }
+})
+
+test("Ticket 04 KB-02B: every sitemap page is filed under the resolved knowledge base", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "kefu-rag-sitemap-kb-"))
+  process.env.OPENAI_API_KEY = process.env.OPENAI_API_KEY || "test-key"
+  process.env.SQLITE_PATH = join(directory, "ingestion.db")
+
+  const sitemapXml = `<?xml version="1.0" encoding="UTF-8"?>
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+  <url><loc>http://public.test/p1</loc></url>
+  <url><loc>http://public.test/p2</loc></url>
+</urlset>`
+  const upstream = await withLocalUpstream((req, res) => {
+    if (req.url === "/sitemap.xml") {
+      res.writeHead(200, { "content-type": "application/xml" })
+      res.end(sitemapXml)
+    } else {
+      res.writeHead(200, { "content-type": "text/html" })
+      res.end(URL_IMPORT_HTML)
+    }
+  })
+  _setTestDefaults({ resolver: PUBLIC_TEST_RESOLVER, fetchImpl: localFetchImpl(upstream.port) })
+
+  const db = openDb()
+  seedKnowledgeBase(db, "kb-policies", "tenant-a")
+  const server = createApp({ eventsSource, ingestAccessMiddleware: tenantAccessMiddleware }).listen(0)
+  try {
+    await new Promise<void>((resolve) => server.once("listening", resolve))
+    const address = server.address()
+    assert.ok(address && typeof address === "object")
+
+    const response = await fetch(`http://127.0.0.1:${address.port}/api/ingest/url`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        url: "http://public.test/sitemap.xml",
+        mode: "sitemap",
+        maxPages: 5,
+        knowledgeBaseId: "kb-policies",
+      }),
+    })
+    assert.equal(response.status, 200)
+    const result = await response.json() as {
+      knowledgeBaseId: string
+      submitted: number
+      items: { url: string; docId: string }[]
+    }
+    assert.equal(result.knowledgeBaseId, "kb-policies")
+    assert.equal(result.submitted, 2)
+
+    // 整批共享同一个已解析的知识库：每个页面的 Document 与 Source 都归属它。
+    const repo = new DocumentRepo(db)
+    for (const item of result.items) {
+      const document = repo.get(item.docId)
+      assert.equal(document?.knowledgeBaseId, "kb-policies", `${item.url} 应归属 kb-policies`)
+      assert.equal(knowledgeBaseIdOfSource(db, document!.sourceId), "kb-policies")
+    }
+  } finally {
+    _setTestDefaults({})
+    await new Promise<void>((resolve, reject) => {
+      server.close((error) => error ? reject(error) : resolve())
+    })
+    await upstream.close()
+    closeDb()
+    rmSync(directory, { recursive: true, force: true })
+  }
+})

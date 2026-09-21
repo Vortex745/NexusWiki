@@ -44,6 +44,12 @@ interface IngestUrlRequestBody {
   title?: string
   parserOverride?: "markitdown" | "marker" | "mineru"
   maxPages?: number
+  /**
+   * Ticket 04 (KB-02B): the owning knowledge base, same contract as `/ingest`
+   * and `/ingest/file`. Omitted → tenant default. `unknown` because this is
+   * untrusted JSON: the resolver validates the type instead of trusting it.
+   */
+  knowledgeBaseId?: unknown
 }
 
 const router = Router()
@@ -223,7 +229,17 @@ router.post("/ingest/url", async (req: Request, res: Response) => {
     return res.status(400).json({ error: "parserOverride must be markitdown, marker, or mineru" })
   }
 
-  const lifecycle = createIngestionLifecycle(openDb())
+  // Ticket 04 (KB-02B): resolve ownership BEFORE any outbound fetch. A rejected
+  // import must not perform network work, and every page of a sitemap batch is
+  // filed under this one knowledge base.
+  const db = openDb()
+  const resolved = resolveRequestKnowledgeBaseId(res, db, body.knowledgeBaseId)
+  if (!resolved.ok) {
+    return res.status(resolved.status).json(resolved.body)
+  }
+  const { knowledgeBaseId } = resolved
+
+  const lifecycle = createIngestionLifecycle(db)
 
   if (mode === "single") {
     let fetched
@@ -258,6 +274,7 @@ router.post("/ingest/url", async (req: Request, res: Response) => {
       fileName: fetched.fileName,
       mimeType: fetched.mimeType,
       parserOverride,
+      knowledgeBaseId,
       sourceIdentity: trustedSourceIdentity(res, {
         kind: "web",
         uriOrExternalId: url,
@@ -333,6 +350,7 @@ router.post("/ingest/url", async (req: Request, res: Response) => {
       fileName: pageFetched.fileName,
       mimeType: pageFetched.mimeType,
       parserOverride,
+      knowledgeBaseId,
       sourceIdentity: trustedSourceIdentity(res, {
         kind: "web",
         uriOrExternalId: page.url.toString(),
@@ -349,6 +367,9 @@ router.post("/ingest/url", async (req: Request, res: Response) => {
   return res.json({
     batchId,
     mode: "sitemap",
+    // Ticket 04 (KB-02B): the batch reports the single knowledge base every
+    // page was filed under, so a caller can verify ownership without probing.
+    knowledgeBaseId,
     total: pages.length,
     submitted: submissions.filter((s) => s.docId).length,
     failed: submissions.filter((s) => !s.docId).length,
