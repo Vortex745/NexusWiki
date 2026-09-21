@@ -6,10 +6,12 @@ import {
   EvaluationRequestError,
   fetchEvaluationDatasets,
   fetchEvaluationTask,
+  listEvaluationTasks,
   type EvaluationCaseResult,
   type EvaluationDatasetsPayload,
   type EvaluationTaskDetail,
   type EvaluationTaskStage,
+  type EvaluationTaskSummary,
 } from "../../lib/api"
 import { EVALUATION_POLL_MS } from "../../lib/constants"
 import { cn } from "../../lib/cn"
@@ -182,6 +184,12 @@ export function EvaluationDialog({ open, onClose }: { open: boolean; onClose: ()
   const [submitting, setSubmitting] = useState(false)
   const [task, setTask] = useState<EvaluationTaskDetail | null>(null)
   const [taskMissing, setTaskMissing] = useState(false)
+  // Ticket 12: in-process history. `pollTokenRef` invalidates responses of a
+  // task the user has already switched away from, so an old poll can never
+  // backfill the panel with stale results.
+  const [history, setHistory] = useState<EvaluationTaskSummary[]>([])
+  const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null)
+  const pollTokenRef = useRef(0)
 
   useEffect(() => {
     const dialog = dialogRef.current
@@ -197,10 +205,20 @@ export function EvaluationDialog({ open, onClose }: { open: boolean; onClose: ()
     }
   }, [])
 
-  // Load the built-in samples each time the dialog opens.
+  /** Ticket 12: the retained records of THIS process (empty after a restart). */
+  const refreshHistory = useCallback(async () => {
+    try {
+      setHistory(await listEvaluationTasks())
+    } catch {
+      // 历史列表读取失败不影响当前任务的展示与轮询。
+    }
+  }, [])
+
+  // Load the built-in samples and the retained records each time it opens.
   useEffect(() => {
     if (!open) return
     setLoadError(null)
+    void refreshHistory()
     fetchEvaluationDatasets()
       .then((payload) => {
         setDatasets(payload)
@@ -209,7 +227,7 @@ export function EvaluationDialog({ open, onClose }: { open: boolean; onClose: ()
       .catch((error: unknown) => {
         setLoadError(error instanceof Error ? error.message : String(error))
       })
-  }, [open])
+  }, [open, refreshHistory])
 
   useEffect(
     () => () => {
@@ -221,25 +239,60 @@ export function EvaluationDialog({ open, onClose }: { open: boolean; onClose: ()
   const startPolling = useCallback(
     (taskId: string) => {
       stopPolling()
+      const token = (pollTokenRef.current += 1)
       pollTimer.current = window.setInterval(() => {
         void (async () => {
           try {
             const detail = await fetchEvaluationTask(taskId)
+            // Ticket 12: the user switched records — drop this stale response
+            // instead of writing an older task back into the panel.
+            if (pollTokenRef.current !== token) return
             if (detail === null) {
               // 服务重启或记录被清理：任务只存在于创建它的进程。
               setTaskMissing(true)
               stopPolling()
+              void refreshHistory()
               return
             }
             setTask(detail)
-            if (TERMINAL_STAGES.has(detail.stage)) stopPolling()
+            if (TERMINAL_STAGES.has(detail.stage)) {
+              stopPolling()
+              void refreshHistory()
+            }
           } catch {
             // 单次轮询失败不中断任务，下一次轮询会重试。
           }
         })()
       }, EVALUATION_POLL_MS)
     },
-    [stopPolling],
+    [refreshHistory, stopPolling],
+  )
+
+  /** Switch the panel to a retained record; polling follows the new choice. */
+  const selectTask = useCallback(
+    async (taskId: string) => {
+      stopPolling()
+      const token = (pollTokenRef.current += 1)
+      setSelectedTaskId(taskId)
+      setTaskMissing(false)
+      setUploadIssues([])
+      setLoadError(null)
+      try {
+        const detail = await fetchEvaluationTask(taskId)
+        if (pollTokenRef.current !== token) return
+        if (detail === null) {
+          setTask(null)
+          setTaskMissing(true)
+          return
+        }
+        setTask(detail)
+        if (!TERMINAL_STAGES.has(detail.stage)) startPolling(taskId)
+      } catch (error) {
+        setTask(null)
+        setLoadError(`读取记录失败：${error instanceof Error ? error.message : String(error)}`)
+      }
+    },
+    [startPolling, stopPolling],
   )
 
   const handleRun = async () => {
@@ -269,6 +322,8 @@ export function EvaluationDialog({ open, onClose }: { open: boolean; onClose: ()
         metrics: { version: "", metrics: {} },
         cleanup: null,
       })
+      setSelectedTaskId(summary.id)
+      void refreshHistory()
       startPolling(summary.id)
     } catch (error) {
       if (error instanceof EvaluationRequestError) {
@@ -439,6 +494,46 @@ export function EvaluationDialog({ open, onClose }: { open: boolean; onClose: ()
         >
           {running ? "评测进行中…" : submitting ? "提交中…" : mode === "upload" ? "运行上传数据集" : "运行评测"}
         </button>
+
+        {/* 本进程保留的评测记录（票 12） */}
+        <div className="mt-4 flex flex-col gap-1.5">
+          <p className="text-[11px] font-semibold text-ink">
+            本进程评测记录
+            <span className="ml-2 font-normal text-muted/50">
+              仅保存在当前服务进程内；重启后不可查询，超出保留上限或过期的完成记录会被清理
+            </span>
+          </p>
+          {history.length === 0 ? (
+            <p className="text-[11px] text-muted/50">本进程暂无评测记录。</p>
+          ) : (
+            <ul className="flex flex-col gap-1">
+              {history.map((item) => (
+                <li key={item.id}>
+                  <button
+                    type="button"
+                    onClick={() => void selectTask(item.id)}
+                    className={cn(
+                      "flex w-full cursor-pointer items-center justify-between gap-2 rounded-md border px-2.5 py-1.5 text-left text-[11px] transition-colors",
+                      item.id === selectedTaskId
+                        ? "border-brand bg-brand-subtle/40"
+                        : "border-line hover:bg-surface-subtle",
+                    )}
+                  >
+                    <span className="min-w-0 truncate font-mono text-muted/70">
+                      {item.dataset.name} · {item.id.slice(0, 8)}
+                    </span>
+                    <span className="flex flex-none items-center gap-2 text-muted/60">
+                      <span>
+                        已完成 {item.progress.finished}/{item.progress.total}
+                      </span>
+                      <span>{STAGE_LABELS[item.stage]}</span>
+                    </span>
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
 
         {/* 任务进度与结果 */}
         {task ? (

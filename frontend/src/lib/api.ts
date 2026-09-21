@@ -190,6 +190,14 @@ export async function createEvaluationTask(input: EvaluationTaskInput): Promise<
   return (await response.json()) as EvaluationTaskSummary
 }
 
+/** Ticket 12: the evaluation records retained by this process. */
+export async function listEvaluationTasks(): Promise<EvaluationTaskSummary[]> {
+  const response = await fetch(`${API_BASE}/evaluations`)
+  if (!response.ok) throw new Error(`评测记录读取失败 (${response.status})`)
+  const body = (await response.json()) as { tasks?: EvaluationTaskSummary[] }
+  return Array.isArray(body.tasks) ? body.tasks : []
+}
+
 /** 404 → null（任务只存在于当前服务进程，重启后不可查询）。 */
 export async function fetchEvaluationTask(id: string): Promise<EvaluationTaskDetail | null> {
   const response = await fetch(`${API_BASE}/evaluations/${encodeURIComponent(id)}`)

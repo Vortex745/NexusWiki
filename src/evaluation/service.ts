@@ -67,6 +67,14 @@ import {
 
 export const DEFAULT_MAX_RETAINED_TASKS = 20
 /**
+ * Ticket 12: in-memory history is bounded by BOTH a record count and a total
+ * case count, and a finished record older than its TTL is dropped on the next
+ * touch. Active (non-terminal) tasks are never evicted — capacity is only ever
+ * freed by finished records, and a task that cannot fit is rejected explicitly.
+ */
+export const DEFAULT_MAX_RETAINED_CASES = 200
+export const DEFAULT_TASK_TTL_MS = 60 * 60_000
+/**
  * Ticket 09: a task runs its dataset's cases with BOUNDED concurrency — never
  * an unbounded Promise.all over model calls. Cases beyond the cap are rejected
  * up front (the dataset validator already caps a dataset at 100 cases; a
@@ -121,6 +129,10 @@ export interface EvaluationServiceOptions {
   now?: () => Date
   generateId?: () => string
   maxRetainedTasks?: number
+  /** Ticket 12: total retained cases across the in-memory history. */
+  maxRetainedCases?: number
+  /** Ticket 12: how long a finished record stays queryable. */
+  taskTtlMs?: number
   maxCasesPerTask?: number
   /** Bounded concurrency across one task's cases (ticket 09). */
   caseConcurrency?: number
@@ -152,6 +164,8 @@ export class EvaluationService {
   private readonly now: () => Date
   private readonly generateId: () => string
   private readonly maxRetainedTasks: number
+  private readonly maxRetainedCases: number
+  private readonly taskTtlMs: number
   private readonly maxCasesPerTask: number
   private readonly caseConcurrency: number
   private readonly taskTimeoutMs: number
@@ -163,6 +177,8 @@ export class EvaluationService {
     this.now = options.now ?? (() => new Date())
     this.generateId = options.generateId ?? (() => randomUUID())
     this.maxRetainedTasks = options.maxRetainedTasks ?? DEFAULT_MAX_RETAINED_TASKS
+    this.maxRetainedCases = options.maxRetainedCases ?? DEFAULT_MAX_RETAINED_CASES
+    this.taskTtlMs = options.taskTtlMs ?? DEFAULT_TASK_TTL_MS
     this.maxCasesPerTask = options.maxCasesPerTask ?? DEFAULT_MAX_CASES_PER_TASK
     this.caseConcurrency = Math.max(
       1,
@@ -211,10 +227,22 @@ export class EvaluationService {
         ["cases"]
       )
     }
-    if (this.tasks.size >= this.maxRetainedTasks) {
-      throw new EvaluationCapacityError(
-        `evaluation task capacity reached (${this.maxRetainedTasks} retained tasks in this process); wait for a running task to finish or restart the service`
-      )
+    // Ticket 12: free the history first (TTL + over-limit records), then make
+    // room for this one by dropping the oldest FINISHED records. A running task
+    // is never evicted, so a house full of running tasks is rejected
+    // explicitly instead of silently losing work.
+    this.pruneHistory()
+    while (
+      this.tasks.size >= this.maxRetainedTasks ||
+      this.retainedCaseCount() + dataset.cases.length > this.maxRetainedCases
+    ) {
+      const oldest = this.oldestFinishedRecord()
+      if (!oldest) {
+        throw new EvaluationCapacityError(
+          `evaluation task capacity reached (${this.maxRetainedTasks} retained tasks / ${this.maxRetainedCases} cases in this process, all still running); wait for a running task to finish or restart the service`
+        )
+      }
+      this.tasks.delete(oldest.id)
     }
 
     const record: TaskRecord = {
@@ -246,12 +274,14 @@ export class EvaluationService {
   }
 
   getTask(id: string, owner: EvaluationOwner): EvalTaskDetail | null {
+    this.pruneHistory()
     const record = this.tasks.get(id)
     if (!record || !this.isOwner(record, owner)) return null
     return this.toDetail(record)
   }
 
   listTasks(owner: EvaluationOwner): EvalTaskSummary[] {
+    this.pruneHistory()
     return [...this.tasks.values()]
       .filter((record) => this.isOwner(record, owner))
       .sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1))
@@ -531,6 +561,49 @@ export class EvaluationService {
       candidates,
       unmappedCandidates: candidates.filter((candidate) => candidate.passageId === null).length,
     }
+  }
+
+  /**
+   * Ticket 12: keep the in-memory history bounded. Expired finished records go
+   * first, then — while the record or case budget is exceeded — the oldest
+   * finished ones. A task that is still running is never evicted, and dropping
+   * a record releases its dataset and replies with it (nothing is cached
+   * anywhere else).
+   */
+  private pruneHistory(): void {
+    const now = this.now().getTime()
+
+    for (const [id, record] of [...this.tasks]) {
+      if (!this.isFinished(record)) continue
+      const finishedAt = Date.parse(record.finishedAt ?? record.createdAt)
+      if (Number.isFinite(finishedAt) && now - finishedAt >= this.taskTtlMs) {
+        this.tasks.delete(id)
+      }
+    }
+
+    while (
+      this.tasks.size > this.maxRetainedTasks ||
+      this.retainedCaseCount() > this.maxRetainedCases
+    ) {
+      const oldest = this.oldestFinishedRecord()
+      if (!oldest) return
+      this.tasks.delete(oldest.id)
+    }
+  }
+
+  private isFinished(record: TaskRecord): boolean {
+    return EVAL_TASK_TERMINAL_STAGES.includes(record.stage)
+  }
+
+  /** Oldest finished record, or undefined when every retained task is running. */
+  private oldestFinishedRecord(): TaskRecord | undefined {
+    return [...this.tasks.values()]
+      .filter((record) => this.isFinished(record))
+      .sort((a, b) => (a.createdAt < b.createdAt ? -1 : 1))[0]
+  }
+
+  private retainedCaseCount(): number {
+    return [...this.tasks.values()].reduce((sum, record) => sum + record.total, 0)
   }
 
   private toSummary(record: TaskRecord): EvalTaskSummary {

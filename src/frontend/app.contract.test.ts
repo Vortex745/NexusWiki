@@ -196,6 +196,24 @@ test("the evaluation dialog shows all six retrieval metrics and the ranking's sc
   assert.match(dialog, /task\.metrics\.version/, "the metric version stamp is displayed")
 })
 
+test("the evaluation dialog lists this process's records and never shows a stale one", () => {
+  const dialog = read("frontend/src/components/panels/EvaluationDialog.tsx")
+  assert.match(dialog, /listEvaluationTasks\(/, "the retained records are read from the API")
+  assert.match(dialog, /history\.map/, "the records are listed so a user can switch")
+  assert.match(dialog, /selectTask\(item\.id\)/, "clicking a record switches the panel to it")
+  assert.match(
+    dialog,
+    /pollTokenRef\.current !== token/,
+    "a poll that lost the race cannot write another task's result into the panel"
+  )
+  assert.match(dialog, /本进程暂无评测记录/, "the empty state is distinguishable from loading")
+  assert.match(
+    dialog,
+    /仅保存在当前服务进程内/,
+    "the retention copy states the records live only in this process"
+  )
+})
+
 test("the evaluation dialog lets a case be expanded into the ranking that was scored", () => {
   const dialog = read("frontend/src/components/panels/EvaluationDialog.tsx")
   assert.match(dialog, /item\.candidates\.map/, "the ordered candidates are listed per case")

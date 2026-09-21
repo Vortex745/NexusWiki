@@ -331,8 +331,12 @@ async function buildHarness(
   serviceOptions: {
     maxCasesPerTask?: number
     maxRetainedTasks?: number
+    maxRetainedCases?: number
+    taskTtlMs?: number
     caseTimeoutMs?: number
     taskTimeoutMs?: number
+    /** Injectable clock so TTL eviction can be tested without waiting. */
+    now?: () => Date
   } = {}
 ): Promise<Harness> {
   const scopes: FakeScope[] = []
@@ -785,7 +789,7 @@ test("results live only in this process: a rebuilt service cannot find old tasks
   }
 })
 
-test("capacity is bounded and a running task is never evicted", async () => {
+test("a finished record makes room for the next one and is then gone", async () => {
   const harness = await buildHarness({}, { maxRetainedTasks: 1 })
   try {
     const first = await createTask(harness.port, { datasetId: "refund-single-case" })
@@ -793,11 +797,84 @@ test("capacity is bounded and a running task is never evicted", async () => {
     await pollTerminal(harness.port, first.body.id as string)
 
     const second = await createTask(harness.port, { datasetId: "refund-single-case" })
-    assert.equal(second.status, 429)
-    assert.match(String(second.body.error), /capacity reached/)
+    assert.equal(second.status, 202, "the oldest FINISHED record was evicted to make room")
 
-    const stillThere = await api(harness.port, `/api/evaluations/${first.body.id as string}`)
-    assert.equal(stillThere.status, 200, "the retained record survived the rejected task")
+    const evicted = await api(harness.port, `/api/evaluations/${first.body.id as string}`)
+    assert.equal(evicted.status, 404, "an evicted record is released, not cached elsewhere")
+    const list = await api(harness.port, "/api/evaluations")
+    assert.equal((list.body.tasks as unknown[]).length, 1)
+  } finally {
+    await harness.close()
+  }
+})
+
+test("a running task is never evicted: a full house of running tasks is rejected", async () => {
+  const harness = await buildHarness(
+    { delayByCaseMs: { "refund-eta": 1_500 } },
+    { maxRetainedTasks: 1, caseTimeoutMs: 60_000 }
+  )
+  try {
+    const first = await createTask(harness.port, { datasetId: "refund-single-case" })
+    assert.equal(first.status, 202)
+
+    const second = await createTask(harness.port, { datasetId: "refund-single-case" })
+    assert.equal(second.status, 429, "a running task cannot be sacrificed for a new one")
+    assert.match(String(second.body.error), /all still running/)
+  } finally {
+    await harness.close()
+  }
+})
+
+test("an expired finished record is dropped on the next touch", async () => {
+  let clock = new Date("2026-09-21T00:00:00.000Z")
+  const harness = await buildHarness({}, { taskTtlMs: 60_000, now: () => clock })
+  try {
+    const created = await createTask(harness.port, { datasetId: "refund-single-case" })
+    const id = created.body.id as string
+    await pollTerminal(harness.port, id)
+    assert.equal((await api(harness.port, `/api/evaluations/${id}`)).status, 200)
+
+    clock = new Date(clock.getTime() + 61_000)
+    assert.equal(
+      (await api(harness.port, `/api/evaluations/${id}`)).status,
+      404,
+      "a record older than the TTL is not kept forever"
+    )
+    assert.deepEqual((await api(harness.port, "/api/evaluations")).body.tasks, [])
+  } finally {
+    await harness.close()
+  }
+})
+
+test("the case budget also bounds the history", async () => {
+  // Room for ONE three-case record: the next three-case task must release it.
+  const harness = await buildHarness({}, { maxRetainedCases: 4 })
+  try {
+    const first = await createTask(harness.port, { datasetId: "refund-batch-3" })
+    assert.equal(first.status, 202)
+    await pollTerminal(harness.port, first.body.id as string)
+
+    const second = await createTask(harness.port, { datasetId: "refund-batch-3" })
+    assert.equal(second.status, 202, "the retained record was released for the new one")
+    assert.equal(
+      (await api(harness.port, `/api/evaluations/${first.body.id as string}`)).status,
+      404,
+      "the released record is gone"
+    )
+    const list = await api(harness.port, "/api/evaluations")
+    assert.equal((list.body.tasks as unknown[]).length, 1, "only the new record is retained")
+  } finally {
+    await harness.close()
+  }
+})
+
+test("a task that cannot fit the history budget at all is refused up front", async () => {
+  const harness = await buildHarness({}, { maxRetainedCases: 2 })
+  try {
+    const rejected = await createTask(harness.port, { datasetId: "refund-batch-3" })
+    assert.equal(rejected.status, 429, "a three-case task cannot fit a two-case budget")
+    assert.match(String(rejected.body.error), /capacity reached/)
+    assert.deepEqual((await api(harness.port, "/api/evaluations")).body.tasks, [])
   } finally {
     await harness.close()
   }
