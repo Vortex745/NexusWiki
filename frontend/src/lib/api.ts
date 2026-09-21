@@ -144,8 +144,8 @@ export interface EvaluationTaskDetail extends EvaluationTaskSummary {
   cases: EvaluationCaseResult[]
   metrics: {
     version: string
-    /** Ticket 07: the text rules behind the BLEU numbers. */
-    generation?: { bleuVersion: string; textRuleVersion: string }
+    /** Ticket 07/08: the answer-similarity metrics and the text rules they share. */
+    generation?: { bleuVersion: string; rougeVersion: string; textRuleVersion: string }
     metrics: Record<string, { value: number | null; sampleSize: number; notApplicable: number }>
   }
   cleanup: { esIndex: string; esError?: string; graphProvenance: string; graphError?: string; dbClosed: boolean } | null

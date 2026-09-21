@@ -47,7 +47,10 @@ import {
 import {
   bleuMetrics,
   EVAL_BLEU_VERSION,
+  EVAL_ROUGE_VERSION,
   notApplicableBleuMetrics,
+  notApplicableRougeMetrics,
+  rougeMetrics,
 } from "./text_metrics"
 import { EVAL_TEXT_RULE_VERSION } from "./text_rules"
 import {
@@ -449,13 +452,15 @@ export class EvaluationService {
     // "not applicable" (null) instead. Answered cases with an empty ranking
     // still score a real 0 (nothing relevant was retrieved).
     //
-    // Ticket 07: the BLEU metrics come from the ACTUAL reply of this run (the
-    // refusal when the run honestly refused), never from the reference answer.
+    // Ticket 07/08: the answer-similarity metrics come from the ACTUAL reply of
+    // this run (the refusal when the run honestly refused), never from the
+    // reference answer.
     const metrics =
       failure === undefined
         ? {
             ...retrievalMetrics(scored, caseDef.relevantPassageIds),
             ...bleuMetrics(done?.reply ?? "", caseDef.referenceAnswer),
+            ...rougeMetrics(done?.reply ?? "", caseDef.referenceAnswer),
           }
         : notApplicableCaseMetrics()
 
@@ -517,7 +522,11 @@ export class EvaluationService {
  * three BLEU zeros.
  */
 function notApplicableCaseMetrics(): EvalCaseResult["metrics"] {
-  return { ...notApplicableRetrievalMetrics(), ...notApplicableBleuMetrics() }
+  return {
+    ...notApplicableRetrievalMetrics(),
+    ...notApplicableBleuMetrics(),
+    ...notApplicableRougeMetrics(),
+  }
 }
 
 function failedCase(caseDef: EvalDatasetCase, error: string): EvalCaseResult {
@@ -606,7 +615,11 @@ export function summarizeMetrics(cases: EvalCaseResult[]): EvalMetricsSummary {
   }
   return {
     version: EVAL_METRIC_VERSION,
-    generation: { bleuVersion: EVAL_BLEU_VERSION, textRuleVersion: EVAL_TEXT_RULE_VERSION },
+    generation: {
+      bleuVersion: EVAL_BLEU_VERSION,
+      rougeVersion: EVAL_ROUGE_VERSION,
+      textRuleVersion: EVAL_TEXT_RULE_VERSION,
+    },
     metrics,
   }
 }

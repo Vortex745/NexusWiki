@@ -196,15 +196,30 @@ test("the evaluation dialog shows all six retrieval metrics and the ranking's sc
   assert.match(dialog, /task\.metrics\.version/, "the metric version stamp is displayed")
 })
 
-test("the evaluation dialog presents BLEU as text similarity with its fixed text rules", () => {
+test("the evaluation dialog presents BLEU and ROUGE as text similarity with their fixed text rules", () => {
   const dialog = read("frontend/src/components/panels/EvaluationDialog.tsx")
-  for (const key of ["bleu-1", "bleu-2", "bleu-4"]) {
+  const similarityKeys = ["bleu-1", "bleu-2", "bleu-4", "rouge-1", "rouge-2", "rouge-l"]
+  for (const key of similarityKeys) {
     assert.ok(dialog.includes(`["${key}", `), `the metric grid must render ${key}`)
   }
-  assert.match(dialog, /文本相似度/, "BLEU is described as text similarity")
+  assert.match(dialog, /文本相似度/, "BLEU/ROUGE are described as text similarity")
   assert.match(dialog, /不是正确率或忠实性/, "the copy must not imply accuracy or faithfulness")
   assert.match(dialog, /textRuleVersion/, "the fixed text rules are version-stamped on screen")
+  assert.match(dialog, /rougeVersion/, "the ROUGE version is shown alongside BLEU's")
   assert.match(dialog, /取自本次实际回复/, "the copy states the score comes from the actual reply")
+  assert.match(
+    dialog,
+    /不沿用旧 RAGAS 的语义评分口径/,
+    "the new similarity metrics must not be mixed with the old RAGAS semantics"
+  )
+  assert.equal(
+    /ragas/i.test(dialog.replace(/不沿用旧 RAGAS 的语义评分口径/g, "")),
+    false,
+    "the evaluation surface must not read or display RAGAS data"
+  )
+  // Twelve metrics in one surface: six retrieval + six similarity.
+  const metricKeys = /\["(?:precision|recall|ndcg@3|ndcg@10|mrr|map|bleu-[124]|rouge-[12l])", "/g
+  assert.equal((dialog.match(metricKeys) ?? []).length, 12, "the metric grid lists all twelve metrics")
 })
 
 // ---------------------------------------------------------------------------

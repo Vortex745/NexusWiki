@@ -36,7 +36,8 @@ const ACTIVE_ORDER: EvaluationTaskStage[] = ["preparing", "running", "cleaning"]
 
 /**
  * Every metric a case reports, in display order: the six retrieval metrics
- * (ticket 06) followed by the three answer-similarity scores (ticket 07).
+ * (ticket 06), the three BLEU scores (ticket 07) and the three ROUGE scores
+ * (ticket 08) — twelve in total.
  */
 const CASE_METRICS: Array<[string, string]> = [
   ["precision", "Precision"],
@@ -48,6 +49,9 @@ const CASE_METRICS: Array<[string, string]> = [
   ["bleu-1", "BLEU-1"],
   ["bleu-2", "BLEU-2"],
   ["bleu-4", "BLEU-4"],
+  ["rouge-1", "ROUGE-1"],
+  ["rouge-2", "ROUGE-2"],
+  ["rouge-l", "ROUGE-L"],
 ]
 
 const ORDERING_REASON_LABELS: Record<string, string> = {
@@ -506,7 +510,7 @@ export function EvaluationDialog({ open, onClose }: { open: boolean; onClose: ()
             {task.metrics.version ? (
               <div className="rounded-lg border border-line bg-surface-subtle/40 px-3 py-2.5">
                 <p className="text-[11px] font-semibold text-ink">
-                  汇总检索指标
+                  汇总指标（六项检索 + 六项文本相似度）
                   <span className="ml-2 font-mono text-[10px] font-normal text-muted/50">
                     {task.metrics.version}
                   </span>
@@ -531,11 +535,11 @@ export function EvaluationDialog({ open, onClose }: { open: boolean; onClose: ()
                   })}
                 </dl>
                 <p className="mt-1.5 text-[10px] text-muted/50">
-                  BLEU 为文本相似度（固定中文按字、英文按词及大小写/标点归一化规则
+                  BLEU 与 ROUGE 均为文本相似度（固定中文按字、英文按词及大小写/标点归一化规则
                   {task.metrics.generation
-                    ? ` ${task.metrics.generation.bleuVersion} / ${task.metrics.generation.textRuleVersion}`
+                    ? ` ${task.metrics.generation.bleuVersion} / ${task.metrics.generation.rougeVersion} / ${task.metrics.generation.textRuleVersion}`
                     : ""}
-                  ），不是正确率或忠实性；分数取自本次实际回复。
+                  ），不是正确率或忠实性，也不沿用旧 RAGAS 的语义评分口径；分数取自本次实际回复。
                 </p>
               </div>
             ) : null}

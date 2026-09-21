@@ -706,6 +706,9 @@ test("a scored case reports all six retrieval metrics and the ranking's real sou
       "ndcg@3",
       "precision",
       "recall",
+      "rouge-1",
+      "rouge-2",
+      "rouge-l",
     ])
     assert.equal(metrics.precision, 0.5)
     assert.equal(metrics.recall, 1)
@@ -753,6 +756,9 @@ test("a failed case reports no retrieval metrics instead of six zeros", async ()
       "bleu-1": null,
       "bleu-2": null,
       "bleu-4": null,
+      "rouge-1": null,
+      "rouge-2": null,
+      "rouge-l": null,
     })
     assert.equal(cases[0].ordering, undefined, "no scored ranking means no score source")
     const summary = detail.metrics as { metrics: Record<string, { value: number | null; sampleSize: number; notApplicable: number }> }
@@ -766,6 +772,9 @@ test("a failed case reports no retrieval metrics instead of six zeros", async ()
       "bleu-1",
       "bleu-2",
       "bleu-4",
+      "rouge-1",
+      "rouge-2",
+      "rouge-l",
     ]) {
       assert.deepEqual(
         summary.metrics[key],
@@ -800,7 +809,7 @@ function bleuDataset(referenceAnswer: string) {
   }
 }
 
-test("a reply identical to the reference scores BLEU-1/2/4 = 1", async () => {
+test("a reply identical to the reference scores BLEU-1/2/4 and ROUGE-1/2/L = 1", async () => {
   const harness = await buildHarness({ ranking: [{ passageId: "bleu-p1", relevant: true }] })
   try {
     const created = await createTask(harness.port, { dataset: bleuDataset(FAKE_REPLY) })
@@ -812,12 +821,23 @@ test("a reply identical to the reference scores BLEU-1/2/4 = 1", async () => {
     assert.equal(metrics["bleu-1"], 1)
     assert.equal(metrics["bleu-2"], 1)
     assert.equal(metrics["bleu-4"], 1)
+    assert.equal(metrics["rouge-1"], 1)
+    assert.equal(metrics["rouge-2"], 1)
+    assert.equal(metrics["rouge-l"], 1)
     // The retrieval side of the same bundle is unaffected.
     assert.equal(metrics.precision, 1)
 
-    const summary = detail.metrics as { metrics: Record<string, { value: number | null; sampleSize: number }> }
+    const summary = detail.metrics as {
+      generation?: { bleuVersion: string; rougeVersion: string; textRuleVersion: string }
+      metrics: Record<string, { value: number | null; sampleSize: number }>
+    }
     assert.equal(summary.metrics["bleu-4"].value, 1)
     assert.equal(summary.metrics["bleu-4"].sampleSize, 1)
+    assert.equal(summary.metrics["rouge-l"].value, 1)
+    assert.equal(summary.metrics["rouge-l"].sampleSize, 1)
+    assert.equal(summary.generation?.bleuVersion, "eval-bleu-v1")
+    assert.equal(summary.generation?.rougeVersion, "eval-rouge-v1")
+    assert.equal(summary.generation?.textRuleVersion, "eval-text-v1")
   } finally {
     await harness.close()
   }
@@ -842,7 +862,10 @@ test("an honest refusal keeps its own text and its own low BLEU (the reference i
     assert.equal(metrics["bleu-1"], 0, "no shared unigram with the reference")
     assert.equal(metrics["bleu-2"], 0)
     assert.equal(metrics["bleu-4"], 0)
-    for (const key of ["bleu-1", "bleu-2", "bleu-4"]) {
+    assert.equal(metrics["rouge-1"], 0, "no shared unigram means no overlap to score")
+    assert.equal(metrics["rouge-2"], 0)
+    assert.equal(metrics["rouge-l"], 0, "no common subsequence at all")
+    for (const key of ["bleu-1", "bleu-2", "bleu-4", "rouge-1", "rouge-2", "rouge-l"]) {
       assert.ok(Number.isFinite(metrics[key]), `${key} must never be NaN or Infinity`)
     }
   } finally {
