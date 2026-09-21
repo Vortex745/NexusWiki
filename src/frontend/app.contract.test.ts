@@ -196,6 +196,20 @@ test("the evaluation dialog shows all six retrieval metrics and the ranking's sc
   assert.match(dialog, /task\.metrics\.version/, "the metric version stamp is displayed")
 })
 
+test("the evaluation dialog lets a case be expanded into the ranking that was scored", () => {
+  const dialog = read("frontend/src/components/panels/EvaluationDialog.tsx")
+  assert.match(dialog, /item\.candidates\.map/, "the ordered candidates are listed per case")
+  assert.match(dialog, /candidate\.rank/, "each candidate shows its rank")
+  assert.match(dialog, /candidate\.score\.toFixed\(3\)/, "each candidate shows its score")
+  assert.match(dialog, /candidate\.channels\.join/, "each candidate shows where it came from")
+  assert.match(dialog, /（未映射）/, "a candidate outside the corpus is marked, not hidden")
+  assert.match(
+    dialog,
+    /评分输入来自第 \{item\.finalContextRound\} 轮生成上下文/,
+    "the round behind the scored context is shown"
+  )
+})
+
 test("the evaluation dialog reports how the batch ended and keeps every case reason visible", () => {
   const dialog = read("frontend/src/components/panels/EvaluationDialog.tsx")
   assert.match(

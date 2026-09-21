@@ -91,6 +91,8 @@ interface FakeScopeOptions {
   throwByCase?: Record<string, string>
   /** Ticket 10: terminal status the done event reports (default "completed"). */
   doneStatus?: string
+  /** Ticket 13: which generation round produced the observed context. */
+  finalContextRound?: number
 }
 
 class FakeScope implements IsolatedEvalResources {
@@ -195,6 +197,9 @@ class FakeScope implements IsolatedEvalResources {
               ...(candidates.length > 0 && options.ordering
                 ? { finalContextOrdering: options.ordering }
                 : {}),
+              ...(candidates.length > 0
+                ? { finalContextRound: options.finalContextRound ?? 1 }
+                : {}),
             },
           })
           yield progressEvent(runOptions, {
@@ -240,6 +245,7 @@ function progressEvent(
           resultCount: number
           finalContextCandidates?: RankedCandidateObservation[]
           finalContextOrdering?: { source: "dedicated_rerank" | "fused"; reason?: string }
+          finalContextRound?: number
         }
       }
     | { type: "done"; stage: "done"; result: AnswerRunResult }
@@ -1015,6 +1021,60 @@ test("an honest refusal keeps its own text and its own low BLEU (the reference i
     for (const key of ["bleu-1", "bleu-2", "bleu-4", "rouge-1", "rouge-2", "rouge-l"]) {
       assert.ok(Number.isFinite(metrics[key]), `${key} must never be NaN or Infinity`)
     }
+  } finally {
+    await harness.close()
+  }
+})
+
+// ---------------------------------------------------------------------------
+// Ticket 13 — the evidence the scorer actually saw
+// ---------------------------------------------------------------------------
+
+test("a case exposes the exact ranking the scorer used, with its round and source", async () => {
+  const harness = await buildHarness({
+    ranking: [
+      { passageId: "shipping-policy", relevant: false },
+      { passageId: "refund-policy", relevant: true },
+      { passageId: "not-in-corpus", relevant: false },
+    ],
+    ordering: { source: "dedicated_rerank" },
+    finalContextRound: 2,
+  })
+  try {
+    const created = await createTask(harness.port, { datasetId: "refund-single-case" })
+    const detail = await pollTerminal(harness.port, created.body.id as string)
+    const item = (detail.cases as Array<Record<string, unknown>>)[0]
+
+    // Case identity and the real texts stay linked.
+    assert.equal(item.question, "退款一般需要多久才能到账？")
+    assert.equal(
+      item.referenceAnswer,
+      "退款在审核通过后 3 个工作日内按原支付路径返还，遇节假日顺延。"
+    )
+    assert.equal(item.answer, FAKE_REPLY)
+    assert.equal(typeof item.runId, "string")
+    assert.ok(String(item.runId).length > 0, "the run identity is kept")
+    assert.equal(item.finalContextRound, 2, "the round behind the scored context is named")
+    assert.deepEqual(item.ordering, { source: "dedicated_rerank" })
+
+    // The displayed ranking IS the scoring input, in the scorer's order.
+    const candidates = item.candidates as Array<Record<string, unknown>>
+    assert.deepEqual(candidates.map((candidate) => candidate.rank), [1, 2, 3])
+    assert.deepEqual(
+      candidates.map((candidate) => candidate.passageId),
+      ["shipping-policy", "refund-policy", null],
+      "a candidate outside this corpus stays as a diagnostic position"
+    )
+    assert.deepEqual(candidates.map((candidate) => candidate.relevant), [false, true, false])
+    assert.deepEqual(candidates[0].channels, ["vector"])
+    assert.equal(typeof candidates[0].score, "number")
+    assert.equal(item.unmappedCandidates, 1)
+    assert.deepEqual(item.retrievedPassageIds, ["shipping-policy", "refund-policy"])
+    assert.equal(
+      (item.metrics as Record<string, number>).precision,
+      1 / 3,
+      "precision is computed from exactly this three-position ranking"
+    )
   } finally {
     await harness.close()
   }

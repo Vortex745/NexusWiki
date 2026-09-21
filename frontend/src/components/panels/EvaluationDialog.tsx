@@ -518,6 +518,49 @@ export function EvaluationDialog({ open, onClose }: { open: boolean; onClose: ()
                   </p>
                 ) : null}
                 <OrderingNote ordering={item.ordering} />
+                {item.finalContextRound ? (
+                  <p className="mt-1 text-[10px] text-muted/50">
+                    评分输入来自第 {item.finalContextRound} 轮生成上下文
+                    {item.finalContextRound > 1
+                      ? "（最后一次纠错被接受）"
+                      : "（首次草稿被接受）"}
+                  </p>
+                ) : null}
+                {item.candidates.length > 0 ? (
+                  <details className="mt-2 rounded-md border border-line bg-surface px-2.5 py-2">
+                    <summary className="cursor-pointer text-[11px] text-muted/70">
+                      候选段落（评分输入，共 {item.candidates.length} 条
+                      {item.unmappedCandidates > 0
+                        ? `，其中 ${item.unmappedCandidates} 条未映射`
+                        : ""}
+                      ）
+                    </summary>
+                    <ol className="mt-1.5 space-y-1">
+                      {item.candidates.map((candidate) => (
+                        <li
+                          key={`${candidate.rank}-${candidate.chunkId}`}
+                          className="flex items-baseline justify-between gap-2 font-mono text-[10px] text-muted/70"
+                        >
+                          <span
+                            className="min-w-0 truncate"
+                            title={`${candidate.documentId} · ${candidate.chunkId}`}
+                          >
+                            #{candidate.rank} {candidate.passageId ?? "（未映射）"}
+                            <span className="ml-1 text-muted/40">
+                              {candidate.channels.join("/")}
+                            </span>
+                          </span>
+                          <span className="flex flex-none items-center gap-2">
+                            <span className={candidate.relevant ? "text-brand" : "text-muted/50"}>
+                              {candidate.relevant ? "相关" : "无关"}
+                            </span>
+                            <span>{candidate.score.toFixed(3)}</span>
+                          </span>
+                        </li>
+                      ))}
+                    </ol>
+                  </details>
+                ) : null}
                 <p className="mt-1 font-mono text-[10px] text-muted/40">参考答案：{item.referenceAnswer}</p>
               </article>
             ))}

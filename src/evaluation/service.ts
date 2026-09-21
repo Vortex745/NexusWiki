@@ -490,7 +490,7 @@ export class EvaluationService {
       }
     }
 
-    const { candidates, ordering } = collectFinalContext(caseDef, events, resources)
+    const { candidates, ordering, round } = collectFinalContext(caseDef, events, resources)
     const scored: ScoredCandidate[] = candidates.map((candidate) => ({
       passageId: candidate.passageId,
       relevant: candidate.relevant,
@@ -521,6 +521,7 @@ export class EvaluationService {
       ...(done ? { terminalStatus: done.status } : {}),
       ...(failure !== undefined ? { error: failure } : {}),
       ...(ordering ? { ordering } : {}),
+      ...(round !== undefined ? { finalContextRound: round } : {}),
       runId,
       durationMs: Date.now() - startedAt,
       metrics,
@@ -629,9 +630,10 @@ function collectFinalContext(
   caseDef: EvalDatasetCase,
   events: readonly AnswerRunEvent[],
   resources: IsolatedEvalResources
-): { candidates: EvalRankedCandidate[]; ordering?: FinalContextOrdering } {
+): { candidates: EvalRankedCandidate[]; ordering?: FinalContextOrdering; round?: number } {
   let observations: RankedCandidateObservation[] | undefined
   let ordering: FinalContextOrdering | undefined
+  let round: number | undefined
   for (const event of events) {
     if (
       event.type === "progress" &&
@@ -640,6 +642,7 @@ function collectFinalContext(
     ) {
       observations = event.data.finalContextCandidates
       ordering = event.data.finalContextOrdering
+      round = event.data.finalContextRound
     }
   }
   if (!observations) return { candidates: [] }
@@ -656,7 +659,11 @@ function collectFinalContext(
       relevant: passageId !== null && relevant.has(passageId),
     }
   })
-  return { candidates, ...(ordering ? { ordering } : {}) }
+  return {
+    candidates,
+    ...(ordering ? { ordering } : {}),
+    ...(round !== undefined ? { round } : {}),
+  }
 }
 
 /**

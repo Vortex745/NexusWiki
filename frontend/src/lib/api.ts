@@ -118,6 +118,8 @@ export interface EvaluationCaseResult {
   durationMs: number
   metrics: Record<string, number | null>
   retrievedPassageIds: string[]
+  /** Ticket 13: which generation round produced the scored context. */
+  finalContextRound?: number
   candidates: EvaluationRankedCandidate[]
   unmappedCandidates: number
 }

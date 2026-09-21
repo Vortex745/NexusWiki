@@ -70,6 +70,13 @@ export interface EvalCaseResult {
   metrics: Record<string, number | null>
   /** Distinct passage ids in rank order (first occurrence wins). */
   retrievedPassageIds: string[]
+  /**
+   * 1-based generation round whose context produced the scored ranking
+   * (1 = initial draft, +1 per correction regeneration). Ticket 13: this is
+   * what makes "which evidence did the last accepted correction use" visible.
+   */
+  finalContextRound?: number
+  /** The scored ranking itself, in the order the scorer saw it. */
   candidates: EvalRankedCandidate[]
   /** How many candidates could not be mapped back to this corpus. */
   unmappedCandidates: number
