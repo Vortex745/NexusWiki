@@ -2,15 +2,15 @@
 //
 // Spec issue #27 acceptance criteria:
 //   1. A hard-invariant failure keeps the release failed even when all
-//      RAGAS and Langfuse signals are positive.
-//   2. RAGAS regression or Langfuse outage cannot change a passing
-//      deterministic result, though each remains visible in its own
+//      shadow-evaluator and Langfuse signals are positive.
+//   2. A shadow-evaluator regression or Langfuse outage cannot change a
+//      passing deterministic result, though each remains visible in its own
 //      report section.
 //   3. The deterministic evidence hash decision excludes non-deterministic
 //      report content without excluding their schema metadata.
 //
-// Pure function that assembles deterministic hard invariants + RAGAS shadow
-// baseline + Langfuse round-trip probe outputs into a single
+// Pure function that assembles deterministic hard invariants + a generic
+// shadow-evaluator baseline + Langfuse round-trip probe outputs into a single
 // EvaluationPrecedenceReport. The releaseDecision is bound to the
 // deterministic decision ONLY — probabilistic signals are visible but
 // structurally lack release authority (spec L1558: deterministic;
@@ -19,15 +19,15 @@
 // Design (karpathy-guidelines):
 //   - Simplest viable shape: pure function, no side effects, no async.
 //     Inputs are pre-computed by upstream probes (T14 hard invariants,
-//     T25 RAGAS shadow CLI, T26 Langfuse round-trip probe).
+//     the shadow-evaluator probe, T26 Langfuse round-trip probe).
 //   - The evidence hash uses SHA-256 over a deterministic-only JSON
 //     payload (hard invariant keys + expected + actual + failingCaseIds).
-//     RAGAS aggregate values, variance, Langfuse trace metadata, and any
+//     Shadow aggregate values, variance, Langfuse trace metadata, and any
 //     other probabilistic content are deliberately excluded — they cannot
 //     affect the hash and therefore cannot affect downstream release
 //     decisions bound to the hash.
-//   - Schema metadata (field name lists for RAGAS + Langfuse sections) is
-//     always included in the report — criterion #3 explicitly requires
+//   - Schema metadata (field name lists for the shadow + Langfuse sections)
+//     is always included in the report — criterion #3 explicitly requires
 //     schema metadata to remain visible while non-deterministic content is
 //     excluded from the hash. This lets reviewers verify the report
 //     structure without needing the probabilistic values.
@@ -88,8 +88,9 @@ export interface LangfuseProbeOutputs {
  * Inputs to assembleEvaluationPrecedence. Each input is the output of an
  * upstream probe or evaluator:
  *   - hardInvariants: T14 evaluateHardInvariants (deterministic)
- *   - ragasShadowBaseline: T25 ragasShadowCliProbe (probabilistic, non-blocking)
- *   - ragasShadowRegressions: T16 runRagasShadowProfile (probabilistic, non-blocking)
+ *   - shadowBaseline / shadowRegressions: the shadow evaluator's outputs
+ *     (probabilistic, non-blocking — a release without that evaluator passes
+ *     no such input at all, per ticket 15)
  *   - langfuseReport: T26 langfuseRoundTripProbe (observability, non-blocking)
  *   - repositoryRevision: trusted git revision for provenance binding
  */
@@ -100,8 +101,8 @@ export interface EvaluationPrecedenceInput {
    * nothing at all. `null` means "the evaluator was skipped" and still keeps
    * its (empty) section visible; omitting the keys removes the section.
    */
-  ragasShadowBaseline?: ShadowBaselineLike | null
-  ragasShadowRegressions?: ShadowRegressionLike[] | null
+  shadowBaseline?: ShadowBaselineLike | null
+  shadowRegressions?: ShadowRegressionLike[] | null
   langfuseReport?: LangfuseProbeOutputs | null
   repositoryRevision: string
 }
@@ -110,7 +111,7 @@ export interface EvaluationPrecedenceInput {
  * Shadow-evaluator section of the probabilistic report — visible but
  * non-blocking.
  */
-export interface RagasProbabilisticSection {
+export interface ShadowProbabilisticSection {
   baseline: ShadowBaselineLike | null
   regressions: ShadowRegressionLike[]
   regressionDetected: boolean
@@ -148,7 +149,7 @@ export interface EvaluationPrecedenceReport {
      * a release without that evaluator has no such section). `null` content
      * still leaves the section visible.
      */
-    ragas?: RagasProbabilisticSection | null
+    shadow?: ShadowProbabilisticSection | null
     langfuse: LangfuseProbabilisticSection | null
   }
   /**
@@ -166,7 +167,7 @@ export interface EvaluationPrecedenceReport {
    * only present when a shadow section is.
    */
   schemaMetadata: {
-    ragasShadowFields?: readonly string[]
+    shadowFields?: readonly string[]
     langfuseFields: readonly string[]
   }
   /** Always true — schema metadata is structurally included (criterion #3). */
@@ -221,8 +222,8 @@ export function assembleEvaluationPrecedence(
   input: EvaluationPrecedenceInput,
 ): EvaluationPrecedenceReport {
   // --- Phase 1: Deterministic decision (AC1) ---
-  // The release decision is bound to hard invariants ONLY. RAGAS and
-  // Langfuse signals are visible but structurally lack release authority.
+  // The release decision is bound to hard invariants ONLY. Shadow-evaluator
+  // and Langfuse signals are visible but structurally lack release authority.
   const hardInvariants = input.hardInvariants ?? []
   const failingInvariants = hardInvariants.filter((h) => !h.passed)
   const failingDeterministicInvariants = failingInvariants.map((h) => h.key)
@@ -244,10 +245,10 @@ export function assembleEvaluationPrecedence(
   // `null` means "the evaluator was skipped" and must stay visible, while an
   // absent key means the release has no such evaluator at all.
   const shadowProvided =
-    input.ragasShadowBaseline !== undefined || input.ragasShadowRegressions !== undefined
-  const shadowBaseline = input.ragasShadowBaseline ?? null
-  const shadowRegressions = input.ragasShadowRegressions ?? []
-  const ragasSection: RagasProbabilisticSection | undefined = shadowProvided
+    input.shadowBaseline !== undefined || input.shadowRegressions !== undefined
+  const shadowBaseline = input.shadowBaseline ?? null
+  const shadowRegressions = input.shadowRegressions ?? []
+  const shadowSection: ShadowProbabilisticSection | undefined = shadowProvided
     ? {
         baseline: shadowBaseline,
         regressions: shadowRegressions,
@@ -301,14 +302,12 @@ export function assembleEvaluationPrecedence(
     releaseDecision: deterministicDecision, // AC1 + AC2: probabilistic cannot change this
     failingDeterministicInvariants,
     probabilisticSection: {
-      ...(ragasSection !== undefined ? { ragas: ragasSection } : {}),
+      ...(shadowSection !== undefined ? { shadow: shadowSection } : {}),
       langfuse: langfuseSection,
     },
     evidenceHash,
     schemaMetadata: {
-      ...(ragasSection !== undefined
-        ? { ragasShadowFields: SHADOW_BASELINE_FIELDS }
-        : {}),
+      ...(shadowSection !== undefined ? { shadowFields: SHADOW_BASELINE_FIELDS } : {}),
       langfuseFields: LANGFUSE_PROBE_OUTPUT_FIELDS,
     },
     schemaMetadataIncluded: true, // AC3: schema metadata always included

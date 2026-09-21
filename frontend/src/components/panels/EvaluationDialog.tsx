@@ -782,7 +782,7 @@ export function EvaluationDialog({ open, onClose }: { open: boolean; onClose: ()
                   {task.metrics.generation
                     ? ` ${task.metrics.generation.bleuVersion} / ${task.metrics.generation.rougeVersion} / ${task.metrics.generation.textRuleVersion}`
                     : ""}
-                  ），不是正确率或忠实性，也不沿用旧 RAGAS 的语义评分口径；分数取自本次实际回复。
+                  ），不是正确率或忠实性；分数取自本次实际回复。
                 </p>
               </div>
             ) : null}

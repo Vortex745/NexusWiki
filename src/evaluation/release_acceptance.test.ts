@@ -6,22 +6,27 @@
 // without weakening ACL, Evidence, Citation, Critic, cancellation, trace
 // or deterministic release guarantees."
 //
+// Eval refactor ticket 17 retired the legacy RAGAS shadow evaluator, so the
+// former criterion #5 (shadow evaluator alongside deterministic gates) no
+// longer applies here. The precedence invariant it protected is still covered
+// by src/release/evaluation_precedence.test.ts against the generic shadow
+// contract, which survives the evaluator's removal.
+//
 // These tests verify CROSS-CAPABILITY COEXISTENCE and STRUCTURAL
 // PRECEDENCE — they do NOT re-test individual modules (covered by
 // Tickets 01-16). T17's unique value:
 //   - Capabilities coexist without weakening each other
 //   - Deterministic gates (hard invariants) take precedence over
-//     non-deterministic results (RAGAS shadow, Langfuse traces)
+//     non-deterministic results (Langfuse traces)
 //   - Backward compatibility: API fields, SSE event types, identities,
 //     schema versions remain stable
 //   - Config-level rollback: each capability has a disable path
 //
-// 8 acceptance criteria:
+// Acceptance criteria:
 //   #1 Long Tenant conversation → Handoff bounded memory
 //   #2 Over-budget complex → compression + multi-tool + valid Citations
 //   #3 Cancellation → cancelled, no late publication
 //   #4 Langfuse enabled/disabled → identical Answer
-//   #5 RAGAS shadow alongside deterministic (precedence preserved)
 //   #6 Backward compat: API fields, SSE, identities, history replay
 //   #7 Final verification artifact (covered by release_verification.ts)
 //   #8 Rollback instructions (config flags + doc)
@@ -39,10 +44,6 @@ import {
   createLangfuseExporter,
 } from "../answer/langfuse_exporter"
 import { buildArtifact } from "./artifact"
-import {
-  computeRagasShadowBaseline,
-  runRagasShadowProfile,
-} from "./ragas_shadow"
 import { evaluateHardInvariants } from "./hard_invariants"
 import { evaluateQualityMetrics } from "./quality_metrics"
 import { GOLDEN_SET } from "./golden/fixtures"
@@ -50,15 +51,6 @@ import type {
   BaselineComparison,
   CaseResult,
   EvaluationArtifact,
-  EvaluationProfile,
-  RagasShadowArtifactSection,
-  RagasShadowBaseline,
-  RagasShadowCase,
-  RagasShadowProfileConfig,
-  RagasEvaluator,
-  RagasRequest,
-  RagasResponse,
-  RagasEvaluateOptions,
 } from "./types"
 
 // ---------------------------------------------------------------------------
@@ -79,7 +71,6 @@ const COMPLEX_RUNNER_SOURCE_PATH = join(here, "..", "mastra", "complex_knowledge
 const CHAT_SOURCE_PATH = join(here, "..", "api", "chat.ts")
 const CONFIG_SOURCE_PATH = join(here, "..", "config", "index.ts")
 const ARTIFACT_SOURCE_PATH = join(here, "artifact.ts")
-const RAGAS_SHADOW_SOURCE_PATH = join(here, "ragas_shadow.ts")
 
 // ---------------------------------------------------------------------------
 // Criterion #1: Long Tenant-bound conversation → Handoff bounded memory
@@ -339,145 +330,6 @@ test("T17 #4: Langfuse npm package is NOT a hard dependency (DI seam enables dis
 })
 
 // ---------------------------------------------------------------------------
-// Criterion #5: RAGAS shadow alongside deterministic (precedence preserved)
-// ---------------------------------------------------------------------------
-
-function makeRagasShadowBaseline(): RagasShadowBaseline {
-  return {
-    aggregate: {
-      meanFaithfulness: 0.9,
-      meanAnswerRelevancy: 0.85,
-      meanContextPrecision: 0.88,
-      meanContextRecall: 0.82,
-      sampleSize: 10,
-      errorCount: 0,
-      skippedCount: 0,
-    },
-    variance: {
-      faithfulness: { min: 0.88, max: 0.92, mean: 0.9, stdDev: 0.02, sampleSize: 3 },
-      answerRelevancy: { min: 0.83, max: 0.87, mean: 0.85, stdDev: 0.02, sampleSize: 3 },
-      contextPrecision: { min: 0.86, max: 0.9, mean: 0.88, stdDev: 0.02, sampleSize: 3 },
-      contextRecall: { min: 0.8, max: 0.84, mean: 0.82, stdDev: 0.02, sampleSize: 3 },
-    },
-    runCount: 3,
-    datasetVersion: "2026.07.t10",
-    providerModelIds: { chat: "gpt-4-0613", embedding: "text-embedding-3-small", evaluator: "gpt-4-0613" },
-    generatedAt: "2026-07-01T00:00:00.000Z",
-    repositoryRevision: "abc123",
-  }
-}
-
-function makeRagasShadowSection(): RagasShadowArtifactSection {
-  return {
-    baseline: makeRagasShadowBaseline(),
-    reportedSeparately: true,
-  }
-}
-
-test("T17 #5: buildArtifact includes BOTH ragasShadow and hardInvariants (coexistence)", () => {
-  const cases: CaseResult[] = GOLDEN_SET.cases.slice(0, 5).map((gc) => ({
-    caseId: gc.id,
-    status: "passed" as const,
-    terminalStatus: "completed" as const,
-    retrievedEvidenceIds: gc.acceptableEvidenceIds ?? [],
-    citationsInAnswer: gc.acceptableEvidenceIds ?? [],
-    durationMs: 100,
-    tokenCount: 150,
-  }))
-  const hardInvariants = evaluateHardInvariants(GOLDEN_SET.cases.slice(0, 5), cases)
-  const qualityMetrics = evaluateQualityMetrics(GOLDEN_SET.cases.slice(0, 5), cases)
-  const artifact = buildArtifact({
-    goldenSet: GOLDEN_SET,
-    results: cases,
-    hardInvariants,
-    qualityMetrics,
-    baseline: makeBaseline(),
-    repositoryRevision: "sha-T17",
-    providerModelIds: { chat: "gpt-4o-mini", embedding: "text-embedding-3-small" },
-    generatedAt: "2026-07-19T00:00:00.000Z",
-    ragasShadow: makeRagasShadowSection(),
-  })
-  // BOTH sections present
-  assert.ok(artifact.ragasShadow, "ragasShadow section present")
-  assert.ok(artifact.aggregateMetrics.hardInvariants, "hardInvariants section present")
-  assert.ok(artifact.aggregateMetrics.qualityMetrics, "qualityMetrics section present")
-})
-
-test("T17 #5: RAGAS shadow regressionDetected does NOT change hardInvariants[].passed (precedence)", () => {
-  const cases: CaseResult[] = GOLDEN_SET.cases.slice(0, 5).map((gc) => ({
-    caseId: gc.id,
-    status: "passed" as const,
-    terminalStatus: "completed" as const,
-    retrievedEvidenceIds: gc.acceptableEvidenceIds ?? [],
-    citationsInAnswer: gc.acceptableEvidenceIds ?? [],
-    durationMs: 100,
-    tokenCount: 150,
-  }))
-  const hardInvariants = evaluateHardInvariants(GOLDEN_SET.cases.slice(0, 5), cases)
-  // Record the original passed values
-  const originalPassed = hardInvariants.map((h) => h.passed)
-  // Build artifact WITH ragasShadow that has regressionDetected=true
-  const sectionWithRegression: RagasShadowArtifactSection = {
-    baseline: makeRagasShadowBaseline(),
-    comparison: {
-      current: makeRagasShadowBaseline().aggregate,
-      baseline: makeRagasShadowBaseline(),
-      regressions: [{
-        metric: "faithfulness",
-        current: 0.7,
-        baseline: 0.9,
-        delta: -0.2,
-        regressionDetected: true,
-      }],
-      regressionDetected: true,
-    },
-    reportedSeparately: true,
-  }
-  const artifact = buildArtifact({
-    goldenSet: GOLDEN_SET,
-    results: cases,
-    hardInvariants,
-    qualityMetrics: evaluateQualityMetrics(GOLDEN_SET.cases.slice(0, 5), cases),
-    baseline: makeBaseline(),
-    repositoryRevision: "sha-T17-precedence",
-    providerModelIds: { chat: "gpt-4o-mini", embedding: "text-embedding-3-small" },
-    generatedAt: "2026-07-19T00:00:00.000Z",
-    ragasShadow: sectionWithRegression,
-  })
-  // The hardInvariants passed values must be UNCHANGED despite RAGAS regression
-  const afterPassed = artifact.aggregateMetrics.hardInvariants.map((h) => h.passed)
-  assert.deepEqual(afterPassed, originalPassed, "hardInvariants[].passed unchanged despite RAGAS regressionDetected=true")
-  // The RAGAS regression IS recorded (reported, not blocking)
-  assert.equal(artifact.ragasShadow!.comparison!.regressionDetected, true, "RAGAS regression is reported")
-})
-
-test("T17 #5: smokeGatePassed does NOT consult RAGAS shadow (deterministic precedence)", () => {
-  const source = readFileSync(join(here, "smoke.ts"), "utf8")
-  // smokeGatePassed must not reference ragasShadow
-  assert.ok(
-    !/ragasShadow/.test(source),
-    "smoke.ts must NOT reference ragasShadow (deterministic gate precedence)",
-  )
-})
-
-test("T17 #5: RAGAS shadow is a top-level sibling of aggregateMetrics (structural separation)", () => {
-  const source = readFileSync(ARTIFACT_SOURCE_PATH, "utf8")
-  assert.match(source, /artifact\.ragasShadow\s*=\s*input\.ragasShadow/, "ragasShadow assigned at top level")
-  assert.ok(
-    !/aggregateMetrics\.ragasShadow/.test(source),
-    "ragasShadow must NOT be nested inside aggregateMetrics",
-  )
-})
-
-test("T17 #5: No REGRESSION_THRESHOLD for RAGAS in ragas_shadow.ts (non-blocking by design)", () => {
-  const source = readFileSync(RAGAS_SHADOW_SOURCE_PATH, "utf8")
-  assert.ok(
-    !/REGRESSION_THRESHOLD\s*=/.test(source),
-    "ragas_shadow.ts must NOT introduce a REGRESSION_THRESHOLD (non-blocking by design)",
-  )
-})
-
-// ---------------------------------------------------------------------------
 // Criterion #6: Backward compat — API fields, SSE, identities, history replay
 // ---------------------------------------------------------------------------
 
@@ -512,7 +364,7 @@ test("T17 #6: API chat endpoint preserves {message, stream} request shape", () =
   assert.match(source, /stream/, "chat API accepts stream field")
 })
 
-test("T17 #6: Artifact JSON-serializable with and without ragasShadow (backward compat)", () => {
+test("T17 #6: Artifact is JSON-serializable and round-trips at schemaVersion 1 (backward compat)", () => {
   const cases: CaseResult[] = GOLDEN_SET.cases.slice(0, 3).map((gc) => ({
     caseId: gc.id,
     status: "passed" as const,
@@ -524,7 +376,7 @@ test("T17 #6: Artifact JSON-serializable with and without ragasShadow (backward 
   }))
   const hardInvariants = evaluateHardInvariants(GOLDEN_SET.cases.slice(0, 3), cases)
   const qualityMetrics = evaluateQualityMetrics(GOLDEN_SET.cases.slice(0, 3), cases)
-  const baseInput = {
+  const artifact = buildArtifact({
     goldenSet: GOLDEN_SET,
     results: cases,
     hardInvariants,
@@ -533,19 +385,10 @@ test("T17 #6: Artifact JSON-serializable with and without ragasShadow (backward 
     repositoryRevision: "sha-T17-compat",
     providerModelIds: { chat: "gpt-4o-mini", embedding: "text-embedding-3-small" },
     generatedAt: "2026-07-19T00:00:00.000Z",
-  }
-  // Without ragasShadow (pre-T16 artifact shape)
-  const artifactWithout = buildArtifact(baseInput)
-  const jsonWithout = JSON.stringify(artifactWithout)
-  const parsedWithout = JSON.parse(jsonWithout) as EvaluationArtifact
-  assert.equal(parsedWithout.schemaVersion, 1, "pre-T16 artifact parses with schemaVersion=1")
-  assert.equal((parsedWithout as EvaluationArtifact).ragasShadow, undefined, "pre-T16 artifact has no ragasShadow")
-  // With ragasShadow (post-T16 artifact shape)
-  const artifactWith = buildArtifact({ ...baseInput, ragasShadow: makeRagasShadowSection() })
-  const jsonWith = JSON.stringify(artifactWith)
-  const parsedWith = JSON.parse(jsonWith) as EvaluationArtifact
-  assert.equal(parsedWith.schemaVersion, 1, "post-T16 artifact parses with schemaVersion=1")
-  assert.ok(parsedWith.ragasShadow, "post-T16 artifact has ragasShadow")
+  })
+  const parsed = JSON.parse(JSON.stringify(artifact)) as EvaluationArtifact
+  assert.equal(parsed.schemaVersion, 1, "artifact parses with schemaVersion=1")
+  assert.equal(parsed.perCaseStatus.length, 3, "artifact round-trips per-case results")
 })
 
 // ---------------------------------------------------------------------------
@@ -578,7 +421,7 @@ test("T17 #8: Conversation TTL rollback — CONVERSATION_TTL_DAYS controls histo
   assert.match(source, /conversationTtlDays/, "conversationTtlDays config field exists (rollback knob)")
 })
 
-test("T17 #8: Config has NO explicit flag for Handoff/compression/tool-autonomy/RAGAS (residual gap — documented)", () => {
+test("T17 #8: Config has NO explicit flag for Handoff/compression/tool-autonomy (residual gap — documented)", () => {
   const source = readFileSync(CONFIG_SOURCE_PATH, "utf8")
   // These capabilities are wired unconditionally — no env flag to disable
   // This is a residual gap: rollback for these requires code changes, not config
@@ -593,10 +436,6 @@ test("T17 #8: Config has NO explicit flag for Handoff/compression/tool-autonomy/
   assert.ok(
     !/toolAutonomyEnabled|enableToolLoop|DISABLE_TOOL_LOOP/.test(source),
     "no tool-autonomy config flag (residual gap: rollback requires code change)",
-  )
-  assert.ok(
-    !/ragasEnabled|enableRagas|DISABLE_RAGAS/.test(source),
-    "no RAGAS config flag (residual gap: rollback requires code change)",
   )
 })
 
@@ -634,15 +473,13 @@ test("T17 coexistence: runtime wires ALL T61 capabilities without mutual exclusi
   assert.match(runtimeSource, /createLangfuseExporter/, "shared runtime constructs Langfuse exporter")
 })
 
-test("T17 coexistence: evaluation artifact carries deterministic + non-deterministic sections together", () => {
-  // The artifact must carry: hardInvariants (deterministic) + qualityMetrics (deterministic)
-  // + ragas? (non-deterministic per-case) + ragasShadow? (non-deterministic shadow)
-  // All coexist without one weakening another
+test("T17 coexistence: evaluation artifact carries both deterministic metric sections together", () => {
+  // The artifact must carry hardInvariants + qualityMetrics (both deterministic).
+  // Non-deterministic signals report in their own release section
+  // (src/release/evaluation_precedence.ts) rather than inside the artifact.
   const source = readFileSync(ARTIFACT_SOURCE_PATH, "utf8")
   assert.match(source, /hardInvariants/, "artifact carries hardInvariants (deterministic)")
   assert.match(source, /qualityMetrics/, "artifact carries qualityMetrics (deterministic)")
-  assert.match(source, /ragas/, "artifact carries ragas (non-deterministic per-case)")
-  assert.match(source, /ragasShadow/, "artifact carries ragasShadow (non-deterministic shadow)")
 })
 
 test("T17 coexistence: ACL scopes (tenant/subject/groups) preserved across all capabilities", () => {
@@ -681,15 +518,6 @@ test("T17: enforced management routes use production identity admission", () => 
     /app\.use\("\/api\/sources", options\.managementAccessMiddleware\)/,
   )
   assert.match(serverSource, /managementAccessMiddleware \? \{ managementAccessMiddleware \}/)
-})
-
-test("T17 residual: runRagasShadowProfile has NO CLI/runner caller (follow-up ticket)", () => {
-  // runRagasShadowProfile is defined but has no production caller outside tests
-  // This is a residual gap — a follow-up ticket must wire it into the eval CLI
-  const shadowSource = readFileSync(RAGAS_SHADOW_SOURCE_PATH, "utf8")
-  assert.match(shadowSource, /export async function runRagasShadowProfile/, "runRagasShadowProfile defined")
-  // No CLI runner file exists that calls it
-  // (This test documents the gap; the follow-up ticket will wire it.)
 })
 
 test("T17 residual: langfuse npm package NOT installed (DI seam preserves disabled mode)", () => {

@@ -246,20 +246,6 @@ export function validateGoldenCase(input: unknown): GoldenCase {
     compressed = input.compressed
   }
 
-  // Ticket 15: referenceAnswer — optional non-empty string (bounded reference
-  // answer for the subset of cases evaluated by RAGAS). When present, the case
-  // is RAGAS-eligible (subject to CaseResult reaching `completed`).
-  let referenceAnswer: string | undefined
-  if ("referenceAnswer" in input && input.referenceAnswer !== undefined) {
-    if (typeof input.referenceAnswer !== "string") {
-      throw new Error(`GoldenCase '${id}': 'referenceAnswer' must be a string`)
-    }
-    if (input.referenceAnswer.length === 0) {
-      throw new Error(`GoldenCase '${id}': 'referenceAnswer' must be a non-empty string when present`)
-    }
-    referenceAnswer = input.referenceAnswer
-  }
-
   const result: GoldenCase = {
     id,
     version,
@@ -277,7 +263,6 @@ export function validateGoldenCase(input: unknown): GoldenCase {
   if (expectedMaxToolCalls !== undefined) result.expectedMaxToolCalls = expectedMaxToolCalls
   if (expectedFallback !== undefined) result.expectedFallback = expectedFallback
   if (compressed !== undefined) result.compressed = compressed
-  if (referenceAnswer !== undefined) result.referenceAnswer = referenceAnswer
   return result
 }
 

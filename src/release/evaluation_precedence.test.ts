@@ -3,9 +3,9 @@
 // TDD red phase: defines the expected behavior of assembleEvaluationPrecedence
 // BEFORE the implementation exists. Tests cover all 3 acceptance criteria:
 //   #1 — A hard-invariant failure keeps the release failed even when all
-//        RAGAS and Langfuse signals are positive.
-//   #2 — RAGAS regression or Langfuse outage cannot change a passing
-//        deterministic result, though each remains visible in its own
+//        shadow-evaluator and Langfuse signals are positive.
+//   #2 — A shadow-evaluator regression or Langfuse outage cannot change a
+//        passing deterministic result, though each remains visible in its own
 //        report section.
 //   #3 — The deterministic evidence hash decision excludes non-deterministic
 //        report content without excluding their schema metadata.
@@ -21,8 +21,10 @@ import {
   assembleEvaluationPrecedence,
   type EvaluationPrecedenceInput,
   type EvaluationPrecedenceReport,
+  type ShadowBaselineLike,
+  type ShadowRegressionLike,
 } from "./evaluation_precedence"
-import type { HardInvariantResult, RagasShadowBaseline, RagasShadowRegression } from "../evaluation/types"
+import type { HardInvariantResult } from "../evaluation/types"
 import type { LangfuseRoundTripProbeFixture } from "./langfuse_probe"
 
 // ---------------------------------------------------------------------------
@@ -67,7 +69,7 @@ function makeFailingHardInvariants(): HardInvariantResult[] {
   ]
 }
 
-function makePositiveRagasBaseline(): RagasShadowBaseline {
+function makePositiveShadowBaseline(): ShadowBaselineLike {
   return {
     aggregate: {
       meanFaithfulness: 0.95,
@@ -92,12 +94,12 @@ function makePositiveRagasBaseline(): RagasShadowBaseline {
   }
 }
 
-function makeRegressedRagasBaseline(): RagasShadowBaseline {
-  // Lower scores — simulates RAGAS regression (must NOT change release decision)
+function makeRegressedShadowBaseline(): ShadowBaselineLike {
+  // Lower scores — simulates a shadow-evaluator regression (must NOT change release decision)
   return {
-    ...makePositiveRagasBaseline(),
+    ...makePositiveShadowBaseline(),
     aggregate: {
-      ...makePositiveRagasBaseline().aggregate,
+      ...makePositiveShadowBaseline().aggregate,
       meanFaithfulness: 0.65, // was 0.95 — major regression
       meanAnswerRelevancy: 0.62,
       meanContextPrecision: 0.58,
@@ -106,7 +108,7 @@ function makeRegressedRagasBaseline(): RagasShadowBaseline {
   }
 }
 
-function makeRagasRegressions(): RagasShadowRegression[] {
+function makeShadowRegressions(): ShadowRegressionLike[] {
   return [
     {
       metric: "faithfulness",
@@ -156,8 +158,8 @@ function makeOutageLangfuseReport(): LangfuseProbeOutputs {
 function makePassingInput(): EvaluationPrecedenceInput {
   return {
     hardInvariants: makePassingHardInvariants(),
-    ragasShadowBaseline: makePositiveRagasBaseline(),
-    ragasShadowRegressions: [],
+    shadowBaseline: makePositiveShadowBaseline(),
+    shadowRegressions: [],
     langfuseReport: makeHealthyLangfuseReport(),
     repositoryRevision: "abc123def4567890abcdef1234567890abcdef12",
   }
@@ -165,15 +167,15 @@ function makePassingInput(): EvaluationPrecedenceInput {
 
 // ============================================================
 // #1 — Hard-invariant failure keeps release failed even when
-//      RAGAS + Langfuse signals are positive (AC1)
+//      shadow-evaluator + Langfuse signals are positive (AC1)
 // ============================================================
 
-test("Ticket 27 #1a: hard-invariant failure → releaseDecision=failed even with positive RAGAS + Langfuse", () => {
+test("Ticket 27 #1a: hard-invariant failure → releaseDecision=failed even with positive shadow + Langfuse", () => {
   const input = makePassingInput()
   input.hardInvariants = makeFailingHardInvariants()
-  // RAGAS + Langfuse positive — must NOT rescue the release
-  input.ragasShadowBaseline = makePositiveRagasBaseline()
-  input.ragasShadowRegressions = []
+  // shadow + Langfuse positive — must NOT rescue the release
+  input.shadowBaseline = makePositiveShadowBaseline()
+  input.shadowRegressions = []
   input.langfuseReport = makeHealthyLangfuseReport()
 
   const report = assembleEvaluationPrecedence(input)
@@ -197,37 +199,37 @@ test("Ticket 27 #1b: report records which deterministic invariants failed (root 
 test("Ticket 27 #1c: probabilistic signals remain visible in the report even when release failed", () => {
   const input = makePassingInput()
   input.hardInvariants = makeFailingHardInvariants()
-  input.ragasShadowBaseline = makePositiveRagasBaseline()
+  input.shadowBaseline = makePositiveShadowBaseline()
   input.langfuseReport = makeHealthyLangfuseReport()
   const report = assembleEvaluationPrecedence(input)
 
-  // RAGAS + Langfuse must still be visible (criterion #2 — "remains visible in its own report section")
-  assert.ok(report.probabilisticSection.ragas, "RAGAS section must be present")
+  // shadow + Langfuse must still be visible (criterion #2 — "remains visible in its own report section")
+  assert.ok(report.probabilisticSection.shadow, "shadow section must be present")
   assert.ok(report.probabilisticSection.langfuse, "Langfuse section must be present")
 })
 
 // ============================================================
-// #2 — RAGAS regression or Langfuse outage cannot change a
-//      passing deterministic result (AC2)
+// #2 — Shadow-evaluator regression or Langfuse outage cannot
+//      change a passing deterministic result (AC2)
 // ============================================================
 
-test("Ticket 27 #2a: RAGAS regression → releaseDecision=passed (deterministic passed)", () => {
+test("Ticket 27 #2a: shadow-evaluator regression → releaseDecision=passed (deterministic passed)", () => {
   const input = makePassingInput()
   input.hardInvariants = makePassingHardInvariants()
-  // RAGAS regression — must NOT change release decision
-  input.ragasShadowBaseline = makeRegressedRagasBaseline()
-  input.ragasShadowRegressions = makeRagasRegressions()
+  // shadow regression — must NOT change release decision
+  input.shadowBaseline = makeRegressedShadowBaseline()
+  input.shadowRegressions = makeShadowRegressions()
   input.langfuseReport = makeHealthyLangfuseReport()
   const report = assembleEvaluationPrecedence(input)
 
-  assert.equal(report.releaseDecision, "passed", "RAGAS regression must NOT change passing deterministic result")
+  assert.equal(report.releaseDecision, "passed", "a shadow regression must NOT change a passing deterministic result")
   assert.equal(report.deterministicDecision, "passed")
 })
 
 test("Ticket 27 #2b: Langfuse outage → releaseDecision=passed (deterministic passed)", () => {
   const input = makePassingInput()
   input.hardInvariants = makePassingHardInvariants()
-  input.ragasShadowBaseline = makePositiveRagasBaseline()
+  input.shadowBaseline = makePositiveShadowBaseline()
   // Langfuse outage — must NOT change release decision
   input.langfuseReport = makeOutageLangfuseReport()
   const report = assembleEvaluationPrecedence(input)
@@ -235,19 +237,19 @@ test("Ticket 27 #2b: Langfuse outage → releaseDecision=passed (deterministic p
   assert.equal(report.releaseDecision, "passed", "Langfuse outage must NOT change passing deterministic result")
 })
 
-test("Ticket 27 #2c: RAGAS regression is visible in probabilisticSection (non-blocking but reported)", () => {
+test("Ticket 27 #2c: shadow regression is visible in probabilisticSection (non-blocking but reported)", () => {
   const input = makePassingInput()
-  input.ragasShadowRegressions = makeRagasRegressions()
+  input.shadowRegressions = makeShadowRegressions()
   const report = assembleEvaluationPrecedence(input)
 
-  assert.ok(report.probabilisticSection.ragas, "RAGAS section must be present")
+  assert.ok(report.probabilisticSection.shadow, "shadow section must be present")
   assert.equal(
-    report.probabilisticSection.ragas?.regressionDetected,
+    report.probabilisticSection.shadow?.regressionDetected,
     true,
     "regressionDetected must be true when regressions exist",
   )
   assert.equal(
-    report.probabilisticSection.ragas?.regressions.length,
+    report.probabilisticSection.shadow?.regressions.length,
     2,
     "must record 2 regressions",
   )
@@ -262,18 +264,18 @@ test("Ticket 27 #2d: Langfuse outage is visible in probabilisticSection (non-blo
   assert.equal(report.probabilisticSection.langfuse?.traceFound, false, "traceFound=false must be reported")
 })
 
-test("Ticket 27 #2e: combined RAGAS regression + Langfuse outage → releaseDecision=passed (deterministic passed)", () => {
+test("Ticket 27 #2e: combined shadow regression + Langfuse outage → releaseDecision=passed (deterministic passed)", () => {
   const input = makePassingInput()
   input.hardInvariants = makePassingHardInvariants()
-  input.ragasShadowBaseline = makeRegressedRagasBaseline()
-  input.ragasShadowRegressions = makeRagasRegressions()
+  input.shadowBaseline = makeRegressedShadowBaseline()
+  input.shadowRegressions = makeShadowRegressions()
   input.langfuseReport = makeOutageLangfuseReport()
   const report = assembleEvaluationPrecedence(input)
 
   assert.equal(
     report.releaseDecision,
     "passed",
-    "both RAGAS + Langfuse failures must NOT change passing deterministic result",
+    "both shadow + Langfuse failures must NOT change a passing deterministic result",
   )
 })
 
@@ -291,8 +293,8 @@ test("Ticket 27 #3a: evidenceHash is present and is a non-empty string", () => {
 test("Ticket 27 #3b: evidenceHash is stable for the same deterministic inputs (reproducible)", () => {
   const input1 = makePassingInput()
   const input2 = makePassingInput()
-  // Change RAGAS + Langfuse (non-deterministic) — must NOT affect hash
-  input2.ragasShadowBaseline = makeRegressedRagasBaseline()
+  // Change shadow + Langfuse (non-deterministic) — must NOT affect hash
+  input2.shadowBaseline = makeRegressedShadowBaseline()
   input2.langfuseReport = makeOutageLangfuseReport()
 
   const report1 = assembleEvaluationPrecedence(input1)
@@ -320,17 +322,17 @@ test("Ticket 27 #3c: evidenceHash changes when deterministic inputs change", () 
   )
 })
 
-test("Ticket 27 #3d: schemaMetadataIncluded=true — RAGAS + Langfuse schema metadata remains in report", () => {
+test("Ticket 27 #3d: schemaMetadataIncluded=true — shadow + Langfuse schema metadata remains in report", () => {
   const report = assembleEvaluationPrecedence(makePassingInput())
   assert.equal(report.schemaMetadataIncluded, true, "schema metadata must be included")
   assert.ok(report.schemaMetadata, "schemaMetadata object must be present")
   assert.ok(
-    Array.isArray(report.schemaMetadata.ragasShadowFields),
-    "ragasShadowFields must be an array (schema metadata for RAGAS section)",
+    Array.isArray(report.schemaMetadata.shadowFields),
+    "shadowFields must be an array (schema metadata for the shadow section)",
   )
   assert.ok(
-    report.schemaMetadata.ragasShadowFields.length > 0,
-    "ragasShadowFields must list the field names of RagasShadowBaseline",
+    report.schemaMetadata.shadowFields.length > 0,
+    "shadowFields must list the field names of the shadow baseline",
   )
   assert.ok(
     Array.isArray(report.schemaMetadata.langfuseFields),
@@ -338,15 +340,15 @@ test("Ticket 27 #3d: schemaMetadataIncluded=true — RAGAS + Langfuse schema met
   )
 })
 
-test("Ticket 27 #3e: evidenceHash excludes RAGAS aggregate values (hash stable when only RAGAS scores change)", () => {
+test("Ticket 27 #3e: evidenceHash excludes shadow aggregate values (hash stable when only shadow scores change)", () => {
   const input1 = makePassingInput()
   const input2 = makePassingInput()
-  // Same hardInvariants + same RAGAS metadata (runCount/datasetVersion/...)
-  // but different RAGAS aggregate values — hash must NOT change
-  input2.ragasShadowBaseline = {
-    ...input1.ragasShadowBaseline!,
+  // Same hardInvariants + same shadow metadata (runCount/datasetVersion/...)
+  // but different shadow aggregate values — hash must NOT change
+  input2.shadowBaseline = {
+    ...input1.shadowBaseline!,
     aggregate: {
-      ...input1.ragasShadowBaseline!.aggregate,
+      ...input1.shadowBaseline!.aggregate,
       meanFaithfulness: 0.50,
       meanAnswerRelevancy: 0.50,
       meanContextPrecision: 0.50,
@@ -358,7 +360,7 @@ test("Ticket 27 #3e: evidenceHash excludes RAGAS aggregate values (hash stable w
   assert.equal(
     report1.evidenceHash,
     report2.evidenceHash,
-    "evidenceHash must be identical when only RAGAS aggregate VALUES change (excludes non-deterministic content)",
+    "evidenceHash must be identical when only shadow aggregate VALUES change (excludes non-deterministic content)",
   )
 })
 
@@ -400,12 +402,12 @@ test("Ticket 27 #5a: missing hardInvariants → deterministicDecision=failed wit
   )
 })
 
-test("Ticket 27 #5b: null ragasShadowBaseline → probabilisticSection.ragas.baseline=null but section still present", () => {
+test("Ticket 27 #5b: null shadowBaseline → probabilisticSection.shadow.baseline=null but section still present", () => {
   const input = makePassingInput()
-  input.ragasShadowBaseline = null
+  input.shadowBaseline = null
   const report = assembleEvaluationPrecedence(input)
-  assert.ok(report.probabilisticSection.ragas, "RAGAS section must still be present (visible even when null)")
-  assert.equal(report.probabilisticSection.ragas?.baseline, null, "baseline must be null")
+  assert.ok(report.probabilisticSection.shadow, "shadow section must still be present (visible even when null)")
+  assert.equal(report.probabilisticSection.shadow?.baseline, null, "baseline must be null")
 })
 
 test("Ticket 27 #5c: null langfuseReport → probabilisticSection.langfuse=null but section still present", () => {
@@ -470,10 +472,10 @@ test("Ticket 27 #7a: report contains all required top-level fields", () => {
   }
 })
 
-test("Ticket 27 #7b: probabilisticSection contains ragas + langfuse sub-sections", () => {
+test("Ticket 27 #7b: probabilisticSection contains shadow + langfuse sub-sections", () => {
   const report = assembleEvaluationPrecedence(makePassingInput())
   assert.ok(report.probabilisticSection)
-  assert.ok("ragas" in report.probabilisticSection)
+  assert.ok("shadow" in report.probabilisticSection)
   assert.ok("langfuse" in report.probabilisticSection)
 })
 
@@ -506,12 +508,12 @@ test("Ticket 15: a release that ran no shadow evaluator still decides determinis
 
   assert.equal(report.releaseDecision, "passed", "omitting the shadow evaluator must not block a passing release")
   assert.equal(
-    report.probabilisticSection.ragas ?? null,
+    report.probabilisticSection.shadow ?? null,
     null,
     "no shadow section exists when the caller supplied none",
   )
   assert.equal(
-    "ragasShadowFields" in report.schemaMetadata,
+    "shadowFields" in report.schemaMetadata,
     false,
     "no shadow schema metadata is reported for a release without that evaluator",
   )
@@ -532,8 +534,8 @@ test("Ticket 15: the deterministic fingerprint ignores whether a shadow evaluato
   // Same invariant evidence, different shadow metadata → still the same hash.
   const differentShadowMetadata = assembleEvaluationPrecedence({
     ...makePassingInput(),
-    ragasShadowBaseline: {
-      ...makePositiveRagasBaseline(),
+    shadowBaseline: {
+      ...makePositiveShadowBaseline(),
       runCount: 42,
       datasetVersion: "v9.9.9",
     },

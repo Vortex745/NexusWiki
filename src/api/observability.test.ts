@@ -12,8 +12,8 @@ import test from "node:test"
  * `./data/ragas-latest.json` fallback must not come back, and the removal must
  * not have taken the neighbouring surfaces with it.
  *
- * The RAGAS engine/config removal is ticket 17; these assertions are about
- * SURFACE only.
+ * The RAGAS engine/config removal landed in eval-refactor ticket 17; these
+ * assertions are about the removed SURFACE only.
  */
 
 const root = join(__dirname, "..", "..")
@@ -44,8 +44,8 @@ test("no shipped server code reads an evaluation artifact from disk", () => {
       `${file} must not fall back to a RAGAS artifact file`
     )
   }
-  // The stale artifacts under data/ are ticket 17's removal (historical
-  // products of the engine); what matters here is that nothing reads them.
+  // The stale artifacts under data/ were removed with the engine in
+  // eval-refactor ticket 17; what matters here is that nothing reads them.
 
 })
 

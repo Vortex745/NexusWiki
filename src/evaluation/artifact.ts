@@ -110,26 +110,6 @@ export function buildArtifact(input: {
   repositoryRevision: string
   providerModelIds: { chat: string; embedding: string; evaluator?: string }
   modelJudgeScores?: ModelJudgeScore[]
-  /**
-   * Optional shadow-evaluator section. When provided, the artifact includes
-   * per-case outcomes, aggregate values, evaluator model IDs and runtime
-   * version info. Structurally separate from hardInvariants/qualityMetrics
-   * (criterion #5) — these results cannot change the passed/failed state of
-   * deterministic gates.
-   *
-   * Ticket 15: the type is derived from the artifact contract instead of
-   * importing evaluator-specific types, so this builder keeps compiling when
-   * the evaluator implementation is retired (ticket 17).
-   */
-  ragas?: EvaluationArtifact["ragas"]
-  /**
-   * Optional shadow baseline section. When provided, the artifact includes the
-   * shadow baseline + optional comparison vs a checked-in baseline.
-   * Structurally separate from `aggregateMetrics.baseline` (latency/token) and
-   * `ragas` (per-case outcomes above). NON-BLOCKING (criterion #6) — shadow
-   * regressions cannot change deterministic gate pass/fail state.
-   */
-  ragasShadow?: EvaluationArtifact["ragasShadow"]
   generatedAt?: string
 }): EvaluationArtifact {
   const aggregateMetrics: EvaluationArtifact["aggregateMetrics"] = {
@@ -148,12 +128,6 @@ export function buildArtifact(input: {
     generatedAt: input.generatedAt ?? new Date().toISOString(),
     aggregateMetrics,
     perCaseStatus: input.results,
-  }
-  if (input.ragas !== undefined) {
-    artifact.ragas = input.ragas
-  }
-  if (input.ragasShadow !== undefined) {
-    artifact.ragasShadow = input.ragasShadow
   }
   return artifact
 }

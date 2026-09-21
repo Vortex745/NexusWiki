@@ -29,8 +29,9 @@
  *   - §4: Noop default + 6 prohibited exports + safe whitelist per stage
  *   - §5: Fire-and-forget; observer failure NEVER throws; local trace
  *     always attempted before export (fanout order: trace → exporter)
- *   - §6: 8 hard invariants deterministic + non-overridable; RAGAS
- *     structurally separate; Mastra scorers shadow-mode only
+ *   - §6: 8 hard invariants deterministic + non-overridable;
+ *     non-deterministic reports structurally separate; Mastra scorers
+ *     shadow-mode only
  */
 
 import { test } from "node:test";
@@ -531,11 +532,12 @@ test("T13 #5: release_verification.ts does NOT import from ../mastra/*", () => {
   assert.equal(mastraImportRegex.test(file), false);
 });
 
-test("T13 #5: EvaluationArtifact type has ragas? + ragasShadow? as separate top-level fields", () => {
-  // T06 §6.2: RAGAS results live in separate top-level fields, NOT under
-  // aggregateMetrics.hardInvariants or aggregateMetrics.qualityMetrics.
-  // This structural separation guarantees RAGAS cannot change deterministic
-  // verdicts.
+test("T13 #5: aggregateMetrics holds deterministic results only (evaluator results stay out)", () => {
+  // T06 §6.2: results that cannot change a deterministic verdict must not sit
+  // beside the deterministic gate fields. The legacy shadow evaluator was
+  // removed in eval-refactor ticket 17, so this invariant is now asserted in
+  // two places: the artifact carries only deterministic sections, and the
+  // release path binds its decision to those sections alone.
   const file = readFileSync(
     path.resolve(process.cwd(), "src/evaluation/types.ts"),
     "utf8",
@@ -544,28 +546,25 @@ test("T13 #5: EvaluationArtifact type has ragas? + ragasShadow? as separate top-
   const artifactMatch = file.match(/export interface EvaluationArtifact \{([\s\S]*?)\n\}/);
   assert.ok(artifactMatch, "EvaluationArtifact interface must exist");
   const body = artifactMatch![1];
-  // ragas? and ragasShadow? must appear at the top level (not nested).
-  assert.ok(
-    /^\s*ragas\?:/m.test(body),
-    "ragas? must be a top-level field of EvaluationArtifact",
-  );
-  assert.ok(
-    /^\s*ragasShadow\?:/m.test(body),
-    "ragasShadow? must be a top-level field of EvaluationArtifact",
-  );
-  // They must NOT appear inside aggregateMetrics.
   const aggMatch = body.match(/aggregateMetrics:\s*\{([\s\S]*?)\n\s*\}/);
   assert.ok(aggMatch, "aggregateMetrics must exist");
   const aggBody = aggMatch![1];
+  assert.ok(/hardInvariants:/.test(aggBody), "hardInvariants is a deterministic gate field");
+  assert.ok(/qualityMetrics:/.test(aggBody), "qualityMetrics is a deterministic gate field");
   assert.equal(
-    /^\s*ragas\?:/m.test(aggBody),
+    /ragas|shadow/i.test(aggBody),
     false,
-    "ragas? must NOT be inside aggregateMetrics (structural separation)",
+    "no shadow-evaluator section may sit inside aggregateMetrics (structural separation)",
   );
-  assert.equal(
-    /^\s*ragasShadow\?:/m.test(aggBody),
-    false,
-    "ragasShadow? must NOT be inside aggregateMetrics (structural separation)",
+
+  const precedenceSource = readFileSync(
+    path.resolve(process.cwd(), "src/release/evaluation_precedence.ts"),
+    "utf8",
+  );
+  assert.match(
+    precedenceSource,
+    /releaseDecision: deterministicDecision/,
+    "the release decision is bound to the deterministic decision only",
   );
 });
 

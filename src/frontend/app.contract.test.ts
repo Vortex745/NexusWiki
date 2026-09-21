@@ -361,11 +361,6 @@ test("the evaluation dialog presents BLEU and ROUGE as text similarity with thei
   assert.match(dialog, /textRuleVersion/, "the fixed text rules are version-stamped on screen")
   assert.match(dialog, /rougeVersion/, "the ROUGE version is shown alongside BLEU's")
   assert.match(dialog, /取自本次实际回复/, "the copy states the score comes from the actual reply")
-  assert.match(
-    dialog,
-    /不沿用旧 RAGAS 的语义评分口径/,
-    "the new similarity metrics must not be mixed with the old RAGAS semantics"
-  )
   assert.match(dialog, /已完成 \{task\.progress\.finished\}\/\{task\.progress\.total\}/, "batch progress is visible")
   assert.equal(
     /只运行一题|多题批量见后续票/.test(dialog),
@@ -373,9 +368,9 @@ test("the evaluation dialog presents BLEU and ROUGE as text similarity with thei
     "the single-case limitation copy is gone now that batches run"
   )
   assert.equal(
-    /ragas/i.test(dialog.replace(/不沿用旧 RAGAS 的语义评分口径/g, "")),
+    /ragas/i.test(dialog),
     false,
-    "the evaluation surface must not read or display RAGAS data"
+    "the evaluation surface must not read, display or mention RAGAS data"
   )
   // Twelve metrics in one surface: six retrieval + six similarity.
   const metricKeys = /\["(?:precision|recall|ndcg@3|ndcg@10|mrr|map|bleu-[124]|rouge-[12l])", "/g
