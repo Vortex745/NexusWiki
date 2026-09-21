@@ -105,22 +105,28 @@ export function defaultBlockedItems(): BlockedItem[] {
 
 /**
  * A non-deterministic signal that may report alongside the release artifact
- * but CANNOT override deterministic gate results (spec L13, L77). RAGAS
- * shadow and Langfuse are bypass-only reporters.
+ * but CANNOT override deterministic gate results (spec L13, L77). Every
+ * reporter is bypass-only.
  *
  * `canOverrideDeterministicGates` is a literal `false` so any code path that
  * tries to consult it as a gate is a type error.
+ *
+ * Ticket 15: `name` is open on purpose. The release path must not enumerate a
+ * specific evaluator, so retiring one never requires editing this contract —
+ * only the default list below changes.
  */
 export interface NonDeterministicSignal {
-  name: "ragas_shadow" | "langfuse"
+  name: string
   role: "bypass_only"
   canOverrideDeterministicGates: false
 }
 
 /**
- * Spec L13, L77: the canonical non-deterministic signal set. RAGAS shadow
- * and Langfuse are bypass-only — they report alongside the artifact but
- * cannot change deterministic gate pass/fail state.
+ * Spec L13, L77: the canonical non-deterministic signal set. These reporters
+ * are bypass-only — they report alongside the artifact but cannot change
+ * deterministic gate pass/fail state. The shadow-evaluator entry is a default
+ * value, not a structural requirement: it disappears with the evaluator
+ * implementation (ticket 17) without touching this contract.
  */
 export function defaultNonDeterministicSignals(): NonDeterministicSignal[] {
   return [

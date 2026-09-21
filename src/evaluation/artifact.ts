@@ -23,8 +23,6 @@ import type {
   HardInvariantResult,
   ModelJudgeScore,
   QualityMetricResult,
-  RagasArtifactSection,
-  RagasShadowArtifactSection,
 } from "./types"
 
 const REGRESSION_THRESHOLD = 1.20 // spec L1560: "more than 20%"
@@ -113,21 +111,25 @@ export function buildArtifact(input: {
   providerModelIds: { chat: string; embedding: string; evaluator?: string }
   modelJudgeScores?: ModelJudgeScore[]
   /**
-   * Ticket 15: optional RAGAS section. When provided, the artifact includes
-   * per-case RAGAS outcomes, aggregate values, evaluator model IDs and runtime
+   * Optional shadow-evaluator section. When provided, the artifact includes
+   * per-case outcomes, aggregate values, evaluator model IDs and runtime
    * version info. Structurally separate from hardInvariants/qualityMetrics
-   * (criterion #5) — RAGAS results cannot change the passed/failed state of
+   * (criterion #5) — these results cannot change the passed/failed state of
    * deterministic gates.
+   *
+   * Ticket 15: the type is derived from the artifact contract instead of
+   * importing evaluator-specific types, so this builder keeps compiling when
+   * the evaluator implementation is retired (ticket 17).
    */
-  ragas?: RagasArtifactSection
+  ragas?: EvaluationArtifact["ragas"]
   /**
-   * Ticket 16: optional RAGAS shadow baseline section. When provided, the
-   * artifact includes the shadow baseline + optional comparison vs a checked-in
-   * baseline. Structurally separate from `aggregateMetrics.baseline` (latency/
-   * token) and `ragas` (per-case outcomes from T15). NON-BLOCKING (criterion
-   * #6) — shadow regressions cannot change deterministic gate pass/fail state.
+   * Optional shadow baseline section. When provided, the artifact includes the
+   * shadow baseline + optional comparison vs a checked-in baseline.
+   * Structurally separate from `aggregateMetrics.baseline` (latency/token) and
+   * `ragas` (per-case outcomes above). NON-BLOCKING (criterion #6) — shadow
+   * regressions cannot change deterministic gate pass/fail state.
    */
-  ragasShadow?: RagasShadowArtifactSection
+  ragasShadow?: EvaluationArtifact["ragasShadow"]
   generatedAt?: string
 }): EvaluationArtifact {
   const aggregateMetrics: EvaluationArtifact["aggregateMetrics"] = {
