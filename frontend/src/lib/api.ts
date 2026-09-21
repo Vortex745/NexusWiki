@@ -142,7 +142,12 @@ export interface EvaluationTaskSummary {
 export interface EvaluationTaskDetail extends EvaluationTaskSummary {
   config: { chatModel: string; rerankModel: string | null; embeddingModel: string; rerankSource: string }
   cases: EvaluationCaseResult[]
-  metrics: { version: string; metrics: Record<string, { value: number | null; sampleSize: number; notApplicable: number }> }
+  metrics: {
+    version: string
+    /** Ticket 07: the text rules behind the BLEU numbers. */
+    generation?: { bleuVersion: string; textRuleVersion: string }
+    metrics: Record<string, { value: number | null; sampleSize: number; notApplicable: number }>
+  }
   cleanup: { esIndex: string; esError?: string; graphProvenance: string; graphError?: string; dbClosed: boolean } | null
   error?: string
 }

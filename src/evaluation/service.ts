@@ -45,6 +45,12 @@ import {
   type ScoredCandidate,
 } from "./metrics"
 import {
+  bleuMetrics,
+  EVAL_BLEU_VERSION,
+  notApplicableBleuMetrics,
+} from "./text_metrics"
+import { EVAL_TEXT_RULE_VERSION } from "./text_rules"
+import {
   EVAL_TASK_TERMINAL_STAGES,
   type EvalCaseResult,
   type EvalCleanupReport,
@@ -442,10 +448,16 @@ export class EvaluationService {
     // launder a provider failure into a retrieval failure, so every metric is
     // "not applicable" (null) instead. Answered cases with an empty ranking
     // still score a real 0 (nothing relevant was retrieved).
+    //
+    // Ticket 07: the BLEU metrics come from the ACTUAL reply of this run (the
+    // refusal when the run honestly refused), never from the reference answer.
     const metrics =
       failure === undefined
-        ? retrievalMetrics(scored, caseDef.relevantPassageIds)
-        : notApplicableRetrievalMetrics()
+        ? {
+            ...retrievalMetrics(scored, caseDef.relevantPassageIds),
+            ...bleuMetrics(done?.reply ?? "", caseDef.referenceAnswer),
+          }
+        : notApplicableCaseMetrics()
 
     return {
       caseId: caseDef.caseId,
@@ -498,6 +510,16 @@ export class EvaluationService {
   }
 }
 
+/**
+ * The full metric key set with every value "not applicable" — retrieval and
+ * generation side both. Used when a case never produced a scorable run, so the
+ * aggregate reports a sample size of 0 instead of six retrieval zeros plus
+ * three BLEU zeros.
+ */
+function notApplicableCaseMetrics(): EvalCaseResult["metrics"] {
+  return { ...notApplicableRetrievalMetrics(), ...notApplicableBleuMetrics() }
+}
+
 function failedCase(caseDef: EvalDatasetCase, error: string): EvalCaseResult {
   return {
     caseId: caseDef.caseId,
@@ -507,7 +529,7 @@ function failedCase(caseDef: EvalDatasetCase, error: string): EvalCaseResult {
     answer: "",
     error,
     durationMs: 0,
-    metrics: notApplicableRetrievalMetrics(),
+    metrics: notApplicableCaseMetrics(),
     retrievedPassageIds: [],
     candidates: [],
     unmappedCandidates: 0,
@@ -582,5 +604,9 @@ export function summarizeMetrics(cases: EvalCaseResult[]): EvalMetricsSummary {
       notApplicable,
     }
   }
-  return { version: EVAL_METRIC_VERSION, metrics }
+  return {
+    version: EVAL_METRIC_VERSION,
+    generation: { bleuVersion: EVAL_BLEU_VERSION, textRuleVersion: EVAL_TEXT_RULE_VERSION },
+    metrics,
+  }
 }

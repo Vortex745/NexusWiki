@@ -34,14 +34,20 @@ const TERMINAL_STAGES: ReadonlySet<EvaluationTaskStage> = new Set([
 /** Transient stages in execution order (queued is the pre-step). */
 const ACTIVE_ORDER: EvaluationTaskStage[] = ["preparing", "running", "cleaning"]
 
-/** The six retrieval metrics, in display order (ticket 06). */
-const RETRIEVAL_METRICS: Array<[string, string]> = [
+/**
+ * Every metric a case reports, in display order: the six retrieval metrics
+ * (ticket 06) followed by the three answer-similarity scores (ticket 07).
+ */
+const CASE_METRICS: Array<[string, string]> = [
   ["precision", "Precision"],
   ["recall", "Recall"],
   ["ndcg@3", "NDCG@3"],
   ["ndcg@10", "NDCG@10"],
   ["mrr", "MRR"],
   ["map", "MAP"],
+  ["bleu-1", "BLEU-1"],
+  ["bleu-2", "BLEU-2"],
+  ["bleu-4", "BLEU-4"],
 ]
 
 const ORDERING_REASON_LABELS: Record<string, string> = {
@@ -474,7 +480,7 @@ export function EvaluationDialog({ open, onClose }: { open: boolean; onClose: ()
                 ) : null}
                 {item.error ? <p className="mt-2 text-[11px] text-red-600">{item.error}</p> : null}
                 <dl className="mt-2 grid grid-cols-3 gap-x-3 gap-y-1 text-[11px] text-muted/70">
-                  {RETRIEVAL_METRICS.map(([key, label]) => (
+                  {CASE_METRICS.map(([key, label]) => (
                     <div key={key} className="flex justify-between gap-2">
                       <dt>{label}</dt>
                       <dd className="font-mono font-semibold text-ink">
@@ -506,7 +512,7 @@ export function EvaluationDialog({ open, onClose }: { open: boolean; onClose: ()
                   </span>
                 </p>
                 <dl className="mt-1.5 grid grid-cols-2 gap-x-4 gap-y-1 text-[11px]">
-                  {RETRIEVAL_METRICS.map(([key, label]) => {
+                  {CASE_METRICS.map(([key, label]) => {
                     const summary = task.metrics.metrics[key]
                     return (
                       <div key={key} className="flex items-baseline justify-between gap-2">
@@ -524,6 +530,13 @@ export function EvaluationDialog({ open, onClose }: { open: boolean; onClose: ()
                     )
                   })}
                 </dl>
+                <p className="mt-1.5 text-[10px] text-muted/50">
+                  BLEU 为文本相似度（固定中文按字、英文按词及大小写/标点归一化规则
+                  {task.metrics.generation
+                    ? ` ${task.metrics.generation.bleuVersion} / ${task.metrics.generation.textRuleVersion}`
+                    : ""}
+                  ），不是正确率或忠实性；分数取自本次实际回复。
+                </p>
               </div>
             ) : null}
 

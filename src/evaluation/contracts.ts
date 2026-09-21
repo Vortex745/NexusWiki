@@ -84,6 +84,11 @@ export interface EvalMetricSummary {
 
 export interface EvalMetricsSummary {
   version: string
+  /**
+   * Ticket 07: the generation-side text rules behind the BLEU numbers, so the
+   * page can state the口径 instead of implying the scores are accuracy.
+   */
+  generation?: { bleuVersion: string; textRuleVersion: string }
   metrics: Record<string, EvalMetricSummary>
 }
 

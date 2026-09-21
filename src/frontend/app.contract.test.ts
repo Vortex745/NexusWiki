@@ -196,6 +196,17 @@ test("the evaluation dialog shows all six retrieval metrics and the ranking's sc
   assert.match(dialog, /task\.metrics\.version/, "the metric version stamp is displayed")
 })
 
+test("the evaluation dialog presents BLEU as text similarity with its fixed text rules", () => {
+  const dialog = read("frontend/src/components/panels/EvaluationDialog.tsx")
+  for (const key of ["bleu-1", "bleu-2", "bleu-4"]) {
+    assert.ok(dialog.includes(`["${key}", `), `the metric grid must render ${key}`)
+  }
+  assert.match(dialog, /文本相似度/, "BLEU is described as text similarity")
+  assert.match(dialog, /不是正确率或忠实性/, "the copy must not imply accuracy or faithfulness")
+  assert.match(dialog, /textRuleVersion/, "the fixed text rules are version-stamped on screen")
+  assert.match(dialog, /取自本次实际回复/, "the copy states the score comes from the actual reply")
+})
+
 // ---------------------------------------------------------------------------
 // Product surface kept across the migration
 // ---------------------------------------------------------------------------

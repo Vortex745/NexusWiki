@@ -79,6 +79,8 @@ interface FakeScopeOptions {
    * that never labelled its ordering must not gain a label from the fake.
    */
   ordering?: { source: "dedicated_rerank" | "fused"; reason?: string }
+  /** Ticket 07: the reply this run publishes (defaults to FAKE_REPLY). */
+  reply?: string
 }
 
 class FakeScope implements IsolatedEvalResources {
@@ -177,7 +179,7 @@ class FakeScope implements IsolatedEvalResources {
           yield progressEvent(runOptions, {
             type: "done",
             stage: "done",
-            result: runResult(runOptions, message),
+            result: runResult(runOptions, options.reply ?? FAKE_REPLY),
           })
           // Keep the unused helper referenced for type clarity.
           void passageIdForChunk
@@ -234,12 +236,12 @@ function progressEvent(
 
 function runResult(
   options: { runId?: string; caseId?: string },
-  message: string
+  reply: string
 ): AnswerRunResult {
   return {
     runId: options.runId ?? "run",
     status: "completed",
-    reply: FAKE_REPLY,
+    reply,
     references: [],
     degradation: { status: "none", unavailableChannels: [] },
   } as AnswerRunResult & { caseId?: string }
@@ -695,6 +697,9 @@ test("a scored case reports all six retrieval metrics and the ranking's real sou
     // Ranking: shipping-policy (irrelevant), refund-policy (relevant). GT is
     // {refund-policy}: one hit of one ground-truth passage at rank 2.
     assert.deepEqual(Object.keys(metrics).sort(), [
+      "bleu-1",
+      "bleu-2",
+      "bleu-4",
       "map",
       "mrr",
       "ndcg@10",
@@ -745,15 +750,100 @@ test("a failed case reports no retrieval metrics instead of six zeros", async ()
       "ndcg@10": null,
       mrr: null,
       map: null,
+      "bleu-1": null,
+      "bleu-2": null,
+      "bleu-4": null,
     })
     assert.equal(cases[0].ordering, undefined, "no scored ranking means no score source")
     const summary = detail.metrics as { metrics: Record<string, { value: number | null; sampleSize: number; notApplicable: number }> }
-    for (const key of ["precision", "recall", "ndcg@3", "ndcg@10", "mrr", "map"]) {
+    for (const key of [
+      "precision",
+      "recall",
+      "ndcg@3",
+      "ndcg@10",
+      "mrr",
+      "map",
+      "bleu-1",
+      "bleu-2",
+      "bleu-4",
+    ]) {
       assert.deepEqual(
         summary.metrics[key],
         { value: null, sampleSize: 0, notApplicable: 1 },
         `${key} must stay "not applicable" rather than becoming a fake 0`
       )
+    }
+  } finally {
+    await harness.close()
+  }
+})
+
+// ---------------------------------------------------------------------------
+// Ticket 07 — BLEU is scored from the actual reply
+// ---------------------------------------------------------------------------
+
+/** Single-case dataset whose reference answer equals the fake reply. */
+function bleuDataset(referenceAnswer: string) {
+  return {
+    schemaVersion: 1,
+    name: "bleu",
+    version: "1.0.0",
+    corpus: [{ passageId: "bleu-p1", content: "退款在审核通过后 3 个工作日内到账。" }],
+    cases: [
+      {
+        caseId: "bleu-1",
+        question: "退款多久到账？",
+        referenceAnswer,
+        relevantPassageIds: ["bleu-p1"],
+      },
+    ],
+  }
+}
+
+test("a reply identical to the reference scores BLEU-1/2/4 = 1", async () => {
+  const harness = await buildHarness({ ranking: [{ passageId: "bleu-p1", relevant: true }] })
+  try {
+    const created = await createTask(harness.port, { dataset: bleuDataset(FAKE_REPLY) })
+    const detail = await pollTerminal(harness.port, created.body.id as string)
+
+    const cases = detail.cases as Array<Record<string, unknown>>
+    const metrics = cases[0].metrics as Record<string, number | null>
+    assert.equal(cases[0].answer, FAKE_REPLY)
+    assert.equal(metrics["bleu-1"], 1)
+    assert.equal(metrics["bleu-2"], 1)
+    assert.equal(metrics["bleu-4"], 1)
+    // The retrieval side of the same bundle is unaffected.
+    assert.equal(metrics.precision, 1)
+
+    const summary = detail.metrics as { metrics: Record<string, { value: number | null; sampleSize: number }> }
+    assert.equal(summary.metrics["bleu-4"].value, 1)
+    assert.equal(summary.metrics["bleu-4"].sampleSize, 1)
+  } finally {
+    await harness.close()
+  }
+})
+
+test("an honest refusal keeps its own text and its own low BLEU (the reference is never substituted)", async () => {
+  const refusal = "抱歉，我无法回答这个问题。"
+  // Zero character overlap with the refusal, so a substituted reference would
+  // score exactly 1 and this test would catch it.
+  const reference = "订单签收后可申请退货。"
+  const harness = await buildHarness({
+    ranking: [{ passageId: "bleu-p1", relevant: true }],
+    reply: refusal,
+  })
+  try {
+    const created = await createTask(harness.port, { dataset: bleuDataset(reference) })
+    const detail = await pollTerminal(harness.port, created.body.id as string)
+
+    const cases = detail.cases as Array<Record<string, unknown>>
+    const metrics = cases[0].metrics as Record<string, number | null>
+    assert.equal(cases[0].answer, refusal, "the published reply is what gets scored")
+    assert.equal(metrics["bleu-1"], 0, "no shared unigram with the reference")
+    assert.equal(metrics["bleu-2"], 0)
+    assert.equal(metrics["bleu-4"], 0)
+    for (const key of ["bleu-1", "bleu-2", "bleu-4"]) {
+      assert.ok(Number.isFinite(metrics[key]), `${key} must never be NaN or Infinity`)
     }
   } finally {
     await harness.close()
