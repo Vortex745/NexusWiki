@@ -149,11 +149,12 @@ test("the assistant-ui runtime is an external store bridged to Conversation", ()
 test("frontend still speaks to the existing backend endpoints", () => {
   // Endpoints are built from a shared `API_BASE = "/api"` prefix, so each is
   // asserted as the path segment that literally appears in the source.
+  // Ticket 16: `/observability/ragas` is gone on purpose — the evaluation
+  // surface is `/evaluations` (asserted in the dialog test below).
   for (const endpoint of [
     "/chat",
     "/chat/runs/",
     "/status",
-    "/observability/ragas",
     "/ingest/file",
     "/ingest/url",
   ]) {
@@ -209,6 +210,71 @@ test("the evaluation dialog offers only allowed model ids and shows the redacted
   assert.match(dialog, /task\.config\.chatModel/, "the model this run really used is displayed")
   assert.match(dialog, /task\.config\.rerankSource/, "the run's score source is displayed")
   assert.ok(api.includes("allowedModels"), "the client reads the server allowlist")
+})
+
+test("the old RAGAS read entry is gone from the frontend too", () => {
+  // Ticket 16: no client, no metric labels, no styles and no hidden file read.
+  // (The evaluation dialog's copy still contrasts its scores with the old
+  // semantic metrics — that mention goes away with the engine in ticket 17.)
+  const files = [
+    "frontend/src/App.tsx",
+    "frontend/src/lib/api.ts",
+    "frontend/src/lib/constants.ts",
+    "frontend/src/components/panels/InsightDialog.tsx",
+    "frontend/src/styles/index.css",
+  ]
+  for (const file of files) {
+    const source = read(file)
+    for (const gone of [
+      "observability/ragas",
+      "fetchRagas",
+      "RAGAS_METRICS",
+      "RagasPayload",
+      "ragas-bar",
+    ]) {
+      assert.equal(source.includes(gone), false, `${file} must not keep ${gone}`)
+    }
+  }
+  assert.equal(
+    read("frontend/src/components/panels/InsightDialog.tsx").includes("质量评估"),
+    false,
+    "the RAGAS tab is removed, not hidden behind a flag"
+  )
+})
+
+test("the evaluation entry and the answer-path view both survive the switch", () => {
+  const sidebar = read("frontend/src/components/Sidebar.tsx")
+  const insight = read("frontend/src/components/panels/InsightDialog.tsx")
+  assert.ok(sidebar.includes("运行评测"), "evaluation is a first-class sidebar entry")
+  assert.match(insight, /<TraceSteps\b/, "the answer-path view still renders the trace steps")
+  assert.match(insight, /aria-label="回答路径"/, "the trace panel keeps its accessible name")
+  assert.match(app, /<EvaluationDialog\b/, "the app mounts the evaluation dialog")
+})
+
+test("the evaluation dialog covers every state and stays usable on small screens", () => {
+  const dialog = read("frontend/src/components/panels/EvaluationDialog.tsx")
+  // Every stage a user can meet has a label — including `cleaning`, which the
+  // cleanup work made observable, and both partial-outcome stages.
+  for (const stage of [
+    "queued",
+    "preparing",
+    "running",
+    "cleaning",
+    "completed",
+    "completed_with_errors",
+    "failed",
+  ]) {
+    assert.match(dialog, new RegExp(`\\b${stage}:`), `${stage} has a label`)
+  }
+  assert.match(dialog, /重启后不可查询/, "the restart-empty state is explained")
+  assert.match(dialog, /aria-label="评测进度"/, "progress is announced")
+  assert.match(dialog, /aria-label="关闭评测"/, "the close control has an accessible name")
+  assert.ok(dialog.includes("max-md:"), "the dialog reflows on narrow screens")
+  assert.match(
+    dialog,
+    /<dialog\b/,
+    "it is a native dialog: Escape, focus and modality come from the platform"
+  )
 })
 
 test("the evaluation dialog separates cleanup failures from the run outcome", () => {

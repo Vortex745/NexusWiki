@@ -1,0 +1,454 @@
+@import "tailwindcss";
+
+/* mem0/assistant-ui ships dark mode as a `.dark` class on <html>. */
+@custom-variant dark (&:where(.dark, .dark *));
+
+/* ---------------------------------------------------------------------------
+   Design tokens — transcribed from the assistant-ui mem0 example
+   (components/assistant-ui/thread.tsx). Light values are the literal hex codes
+   used there; dark values are the zinc palette the same file pairs with them
+   (zinc-900 canvas / zinc-800 surface / zinc-700 border / zinc-200 text).
+   Overriding the variables under `.dark` cascades into every generated
+   utility, so components carry a single set of classes.
+--------------------------------------------------------------------------- */
+@theme {
+  --font-sans:
+    Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+    "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+
+  --color-canvas: #f8fafc;
+  --color-surface: #ffffff;
+  --color-surface-subtle: #f1f5f9;
+  --color-line: #e2e8f0;
+  --color-ink: #1e293b;
+  --color-muted: #475569;
+
+  --color-brand: #4f46e5;
+  --color-brand-hover: #4338ca;
+  --color-brand-subtle: #eef2ff;
+  --color-brand-line: #c7d2fe;
+
+  --shadow-composer: 0 1px 2px 0 rgb(0 0 0 / 0.05);
+  --shadow-card: 0 1px 2px 0 rgb(0 0 0 / 0.03);
+  --shadow-dialog:
+    0 20px 45px -15px rgb(15 23 42 / 0.14), 0 0 0 1px rgb(15 23 42 / 0.06);
+
+  --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
+  --ease-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
+  --ease-drawer: cubic-bezier(0.32, 0.72, 0, 1);
+
+  --animate-message-in: message-in 160ms var(--ease-out) both;
+  /* User bubbles launch: the spring curve overshoots slightly — the bubble
+     lands with a tiny bounce, mirroring the press-and-release on Send. */
+  --animate-message-send: message-send 170ms var(--ease-spring) both;
+  --animate-thinking: thinking 1.15s ease-in-out infinite;
+  --animate-fade-in: fade-in 180ms ease-out both;
+  --animate-dialog-enter: dialog-enter 180ms var(--ease-out) both;
+  /* Welcome suggestions cascade in with a 45ms stagger (set per-card inline). */
+  --animate-suggestion-in: suggestion-in 220ms var(--ease-out) both;
+
+  /* transitions.dev — streaming text: words resolve through opacity + blur. */
+  --stream-gap: 60ms;
+  --stream-fade: 350ms;
+  --stream-blur: 1px;
+  --stream-ease: cubic-bezier(0.22, 1, 0.36, 1);
+
+  /* transitions.dev — matrix dot loader: 4×4 colour-pulse matrix. */
+  --matrix-cycle: 1200ms;
+  --matrix-base: #cbd5e1; /* slate-300; dark overrides below */
+  --matrix-active: #64748b; /* slate-500 */
+  --matrix-ease: ease-in-out;
+
+  /* transitions.dev — shimmer text: highlight band sweeping muted text. */
+  --shimmer-dur: 2000ms;
+  --shimmer-base: #94a3b8; /* slate-400 */
+  --shimmer-highlight: #1e293b; /* slate-800 */
+  --shimmer-band: 400%;
+  --shimmer-ease: linear;
+
+  /* transitions.dev — reasoning stream: stepped auto-scroll transcript. */
+  --reason-hold: 840ms;
+  --reason-step: 500ms;
+  --reason-lines: 2;
+  --reason-fade: 28px;
+  --reason-ease: cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+@layer base {
+  .dark {
+    --color-canvas: #18181b; /* zinc-900 */
+    --color-surface: #27272a; /* zinc-800 */
+    --color-surface-subtle: #3f3f46; /* zinc-700 */
+    --color-line: #3f3f46; /* zinc-700 */
+    --color-ink: #e4e4e7; /* zinc-200 */
+    --color-muted: #d4d4d8; /* zinc-300 */
+
+    --color-brand: #6366f1;
+    --color-brand-hover: #4f46e5;
+    --color-brand-subtle: #27272a;
+    --color-brand-line: #4f46e5;
+
+    --shadow-composer: 0 1px 2px 0 rgb(0 0 0 / 0.4);
+    --shadow-card: 0 1px 2px 0 rgb(0 0 0 / 0.3);
+    --shadow-dialog:
+      0 20px 45px -15px rgb(0 0 0 / 0.6), 0 0 0 1px rgb(63 63 70 / 1);
+
+    --matrix-base: #3f3f46; /* zinc-700 */
+    --matrix-active: #a1a1aa; /* zinc-400 */
+    --shimmer-base: #71717a; /* zinc-500 */
+    --shimmer-highlight: #e4e4e7; /* zinc-200 */
+  }
+
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+
+  body {
+    @apply overflow-hidden bg-canvas font-sans text-sm leading-6 text-ink antialiased;
+  }
+
+  button,
+  textarea,
+  input {
+    letter-spacing: -0.01em;
+  }
+
+  /* Lucide geometry is stroke-drawn; morphicons animates that same geometry. */
+  svg {
+    @apply size-[16px] shrink-0 fill-none stroke-current;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+    stroke-width: 1.75;
+  }
+
+  [hidden] {
+    display: none !important;
+  }
+
+  dialog::backdrop {
+    background: rgb(0 0 0 / 0.2);
+  }
+
+  ::selection {
+    @apply bg-brand text-white;
+  }
+}
+
+@keyframes message-in {
+  from {
+    transform: translateY(5px);
+    opacity: 0;
+  }
+  to {
+    transform: translateY(0);
+    opacity: 1;
+  }
+}
+
+@keyframes message-send {
+  from {
+    transform: scale(0.97) translateY(3px);
+    opacity: 0;
+  }
+  to {
+    transform: scale(1) translateY(0);
+    opacity: 1;
+  }
+}
+
+@keyframes thinking {
+  0%,
+  75%,
+  100% {
+    transform: translateY(0);
+    opacity: 0.35;
+  }
+  38% {
+    transform: translateY(-4px);
+    opacity: 1;
+  }
+}
+
+@keyframes fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes suggestion-in {
+  from {
+    transform: translateY(6px);
+    opacity: 0;
+  }
+  to {
+    transform: translateY(0);
+    opacity: 1;
+  }
+}
+
+@keyframes dialog-enter {
+  from {
+    opacity: 0;
+    transform: scale(0.98) translateY(-4px);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1) translateY(0);
+  }
+}
+
+/* ---------------------------------------------------------------------------
+   transitions.dev components — t-stream / t-matrix / t-shimmer.
+   Streaming words use a mount animation (not the JS replay transition) so
+   React can render them incrementally: each new word span mounts and resolves
+   through opacity + blur exactly once; stable spans never remount, never
+   replay. Rehype plugin in MarkdownText.tsx wraps words only while running.
+--------------------------------------------------------------------------- */
+.t-stream-w {
+  animation: t-stream-in var(--stream-fade) var(--stream-ease) both;
+}
+@keyframes t-stream-in {
+  from {
+    opacity: 0;
+    filter: blur(var(--stream-blur));
+  }
+  to {
+    opacity: 1;
+    filter: blur(0);
+  }
+}
+
+.t-matrix {
+  display: grid;
+  grid-template-columns: repeat(4, 2px);
+  grid-auto-rows: 2px;
+  gap: 2px;
+}
+.t-matrix i {
+  display: block;
+  background: var(--matrix-base);
+  animation: t-matrix-pulse var(--matrix-cycle) var(--matrix-ease) infinite;
+  animation-delay: calc(var(--d, 0) * 1ms);
+}
+/* Hole positions (rounded variants) render nothing. */
+.t-matrix i.is-gap {
+  visibility: hidden;
+  animation: none;
+}
+@keyframes t-matrix-pulse {
+  0%,
+  45%,
+  100% {
+    background-color: var(--matrix-base);
+  }
+  15% {
+    background-color: var(--matrix-active);
+  }
+}
+
+.t-shimmer {
+  position: relative;
+  display: inline-block;
+  color: var(--shimmer-base);
+}
+.t-shimmer::before {
+  content: attr(data-text);
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background-image: linear-gradient(
+    90deg,
+    transparent 0%,
+    transparent 40%,
+    var(--shimmer-highlight) 50%,
+    transparent 60%,
+    transparent 100%
+  );
+  background-size: var(--shimmer-band) 100%;
+  background-repeat: no-repeat;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  -webkit-text-fill-color: transparent;
+  animation: t-shimmer var(--shimmer-dur) var(--shimmer-ease) infinite;
+}
+@keyframes t-shimmer {
+  0% {
+    background-position: 100% 0;
+  }
+  100% {
+    background-position: 0% 0;
+  }
+}
+
+/* transitions.dev — reasoning stream: the card clips a live transcript and
+   JS steps the scroll up --reason-lines rows every --reason-hold. Content
+   grows while streaming, so the scroll keeps following the tail until it
+   reaches the bottom. Edge fades are a mask on the viewport (not gradients
+   painted over the text), so the card background can be anything. */
+.t-reason {
+  position: relative;
+  overflow: hidden;
+}
+.t-reason-viewport {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  -webkit-mask-image: linear-gradient(
+    transparent 0,
+    black var(--reason-fade),
+    black calc(100% - var(--reason-fade)),
+    transparent 100%
+  );
+  mask-image: linear-gradient(
+    transparent 0,
+    black var(--reason-fade),
+    black calc(100% - var(--reason-fade)),
+    transparent 100%
+  );
+}
+.t-reason-scroll {
+  position: absolute;
+  left: 0;
+  right: 0;
+  transform: translateY(0);
+  will-change: transform;
+}
+.t-reason-text p {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Markdown inside assistant bubbles — restrained prose sized to the bubble. */
+@layer components {
+  .markdown-body {
+    @apply text-sm leading-7 text-ink;
+  }
+  .markdown-body > *:first-child {
+    margin-top: 0;
+  }
+  .markdown-body > *:last-child {
+    margin-bottom: 0;
+  }
+  .markdown-body p {
+    @apply my-2;
+  }
+  .markdown-body h1,
+  .markdown-body h2,
+  .markdown-body h3,
+  .markdown-body h4 {
+    @apply mb-2 mt-4 font-semibold text-ink;
+  }
+  .markdown-body h1 {
+    @apply text-lg;
+  }
+  .markdown-body h2 {
+    @apply text-base;
+  }
+  .markdown-body h3 {
+    @apply text-sm;
+  }
+  .markdown-body ul {
+    @apply my-2 list-disc pl-5;
+  }
+  .markdown-body ol {
+    @apply my-2 list-decimal pl-5;
+  }
+  .markdown-body li {
+    @apply my-0.5;
+  }
+  .markdown-body a {
+    @apply text-brand underline underline-offset-2;
+  }
+  .markdown-body blockquote {
+    @apply my-2 border-l-2 border-brand-line pl-3 text-muted;
+  }
+  .markdown-body code {
+    @apply rounded bg-surface-subtle px-1 py-0.5 font-mono text-[0.85em] text-ink;
+  }
+  .markdown-body pre {
+    @apply my-3 overflow-x-auto rounded-lg bg-neutral-900 p-3 text-neutral-100;
+  }
+  .markdown-body pre code {
+    @apply bg-transparent p-0 text-neutral-100;
+  }
+  .markdown-body table {
+    @apply my-3 w-full border-collapse text-sm;
+  }
+  .markdown-body th,
+  .markdown-body td {
+    @apply border border-line px-2 py-1 text-left;
+  }
+  .markdown-body th {
+    @apply bg-surface-subtle font-semibold;
+  }
+  .markdown-body hr {
+    @apply my-4 border-line;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+  }
+
+  .animate-message-in,
+  .animate-message-send,
+  .animate-fade-in,
+  .animate-suggestion-in,
+  dialog[open] {
+    animation-duration: 1ms !important;
+    animation-timing-function: steps(1, end) !important;
+  }
+
+  /* Press feedback is transform-based motion; flatten it but keep the color
+     response so the click still reads. */
+  button:active {
+    transform: none !important;
+  }
+
+  .animate-thinking {
+    animation-name: thinking-reduced !important;
+  }
+
+  /* transitions.dev guards — keep content legible, drop the motion. */
+  .t-stream-w {
+    animation: none !important;
+    filter: none !important;
+    opacity: 1 !important;
+  }
+  .t-matrix i {
+    animation: none !important;
+    background: var(--matrix-active) !important;
+  }
+  .t-shimmer::before {
+    animation: none !important;
+  }
+  /* Reduced motion: the transcript stays readable; JS jumps it to the tail
+     without tweening. */
+  .t-reason-scroll {
+    transition: none !important;
+  }
+}
+
+@keyframes thinking-reduced {
+  0%,
+  75%,
+  100% {
+    opacity: 0.35;
+    transform: none;
+  }
+  38% {
+    opacity: 1;
+    transform: none;
+  }
+}

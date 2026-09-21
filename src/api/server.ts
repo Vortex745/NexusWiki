@@ -23,7 +23,6 @@ import { SqliteSourceLifecycleStore } from "../knowledge/source_lifecycle_store"
 import { SqliteCandidateReviewStore } from "../knowledge/candidate_review_store"
 import { RetirementServiceImpl } from "../knowledge/retirement"
 import { createSourceGovernanceRouter } from "./source_governance"
-import { createObservabilityRouter } from "./observability"
 import { createStatusRouter } from "./status"
 import { createEvaluationsRouter } from "./evaluations"
 import { EvaluationService } from "../evaluation/service"
@@ -32,7 +31,6 @@ import { createDedicatedReranker } from "../retrieval/search/dedicated_reranker"
 export function createApp(options: {
   db?: DB
   imageAssetPath?: string
-  ragasArtifactPath?: string
   accessMiddleware?: RequestHandler
   /**
    * Eval refactor Ticket 04: in-process evaluation service. Mounted only when
@@ -108,12 +106,8 @@ export function createApp(options: {
   // binder. Ingestion uses its separate identity gate and trusted ACL propagation.
   if (options.accessMiddleware) {
     app.use("/api/chat", options.accessMiddleware)
-    app.use("/api/observability", options.accessMiddleware)
   }
   app.use("/api", createChatRouter(traceRepository, options.eventsSource, options.sessionBinder))
-  app.use("/api", createObservabilityRouter({
-    ragasArtifactPath: options.ragasArtifactPath,
-  }))
   if (options.managementAccessMiddleware) {
     app.use("/api/handoffs", options.managementAccessMiddleware)
     app.use("/api/sources", options.managementAccessMiddleware)

@@ -26,12 +26,6 @@ export interface StatusPayload {
   }
 }
 
-export interface RagasPayload {
-  available?: boolean
-  reason?: string
-  aggregate?: Record<string, number> & { sampleSize?: number }
-}
-
 export interface IngestSubmission {
   docId?: string
   submitted?: number
@@ -52,12 +46,6 @@ export async function fetchStatus(): Promise<StatusPayload> {
   const response = await fetch(`${API_BASE}/status`)
   if (!response.ok) throw new Error(`HTTP ${response.status}`)
   return (await response.json()) as StatusPayload
-}
-
-export async function fetchRagas(): Promise<RagasPayload> {
-  const response = await fetch(`${API_BASE}/observability/ragas`)
-  if (!response.ok) throw new Error(`RAGAS request failed (${response.status})`)
-  return (await response.json()) as RagasPayload
 }
 
 // ---------------------------------------------------------------------------

@@ -13,13 +13,6 @@ export const INSIGHT_PATH_STEPS = [
   { stage: "done", label: "完成回答" },
 ] as const
 
-export const RAGAS_METRICS = [
-  { key: "meanFaithfulness", label: "回答是否有依据" },
-  { key: "meanAnswerRelevancy", label: "回答是否切题" },
-  { key: "meanContextPrecision", label: "找到的资料是否精准" },
-  { key: "meanContextRecall", label: "重要资料是否找全" },
-] as const
-
 export const CHANNEL_LABELS: Record<string, { name: string; short: string }> = {
   elasticsearch: { name: "Elasticsearch", short: "ES" },
   neo4j: { name: "Neo4j 知识图谱", short: "Neo4j" },

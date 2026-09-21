@@ -1766,6 +1766,58 @@ test("an uploaded dataset runs end to end: arbitrary passageId, distractor inges
   }
 })
 
+test("an uploaded dataset is not limited to one case", async () => {
+  // Ticket 16: the entry switch must not leave a temporary single-case cap on
+  // uploads — a three-case inline dataset runs all three, in dataset order.
+  const harness = await buildHarness({
+    ranking: [
+      { passageId: "段落/一 #1", relevant: true },
+      { passageId: "干扰/配送 #2", relevant: false },
+    ],
+  })
+  try {
+    const base = inlineDataset()
+    const created = await createTask(harness.port, {
+      dataset: {
+        ...base,
+        cases: [
+          ...base.cases,
+          {
+            caseId: "custom-2",
+            question: "配送一般需要多久？",
+            referenceAnswer: "同城次日达。",
+            relevantPassageIds: ["干扰/配送 #2"],
+          },
+          {
+            caseId: "custom-3",
+            question: "退款多久到账？",
+            referenceAnswer: "审核通过后 3 个工作日。",
+            relevantPassageIds: ["段落/一 #1"],
+          },
+        ],
+      },
+    })
+    assert.equal(created.status, 202)
+    const detail = await pollTerminal(harness.port, created.body.id as string)
+
+    assert.equal(detail.stage, "completed", "every case ran")
+    const cases = detail.cases as Array<Record<string, unknown>>
+    assert.deepEqual(
+      cases.map((item) => item.caseId),
+      ["custom-1", "custom-2", "custom-3"],
+      "results keep the dataset order"
+    )
+    assert.deepEqual(detail.progress, { finished: 3, total: 3 })
+    assert.equal(
+      harness.scopes[0].preparedCaseOptions.length,
+      3,
+      "each case gets its own session"
+    )
+  } finally {
+    await harness.close()
+  }
+})
+
 test("uploaded datasets are rejected per field before any scope or model call", async () => {
   const base = inlineDataset()
   const cases: Array<[string, unknown, RegExp]> = [
