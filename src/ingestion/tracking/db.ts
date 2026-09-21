@@ -213,6 +213,25 @@ const SCHEMA = [
     ON source_tombstones(source_id, retired_at)`,
   `CREATE INDEX IF NOT EXISTS idx_source_tombstones_tenant
     ON source_tombstones(tenant_id, created_at)`,
+  // Ticket 02 (KB-01, spec §8.1 L239-241): knowledge bases. The table is owned
+  // by `src/knowledge/knowledge_base_repo.ts` — no other module queries it.
+  // The id is deterministic for the per-tenant default (`kb-default-<tenant>`),
+  // so a repeated startup inserts nothing; the primary key is what makes that
+  // guarantee structural. `status` is the active/archived lifecycle and is the
+  // ONLY column a lifecycle transition changes — archiving never deletes the
+  // row, the workspace or the database file.
+  `CREATE TABLE IF NOT EXISTS knowledge_bases (
+    id TEXT PRIMARY KEY,
+    tenant_id TEXT NOT NULL,
+    name TEXT NOT NULL,
+    description TEXT NOT NULL DEFAULT '',
+    status TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active', 'archived')),
+    embedding_profile TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_knowledge_bases_tenant
+    ON knowledge_bases(tenant_id, status)`,
 ].join(";\n")
 
 let _db: DB | null = null

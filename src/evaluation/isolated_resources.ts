@@ -268,6 +268,18 @@ const GRAPH_SELECT_OWNED_RELATIONS = `
   RETURN elementId(r) AS rid, r.provenance AS provenance
 `.trim()
 
+// A directly dependent property update acquires Neo4j's write lock before
+// reading the value. Keep that lock through the transaction's cleanup write;
+// discovery outside the transaction is only a list of candidate identities.
+const GRAPH_LOCK_RELATION = `
+  MATCH ()-[r:WIKILINK]->()
+  WHERE elementId(r) = $rid
+  SET r.provenance = r.provenance
+  RETURN r.provenance AS provenance
+`.trim()
+
+const CLEANUP_REQUEST_TIMEOUT_MS = 5_000
+
 /** Drop this scope's share but keep the relation alive. */
 const GRAPH_UPDATE_RELATION_PROVENANCE = `
   MATCH ()-[r:WIKILINK]->()
@@ -308,33 +320,40 @@ export async function stripProvenanceForTenant(
   tenantId: string
 ): Promise<void> {
   const needle = provenanceTenantNeedle(tenantId)
-  const selected = await session.run(GRAPH_SELECT_OWNED_RELATIONS, { needle })
+  const selected = await session.run(GRAPH_SELECT_OWNED_RELATIONS, { needle }, {
+    timeout: CLEANUP_REQUEST_TIMEOUT_MS,
+  })
   for (const record of selected.records) {
     const rid = record.get("rid")
-    const entries = parseProvenance(record.get("provenance"))
-    const remaining = entries.filter((entry) => entry.tenant !== tenantId)
-    // Needle over-match (or a concurrent cleanup): nothing of ours here.
-    if (remaining.length === entries.length) continue
-    if (remaining.length === 0) {
-      await session.run(GRAPH_DELETE_RELATION, { rid })
-      continue
-    }
-    const remainingRaw = remaining.map((entry) => entry.raw)
-    const weights = remaining.map((entry) => entry.weight)
-    if (weights.every((weight): weight is number => weight !== null)) {
-      await session.run(GRAPH_UPDATE_RELATION_PROVENANCE_AND_WEIGHT, {
-        rid,
-        remaining: remainingRaw,
-        maxWeight: Math.max(...weights),
-      })
-    } else {
-      // Legacy/malformed survivor without a weight element: keep the relation
-      // weight as-is rather than guessing it downward.
-      await session.run(GRAPH_UPDATE_RELATION_PROVENANCE, {
-        rid,
-        remaining: remainingRaw,
-      })
-    }
+    await session.executeWrite(async (tx) => {
+      const current = await tx.run(GRAPH_LOCK_RELATION, { rid })
+      // Another cleanup may have deleted this relation since discovery.
+      if (current.records.length === 0) return
+      const entries = parseProvenance(current.records[0].get("provenance"))
+      const remaining = entries.filter((entry) => entry.tenant !== tenantId)
+      // Needle over-match (or a concurrent cleanup): nothing of ours here.
+      if (remaining.length === entries.length) return
+      if (remaining.length === 0) {
+        await tx.run(GRAPH_DELETE_RELATION, { rid })
+        return
+      }
+      const remainingRaw = remaining.map((entry) => entry.raw)
+      const weights = remaining.map((entry) => entry.weight)
+      if (weights.every((weight): weight is number => weight !== null)) {
+        await tx.run(GRAPH_UPDATE_RELATION_PROVENANCE_AND_WEIGHT, {
+          rid,
+          remaining: remainingRaw,
+          maxWeight: Math.max(...weights),
+        })
+      } else {
+        // Legacy/malformed survivor without a weight element: keep the relation
+        // weight as-is rather than guessing it downward.
+        await tx.run(GRAPH_UPDATE_RELATION_PROVENANCE, {
+          rid,
+          remaining: remainingRaw,
+        })
+      }
+    }, { timeout: CLEANUP_REQUEST_TIMEOUT_MS })
   }
 }
 
@@ -351,6 +370,31 @@ export async function findEvalTenants(session: Session): Promise<string[]> {
   for (const record of selected.records) {
     for (const entry of parseProvenance(record.get("provenance"))) {
       if (entry.tenant?.startsWith(EVAL_TENANT_PREFIX)) tenants.add(entry.tenant)
+    }
+  }
+  return [...tenants].sort()
+}
+
+const GRAPH_SELECT_ALL_PROVENANCE = `
+  MATCH (a:Entity)-[r:WIKILINK]->(b:Entity)
+  WHERE size(coalesce(r.provenance, [])) > 0
+  RETURN r.provenance AS provenance
+`.trim()
+
+/**
+ * Ticket 02 (KB-01): EVERY tenant that owns WIKILINK provenance in the graph.
+ * The one-time demo-data rebuild has to list its exact Neo4j targets before it
+ * cleans anything, and those targets are the provenance owners — the same
+ * ownership rule `stripProvenanceForTenant` applies, read from the parsed
+ * entries rather than from a name pattern. No narrowing needle: this call is a
+ * deliberate full scan of the demo graph, and entity nodes are never involved.
+ */
+export async function findProvenanceTenants(session: Session): Promise<string[]> {
+  const selected = await session.run(GRAPH_SELECT_ALL_PROVENANCE, {})
+  const tenants = new Set<string>()
+  for (const record of selected.records) {
+    for (const entry of parseProvenance(record.get("provenance"))) {
+      if (entry.tenant) tenants.add(entry.tenant)
     }
   }
   return [...tenants].sort()
@@ -488,7 +532,10 @@ export function createIsolatedEvalResources(
   }> {
     if (!scopeOwnsResources) return { outcome: "skipped" }
     try {
-      await clients.es.indices.delete({ index: esIndex })
+      await clients.es.indices.delete({ index: esIndex }, {
+        requestTimeout: CLEANUP_REQUEST_TIMEOUT_MS,
+        maxRetries: 0,
+      })
       return { outcome: "deleted" }
     } catch (error) {
       const status = (error as { meta?: { statusCode?: number } })?.meta
@@ -506,19 +553,24 @@ export function createIsolatedEvalResources(
     error?: string
   }> {
     if (!scopeOwnsResources) return { outcome: "skipped" }
-    const session = clients.graphDriver.session()
+    let session: Session | undefined
+    const errors: string[] = []
     try {
+      session = clients.graphDriver.session()
       // Shared with the crash-residue sweep (ticket 14) — one strip rule.
       await stripProvenanceForTenant(session, tenantId)
-      return { outcome: "cleaned" }
     } catch (error) {
-      return {
-        outcome: "failed",
-        error: error instanceof Error ? error.message : String(error),
-      }
+      errors.push(error instanceof Error ? error.message : String(error))
     } finally {
-      await session.close()
+      try {
+        await session?.close()
+      } catch (error) {
+        errors.push(error instanceof Error ? error.message : String(error))
+      }
     }
+    return errors.length > 0
+      ? { outcome: "failed", error: errors.join("; ") }
+      : { outcome: "cleaned" }
   }
 
   let dbClosed = false

@@ -3,15 +3,23 @@ import { createAnswerRuntime } from "./answer/runtime"
 import { startConversationGc } from "./answer/conversation_gc"
 import { SqliteConversationStore } from "./answer/conversation_store"
 import { loadConfig } from "./config"
-import { validateAccessMode, type IdentityAdapter } from "./access/context"
+import {
+  validateAccessMode,
+  SINGLE_TENANT_TENANT,
+  type IdentityAdapter,
+} from "./access/context"
 import {
   loadOidcConfig,
   JoseIdentityAdapter,
   DEFAULT_CLAIM_MAPPING,
   DEFAULT_CLOCK_SKEW_SECONDS,
+  DEMO_TENANT_ID,
   startDemoOidcIssuer,
   type DemoOidcIssuerHandle,
 } from "./identity"
+import { SqliteKnowledgeBaseRepo } from "./knowledge/knowledge_base_repo"
+import { KnowledgeBaseServiceImpl } from "./knowledge/knowledge_base_service"
+import { knowledgeBaseEmbeddingProfile } from "./types/knowledge_base"
 import { startServer } from "./api"
 import { startWorker } from "./api/worker"
 import { closeDriver } from "./graph"
@@ -102,6 +110,24 @@ async function main() {
       ...(cfg.langfuseBaseUrl ? { baseUrl: cfg.langfuseBaseUrl } : {}),
     }),
   )
+
+  // Ticket 02 (KB-01, spec §8.1 L241): every tenant owns exactly one default
+  // knowledge base, and startup creates it for the tenants this process serves.
+  // Repeated startup inserts nothing — the default id is derived from the
+  // tenant id, so this is a read on the second run. A tenant that only appears
+  // later (an enforced deployment with arbitrary OIDC tenants) gets its default
+  // on first use, through the same deterministic path.
+  const knowledgeBases = new KnowledgeBaseServiceImpl(
+    new SqliteKnowledgeBaseRepo(answerRuntime.processRuntime.db),
+    knowledgeBaseEmbeddingProfile(cfg.embeddingModel, cfg.embeddingDimensions)
+  )
+  const startupTenants = cfg.demoOidc ? [DEMO_TENANT_ID] : [SINGLE_TENANT_TENANT]
+  for (const tenantId of startupTenants) {
+    const knowledgeBase = knowledgeBases.ensureDefault(tenantId)
+    console.log(
+      `[kefu-RAG] default knowledge base ready for tenant ${tenantId}: ${knowledgeBase.id}`
+    )
+  }
 
   // Eval refactor Ticket 01: the shared Answer run entry owns the full
   // production composition (direct/simple/complex/ambiguous routing,
