@@ -6,7 +6,7 @@
  * a persistent trace backend (spec "任务、上传数据集和结果只存内存").
  */
 
-import type { AnswerTerminalStatus } from "../types"
+import type { AnswerTerminalStatus, FinalContextOrdering } from "../types"
 import type { EvalDisposeReport } from "./isolated_resources"
 
 /**
@@ -56,6 +56,14 @@ export interface EvalCaseResult {
   terminalStatus?: AnswerTerminalStatus
   /** Failure reason when outcome is "failed" (provider/timeout/etc.). */
   error?: string
+  /**
+   * Ticket 06: how the scored ranking was produced — `dedicated_rerank` means
+   * the configured reranker scored it, `fused` means an unscored order was
+   * published (fusion, below-threshold, unavailable reranker, or a multi-query
+   * merge). A degraded ranking is never labelled as a dedicated-rerank result.
+   * Absent when no final round was published.
+   */
+  ordering?: FinalContextOrdering
   runId?: string
   durationMs: number
   /** Per-case metric values; null = not applicable for this case. */

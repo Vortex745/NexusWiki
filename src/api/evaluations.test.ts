@@ -74,6 +74,11 @@ interface FakeScopeOptions {
    * corpus → passageId mapping can be exercised for arbitrary ids (ticket 05).
    */
   ranking?: readonly { passageId: string; relevant: boolean }[]
+  /**
+   * Ticket 06: how that ranking was produced. Omitted by default — a release
+   * that never labelled its ordering must not gain a label from the fake.
+   */
+  ordering?: { source: "dedicated_rerank" | "fused"; reason?: string }
 }
 
 class FakeScope implements IsolatedEvalResources {
@@ -164,6 +169,9 @@ class FakeScope implements IsolatedEvalResources {
             data: {
               resultCount: candidates.length,
               ...(candidates.length > 0 ? { finalContextCandidates: candidates } : {}),
+              ...(candidates.length > 0 && options.ordering
+                ? { finalContextOrdering: options.ordering }
+                : {}),
             },
           })
           yield progressEvent(runOptions, {
@@ -194,7 +202,16 @@ class FakeScope implements IsolatedEvalResources {
 function progressEvent(
   options: { runId?: string; sessionId?: string; caseId?: string },
   payload:
-    | { type: "progress"; stage: "retrieval"; message: string; data: { resultCount: number; finalContextCandidates?: RankedCandidateObservation[] } }
+    | {
+        type: "progress"
+        stage: "retrieval"
+        message: string
+        data: {
+          resultCount: number
+          finalContextCandidates?: RankedCandidateObservation[]
+          finalContextOrdering?: { source: "dedicated_rerank" | "fused"; reason?: string }
+        }
+      }
     | { type: "done"; stage: "done"; result: AnswerRunResult }
 ): AnswerRunEvent {
   return {
@@ -658,6 +675,88 @@ test("single-tenant requests without a mounted middleware still work", async () 
     assert.deepEqual(singleTenantAccessContext().scopes, ALL_SCOPES)
   } finally {
     await new Promise<void>((resolve) => server.close(() => resolve()))
+  }
+})
+
+// ---------------------------------------------------------------------------
+// Ticket 06 — the six retrieval metrics and the ranking's score source
+// ---------------------------------------------------------------------------
+
+test("a scored case reports all six retrieval metrics and the ranking's real source", async () => {
+  // The fake publishes an unscored fallback order (fused) — the case must say
+  // so instead of claiming the dedicated reranker produced this ranking.
+  const harness = await buildHarness({ ordering: { source: "fused", reason: "not_configured" } })
+  try {
+    const created = await createTask(harness.port, { datasetId: "refund-single-case" })
+    const detail = await pollTerminal(harness.port, created.body.id as string)
+
+    const cases = detail.cases as Array<Record<string, unknown>>
+    const metrics = cases[0].metrics as Record<string, number | null>
+    // Ranking: shipping-policy (irrelevant), refund-policy (relevant). GT is
+    // {refund-policy}: one hit of one ground-truth passage at rank 2.
+    assert.deepEqual(Object.keys(metrics).sort(), [
+      "map",
+      "mrr",
+      "ndcg@10",
+      "ndcg@3",
+      "precision",
+      "recall",
+    ])
+    assert.equal(metrics.precision, 0.5)
+    assert.equal(metrics.recall, 1)
+    assert.equal(metrics.mrr, 0.5)
+    assert.equal(metrics.map, 0.5)
+    assert.equal(Number(metrics["ndcg@3"]!.toFixed(6)), Number((1 / Math.log2(3)).toFixed(6)))
+    assert.equal(metrics["ndcg@10"], metrics["ndcg@3"])
+
+    assert.deepEqual(
+      cases[0].ordering,
+      { source: "fused", reason: "not_configured" },
+      "a fused fallback is never reported as a dedicated-rerank result"
+    )
+
+    // One metric version and one effective sample size for every average.
+    const summary = detail.metrics as { version: string; metrics: Record<string, { value: number | null; sampleSize: number; notApplicable: number }> }
+    assert.equal(summary.version, "eval-metrics-v2")
+    for (const key of ["precision", "recall", "ndcg@3", "ndcg@10", "mrr", "map"]) {
+      assert.deepEqual(
+        { sampleSize: summary.metrics[key].sampleSize, notApplicable: summary.metrics[key].notApplicable },
+        { sampleSize: 1, notApplicable: 0 },
+        `${key} must carry its effective sample size`
+      )
+    }
+    assert.equal(summary.metrics.map.value, 0.5, "the aggregate of per-case AP is MAP")
+  } finally {
+    await harness.close()
+  }
+})
+
+test("a failed case reports no retrieval metrics instead of six zeros", async () => {
+  const harness = await buildHarness({ caseThrows: "provider unavailable" })
+  try {
+    const created = await createTask(harness.port, { datasetId: "refund-single-case" })
+    const detail = await pollTerminal(harness.port, created.body.id as string)
+
+    const cases = detail.cases as Array<Record<string, unknown>>
+    assert.deepEqual(cases[0].metrics, {
+      precision: null,
+      recall: null,
+      "ndcg@3": null,
+      "ndcg@10": null,
+      mrr: null,
+      map: null,
+    })
+    assert.equal(cases[0].ordering, undefined, "no scored ranking means no score source")
+    const summary = detail.metrics as { metrics: Record<string, { value: number | null; sampleSize: number; notApplicable: number }> }
+    for (const key of ["precision", "recall", "ndcg@3", "ndcg@10", "mrr", "map"]) {
+      assert.deepEqual(
+        summary.metrics[key],
+        { value: null, sampleSize: 0, notApplicable: 1 },
+        `${key} must stay "not applicable" rather than becoming a fake 0`
+      )
+    }
+  } finally {
+    await harness.close()
   }
 })
 

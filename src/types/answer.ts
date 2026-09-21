@@ -314,6 +314,25 @@ export interface RetrievalTraceData {
    * Pairs with `finalContextCandidates`.
    */
   finalContextRound?: number
+  /**
+   * Eval refactor Ticket 06: honest score source of that final ranking.
+   * Mirrors `RetrievalOrdering` (retrieval/search/interface.ts) and adds the
+   * merged case, because a multi-query runner (complex route) orders its final
+   * context itself out of several retrievals — no single rerank produced it,
+   * and it must not be labelled as one.
+   */
+  finalContextOrdering?: FinalContextOrdering
+}
+
+/**
+ * Eval refactor Ticket 06: how the published final-ranking was produced.
+ * `dedicated_rerank` means the configured reranker scored this order; `fused`
+ * means an unscored order was published (fusion, below-threshold,
+ * unavailable reranker, or the multi-query merge).
+ */
+export interface FinalContextOrdering {
+  source: "dedicated_rerank" | "fused"
+  reason?: "not_configured" | "below_threshold" | "unavailable" | "multi_query_aggregation"
 }
 
 /**

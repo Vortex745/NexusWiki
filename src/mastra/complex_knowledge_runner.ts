@@ -91,6 +91,7 @@ import type {
 } from "./chat_event_adapter"
 import type { Router } from "../retrieval/router/interface"
 import type {
+  RetrievalOrdering,
   Searcher,
   SearchOptions,
 } from "../retrieval/search/interface"
@@ -569,6 +570,13 @@ export function createComplexKnowledgeMastraRunner(
     let retrievalAttempted = false
     let retrievalAvailable = false
     const resultGroups: RetrievalResult[][] = []
+    /**
+     * Ticket 06: ordering labels of the searches whose results were kept. The
+     * complex loop's own merged results contribute no label (no single rerank
+     * produced them), which is exactly why the merge is reported as an
+     * aggregation rather than a dedicated rerank.
+     */
+    const orderings: RetrievalOrdering[] = []
     let coverageCriteria: string[] | undefined
     let complexLoopResult: ComplexLoopResult | undefined
     let complexLoopDurationMs: number | undefined
@@ -782,6 +790,7 @@ export function createComplexKnowledgeMastraRunner(
         outcome.unavailableChannels.forEach((ch) => unavailableChannels.add(ch))
         if (outcome.status !== "insufficient") retrievalAvailable = true
         resultGroups.push(outcome.results)
+        if (outcome.ordering) orderings.push(outcome.ordering)
       }
 
       // Collect coverage criteria from all sub-queries.
@@ -911,15 +920,27 @@ export function createComplexKnowledgeMastraRunner(
     // retrievals (diversifySelect over result groups), not a single tool
     // call's output.
     let finalContextRound = 0
+    /**
+     * Ticket 06: the committed round also carries HOW its ranking was
+     * produced. This route merges several retrievals (planner sub-queries,
+     * loop tool calls, correction retrievals), so a single contributing search
+     * keeps its own label and anything merged is reported as an aggregation —
+     * never as a dedicated-rerank success.
+     */
     const commitFinalContext = (
       candidates: RetrievalResult[],
-      citationIds: Map<string, string>
+      citationIds: Map<string, string>,
+      orderings: RetrievalOrdering[]
     ): void => {
       finalContextRound += 1
       retrievalTrace = {
         ...retrievalTrace,
         finalContextCandidates: toRankedCandidateObservations(candidates, citationIds),
         finalContextRound,
+        finalContextOrdering:
+          orderings.length === 1
+            ? orderings[0]
+            : { source: "fused" as const, reason: "multi_query_aggregation" as const },
       }
     }
     const initialCitationIds = citationIdsByChunk(evidence)
@@ -1001,7 +1022,7 @@ export function createComplexKnowledgeMastraRunner(
     }
     // Ticket 01: the initial draft was accepted — its context is the current
     // final generation context.
-    commitFinalContext(selectedResults, initialCitationIds)
+    commitFinalContext(selectedResults, initialCitationIds, orderings)
     let fullAnswer = initialAnswer
     let draftTokens: string[] = [...initialTokens]
     let validationTrace: ValidationTraceData = {}
@@ -1117,6 +1138,8 @@ export function createComplexKnowledgeMastraRunner(
       // Correction retrieval: dual-path per gap query.
       let anyNewResults = false
       let correctionInsufficient = false
+      // Ticket 06: ordering labels of the correction searches that were kept.
+      const correctionOrderings: RetrievalOrdering[] = []
       for (const gapQuery of gapQueries) {
         if (
           complexLoopController &&
@@ -1220,6 +1243,7 @@ export function createComplexKnowledgeMastraRunner(
               break
             }
             if (fallbackOutcome.results.length === 0) continue
+            if (fallbackOutcome.ordering) correctionOrderings.push(fallbackOutcome.ordering)
             accumulatedResults.push(...fallbackOutcome.results)
             anyNewResults = true
           } else {
@@ -1246,6 +1270,7 @@ export function createComplexKnowledgeMastraRunner(
             break
           }
           if (correctionOutcome.results.length === 0) continue
+          if (correctionOutcome.ordering) correctionOrderings.push(correctionOutcome.ordering)
           accumulatedResults.push(...correctionOutcome.results)
           anyNewResults = true
         }
@@ -1384,7 +1409,7 @@ export function createComplexKnowledgeMastraRunner(
       draftTokens = [...regenTokens]
       // Ticket 01: the regenerated draft was accepted — commit its context as
       // the final generation context (overwrites the previous round).
-      commitFinalContext(correctionCandidates, correctionCitationIds)
+      commitFinalContext(correctionCandidates, correctionCitationIds, correctionOrderings)
     }
 
     // -------------------------------------------------------------------------

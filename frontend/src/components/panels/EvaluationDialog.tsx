@@ -6,6 +6,7 @@ import {
   EvaluationRequestError,
   fetchEvaluationDatasets,
   fetchEvaluationTask,
+  type EvaluationCaseResult,
   type EvaluationDatasetsPayload,
   type EvaluationTaskDetail,
   type EvaluationTaskStage,
@@ -33,9 +34,43 @@ const TERMINAL_STAGES: ReadonlySet<EvaluationTaskStage> = new Set([
 /** Transient stages in execution order (queued is the pre-step). */
 const ACTIVE_ORDER: EvaluationTaskStage[] = ["preparing", "running", "cleaning"]
 
-function formatPercent(value: number | null): string {
-  if (value === null || !Number.isFinite(value)) return "不适用"
-  return `${Math.round(value * 100)}%`
+/** The six retrieval metrics, in display order (ticket 06). */
+const RETRIEVAL_METRICS: Array<[string, string]> = [
+  ["precision", "Precision"],
+  ["recall", "Recall"],
+  ["ndcg@3", "NDCG@3"],
+  ["ndcg@10", "NDCG@10"],
+  ["mrr", "MRR"],
+  ["map", "MAP"],
+]
+
+const ORDERING_REASON_LABELS: Record<string, string> = {
+  not_configured: "未配置专用重排",
+  below_threshold: "候选过少，无需重排",
+  unavailable: "重排服务不可用",
+  multi_query_aggregation: "多路检索合并顺序",
+}
+
+function formatScore(value: number | null | undefined): string {
+  if (value === null || value === undefined || !Number.isFinite(value)) return "不适用"
+  return value.toFixed(3)
+}
+
+/** Score source of one case's ranking — an unscored order is never dressed up. */
+function OrderingNote({ ordering }: { ordering?: EvaluationCaseResult["ordering"] }) {
+  if (!ordering) return null
+  const dedicated = ordering.source === "dedicated_rerank"
+  return (
+    <p className="mt-1 text-[10px] text-muted/50">
+      评分来源：
+      <span className={dedicated ? "text-brand" : "text-amber-600 dark:text-amber-400"}>
+        {dedicated ? "专用重排" : "原始顺序（未重排）"}
+      </span>
+      {!dedicated && ordering.reason
+        ? `（${ORDERING_REASON_LABELS[ordering.reason] ?? ordering.reason}）`
+        : ""}
+    </p>
+  )
 }
 
 function StageStepper({ stage }: { stage: EvaluationTaskStage }) {
@@ -245,7 +280,6 @@ export function EvaluationDialog({ open, onClose }: { open: boolean; onClose: ()
 
   const selected = datasets?.datasets.find((item) => item.id === selectedId) ?? null
   const cases = task?.cases ?? []
-  const aggregatePrecision = task?.metrics.metrics.precision ?? null
   const running = task !== null && !TERMINAL_STAGES.has(task.stage)
   const canRun =
     mode === "builtin" ? Boolean(selectedId) : uploadText.trim().length > 0
@@ -439,13 +473,15 @@ export function EvaluationDialog({ open, onClose }: { open: boolean; onClose: ()
                   </p>
                 ) : null}
                 {item.error ? <p className="mt-2 text-[11px] text-red-600">{item.error}</p> : null}
-                <dl className="mt-2 grid grid-cols-2 gap-x-3 gap-y-1 text-[11px] text-muted/70">
-                  <div className="flex justify-between gap-2">
-                    <dt>Precision</dt>
-                    <dd className="font-mono font-semibold text-ink">
-                      {formatPercent(item.metrics.precision ?? null)}
-                    </dd>
-                  </div>
+                <dl className="mt-2 grid grid-cols-3 gap-x-3 gap-y-1 text-[11px] text-muted/70">
+                  {RETRIEVAL_METRICS.map(([key, label]) => (
+                    <div key={key} className="flex justify-between gap-2">
+                      <dt>{label}</dt>
+                      <dd className="font-mono font-semibold text-ink">
+                        {formatScore(item.metrics[key] ?? null)}
+                      </dd>
+                    </div>
+                  ))}
                   <div className="flex justify-between gap-2">
                     <dt>耗时</dt>
                     <dd className="font-mono">{item.durationMs} ms</dd>
@@ -456,20 +492,39 @@ export function EvaluationDialog({ open, onClose }: { open: boolean; onClose: ()
                     证据顺序：{item.retrievedPassageIds.join(" → ")}
                   </p>
                 ) : null}
+                <OrderingNote ordering={item.ordering} />
                 <p className="mt-1 font-mono text-[10px] text-muted/40">参考答案：{item.referenceAnswer}</p>
               </article>
             ))}
 
-            {aggregatePrecision ? (
-              <p className="text-[11px] text-muted/70">
-                汇总 Precision：
-                <span className="ml-1 font-mono text-sm font-semibold text-ink">
-                  {formatPercent(aggregatePrecision.value)}
-                </span>
-                <span className="ml-2">
-                  （有效样本 {aggregatePrecision.sampleSize}，不适用 {aggregatePrecision.notApplicable}）
-                </span>
-              </p>
+            {task.metrics.version ? (
+              <div className="rounded-lg border border-line bg-surface-subtle/40 px-3 py-2.5">
+                <p className="text-[11px] font-semibold text-ink">
+                  汇总检索指标
+                  <span className="ml-2 font-mono text-[10px] font-normal text-muted/50">
+                    {task.metrics.version}
+                  </span>
+                </p>
+                <dl className="mt-1.5 grid grid-cols-2 gap-x-4 gap-y-1 text-[11px]">
+                  {RETRIEVAL_METRICS.map(([key, label]) => {
+                    const summary = task.metrics.metrics[key]
+                    return (
+                      <div key={key} className="flex items-baseline justify-between gap-2">
+                        <dt className="text-muted/70">{label}</dt>
+                        <dd className="font-mono font-semibold text-ink">
+                          {formatScore(summary?.value ?? null)}
+                          <span className="ml-1.5 font-normal text-muted/50">
+                            有效 {summary?.sampleSize ?? 0}
+                            {summary && summary.notApplicable > 0
+                              ? ` · 不适用 ${summary.notApplicable}`
+                              : ""}
+                          </span>
+                        </dd>
+                      </div>
+                    )
+                  })}
+                </dl>
+              </div>
             ) : null}
 
             {task.cleanup ? <CleanupLine detail={task} /> : null}

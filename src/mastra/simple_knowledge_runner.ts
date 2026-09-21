@@ -56,6 +56,7 @@ import type {
 } from "./chat_event_adapter"
 import type { Router } from "../retrieval/router/interface"
 import type {
+  RetrievalOrdering,
   Searcher,
   SearchOptions,
 } from "../retrieval/search/interface"
@@ -568,6 +569,9 @@ export function createSimpleKnowledgeMastraRunner(
     outcome.unavailableChannels.forEach((channel) => unavailableChannels.add(channel))
     if (outcome.status !== "insufficient") retrievalAvailable = true
     resultGroups.push(outcome.results)
+    // Ticket 06: the initial context comes from this single search, so its
+    // ordering label is the one that will describe the scored ranking.
+    const initialOrdering = outcome.ordering
 
     // Build the initial retrieval trace data (aggregated; final state).
     const channelStatuses = Object.fromEntries(
@@ -657,15 +661,30 @@ export function createSimpleKnowledgeMastraRunner(
     // context whose draft was rejected. Round numbers are 1-based generation
     // rounds (1 = initial draft, +1 per correction regeneration).
     let finalContextRound = 0
+    /**
+     * Ticket 06: the committed round also carries HOW its ranking was
+     * produced. One contributing search keeps its own label (dedicated rerank
+     * or the honest fused reason); several merged searches are reported as an
+     * aggregation, never as a dedicated-rerank success.
+     */
     const commitFinalContext = (
       candidates: RetrievalResult[],
-      citationIds: Map<string, string>
+      citationIds: Map<string, string>,
+      orderings: RetrievalOrdering[]
     ): void => {
       finalContextRound += 1
       retrievalTrace = {
         ...retrievalTrace,
         finalContextCandidates: toRankedCandidateObservations(candidates, citationIds),
         finalContextRound,
+        ...(orderings.length > 0
+          ? {
+              finalContextOrdering:
+                orderings.length === 1
+                  ? orderings[0]
+                  : { source: "fused" as const, reason: "multi_query_aggregation" as const },
+            }
+          : {}),
       }
     }
     const initialCitationIds = citationIdsByChunk(evidence)
@@ -749,7 +768,11 @@ export function createSimpleKnowledgeMastraRunner(
     }
     // Ticket 01: the initial draft was accepted — its context is the current
     // final generation context.
-    commitFinalContext(selectedResults, initialCitationIds)
+    commitFinalContext(
+      selectedResults,
+      initialCitationIds,
+      initialOrdering ? [initialOrdering] : []
+    )
     let fullAnswer = initialAnswer
     let draftTokens: string[] = [...initialTokens]
     let validationTrace: ValidationTraceData = {}
@@ -838,6 +861,8 @@ export function createSimpleKnowledgeMastraRunner(
       // Correction retrieval: run searcher.search for each gap query.
       let anyNewResults = false
       let correctionInsufficient = false
+      // Ticket 06: orderings of the searches whose results were kept.
+      const correctionOrderings: RetrievalOrdering[] = []
       for (const gapQuery of gapQueries) {
         const correctionOutcome = await abortable(
           searcher.search(gapQuery, { accessContext, signal }),
@@ -851,6 +876,7 @@ export function createSimpleKnowledgeMastraRunner(
           break
         }
         if (correctionOutcome.results.length === 0) continue
+        if (correctionOutcome.ordering) correctionOrderings.push(correctionOutcome.ordering)
         accumulatedResults.push(...correctionOutcome.results)
         anyNewResults = true
       }
@@ -987,7 +1013,7 @@ export function createSimpleKnowledgeMastraRunner(
       draftTokens = [...regenTokens]
       // Ticket 01: the regenerated draft was accepted — commit its context as
       // the final generation context (overwrites the previous round).
-      commitFinalContext(correctionCandidates, correctionCitationIds)
+      commitFinalContext(correctionCandidates, correctionCitationIds, correctionOrderings)
     }
 
     // -------------------------------------------------------------------------

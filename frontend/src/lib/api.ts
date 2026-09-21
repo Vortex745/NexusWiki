@@ -107,6 +107,13 @@ export interface EvaluationCaseResult {
   answer: string
   terminalStatus?: string
   error?: string
+  /**
+   * Ticket 06: how the scored ranking was produced. `dedicated_rerank` means
+   * the configured reranker scored it; `fused` means an unscored order was
+   * published (fusion, below-threshold, unavailable reranker, or a multi-query
+   * merge) — never displayed as a dedicated-rerank success.
+   */
+  ordering?: { source: "dedicated_rerank" | "fused"; reason?: string }
   runId?: string
   durationMs: number
   metrics: Record<string, number | null>

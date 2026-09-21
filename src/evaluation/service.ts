@@ -20,6 +20,7 @@ import type { AppConfig } from "../config"
 import type {
   AnswerRunEvent,
   AnswerRunResult,
+  FinalContextOrdering,
   RankedCandidateObservation,
 } from "../types"
 import type { Reranker } from "../retrieval/search/interface"
@@ -37,7 +38,12 @@ import {
   type EvalDatasetCase,
 } from "./dataset"
 import { getBuiltinEvalDataset, listBuiltinEvalDatasets } from "./builtin_datasets"
-import { EVAL_METRIC_VERSION, precision, type ScoredCandidate } from "./metrics"
+import {
+  EVAL_METRIC_VERSION,
+  notApplicableRetrievalMetrics,
+  retrievalMetrics,
+  type ScoredCandidate,
+} from "./metrics"
 import {
   EVAL_TASK_TERMINAL_STAGES,
   type EvalCaseResult,
@@ -59,8 +65,6 @@ export const DEFAULT_MAX_RETAINED_TASKS = 20
 export const DEFAULT_MAX_CASES_PER_TASK = 1
 export const DEFAULT_TASK_TIMEOUT_MS = 10 * 60_000
 export const DEFAULT_CASE_TIMEOUT_MS = 3 * 60_000
-/** In-code constant (never a request parameter): the metric implementation. */
-export const EVAL_METRIC_NAME_PRECISION = "precision"
 
 /** Invalid request/dataset — maps to HTTP 400. */
 export class EvaluationRequestError extends Error {
@@ -429,17 +433,19 @@ export class EvaluationService {
       }
     }
 
-    const candidates = collectCandidates(caseDef, events, resources)
+    const { candidates, ordering } = collectFinalContext(caseDef, events, resources)
     const scored: ScoredCandidate[] = candidates.map((candidate) => ({
       passageId: candidate.passageId,
       relevant: candidate.relevant,
     }))
     // A failed case has no completed final round to score — reporting 0 would
-    // launder a provider failure into a retrieval failure, so the metric is
+    // launder a provider failure into a retrieval failure, so every metric is
     // "not applicable" (null) instead. Answered cases with an empty ranking
     // still score a real 0 (nothing relevant was retrieved).
-    const casePrecision =
-      failure === undefined ? precision(scored, caseDef.relevantPassageIds) : null
+    const metrics =
+      failure === undefined
+        ? retrievalMetrics(scored, caseDef.relevantPassageIds)
+        : notApplicableRetrievalMetrics()
 
     return {
       caseId: caseDef.caseId,
@@ -449,9 +455,10 @@ export class EvaluationService {
       answer: done?.reply ?? "",
       ...(done ? { terminalStatus: done.status } : {}),
       ...(failure !== undefined ? { error: failure } : {}),
+      ...(ordering ? { ordering } : {}),
       runId,
       durationMs: Date.now() - startedAt,
-      metrics: { [EVAL_METRIC_NAME_PRECISION]: casePrecision },
+      metrics,
       retrievedPassageIds: [...new Set(
         candidates.flatMap((candidate) => (candidate.passageId ? [candidate.passageId] : []))
       )],
@@ -500,7 +507,7 @@ function failedCase(caseDef: EvalDatasetCase, error: string): EvalCaseResult {
     answer: "",
     error,
     durationMs: 0,
-    metrics: { [EVAL_METRIC_NAME_PRECISION]: null },
+    metrics: notApplicableRetrievalMetrics(),
     retrievedPassageIds: [],
     candidates: [],
     unmappedCandidates: 0,
@@ -515,14 +522,17 @@ function failedCase(caseDef: EvalDatasetCase, error: string): EvalCaseResult {
  *
  * The runner submits an observation only for the round whose draft was
  * accepted, so taking the LAST one keeps the published round's ranking when a
- * correction round regenerated the answer.
+ * correction round regenerated the answer. The same observation carries the
+ * ordering label (ticket 06) so the scorer can say whether the ranking it just
+ * scored came from the dedicated reranker or from an unscored fallback/merge.
  */
-function collectCandidates(
+function collectFinalContext(
   caseDef: EvalDatasetCase,
   events: readonly AnswerRunEvent[],
   resources: IsolatedEvalResources
-): EvalRankedCandidate[] {
+): { candidates: EvalRankedCandidate[]; ordering?: FinalContextOrdering } {
   let observations: RankedCandidateObservation[] | undefined
+  let ordering: FinalContextOrdering | undefined
   for (const event of events) {
     if (
       event.type === "progress" &&
@@ -530,11 +540,12 @@ function collectCandidates(
       event.data.finalContextCandidates
     ) {
       observations = event.data.finalContextCandidates
+      ordering = event.data.finalContextOrdering
     }
   }
-  if (!observations) return []
+  if (!observations) return { candidates: [] }
   const relevant = new Set(caseDef.relevantPassageIds)
-  return observations.map((observation) => {
+  const candidates = observations.map((observation) => {
     const passageId = resources.passageIdForChunk({ documentId: observation.documentId })
     return {
       rank: observation.rank,
@@ -546,6 +557,7 @@ function collectCandidates(
       relevant: passageId !== null && relevant.has(passageId),
     }
   })
+  return { candidates, ...(ordering ? { ordering } : {}) }
 }
 
 /**

@@ -185,6 +185,17 @@ test("the evaluation dialog accepts an uploaded dataset and shows field-level is
   assert.ok(api.includes("EvaluationTaskInput"), "the client models both dataset sources explicitly")
 })
 
+test("the evaluation dialog shows all six retrieval metrics and the ranking's score source", () => {
+  const dialog = read("frontend/src/components/panels/EvaluationDialog.tsx")
+  for (const key of ["precision", "recall", "ndcg@3", "ndcg@10", "mrr", "map"]) {
+    assert.ok(dialog.includes(`["${key}", `), `the metric grid must render ${key}`)
+  }
+  assert.match(dialog, /OrderingNote/, "the score source of the scored ranking is displayed")
+  assert.match(dialog, /原始顺序（未重排）/, "an unscored order is never labelled as a dedicated rerank")
+  assert.match(dialog, /summary\?\.sampleSize/, "every average shows its effective sample size")
+  assert.match(dialog, /task\.metrics\.version/, "the metric version stamp is displayed")
+})
+
 // ---------------------------------------------------------------------------
 // Product surface kept across the migration
 // ---------------------------------------------------------------------------
