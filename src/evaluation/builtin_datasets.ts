@@ -60,11 +60,43 @@ const REFUND_SAMPLE: EvalDataset = {
   ],
 }
 
+/**
+ * Ticket 09: the same corpus with three questions, so a batch run (bounded
+ * concurrency, per-case progress) can be exercised without uploading anything.
+ */
+const REFUND_BATCH_SAMPLE: EvalDataset = {
+  ...REFUND_SAMPLE,
+  name: "退款与售后（内置三题）",
+  version: "1.1.0",
+  cases: [
+    ...REFUND_SAMPLE.cases,
+    {
+      caseId: "shipping-eta",
+      question: "标准配送一般需要多久？",
+      referenceAnswer: "标准配送需要 2 至 4 个工作日，偏远地区可能延长至 6 个工作日。",
+      relevantPassageIds: ["shipping-policy"],
+      tags: ["物流"],
+    },
+    {
+      caseId: "warranty-scope",
+      question: "电子产品的保修期和保修范围是什么？",
+      referenceAnswer: "电子产品自购买之日起享有一年保修，人为损坏不在保修范围内。",
+      relevantPassageIds: ["warranty-policy"],
+      tags: ["售后"],
+    },
+  ],
+}
+
 export const BUILTIN_EVAL_DATASETS: readonly BuiltinEvalDataset[] = [
   {
     id: "refund-single-case",
     dataset: REFUND_SAMPLE,
     description: "退款政策语料 + 1 个问题，含 3 条干扰段落",
+  },
+  {
+    id: "refund-batch-3",
+    dataset: REFUND_BATCH_SAMPLE,
+    description: "同一份语料 + 3 个问题，用于批量运行与逐题进度",
   },
 ]
 

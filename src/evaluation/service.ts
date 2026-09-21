@@ -67,11 +67,15 @@ import {
 
 export const DEFAULT_MAX_RETAINED_TASKS = 20
 /**
- * Ticket 04 runs one case per task. Batch support (bounded concurrency,
- * progress across cases) is ticket 09 — until then a multi-case dataset is
- * rejected explicitly instead of silently running only the first case.
+ * Ticket 09: a task runs its dataset's cases with BOUNDED concurrency — never
+ * an unbounded Promise.all over model calls. Cases beyond the cap are rejected
+ * up front (the dataset validator already caps a dataset at 100 cases; a
+ * single task is kept smaller so one run cannot monopolize the shared
+ * providers).
  */
-export const DEFAULT_MAX_CASES_PER_TASK = 1
+export const DEFAULT_MAX_CASES_PER_TASK = 20
+/** How many cases of one task may run at the same time. */
+export const DEFAULT_CASE_CONCURRENCY = 2
 export const DEFAULT_TASK_TIMEOUT_MS = 10 * 60_000
 export const DEFAULT_CASE_TIMEOUT_MS = 3 * 60_000
 
@@ -118,6 +122,8 @@ export interface EvaluationServiceOptions {
   generateId?: () => string
   maxRetainedTasks?: number
   maxCasesPerTask?: number
+  /** Bounded concurrency across one task's cases (ticket 09). */
+  caseConcurrency?: number
   taskTimeoutMs?: number
   caseTimeoutMs?: number
 }
@@ -147,6 +153,7 @@ export class EvaluationService {
   private readonly generateId: () => string
   private readonly maxRetainedTasks: number
   private readonly maxCasesPerTask: number
+  private readonly caseConcurrency: number
   private readonly taskTimeoutMs: number
   private readonly caseTimeoutMs: number
   private readonly createResources: (taskId: string) => IsolatedEvalResources
@@ -157,6 +164,10 @@ export class EvaluationService {
     this.generateId = options.generateId ?? (() => randomUUID())
     this.maxRetainedTasks = options.maxRetainedTasks ?? DEFAULT_MAX_RETAINED_TASKS
     this.maxCasesPerTask = options.maxCasesPerTask ?? DEFAULT_MAX_CASES_PER_TASK
+    this.caseConcurrency = Math.max(
+      1,
+      options.caseConcurrency ?? DEFAULT_CASE_CONCURRENCY
+    )
     this.taskTimeoutMs = options.taskTimeoutMs ?? DEFAULT_TASK_TIMEOUT_MS
     this.caseTimeoutMs = options.caseTimeoutMs ?? DEFAULT_CASE_TIMEOUT_MS
     this.reranker = options.reranker
@@ -196,7 +207,7 @@ export class EvaluationService {
     const { dataset, datasetId } = this.resolveDataset(input)
     if (dataset.cases.length > this.maxCasesPerTask) {
       throw new EvaluationRequestError(
-        `this dataset has ${dataset.cases.length} cases but the service runs at most ${this.maxCasesPerTask} per task (batch runs are not enabled yet); split the dataset or use the built-in single-case sample`,
+        `this dataset has ${dataset.cases.length} cases but one task runs at most ${this.maxCasesPerTask} (bounded concurrency of ${this.caseConcurrency}); split the dataset into several tasks`,
         ["cases"]
       )
     }
@@ -348,19 +359,7 @@ export class EvaluationService {
 
       record.stage = "running"
       const entry = await resources.createAnswerEntry()
-      for (const caseDef of record.dataset.cases) {
-        if (taskController.signal.aborted) {
-          record.cases.push(
-            failedCase(caseDef, `task exceeded its ${this.taskTimeoutMs}ms budget before this case started`)
-          )
-          record.finished += 1
-          continue
-        }
-        record.cases.push(
-          await this.runCase(record, caseDef, entry, resources, taskController.signal)
-        )
-        record.finished += 1
-      }
+      await this.runCases(record, entry, resources, taskController.signal)
 
       record.stage = this.terminalStageFor(record.cases)
     } catch (error) {
@@ -405,6 +404,55 @@ export class EvaluationService {
     if (failed === cases.length) return "failed"
     if (failed > 0) return "completed_with_errors"
     return "completed"
+  }
+
+  /**
+   * Ticket 09: run every case of the task with bounded concurrency. Each
+   * worker owns one case at a time (so at most `caseConcurrency` runs are in
+   * flight — never an unbounded aggregation of model calls), and a result is
+   * written back at its DATASET index, so the task always reports its cases in
+   * dataset order no matter which one finishes first.
+   */
+  private async runCases(
+    record: TaskRecord,
+    entry: Awaited<ReturnType<IsolatedEvalResources["createAnswerEntry"]>>,
+    resources: IsolatedEvalResources,
+    taskSignal: AbortSignal
+  ): Promise<void> {
+    const caseDefs = record.dataset.cases
+    record.cases = new Array<EvalCaseResult>(caseDefs.length)
+    let nextIndex = 0
+
+    const runWorker = async (): Promise<void> => {
+      for (;;) {
+        const index = nextIndex
+        nextIndex += 1
+        const caseDef = caseDefs[index]
+        if (!caseDef) return
+        let result: EvalCaseResult
+        if (taskSignal.aborted) {
+          result = failedCase(
+            caseDef,
+            `task exceeded its ${this.taskTimeoutMs}ms budget before this case started`
+          )
+        } else {
+          try {
+            result = await this.runCase(record, caseDef, entry, resources, taskSignal)
+          } catch (error) {
+            // A case must never leave a hole in the result list.
+            result = failedCase(
+              caseDef,
+              error instanceof Error ? error.message : String(error)
+            )
+          }
+        }
+        record.cases[index] = result
+        record.finished += 1
+      }
+    }
+
+    const workers = Math.max(1, Math.min(this.caseConcurrency, caseDefs.length))
+    await Promise.all(Array.from({ length: workers }, () => runWorker()))
   }
 
   private async runCase(
@@ -507,7 +555,10 @@ export class EvaluationService {
     return {
       ...this.toSummary(record),
       config: record.config,
-      cases: [...record.cases],
+      // Ticket 09: while a batch is running, results land at their dataset
+      // index one by one — only the settled ones are reported (the progress
+      // counters carry the rest), so the detail never shows empty slots.
+      cases: record.cases.filter(Boolean),
       metrics: summarizeMetrics(record.cases),
       cleanup: record.cleanup,
       ...(record.error ? { error: record.error } : {}),
@@ -597,16 +648,19 @@ function collectFinalContext(
  * and never turn into a fake 100%.
  */
 export function summarizeMetrics(cases: EvalCaseResult[]): EvalMetricsSummary {
+  // Ticket 09: a running batch has slots that are not settled yet — averages
+  // are computed from the cases that actually produced a result.
+  const settled = cases.filter(Boolean)
   const keys = new Set<string>()
-  for (const item of cases) {
+  for (const item of settled) {
     for (const key of Object.keys(item.metrics)) keys.add(key)
   }
   const metrics: EvalMetricsSummary["metrics"] = {}
   for (const key of keys) {
-    const values = cases
+    const values = settled
       .map((item) => item.metrics[key])
       .filter((value): value is number => typeof value === "number" && Number.isFinite(value))
-    const notApplicable = cases.filter((item) => item.metrics[key] === null).length
+    const notApplicable = settled.filter((item) => item.metrics[key] === null).length
     metrics[key] = {
       value: values.length > 0 ? values.reduce((sum, value) => sum + value, 0) / values.length : null,
       sampleSize: values.length,

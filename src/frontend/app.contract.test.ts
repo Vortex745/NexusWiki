@@ -212,6 +212,12 @@ test("the evaluation dialog presents BLEU and ROUGE as text similarity with thei
     /不沿用旧 RAGAS 的语义评分口径/,
     "the new similarity metrics must not be mixed with the old RAGAS semantics"
   )
+  assert.match(dialog, /已完成 \{task\.progress\.finished\}\/\{task\.progress\.total\}/, "batch progress is visible")
+  assert.equal(
+    /只运行一题|多题批量见后续票/.test(dialog),
+    false,
+    "the single-case limitation copy is gone now that batches run"
+  )
   assert.equal(
     /ragas/i.test(dialog.replace(/不沿用旧 RAGAS 的语义评分口径/g, "")),
     false,

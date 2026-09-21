@@ -382,7 +382,7 @@ export function EvaluationDialog({ open, onClose }: { open: boolean; onClose: ()
             ) : null}
             <p className="text-[11px] text-muted/50">
               corpus 需带稳定 passageId（干扰段落也要入库），cases 引用这些 id 并给出参考答案；服务端逐字段校验，
-              非法数据在付费调用前被拒绝。本版本每条任务只运行一题（多题批量见后续票）。
+              非法数据在付费调用前被拒绝。多题会按受控并发批量运行，每题独立会话。
             </p>
           </div>
         ) : (
@@ -445,7 +445,14 @@ export function EvaluationDialog({ open, onClose }: { open: boolean; onClose: ()
           <div className="mt-4 flex min-h-0 flex-1 flex-col gap-3" aria-live="polite">
             <div className="flex items-center justify-between gap-2">
               <StageStepper stage={task.stage} />
-              <StageBadge stage={task.stage} />
+              <span className="flex items-center gap-2">
+                {task.progress.total > 0 ? (
+                  <span className="font-mono text-[11px] text-muted/70">
+                    已完成 {task.progress.finished}/{task.progress.total}
+                  </span>
+                ) : null}
+                <StageBadge stage={task.stage} />
+              </span>
             </div>
 
             {taskMissing ? (

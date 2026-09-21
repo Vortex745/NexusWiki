@@ -81,6 +81,11 @@ interface FakeScopeOptions {
   ordering?: { source: "dedicated_rerank" | "fused"; reason?: string }
   /** Ticket 07: the reply this run publishes (defaults to FAKE_REPLY). */
   reply?: string
+  /**
+   * Ticket 09: per-case delay before the fake starts answering, so a test can
+   * force a completion order different from the dataset order.
+   */
+  delayByCaseMs?: Record<string, number>
 }
 
 class FakeScope implements IsolatedEvalResources {
@@ -91,6 +96,9 @@ class FakeScope implements IsolatedEvalResources {
   readonly accessContext: AccessContext
   readonly corpus: EvalCorpusPassage[] = []
   readonly preparedCaseOptions: Array<{ caseId?: string; sessionId?: string; message: string }> = []
+  /** Ticket 09: how many cases were really in flight at once. */
+  inFlight = 0
+  maxInFlight = 0
   disposeCalls = 0
   private state: "created" | "prepared" | "disposed" = "created"
 
@@ -152,7 +160,13 @@ class FakeScope implements IsolatedEvalResources {
           ...(runOptions.caseId ? { caseId: runOptions.caseId } : {}),
           ...(runOptions.sessionId ? { sessionId: runOptions.sessionId } : {}),
         })
+        const scope = this
         return (async function* (): AsyncIterable<AnswerRunEvent> {
+          scope.inFlight += 1
+          scope.maxInFlight = Math.max(scope.maxInFlight, scope.inFlight)
+          try {
+          const delay = options.delayByCaseMs?.[runOptions.caseId ?? ""]
+          if (delay) await new Promise((resolve) => setTimeout(resolve, delay))
           if (options.caseThrows) throw new Error(options.caseThrows)
           const ranking = options.ranking ?? FAKE_RANKING
           const candidates: RankedCandidateObservation[] = options.noObservation
@@ -183,6 +197,9 @@ class FakeScope implements IsolatedEvalResources {
           })
           // Keep the unused helper referenced for type clarity.
           void passageIdForChunk
+          } finally {
+            scope.inFlight -= 1
+          }
         })()
       },
     }
@@ -362,9 +379,13 @@ test("built-in sample runs end to end: register, poll, real answer, Precision, c
     const datasets = await api(harness.port, "/api/evaluation-datasets")
     assert.equal(datasets.status, 200)
     const list = datasets.body.datasets as Array<Record<string, unknown>>
-    assert.equal(list.length, 1)
-    assert.equal(list[0].id, "refund-single-case")
+    assert.deepEqual(
+      list.map((entry) => entry.id),
+      ["refund-single-case", "refund-batch-3"],
+      "a single-case sample and a batch sample are both offered"
+    )
     assert.equal(list[0].caseCount, 1)
+    assert.equal(list[1].caseCount, 3)
     assert.equal((datasets.body.defaults as Record<string, unknown>).chatModel, "test-chat-model")
 
     const created = await createTask(harness.port, { datasetId: "refund-single-case" })
@@ -529,26 +550,116 @@ test("invalid datasets are rejected before any task or scope exists", async () =
   }
 })
 
-test("multi-case datasets are refused explicitly until batch support exists", async () => {
-  const harness = await buildHarness()
+test("a multi-case dataset runs with bounded concurrency, in dataset order, one session per case", async () => {
+  const dataset = {
+    schemaVersion: 1,
+    name: "batch",
+    version: "1.0.0",
+    corpus: [
+      { passageId: "p1", content: "退款在审核通过后 3 个工作日内到账。" },
+      { passageId: "p2", content: "标准配送需要 2 至 4 个工作日。" },
+    ],
+    cases: [
+      { caseId: "c1", question: "退款多久到账？", referenceAnswer: "3 个工作日。", relevantPassageIds: ["p1"] },
+      { caseId: "c2", question: "配送多久？", referenceAnswer: "2 至 4 个工作日。", relevantPassageIds: ["p2"] },
+      { caseId: "c3", question: "退款要审核吗？", referenceAnswer: "需要审核。", relevantPassageIds: ["p1"] },
+    ],
+  }
+  const harness = await buildHarness({
+    ranking: [
+      { passageId: "p1", relevant: true },
+      { passageId: "p2", relevant: false },
+    ],
+    // The last case finishes first — the report must still follow dataset order.
+    delayByCaseMs: { c1: 80, c2: 40, c3: 0 },
+  })
+  try {
+    const created = await createTask(harness.port, { dataset })
+    assert.equal(created.status, 202)
+    assert.deepEqual(created.body.progress, { finished: 0, total: 3 })
+
+    const detail = await pollTerminal(harness.port, created.body.id as string)
+    assert.equal(detail.stage, "completed")
+    assert.deepEqual(detail.progress, { finished: 3, total: 3 })
+
+    const cases = detail.cases as Array<Record<string, unknown>>
+    assert.deepEqual(
+      cases.map((item) => item.caseId),
+      ["c1", "c2", "c3"],
+      "results are reported in dataset order even when they finish out of order"
+    )
+
+    // Every case ran with its own session, correlated by caseId.
+    const scope = harness.scopes[0]
+    assert.equal(scope.preparedCaseOptions.length, 3)
+    assert.deepEqual(
+      scope.preparedCaseOptions.map((entry) => entry.caseId),
+      ["c1", "c2", "c3"]
+    )
+    assert.equal(
+      new Set(scope.preparedCaseOptions.map((entry) => entry.sessionId)).size,
+      3,
+      "cases never share conversation memory"
+    )
+    assert.equal(scope.maxInFlight, 2, "concurrency is real but bounded")
+    assert.equal(scope.disposeCalls, 1, "one shared cleanup after all cases settle")
+
+    // Each average can be recomputed from the per-case results.
+    const summary = detail.metrics as {
+      metrics: Record<string, { value: number | null; sampleSize: number; notApplicable: number }>
+    }
+    assert.equal(summary.metrics.precision.sampleSize, 3)
+    const precisions = cases.map((item) => (item.metrics as Record<string, number>).precision)
+    assert.equal(
+      summary.metrics.precision.value,
+      precisions.reduce((sum, value) => sum + value, 0) / precisions.length
+    )
+    assert.equal((cases[0].metrics as Record<string, number>).precision, 0.5, "1 of 2 candidates is relevant")
+  } finally {
+    await harness.close()
+  }
+})
+
+test("the built-in batch sample runs end to end from the id alone", async () => {
+  const harness = await buildHarness({
+    ranking: [{ passageId: "refund-policy", relevant: true }],
+  })
+  try {
+    const created = await createTask(harness.port, { datasetId: "refund-batch-3" })
+    assert.equal(created.status, 202)
+    const detail = await pollTerminal(harness.port, created.body.id as string)
+
+    assert.equal(detail.stage, "completed")
+    assert.deepEqual(detail.progress, { finished: 3, total: 3 })
+    const cases = detail.cases as Array<Record<string, unknown>>
+    assert.deepEqual(
+      cases.map((item) => item.caseId),
+      ["refund-eta", "shipping-eta", "warranty-scope"]
+    )
+  } finally {
+    await harness.close()
+  }
+})
+
+test("a dataset larger than the per-task cap is refused before any scope exists", async () => {
+  const harness = await buildHarness({}, { maxCasesPerTask: 2 })
   try {
     const dataset = {
       schemaVersion: 1,
-      name: "two cases",
+      name: "three cases",
       version: "1.0.0",
-      corpus: [
-        { passageId: "p1", content: "a" },
-        { passageId: "p2", content: "b" },
-      ],
+      corpus: [{ passageId: "p1", content: "a" }],
       cases: [
         { caseId: "c1", question: "q1", referenceAnswer: "a1", relevantPassageIds: ["p1"] },
-        { caseId: "c2", question: "q2", referenceAnswer: "a2", relevantPassageIds: ["p2"] },
+        { caseId: "c2", question: "q2", referenceAnswer: "a2", relevantPassageIds: ["p1"] },
+        { caseId: "c3", question: "q3", referenceAnswer: "a3", relevantPassageIds: ["p1"] },
       ],
     }
     const rejected = await createTask(harness.port, { dataset })
     assert.equal(rejected.status, 400)
-    assert.match(String(rejected.body.error), /at most 1 per task|batch runs are not enabled/)
-    assert.equal(harness.scopes.length, 0)
+    assert.match(String(rejected.body.error), /runs at most 2/)
+    assert.equal(harness.scopes.length, 0, "nothing was prepared for a rejected batch")
+    assert.deepEqual((await api(harness.port, "/api/evaluations")).body.tasks, [])
   } finally {
     await harness.close()
   }
