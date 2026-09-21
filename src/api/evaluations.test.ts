@@ -12,6 +12,8 @@ import type {
   IsolatedEvalResources,
 } from "../evaluation/isolated_resources"
 import { EvalPrepareError } from "../evaluation/isolated_resources"
+import type { EvalModelOverrides } from "../evaluation/service"
+import type { Reranker } from "../retrieval/search/interface"
 import type { AppConfig } from "../config"
 import type { AnswerRunEvent, AnswerRunResult, RankedCandidateObservation } from "../types"
 import type { AccessContext, Scope } from "../access/context"
@@ -96,6 +98,10 @@ interface FakeScopeOptions {
 }
 
 class FakeScope implements IsolatedEvalResources {
+  /** Ticket 11: the validated model plan this task was created with. */
+  taskOverrides: EvalModelOverrides = {}
+  /** Ticket 11: the reranker this task actually runs with. */
+  taskReranker?: Reranker
   readonly taskId: string
   readonly tenantId: string
   readonly namespace: string
@@ -337,6 +343,11 @@ async function buildHarness(
     taskTimeoutMs?: number
     /** Injectable clock so TTL eviction can be tested without waiting. */
     now?: () => Date
+    /** Ticket 11: model ids a task may override. */
+    allowedChatModels?: readonly string[]
+    allowedRerankModels?: readonly string[]
+    createReranker?: (model: string) => Reranker | undefined
+    reranker?: Reranker
   } = {}
 ): Promise<Harness> {
   const scopes: FakeScope[] = []
@@ -345,8 +356,12 @@ async function buildHarness(
     const service = new EvaluationService({
       config: CONFIG,
       clients: {} as never,
-      createResources: (taskId) => {
+      createResources: (taskId, overrides, taskReranker) => {
         const scope = new FakeScope(taskId, scopeOptions)
+        // Ticket 11: record the task's model plan so tests can prove that two
+        // concurrent tasks never share or cross-talk models.
+        scope.taskOverrides = overrides
+        scope.taskReranker = taskReranker
         scopes.push(scope)
         return scope
       },
@@ -1341,6 +1356,183 @@ test("an honest refusal keeps its terminal status and reply instead of looking l
     assert.equal(cases[0].error, undefined, "no provider error is invented for a refusal")
     assert.deepEqual(cases[0].ordering, { source: "dedicated_rerank" })
     assert.equal((cases[0].metrics as Record<string, number>).precision, 1)
+  } finally {
+    await harness.close()
+  }
+})
+
+// ---------------------------------------------------------------------------
+// Ticket 11 — per-run model choice without touching the shared configuration
+// ---------------------------------------------------------------------------
+
+const ALT_CHAT = "alt-chat-model"
+
+test("an allowed chat-model override is used by that task only and never mutates the shared config", async () => {
+  const harness = await buildHarness({}, { allowedChatModels: [ALT_CHAT] })
+  try {
+    const created = await createTask(harness.port, {
+      datasetId: "refund-single-case",
+      chatModel: ALT_CHAT,
+    })
+    assert.equal(created.status, 202)
+    const detail = await pollTerminal(harness.port, created.body.id as string)
+
+    assert.equal(
+      (detail.config as Record<string, unknown>).chatModel,
+      ALT_CHAT,
+      "the snapshot records what this run really used"
+    )
+    assert.equal((detail.config as Record<string, unknown>).embeddingModel, CONFIG.embeddingModel)
+    assert.equal(
+      harness.scopes[0].taskOverrides.chatModel,
+      ALT_CHAT,
+      "the isolated scope ran with the override"
+    )
+    assert.equal(
+      CONFIG.openaiChatModel,
+      "test-chat-model",
+      "the shared configuration singleton is untouched"
+    )
+
+    // Redacted: no credential or endpoint appears in a task response.
+    const serialized = JSON.stringify(detail)
+    for (const secret of ["chat-key", "chat.test", "apiKey", "baseUrl"]) {
+      assert.equal(serialized.includes(secret), false, `the response must not expose ${secret}`)
+    }
+  } finally {
+    await harness.close()
+  }
+})
+
+test("a model id the server did not allow is refused before any scope exists", async () => {
+  const harness = await buildHarness({}, { allowedChatModels: [ALT_CHAT] })
+  try {
+    const unlisted = await createTask(harness.port, {
+      datasetId: "refund-single-case",
+      chatModel: "sneaky-model",
+    })
+    assert.equal(unlisted.status, 400)
+    assert.match(String(unlisted.body.error), /allowed list/)
+
+    const url = await createTask(harness.port, {
+      datasetId: "refund-single-case",
+      chatModel: "https://evil.example/v1",
+    })
+    assert.equal(url.status, 400, "a URL is not a model id")
+    assert.match(String(url.body.error), /plain model id/)
+    assert.equal(harness.scopes.length, 0, "nothing was created for a refused model")
+
+    // Provider settings are not part of the contract: extra fields are
+    // ignored, never proxied to a provider.
+    const extra = await createTask(harness.port, {
+      datasetId: "refund-single-case",
+      baseUrl: "https://evil.example/v1",
+      apiKey: "stolen",
+    })
+    assert.equal(extra.status, 202)
+    const detail = await pollTerminal(harness.port, extra.body.id as string)
+    assert.equal((detail.config as Record<string, unknown>).chatModel, "test-chat-model")
+    assert.equal(harness.scopes.length, 1, "only the accepted task created a scope")
+    assert.equal(JSON.stringify(detail).includes("evil.example"), false)
+  } finally {
+    await harness.close()
+  }
+})
+
+test("two tasks with different overrides never cross-talk", async () => {
+  const harness = await buildHarness({}, { allowedChatModels: ["model-a", "model-b"] })
+  try {
+    const first = await createTask(harness.port, {
+      datasetId: "refund-single-case",
+      chatModel: "model-a",
+    })
+    const second = await createTask(harness.port, {
+      datasetId: "refund-single-case",
+      chatModel: "model-b",
+    })
+    const firstDetail = await pollTerminal(harness.port, first.body.id as string)
+    const secondDetail = await pollTerminal(harness.port, second.body.id as string)
+
+    assert.equal((firstDetail.config as Record<string, unknown>).chatModel, "model-a")
+    assert.equal((secondDetail.config as Record<string, unknown>).chatModel, "model-b")
+    assert.equal(
+      harness.scopes.find((scope) => scope.taskId === first.body.id)?.taskOverrides.chatModel,
+      "model-a"
+    )
+    assert.equal(
+      harness.scopes.find((scope) => scope.taskId === second.body.id)?.taskOverrides.chatModel,
+      "model-b"
+    )
+    assert.equal(CONFIG.openaiChatModel, "test-chat-model", "still no global change")
+  } finally {
+    await harness.close()
+  }
+})
+
+test("a rerank override builds a task-scoped reranker through the injected factory", async () => {
+  const seen: string[] = []
+  const harness = await buildHarness(
+    {
+      ranking: [{ passageId: "refund-policy", relevant: true }],
+      ordering: { source: "dedicated_rerank" },
+    },
+    {
+      allowedRerankModels: ["alt-rerank-model"],
+      createReranker: (model) => {
+        seen.push(model)
+        return { model, rerank: async (_query, results) => results }
+      },
+    }
+  )
+  try {
+    const created = await createTask(harness.port, {
+      datasetId: "refund-single-case",
+      rerankModel: "alt-rerank-model",
+    })
+    assert.equal(created.status, 202)
+    const detail = await pollTerminal(harness.port, created.body.id as string)
+
+    assert.deepEqual(seen, ["alt-rerank-model"], "the override went through the adapter factory")
+    assert.equal((detail.config as Record<string, unknown>).rerankModel, "alt-rerank-model")
+    assert.equal(
+      (detail.config as Record<string, unknown>).rerankSource,
+      "dedicated_rerank",
+      "the task-scoped reranker is the recorded score source"
+    )
+    assert.equal(harness.scopes[0].taskReranker?.model, "alt-rerank-model")
+  } finally {
+    await harness.close()
+  }
+})
+
+test("a rerank override is refused when the server wires no adapter factory", async () => {
+  const harness = await buildHarness({}, { allowedRerankModels: ["alt-rerank-model"] })
+  try {
+    const rejected = await createTask(harness.port, {
+      datasetId: "refund-single-case",
+      rerankModel: "alt-rerank-model",
+    })
+    assert.equal(rejected.status, 400)
+    assert.match(String(rejected.body.error), /not enabled/)
+    assert.equal(harness.scopes.length, 0)
+  } finally {
+    await harness.close()
+  }
+})
+
+test("the datasets endpoint advertises the allowed model ids next to the defaults", async () => {
+  const harness = await buildHarness(
+    {},
+    { allowedChatModels: ["model-a"], allowedRerankModels: ["r-1"] }
+  )
+  try {
+    const payload = (await api(harness.port, "/api/evaluation-datasets")).body
+    assert.deepEqual(payload.allowedModels, { chat: ["model-a"], rerank: ["r-1"] })
+    assert.equal(
+      (payload.defaults as Record<string, unknown>).chatModel,
+      "test-chat-model",
+      "the default stays visible so a user can fall back to it"
+    )
   } finally {
     await harness.close()
   }

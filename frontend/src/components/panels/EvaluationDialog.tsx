@@ -181,6 +181,9 @@ export function EvaluationDialog({ open, onClose }: { open: boolean; onClose: ()
   const [uploadText, setUploadText] = useState("")
   const [uploadFileName, setUploadFileName] = useState<string | null>(null)
   const [uploadIssues, setUploadIssues] = useState<string[]>([])
+  // 票 11：可选模型覆盖（只填 id；留空＝沿用服务配置）
+  const [chatModel, setChatModel] = useState("")
+  const [rerankModel, setRerankModel] = useState("")
   const [submitting, setSubmitting] = useState(false)
   const [task, setTask] = useState<EvaluationTaskDetail | null>(null)
   const [taskMissing, setTaskMissing] = useState(false)
@@ -311,8 +314,15 @@ export function EvaluationDialog({ open, onClose }: { open: boolean; onClose: ()
     try {
       // 服务端校验是权威：非法数据集在这里被逐字段/逐题拒绝，不会产生任何
       // 模型或索引调用（票 05）。
+      // 票 11：只提交模型 id（服务端按允许列表校验），留空表示沿用服务配置。
+      const models = {
+        ...(chatModel.trim() ? { chatModel: chatModel.trim() } : {}),
+        ...(rerankModel.trim() ? { rerankModel: rerankModel.trim() } : {}),
+      }
       const summary = await createEvaluationTask(
-        mode === "upload" ? { dataset: upload && upload.ok ? upload.value : null } : { datasetId: selectedId as string },
+        mode === "upload"
+          ? { dataset: upload && upload.ok ? upload.value : null, ...models }
+          : { datasetId: selectedId as string, ...models },
       )
       // 先展示 202 返回的初始状态，再进入轮询。
       setTask({
@@ -345,6 +355,11 @@ export function EvaluationDialog({ open, onClose }: { open: boolean; onClose: ()
 
   const selected = datasets?.datasets.find((item) => item.id === selectedId) ?? null
   const cases = task?.cases ?? []
+  // 票 11：页面只提供服务器允许的选择；没有允许列表时不显示覆盖控件。
+  const allowedModels = datasets?.allowedModels ?? { chat: [], rerank: [] }
+  const allowedModelCount = allowedModels.chat.length + allowedModels.rerank.length
+  const defaultChatModel = datasets?.defaults.chatModel ?? ""
+  const defaultRerankModel = datasets?.defaults.rerankModel ?? null
   const running = task !== null && !TERMINAL_STAGES.has(task.stage)
   const canRun =
     mode === "builtin" ? Boolean(selectedId) : uploadText.trim().length > 0
@@ -486,6 +501,46 @@ export function EvaluationDialog({ open, onClose }: { open: boolean; onClose: ()
         </div>
         )}
 
+        {/* 票 11：本次运行的模型（可选；留空＝沿用服务配置，只接受服务端允许的 id） */}
+        {allowedModelCount > 0 ? (
+          <div className="mt-3 flex flex-col gap-1.5 rounded-lg border border-line bg-surface px-3 py-2">
+            <p className="text-[11px] font-semibold text-ink">本次运行的模型（可选）</p>
+            <label className="flex items-center justify-between gap-2 text-[11px] text-muted/70">
+              <span>Chat</span>
+              <input
+                list="eval-chat-models"
+                value={chatModel}
+                onChange={(event) => setChatModel(event.target.value)}
+                placeholder={defaultChatModel}
+                className="w-48 rounded-md border border-line bg-surface px-2 py-1 font-mono text-[11px] text-ink outline-none focus:border-brand"
+              />
+            </label>
+            <datalist id="eval-chat-models">
+              {allowedModels.chat.map((model) => (
+                <option key={model} value={model} />
+              ))}
+            </datalist>
+            <label className="flex items-center justify-between gap-2 text-[11px] text-muted/70">
+              <span>Rerank</span>
+              <input
+                list="eval-rerank-models"
+                value={rerankModel}
+                onChange={(event) => setRerankModel(event.target.value)}
+                placeholder={defaultRerankModel ?? "未配置"}
+                className="w-48 rounded-md border border-line bg-surface px-2 py-1 font-mono text-[11px] text-ink outline-none focus:border-brand"
+              />
+            </label>
+            <datalist id="eval-rerank-models">
+              {allowedModels.rerank.map((model) => (
+                <option key={model} value={model} />
+              ))}
+            </datalist>
+            <p className="text-[10px] text-muted/50">
+              只接受服务端允许的模型 id；此处不能填写 Base URL 或密钥，Embedding 沿用服务配置。
+            </p>
+          </div>
+        ) : null}
+
         <button
           type="button"
           disabled={!canRun || submitting || running}
@@ -553,6 +608,14 @@ export function EvaluationDialog({ open, onClose }: { open: boolean; onClose: ()
                 <StageBadge stage={task.stage} />
               </span>
             </div>
+
+            {/* 票 11：本次运行实际使用的数据集与脱敏配置（不含任何凭据） */}
+            <p className="font-mono text-[10px] text-muted/50">
+              数据集 {task.dataset.name} v{task.dataset.version} · 摘要{" "}
+              {task.dataset.contentDigest.slice(0, 12)} · 模型 Chat {task.config.chatModel || "…"} ·
+              Rerank {task.config.rerankModel ?? "未配置"}（{task.config.rerankSource}） · Embedding{" "}
+              {task.config.embeddingModel || "…"}
+            </p>
 
             {taskMissing ? (
               <p className="rounded-lg border border-line bg-surface-subtle/40 px-3 py-2.5 text-xs text-muted">

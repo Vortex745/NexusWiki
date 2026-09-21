@@ -246,6 +246,18 @@ export async function startServer(
       graphDriver: processRuntime.neo4jDriver,
     },
     ...(reranker ? { reranker } : {}),
+    // Ticket 11: a task may only pick models the operator listed; the rerank
+    // override reuses the same dedicated adapter as normal chat.
+    allowedChatModels: config.evalAllowedChatModels ?? [],
+    allowedRerankModels: config.evalAllowedRerankModels ?? [],
+    createReranker: (model) =>
+      createDedicatedReranker({
+        baseUrl: config.rerankBaseUrl,
+        apiKey: config.rerankApiKey,
+        model,
+        timeoutMs: config.rerankTimeoutMs,
+        maxDocumentChars: config.rerankMaxDocumentChars,
+      }),
   })
   const app = createApp({
     db: processRuntime.db,

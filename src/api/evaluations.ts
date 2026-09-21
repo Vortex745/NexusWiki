@@ -55,6 +55,10 @@ export function createEvaluationsRouter(service: EvaluationService): Router {
         {
           ...("datasetId" in body ? { datasetId: body.datasetId } : {}),
           ...("dataset" in body ? { dataset: body.dataset } : {}),
+          // Ticket 11: model ids only. The service validates them against this
+          // server's allowlist; no other provider setting is ever read.
+          ...("chatModel" in body ? { chatModel: body.chatModel } : {}),
+          ...("rerankModel" in body ? { rerankModel: body.rerankModel } : {}),
         },
         { tenantId: ctx.tenantId, subjectId: ctx.subjectId }
       )

@@ -196,6 +196,21 @@ test("the evaluation dialog shows all six retrieval metrics and the ranking's sc
   assert.match(dialog, /task\.metrics\.version/, "the metric version stamp is displayed")
 })
 
+test("the evaluation dialog offers only allowed model ids and shows the redacted snapshot", () => {
+  const dialog = read("frontend/src/components/panels/EvaluationDialog.tsx")
+  assert.match(dialog, /allowedModels\.chat\.map/, "only allowed chat models are offered")
+  assert.match(dialog, /allowedModels\.rerank\.map/, "only allowed rerank models are offered")
+  assert.match(
+    dialog,
+    /chatModel: chatModel\.trim\(\)/,
+    "the page sends a model id and nothing else"
+  )
+  assert.match(dialog, /不能填写 Base URL 或密钥/, "the copy states the constraint")
+  assert.match(dialog, /task\.config\.chatModel/, "the model this run really used is displayed")
+  assert.match(dialog, /task\.config\.rerankSource/, "the run's score source is displayed")
+  assert.ok(api.includes("allowedModels"), "the client reads the server allowlist")
+})
+
 test("the evaluation dialog lists this process's records and never shows a stale one", () => {
   const dialog = read("frontend/src/components/panels/EvaluationDialog.tsx")
   assert.match(dialog, /listEvaluationTasks\(/, "the retained records are read from the API")

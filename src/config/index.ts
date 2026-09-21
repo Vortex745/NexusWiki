@@ -53,6 +53,14 @@ export interface AppConfig {
   /** Max characters of one candidate sent to the reranker. */
   rerankMaxDocumentChars: number
   /**
+   * Eval refactor Ticket 11: model ids one evaluation task may pick instead of
+   * the server default (comma-separated env lists). Empty/absent means the
+   * server default is the only choice — a request can then never make the
+   * service call an arbitrary model or endpoint.
+   */
+  evalAllowedChatModels?: string[]
+  evalAllowedRerankModels?: string[]
+  /**
    * Ticket 11 P1 (spec §11 L1574): ACTIVATION_MODE controls whether completed
    * ingestion candidates become active immediately (`auto`, default) or
    * require explicit human review (`review`). `auto` is the default
@@ -174,6 +182,17 @@ function optionalPricingTable(): AppConfig["answerRunModelPricing"] {
   return table
 }
 
+/**
+ * Comma-separated id list; unset/blank yields no entries, so a trailing comma
+ * or an empty env var can never smuggle an empty model id into the allowlist.
+ */
+function idListEnv(name: string): string[] {
+  return (process.env[name] ?? "")
+    .split(",")
+    .map((entry) => entry.trim())
+    .filter((entry) => entry.length > 0)
+}
+
 export function loadConfig(): AppConfig {
   if (_config) return _config
   const openaiApiKey = required("OPENAI_API_KEY")
@@ -218,6 +237,9 @@ export function loadConfig(): AppConfig {
     rerankModel: process.env.RERANK_MODEL || "bge-reranker-v2-m3",
     rerankTimeoutMs: integerEnv("RERANK_TIMEOUT_MS", "positive", 30_000),
     rerankMaxDocumentChars: integerEnv("RERANK_MAX_DOCUMENT_CHARS", "positive", 4_000),
+    // Ticket 11: opt-in per-task model overrides for evaluation runs.
+    evalAllowedChatModels: idListEnv("EVAL_ALLOWED_CHAT_MODELS"),
+    evalAllowedRerankModels: idListEnv("EVAL_ALLOWED_RERANK_MODELS"),
     // Ticket 11 P1 (spec §11 L1574): ACTIVATION_MODE=auto is default; only
     // the literal value "review" activates review mode. Any other value
     // (including unset) falls back to "auto" — same defensive pattern as

@@ -77,6 +77,8 @@ export interface EvaluationDatasetSummary {
 export interface EvaluationDatasetsPayload {
   datasets: EvaluationDatasetSummary[]
   defaults: { chatModel: string; rerankModel: string | null; embeddingModel: string }
+  /** Ticket 11: ids a task may pick instead of the server default. */
+  allowedModels: { chat: string[]; rerank: string[] }
   maxCasesPerTask: number
 }
 
@@ -162,8 +164,15 @@ export async function fetchEvaluationDatasets(): Promise<EvaluationDatasetsPaylo
   return (await response.json()) as EvaluationDatasetsPayload
 }
 
-/** Built-in sample id or an inline dataset payload — exactly one of the two. */
-export type EvaluationTaskInput = { datasetId: string } | { dataset: unknown }
+/**
+ * Built-in sample id or an inline dataset payload — exactly one of the two —
+ * plus the optional per-run model ids (ticket 11). Model ids are the ONLY
+ * provider setting a request may carry: no base URL, key or endpoint.
+ */
+export type EvaluationTaskInput = ({ datasetId: string } | { dataset: unknown }) & {
+  chatModel?: string
+  rerankModel?: string
+}
 
 /**
  * Rejected request (400/429). `issues` carries the server's per-field/per-case

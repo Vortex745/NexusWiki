@@ -113,7 +113,28 @@ export interface CreateEvaluationTaskInput {
   datasetId?: unknown
   /** Inline dataset payload — mutually exclusive with `datasetId`. */
   dataset?: unknown
+  /**
+   * Ticket 11: model identifiers this run should use. Only ids the operator
+   * allowed are accepted — never a base URL, key or any other provider
+   * setting, so a request can never make the service proxy an arbitrary
+   * endpoint.
+   */
+  chatModel?: unknown
+  rerankModel?: unknown
 }
+
+/** Per-task model overrides that survived validation. */
+export interface EvalModelOverrides {
+  chatModel?: string
+  rerankModel?: string
+}
+
+/**
+ * Model ids arrive from HTTP: keep them to an identifier-shaped string. `//`
+ * is rejected outright, so a scheme or endpoint path can never be smuggled in
+ * as a "model id" (an operator's allowlist stays the only way in).
+ */
+const MODEL_ID_PATTERN = /^(?!.*\/\/)[A-Za-z0-9._:/-]{1,120}$/
 
 export interface EvaluationServiceOptions {
   config: AppConfig
@@ -123,9 +144,25 @@ export interface EvaluationServiceOptions {
    * {@link createIsolatedEvalResources}; tests inject a fake to replace the
    * external ES/Neo4j/model boundary while exercising the whole lifecycle.
    */
-  createResources?: (taskId: string) => IsolatedEvalResources
+  createResources?: (
+    taskId: string,
+    overrides: EvalModelOverrides,
+    reranker?: Reranker
+  ) => IsolatedEvalResources
   /** Dedicated reranker (ticket 03). Default: none configured. */
   reranker?: Reranker
+  /**
+   * Ticket 11: the model ids a task may override. Empty (the default) means
+   * "no override" — the server's own configuration is the only choice, and any
+   * other id is refused before a scope, an index or a paid call exists.
+   */
+  allowedChatModels?: readonly string[]
+  allowedRerankModels?: readonly string[]
+  /**
+   * Builds a reranker for an allowed rerank-model override. Wired to the same
+   * dedicated adapter normal chat uses; absent → rerank overrides are refused.
+   */
+  createReranker?: (model: string) => Reranker | undefined
   now?: () => Date
   generateId?: () => string
   maxRetainedTasks?: number
@@ -156,6 +193,10 @@ interface TaskRecord {
   cases: EvalCaseResult[]
   cleanup: EvalCleanupReport | null
   error?: string
+  /** Ticket 11: validated per-task model overrides (snapshot input). */
+  modelOverrides: EvalModelOverrides
+  /** Ticket 11: the reranker this task actually runs with. */
+  reranker?: Reranker
   config: EvalTaskConfigSnapshot
 }
 
@@ -170,8 +211,15 @@ export class EvaluationService {
   private readonly caseConcurrency: number
   private readonly taskTimeoutMs: number
   private readonly caseTimeoutMs: number
-  private readonly createResources: (taskId: string) => IsolatedEvalResources
+  private readonly createResources: (
+    taskId: string,
+    overrides: EvalModelOverrides,
+    reranker?: Reranker
+  ) => IsolatedEvalResources
   private readonly reranker?: Reranker
+  private readonly allowedChatModels: readonly string[]
+  private readonly allowedRerankModels: readonly string[]
+  private readonly createReranker?: (model: string) => Reranker | undefined
 
   constructor(private readonly options: EvaluationServiceOptions) {
     this.now = options.now ?? (() => new Date())
@@ -187,21 +235,37 @@ export class EvaluationService {
     this.taskTimeoutMs = options.taskTimeoutMs ?? DEFAULT_TASK_TIMEOUT_MS
     this.caseTimeoutMs = options.caseTimeoutMs ?? DEFAULT_CASE_TIMEOUT_MS
     this.reranker = options.reranker
+    this.allowedChatModels = options.allowedChatModels ?? []
+    this.allowedRerankModels = options.allowedRerankModels ?? []
+    this.createReranker = options.createReranker
     this.createResources =
       options.createResources ??
-      ((taskId) =>
-        createIsolatedEvalResources({
+      ((
+        taskId: string,
+        overrides: EvalModelOverrides,
+        taskReranker?: Reranker
+      ) => {
+        // Ticket 11: a task's model override is applied to a COPY of the shared
+        // config — the singleton normal chat reads is never mutated, so a run
+        // with an override cannot change anyone else's behaviour.
+        const taskConfig = overrides.chatModel
+          ? { ...options.config, openaiChatModel: overrides.chatModel }
+          : options.config
+        return createIsolatedEvalResources({
           taskId,
-          config: options.config,
+          config: taskConfig,
           clients: options.clients,
-          ...(options.reranker ? { reranker: options.reranker } : {}),
-        }))
+          ...(taskReranker ? { reranker: taskReranker } : {}),
+        })
+      })
   }
 
   /** Built-in samples + non-sensitive default model information. */
   describeDatasets(): {
     datasets: ReturnType<typeof listBuiltinEvalDatasets>
     defaults: { chatModel: string; rerankModel: string | null; embeddingModel: string }
+    /** Ticket 11: ids a task may pick instead of the server default. */
+    allowedModels: { chat: string[]; rerank: string[] }
     maxCasesPerTask: number
   } {
     return {
@@ -210,6 +274,10 @@ export class EvaluationService {
         chatModel: this.options.config.openaiChatModel,
         rerankModel: this.reranker?.model ?? null,
         embeddingModel: this.options.config.embeddingModel,
+      },
+      allowedModels: {
+        chat: [...this.allowedChatModels],
+        rerank: [...this.allowedRerankModels],
       },
       maxCasesPerTask: this.maxCasesPerTask,
     }
@@ -221,6 +289,12 @@ export class EvaluationService {
    */
   createTask(input: CreateEvaluationTaskInput, owner: EvaluationOwner): EvalTaskSummary {
     const { dataset, datasetId } = this.resolveDataset(input)
+    // Ticket 11: validate the requested models BEFORE anything exists — an
+    // unlisted id never reaches a scope, an index or a paid provider call.
+    const modelOverrides = this.resolveModelOverrides(input)
+    const taskReranker = modelOverrides.rerankModel
+      ? this.createReranker?.(modelOverrides.rerankModel)
+      : this.reranker
     if (dataset.cases.length > this.maxCasesPerTask) {
       throw new EvaluationRequestError(
         `this dataset has ${dataset.cases.length} cases but one task runs at most ${this.maxCasesPerTask} (bounded concurrency of ${this.caseConcurrency}); split the dataset into several tasks`,
@@ -257,7 +331,11 @@ export class EvaluationService {
       total: dataset.cases.length,
       cases: [],
       cleanup: null,
-      config: this.configSnapshot(),
+      modelOverrides,
+      ...(taskReranker ? { reranker: taskReranker } : {}),
+      // Snapshot at start: later global config changes cannot re-interpret a
+      // task that already ran (ticket 11).
+      config: this.configSnapshot(modelOverrides, taskReranker),
     }
     this.tasks.set(record.id, record)
 
@@ -312,13 +390,72 @@ export class EvaluationService {
     )
   }
 
-  private configSnapshot(): EvalTaskConfigSnapshot {
+  private configSnapshot(
+    overrides: EvalModelOverrides,
+    reranker?: Reranker
+  ): EvalTaskConfigSnapshot {
     return {
-      chatModel: this.options.config.openaiChatModel,
-      rerankModel: this.reranker?.model ?? null,
+      chatModel: overrides.chatModel ?? this.options.config.openaiChatModel,
+      rerankModel: reranker?.model ?? null,
       embeddingModel: this.options.config.embeddingModel,
-      rerankSource: this.reranker ? "dedicated_rerank" : "not_configured",
+      rerankSource: reranker ? "dedicated_rerank" : "not_configured",
     }
+  }
+
+  /**
+   * Ticket 11: turn the request's model ids into a validated plan. Only ids
+   * this server allows (or the server's own default) survive; a rejected id
+   * names the offending field so the page can point at it. Nothing else from
+   * the request — no URL, key or provider setting — is ever read, so a task
+   * can never make the service proxy another endpoint.
+   */
+  private resolveModelOverrides(input: CreateEvaluationTaskInput): EvalModelOverrides {
+    const chatModel = this.resolveModelId(
+      input.chatModel,
+      "chatModel",
+      this.allowedChatModels
+    )
+    const rerankModel = this.resolveModelId(
+      input.rerankModel,
+      "rerankModel",
+      this.allowedRerankModels
+    )
+    if (rerankModel && !this.createReranker) {
+      throw new EvaluationRequestError(
+        "rerank model overrides are not enabled on this server",
+        ["rerankModel"]
+      )
+    }
+    return { ...(chatModel ? { chatModel } : {}), ...(rerankModel ? { rerankModel } : {}) }
+  }
+
+  private resolveModelId(
+    raw: unknown,
+    field: "chatModel" | "rerankModel",
+    allowed: readonly string[]
+  ): string | undefined {
+    // An absent/empty value means "use the server's configuration".
+    if (raw === undefined || raw === null || raw === "") return undefined
+    if (typeof raw !== "string") {
+      throw new EvaluationRequestError(`${field} must be a model id string`, [field])
+    }
+    const value = raw.trim()
+    if (!MODEL_ID_PATTERN.test(value)) {
+      throw new EvaluationRequestError(
+        `${field} must be a plain model id (letters, digits, . _ : / -); base URLs and keys are not accepted`,
+        [field]
+      )
+    }
+    const baseline =
+      field === "chatModel" ? this.options.config.openaiChatModel : this.reranker?.model
+    if (value === baseline) return value
+    if (!allowed.includes(value)) {
+      throw new EvaluationRequestError(
+        `${field} "${value}" is not in this server's allowed list`,
+        [field]
+      )
+    }
+    return value
   }
 
   private resolveDataset(input: CreateEvaluationTaskInput): {
@@ -368,7 +505,11 @@ export class EvaluationService {
     let resourcesDisposed = false
 
     try {
-      resources = this.createResources(record.id)
+      resources = this.createResources(
+        record.id,
+        record.modelOverrides,
+        record.reranker
+      )
       try {
         await resources.prepare(
           record.dataset.corpus.map<EvalCorpusPassage>((passage) => ({
