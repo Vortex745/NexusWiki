@@ -175,6 +175,16 @@ test("the evaluation dialog submits a task and polls it through the API", () => 
   assert.match(app, /<EvaluationDialog\b/, "the dialog is mounted in the app")
 })
 
+test("the evaluation dialog accepts an uploaded dataset and shows field-level issues", () => {
+  const dialog = read("frontend/src/components/panels/EvaluationDialog.tsx")
+  assert.match(dialog, /type="file"/, "the page can pick a .json file")
+  assert.match(dialog, /\{\s*dataset:/, "the upload path submits the inline dataset field")
+  assert.match(dialog, /EvaluationRequestError/, "a rejected dataset is distinguished from other failures")
+  assert.match(dialog, /error\.issues/, "the server's field/case-level issues are surfaced")
+  assert.match(dialog, /uploadIssues\.map/, "the issues are rendered for the user")
+  assert.ok(api.includes("EvaluationTaskInput"), "the client models both dataset sources explicitly")
+})
+
 // ---------------------------------------------------------------------------
 // Product surface kept across the migration
 // ---------------------------------------------------------------------------

@@ -3,6 +3,7 @@ import { useCallback, useEffect, useRef, useState } from "react"
 
 import {
   createEvaluationTask,
+  EvaluationRequestError,
   fetchEvaluationDatasets,
   fetchEvaluationTask,
   type EvaluationDatasetsPayload,
@@ -111,13 +112,28 @@ function CleanupLine({ detail }: { detail: EvaluationTaskDetail }) {
   )
 }
 
+/** Client-side JSON parse only — the server stays the authoritative validator. */
+function parseUpload(text: string): { ok: true; value: unknown } | { ok: false; error: string } {
+  const trimmed = text.trim()
+  if (!trimmed) return { ok: false, error: "请粘贴数据集 JSON 或选择一个 .json 文件" }
+  try {
+    return { ok: true, value: JSON.parse(trimmed) }
+  } catch (error) {
+    return { ok: false, error: `JSON 解析失败：${error instanceof Error ? error.message : String(error)}` }
+  }
+}
+
 export function EvaluationDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
   const dialogRef = useRef<HTMLDialogElement>(null)
   const pollTimer = useRef<number | null>(null)
 
   const [datasets, setDatasets] = useState<EvaluationDatasetsPayload | null>(null)
   const [loadError, setLoadError] = useState<string | null>(null)
+  const [mode, setMode] = useState<"builtin" | "upload">("builtin")
   const [selectedId, setSelectedId] = useState<string | null>(null)
+  const [uploadText, setUploadText] = useState("")
+  const [uploadFileName, setUploadFileName] = useState<string | null>(null)
+  const [uploadIssues, setUploadIssues] = useState<string[]>([])
   const [submitting, setSubmitting] = useState(false)
   const [task, setTask] = useState<EvaluationTaskDetail | null>(null)
   const [taskMissing, setTaskMissing] = useState(false)
@@ -182,12 +198,24 @@ export function EvaluationDialog({ open, onClose }: { open: boolean; onClose: ()
   )
 
   const handleRun = async () => {
-    if (!selectedId || submitting) return
+    if (submitting) return
+    const upload = mode === "upload" ? parseUpload(uploadText) : null
+    if (mode === "builtin" && !selectedId) return
+    if (upload && !upload.ok) {
+      setUploadIssues([upload.error])
+      return
+    }
     setSubmitting(true)
     setTask(null)
     setTaskMissing(false)
+    setUploadIssues([])
+    setLoadError(null)
     try {
-      const summary = await createEvaluationTask(selectedId)
+      // 服务端校验是权威：非法数据集在这里被逐字段/逐题拒绝，不会产生任何
+      // 模型或索引调用（票 05）。
+      const summary = await createEvaluationTask(
+        mode === "upload" ? { dataset: upload && upload.ok ? upload.value : null } : { datasetId: selectedId as string },
+      )
       // 先展示 202 返回的初始状态，再进入轮询。
       setTask({
         ...summary,
@@ -198,6 +226,9 @@ export function EvaluationDialog({ open, onClose }: { open: boolean; onClose: ()
       })
       startPolling(summary.id)
     } catch (error) {
+      if (error instanceof EvaluationRequestError) {
+        setUploadIssues(error.issues.length > 0 ? error.issues : [error.message])
+      }
       const message = error instanceof Error ? error.message : String(error)
       setLoadError(`提交失败：${message}`)
     } finally {
@@ -205,9 +236,19 @@ export function EvaluationDialog({ open, onClose }: { open: boolean; onClose: ()
     }
   }
 
+  const handleUploadFile = async (file: File | undefined) => {
+    if (!file) return
+    setUploadFileName(file.name)
+    setUploadIssues([])
+    setUploadText(await file.text())
+  }
+
   const selected = datasets?.datasets.find((item) => item.id === selectedId) ?? null
   const cases = task?.cases ?? []
   const aggregatePrecision = task?.metrics.metrics.precision ?? null
+  const running = task !== null && !TERMINAL_STAGES.has(task.stage)
+  const canRun =
+    mode === "builtin" ? Boolean(selectedId) : uploadText.trim().length > 0
 
   return (
     <dialog
@@ -238,7 +279,69 @@ export function EvaluationDialog({ open, onClose }: { open: boolean; onClose: ()
       </div>
 
       <section className="flex min-h-0 flex-1 flex-col overflow-y-auto px-5 py-5 max-md:px-4">
-        {/* 内置样例选择 */}
+        {/* 数据来源：内置样例，或用户上传的 JSON（票 05） */}
+        <div className="mb-4 flex flex-none items-center gap-1 rounded-lg bg-surface-subtle/60 p-1">
+          {([
+            ["builtin", "内置样例"],
+            ["upload", "上传 JSON"],
+          ] as Array<["builtin" | "upload", string]>).map(([value, label]) => (
+            <button
+              key={value}
+              type="button"
+              onClick={() => {
+                setMode(value)
+                setUploadIssues([])
+                setLoadError(null)
+              }}
+              disabled={running}
+              className={cn(
+                "flex-1 cursor-pointer rounded-md px-3 py-1.5 text-xs font-medium transition-colors disabled:cursor-not-allowed",
+                mode === value ? "bg-surface text-ink shadow-sm" : "text-muted/70 hover:text-ink",
+              )}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+
+        {mode === "upload" ? (
+          <div className="flex flex-col gap-2">
+            <h3 className="text-xs font-semibold text-ink">上传数据集 JSON</h3>
+            <input
+              type="file"
+              accept="application/json,.json"
+              aria-label="选择数据集 JSON 文件"
+              onChange={(event) => void handleUploadFile(event.target.files?.[0])}
+              className="cursor-pointer text-[11px] text-muted/70 file:mr-2 file:cursor-pointer file:rounded-md file:border file:border-line file:bg-surface-subtle file:px-2.5 file:py-1 file:text-[11px] file:text-ink"
+            />
+            <textarea
+              value={uploadText}
+              onChange={(event) => {
+                setUploadText(event.target.value)
+                setUploadIssues([])
+                setUploadFileName(null)
+              }}
+              spellCheck={false}
+              rows={8}
+              placeholder='{"schemaVersion":1,"name":"我的数据集","version":"1.0.0","corpus":[{"passageId":"p1","content":"…"}],"cases":[{"caseId":"c1","question":"…","referenceAnswer":"…","relevantPassageIds":["p1"]}]}'
+              className="w-full resize-y rounded-lg border border-line bg-surface px-3 py-2 font-mono text-[11px] leading-relaxed text-ink outline-none focus:border-brand"
+            />
+            {uploadFileName ? (
+              <p className="text-[11px] text-muted/50">已读取文件：{uploadFileName}</p>
+            ) : null}
+            {uploadIssues.length > 0 ? (
+              <ul className="list-disc space-y-1 rounded-lg border border-red-200 bg-red-50 px-4 py-2.5 text-[11px] text-red-700 dark:border-red-900 dark:bg-red-950/40 dark:text-red-400">
+                {uploadIssues.map((issue) => (
+                  <li key={issue}>{issue}</li>
+                ))}
+              </ul>
+            ) : null}
+            <p className="text-[11px] text-muted/50">
+              corpus 需带稳定 passageId（干扰段落也要入库），cases 引用这些 id 并给出参考答案；服务端逐字段校验，
+              非法数据在付费调用前被拒绝。本版本每条任务只运行一题（多题批量见后续票）。
+            </p>
+          </div>
+        ) : (
         <div className="flex flex-col gap-2">
           <h3 className="text-xs font-semibold text-ink">内置样例</h3>
           {loadError ? <p className="text-xs text-red-600">{loadError}</p> : null}
@@ -282,18 +385,15 @@ export function EvaluationDialog({ open, onClose }: { open: boolean; onClose: ()
             </p>
           ) : null}
         </div>
+        )}
 
         <button
           type="button"
-          disabled={!selectedId || submitting || (task !== null && !TERMINAL_STAGES.has(task.stage))}
+          disabled={!canRun || submitting || running}
           onClick={() => void handleRun()}
           className="mt-4 inline-flex h-9 w-full flex-none cursor-pointer items-center justify-center gap-2 rounded-lg bg-neutral-900 px-4 text-xs font-medium text-white shadow-sm transition-all hover:bg-neutral-800 active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-50 disabled:active:scale-100 dark:bg-neutral-200 dark:text-neutral-900 dark:hover:bg-white"
         >
-          {task !== null && !TERMINAL_STAGES.has(task.stage)
-            ? "评测进行中…"
-            : submitting
-              ? "提交中…"
-              : "运行评测"}
+          {running ? "评测进行中…" : submitting ? "提交中…" : mode === "upload" ? "运行上传数据集" : "运行评测"}
         </button>
 
         {/* 任务进度与结果 */}

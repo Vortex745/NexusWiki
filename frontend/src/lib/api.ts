@@ -146,15 +146,30 @@ export async function fetchEvaluationDatasets(): Promise<EvaluationDatasetsPaylo
   return (await response.json()) as EvaluationDatasetsPayload
 }
 
-export async function createEvaluationTask(datasetId: string): Promise<EvaluationTaskSummary> {
+/** Built-in sample id or an inline dataset payload — exactly one of the two. */
+export type EvaluationTaskInput = { datasetId: string } | { dataset: unknown }
+
+/**
+ * Rejected request (400/429). `issues` carries the server's per-field/per-case
+ * messages so the page can point at the offending entry (ticket 05).
+ */
+export class EvaluationRequestError extends Error {
+  constructor(message: string, readonly issues: string[] = []) {
+    super(message)
+    this.name = "EvaluationRequestError"
+  }
+}
+
+export async function createEvaluationTask(input: EvaluationTaskInput): Promise<EvaluationTaskSummary> {
   const response = await fetch(`${API_BASE}/evaluations`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ datasetId }),
+    body: JSON.stringify(input),
   })
   if (!response.ok) {
-    const body = (await response.json().catch(() => ({}))) as { error?: string }
-    throw new Error(body.error || `评测任务提交失败 (${response.status})`)
+    const body = (await response.json().catch(() => ({}))) as { error?: string; issues?: unknown }
+    const issues = Array.isArray(body.issues) ? body.issues.map((issue) => String(issue)) : []
+    throw new EvaluationRequestError(body.error || `评测任务提交失败 (${response.status})`, issues)
   }
   return (await response.json()) as EvaluationTaskSummary
 }

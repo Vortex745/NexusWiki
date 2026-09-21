@@ -68,6 +68,12 @@ interface FakeScopeOptions {
   disposeReport?: EvalDisposeReport
   noObservation?: boolean
   caseThrows?: string
+  /**
+   * Ranking the fake answering path publishes. Defaults to {@link FAKE_RANKING}
+   * (the built-in sample's corpus); a custom dataset supplies its own so the
+   * corpus → passageId mapping can be exercised for arbitrary ids (ticket 05).
+   */
+  ranking?: readonly { passageId: string; relevant: boolean }[]
 }
 
 class FakeScope implements IsolatedEvalResources {
@@ -141,9 +147,10 @@ class FakeScope implements IsolatedEvalResources {
         })
         return (async function* (): AsyncIterable<AnswerRunEvent> {
           if (options.caseThrows) throw new Error(options.caseThrows)
+          const ranking = options.ranking ?? FAKE_RANKING
           const candidates: RankedCandidateObservation[] = options.noObservation
             ? []
-            : FAKE_RANKING.map((entry, index) => ({
+            : ranking.map((entry, index) => ({
                 rank: index + 1,
                 documentId: `doc-${entry.passageId}`,
                 chunkId: `chunk-${index}`,
@@ -651,5 +658,156 @@ test("single-tenant requests without a mounted middleware still work", async () 
     assert.deepEqual(singleTenantAccessContext().scopes, ALL_SCOPES)
   } finally {
     await new Promise<void>((resolve) => server.close(() => resolve()))
+  }
+})
+
+// ---------------------------------------------------------------------------
+// Ticket 05 — custom JSON datasets
+// ---------------------------------------------------------------------------
+
+/** A minimal valid single-case dataset; passageIds are deliberately unfriendly. */
+function inlineDataset(content = "退款在审核通过后 3 个工作日内按原支付路径返还。") {
+  return {
+    schemaVersion: 1,
+    name: "自定义单题",
+    version: "1.0.0",
+    corpus: [
+      { passageId: "段落/一 #1", title: "退款到账", content },
+      { passageId: "干扰/配送 #2", content: "标准配送需要 2 至 4 个工作日。" },
+    ],
+    cases: [
+      {
+        caseId: "custom-1",
+        question: "退款一般需要多久才能到账？",
+        referenceAnswer: "审核通过后 3 个工作日内按原支付路径返还。",
+        relevantPassageIds: ["段落/一 #1"],
+      },
+    ],
+  }
+}
+
+test("an uploaded dataset runs end to end: arbitrary passageId, distractor ingested, digest identifies the content", async () => {
+  const harness = await buildHarness({
+    ranking: [
+      { passageId: "段落/一 #1", relevant: true },
+      { passageId: "干扰/配送 #2", relevant: false },
+    ],
+  })
+  try {
+    const created = await createTask(harness.port, { dataset: inlineDataset() })
+    assert.equal(created.status, 202)
+    const detail = await pollTerminal(harness.port, created.body.id as string)
+
+    assert.equal(detail.stage, "completed")
+    const cases = detail.cases as Array<Record<string, unknown>>
+    assert.equal(cases[0].outcome, "answered")
+    assert.deepEqual(
+      cases[0].retrievedPassageIds,
+      ["段落/一 #1", "干扰/配送 #2"],
+      "an arbitrary passageId maps back to the corpus"
+    )
+    assert.equal(cases[0].unmappedCandidates, 0, "both candidates belong to this dataset's corpus")
+    assert.equal(
+      (cases[0].metrics as Record<string, number>).precision,
+      0.5,
+      "the distractor stays in the ranking (no filtering that would inflate the score)"
+    )
+    assert.equal(harness.scopes[0].corpus.length, 2, "the distractor passage is ingested too")
+
+    // Same name/version, different content → a different digest (ticket 05).
+    const other = await createTask(harness.port, {
+      dataset: inlineDataset("退款到账时间以审核完成为准，一般为 5 个工作日。"),
+    })
+    assert.equal(other.status, 202)
+    const otherDetail = await pollTerminal(harness.port, other.body.id as string)
+    const firstRef = detail.dataset as Record<string, unknown>
+    const secondRef = otherDetail.dataset as Record<string, unknown>
+    assert.equal(secondRef.version, firstRef.version)
+    assert.notEqual(
+      secondRef.contentDigest,
+      firstRef.contentDigest,
+      "same version with different content must be distinguishable by digest"
+    )
+  } finally {
+    await harness.close()
+  }
+})
+
+test("uploaded datasets are rejected per field before any scope or model call", async () => {
+  const base = inlineDataset()
+  const cases: Array<[string, unknown, RegExp]> = [
+    [
+      "duplicate passageId",
+      { ...base, corpus: [base.corpus[0], { ...base.corpus[1], passageId: "段落/一 #1" }] },
+      /duplicates an earlier id/,
+    ],
+    [
+      "unknown passage reference",
+      { ...base, cases: [{ ...base.cases[0], relevantPassageIds: ["不存在"] }] },
+      /references unknown passageId/,
+    ],
+    ["empty corpus", { ...base, corpus: [] }, /corpus must be a non-empty array/],
+    [
+      "empty question",
+      { ...base, cases: [{ ...base.cases[0], question: "   " }] },
+      /question must be a non-empty string/,
+    ],
+    ["illegal version", { ...base, version: "" }, /version must be a non-empty string/],
+    [
+      "oversized corpus",
+      {
+        ...base,
+        corpus: Array.from({ length: 201 }, (_, index) => ({ passageId: `p${index}`, content: "x" })),
+        cases: [{ ...base.cases[0], relevantPassageIds: ["p0"] }],
+      },
+      /at most 200 passages/,
+    ],
+  ]
+
+  const harness = await buildHarness()
+  try {
+    for (const [label, dataset, pattern] of cases) {
+      const rejected = await createTask(harness.port, { dataset })
+      assert.equal(rejected.status, 400, `${label} must be rejected`)
+      const issues = Array.isArray(rejected.body.issues) ? (rejected.body.issues as string[]) : []
+      assert.ok(issues.length > 0, `${label} must report field/case-level issues`)
+      assert.match(issues.join("; "), pattern, `${label}: issue must name the offending field`)
+    }
+    assert.equal(harness.scopes.length, 0, "no scope was created for any invalid dataset")
+    const listed = await api(harness.port, "/api/evaluations")
+    assert.deepEqual(listed.body.tasks, [], "no task was registered for any invalid dataset")
+  } finally {
+    await harness.close()
+  }
+})
+
+test("a request cannot make the server read an arbitrary path", async () => {
+  const harness = await buildHarness()
+  try {
+    const pathOnly = await createTask(harness.port, { datasetPath: "C:/Windows/win.ini" })
+    assert.equal(pathOnly.status, 400, "a path-like field is not a dataset source")
+    assert.match(String(pathOnly.body.error), /datasetId \(built-in sample\) or dataset/)
+
+    const traversal = await createTask(harness.port, { datasetId: "../../etc/passwd" })
+    assert.equal(traversal.status, 400, "built-in ids are matched against the in-code samples only")
+    assert.match(String(traversal.body.error), /unknown built-in dataset id/)
+
+    // Extra fields are ignored: the documented field decides, and it is the
+    // in-code sample — never a file on disk.
+    const withExtra = await createTask(harness.port, {
+      datasetId: "refund-single-case",
+      datasetPath: "C:/Windows/win.ini",
+    })
+    assert.equal(withExtra.status, 202)
+    const detail = await pollTerminal(harness.port, withExtra.body.id as string)
+    assert.equal(detail.stage, "completed")
+    assert.equal(harness.scopes.length, 1)
+    assert.deepEqual(
+      harness.scopes[0].corpus.map((passage) => passage.passageId),
+      ["refund-policy", "shipping-policy", "warranty-policy", "invoice-policy"],
+      "the built-in corpus was ingested, not a file"
+    )
+  } finally {
+    await harness.close()
   }
 })
