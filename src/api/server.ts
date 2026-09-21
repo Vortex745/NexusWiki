@@ -25,12 +25,20 @@ import { RetirementServiceImpl } from "../knowledge/retirement"
 import { createSourceGovernanceRouter } from "./source_governance"
 import { createObservabilityRouter } from "./observability"
 import { createStatusRouter } from "./status"
+import { createEvaluationsRouter } from "./evaluations"
+import { EvaluationService } from "../evaluation/service"
+import { createDedicatedReranker } from "../retrieval/search/dedicated_reranker"
 
 export function createApp(options: {
   db?: DB
   imageAssetPath?: string
   ragasArtifactPath?: string
   accessMiddleware?: RequestHandler
+  /**
+   * Eval refactor Ticket 04: in-process evaluation service. Mounted only when
+   * provided (tests exercising unrelated routes do not need it).
+   */
+  evaluationService?: EvaluationService
   /**
    * P5.2: Ingestion access middleware. Mounted on /api/ingest routes so the
    * same identity context enforced at the chat gate is also enforced before
@@ -109,6 +117,13 @@ export function createApp(options: {
   if (options.managementAccessMiddleware) {
     app.use("/api/handoffs", options.managementAccessMiddleware)
     app.use("/api/sources", options.managementAccessMiddleware)
+    // Ticket 04: evaluation tasks are identity-scoped like every other
+    // management surface; the handler keeps its own admin check.
+    app.use("/api/evaluations", options.managementAccessMiddleware)
+    app.use("/api/evaluation-datasets", options.managementAccessMiddleware)
+  }
+  if (options.evaluationService) {
+    app.use("/api", createEvaluationsRouter(options.evaluationService))
   }
   // Ticket 09 P5: mount the Handoff HTTP API (spec §8 L1549-1552).
   // POST /chat/runs/:runId/handoff is covered by the /api/chat access middleware
@@ -212,6 +227,26 @@ export async function startServer(
         })
       : undefined
   const sessionBinder = new SqliteSessionBinder(processRuntime.db)
+  // Ticket 04: the evaluation service shares the production clients but owns
+  // its per-task isolated scopes, in-memory task registry, and the dedicated
+  // reranker built from RERANK_* config (the same adapter normal chat uses).
+  const reranker = createDedicatedReranker({
+    baseUrl: config.rerankBaseUrl,
+    apiKey: config.rerankApiKey,
+    model: config.rerankModel,
+    timeoutMs: config.rerankTimeoutMs,
+    maxDocumentChars: config.rerankMaxDocumentChars,
+  })
+  const evaluationService = new EvaluationService({
+    config,
+    clients: {
+      es: processRuntime.elasticsearch,
+      chatClient: processRuntime.chatClient,
+      embeddingClient: processRuntime.embeddingClient,
+      graphDriver: processRuntime.neo4jDriver,
+    },
+    ...(reranker ? { reranker } : {}),
+  })
   const app = createApp({
     db: processRuntime.db,
     imageAssetPath: config.imageAssetPath,
@@ -222,6 +257,7 @@ export async function startServer(
     eventsSource,
     processRuntime,
     config,
+    evaluationService,
   })
   const server = await new Promise<Server>((resolve) => {
     const s = app.listen(port, () => {
