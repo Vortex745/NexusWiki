@@ -78,7 +78,7 @@ const ARTIFACT_SOURCE_PATH = join(here, "artifact.ts")
 
 /**
  * Build a non-regressing BaselineComparison for buildArtifact inputs.
- * Used by T17 #5/#6 tests that verify artifact shape, not baseline semantics.
+ * Used by the T17 #6 test that verifies artifact shape, not baseline semantics.
  */
 function makeBaseline(): BaselineComparison {
   return {

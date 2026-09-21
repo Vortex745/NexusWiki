@@ -491,7 +491,7 @@ export function defaultLocalGates(options: { cwd: string }): GateDefinition[] {
     makeSubprocessGate(
       "frontend_build",
       "npm",
-      ["run", "build:web"],
+      ["run", "build:frontend"],
       BUILD_TIMEOUT_MS,
       cwd,
       true,
@@ -526,7 +526,7 @@ export function defaultProductionGates(options: {
     makeSubprocessGate(
       "frontend_build",
       "npm",
-      ["run", "build:web"],
+      ["run", "build:frontend"],
       BUILD_TIMEOUT_MS,
       cwd,
       true,
