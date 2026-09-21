@@ -35,7 +35,7 @@
 
 import type { Client } from "@elastic/elasticsearch"
 import type OpenAI from "openai"
-import type { Driver } from "neo4j-driver"
+import type { Driver, Session } from "neo4j-driver"
 import type { AppConfig } from "../config"
 import type { AccessContext } from "../access/context"
 import { ALL_LOCAL_SCOPES } from "../access/context"
@@ -196,8 +196,15 @@ export interface IsolatedEvalResources {
 // Scope identity derivation
 // ---------------------------------------------------------------------------
 
-const TENANT_PREFIX = "eval-"
-const ES_INDEX_PREFIX = "kefu-rag-chunks-eval-"
+/**
+ * Scope naming. Exported (ticket 14) so the crash-residue sweep derives and
+ * validates the SAME names instead of inventing its own pattern — one source
+ * for "what an eval scope is called".
+ */
+export const EVAL_TENANT_PREFIX = "eval-"
+export const EVAL_ES_INDEX_PREFIX = "kefu-rag-chunks-eval-"
+/** A scope name is `eval-<sanitized task id>`: lowercase alphanumerics, 8..32. */
+export const EVAL_SCOPE_PATTERN = /^eval-[a-z0-9]{8,32}$/
 const SANITIZED_LENGTH = 32
 const MIN_TASK_ID_LENGTH = 8
 
@@ -287,6 +294,68 @@ const GRAPH_DELETE_RELATION = `
   DELETE r
 `.trim()
 
+/**
+ * Ticket 14: strip ONE tenant's provenance contributions from every relation
+ * that carries them. This is the exact rule a scope's own dispose applies, kept
+ * as one implementation so the crash-residue sweep cannot drift from it: a
+ * relation survives while any other contributor remains (its weight is restored
+ * to the max of the survivors, matching the writer's max-merge), a relation
+ * nobody else references is deleted, and entity nodes are never touched.
+ * Idempotent — a second pass finds nothing of this tenant left.
+ */
+export async function stripProvenanceForTenant(
+  session: Session,
+  tenantId: string
+): Promise<void> {
+  const needle = provenanceTenantNeedle(tenantId)
+  const selected = await session.run(GRAPH_SELECT_OWNED_RELATIONS, { needle })
+  for (const record of selected.records) {
+    const rid = record.get("rid")
+    const entries = parseProvenance(record.get("provenance"))
+    const remaining = entries.filter((entry) => entry.tenant !== tenantId)
+    // Needle over-match (or a concurrent cleanup): nothing of ours here.
+    if (remaining.length === entries.length) continue
+    if (remaining.length === 0) {
+      await session.run(GRAPH_DELETE_RELATION, { rid })
+      continue
+    }
+    const remainingRaw = remaining.map((entry) => entry.raw)
+    const weights = remaining.map((entry) => entry.weight)
+    if (weights.every((weight): weight is number => weight !== null)) {
+      await session.run(GRAPH_UPDATE_RELATION_PROVENANCE_AND_WEIGHT, {
+        rid,
+        remaining: remainingRaw,
+        maxWeight: Math.max(...weights),
+      })
+    } else {
+      // Legacy/malformed survivor without a weight element: keep the relation
+      // weight as-is rather than guessing it downward.
+      await session.run(GRAPH_UPDATE_RELATION_PROVENANCE, {
+        rid,
+        remaining: remainingRaw,
+      })
+    }
+  }
+}
+
+/**
+ * Ticket 14: every scope tenant (`eval-…`) that still owns provenance in the
+ * graph — what a crash left behind. The needle only narrows the scan; the
+ * decision is the parsed per-entry comparison, so an over-match is harmless.
+ */
+export async function findEvalTenants(session: Session): Promise<string[]> {
+  const selected = await session.run(GRAPH_SELECT_OWNED_RELATIONS, {
+    needle: `","${EVAL_TENANT_PREFIX}`,
+  })
+  const tenants = new Set<string>()
+  for (const record of selected.records) {
+    for (const entry of parseProvenance(record.get("provenance"))) {
+      if (entry.tenant?.startsWith(EVAL_TENANT_PREFIX)) tenants.add(entry.tenant)
+    }
+  }
+  return [...tenants].sort()
+}
+
 /** Exact JSON-element form of a tenant inside a provenance entry. */
 function provenanceTenantNeedle(tenantId: string): string {
   // Provenance entries are JSON arrays — the tenant element is always
@@ -346,9 +415,9 @@ export function createIsolatedEvalResources(
 ): IsolatedEvalResources {
   const { taskId, config, clients } = options
   const sanitized = sanitizeTaskId(taskId)
-  const tenantId = TENANT_PREFIX + sanitized
+  const tenantId = EVAL_TENANT_PREFIX + sanitized
   const namespace = tenantId
-  const esIndex = ES_INDEX_PREFIX + sanitized
+  const esIndex = EVAL_ES_INDEX_PREFIX + sanitized
 
   const now = options.now ?? (() => new Date())
   const readinessTimeoutMs =
@@ -439,37 +508,8 @@ export function createIsolatedEvalResources(
     if (!scopeOwnsResources) return { outcome: "skipped" }
     const session = clients.graphDriver.session()
     try {
-      const needle = provenanceTenantNeedle(tenantId)
-      const selected = await session.run(GRAPH_SELECT_OWNED_RELATIONS, { needle })
-      for (const record of selected.records) {
-        const rid = record.get("rid")
-        const entries = parseProvenance(record.get("provenance"))
-        const remaining = entries.filter((entry) => entry.tenant !== tenantId)
-        // Needle over-match (or a concurrent cleanup): nothing of ours here.
-        if (remaining.length === entries.length) continue
-        if (remaining.length === 0) {
-          await session.run(GRAPH_DELETE_RELATION, { rid })
-          continue
-        }
-        const remainingRaw = remaining.map((entry) => entry.raw)
-        const weights = remaining.map((entry) => entry.weight)
-        if (weights.every((weight): weight is number => weight !== null)) {
-          // Every survivor carries its own weight → restore the relation to
-          // the max of the survivors (the writer's max-merge semantics).
-          await session.run(GRAPH_UPDATE_RELATION_PROVENANCE_AND_WEIGHT, {
-            rid,
-            remaining: remainingRaw,
-            maxWeight: Math.max(...weights),
-          })
-        } else {
-          // Legacy/malformed survivor without a weight element: keep the
-          // relation weight as-is rather than guessing it downward.
-          await session.run(GRAPH_UPDATE_RELATION_PROVENANCE, {
-            rid,
-            remaining: remainingRaw,
-          })
-        }
-      }
+      // Shared with the crash-residue sweep (ticket 14) — one strip rule.
+      await stripProvenanceForTenant(session, tenantId)
       return { outcome: "cleaned" }
     } catch (error) {
       return {

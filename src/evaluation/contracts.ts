@@ -30,6 +30,18 @@ export const EVAL_TASK_TERMINAL_STAGES: readonly EvalTaskStage[] = [
 
 export type EvalCleanupReport = EvalDisposeReport
 
+/**
+ * Ticket 14: cleanup is incomplete when a release step failed, i.e. the scope
+ * may still own an index or graph provenance. `skipped` is NOT a failure — it
+ * means this scope never created resources, so there was nothing of its own to
+ * release. Kept here so the service, the residue tool and the page agree on
+ * what "not fully released" means.
+ */
+export function cleanupIncomplete(report: EvalCleanupReport | null): boolean {
+  if (!report) return false
+  return report.esIndex === "failed" || report.graphProvenance === "failed"
+}
+
 /** One ranked candidate of the FINAL generation round, joined to the corpus. */
 export interface EvalRankedCandidate {
   /** 1-based position in the final ordered candidate list (the scoring input). */

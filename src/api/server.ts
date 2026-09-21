@@ -194,6 +194,8 @@ export async function startServer(
 ): Promise<{
   server: Server
   processRuntime: ProcessRuntime
+  /** Ticket 14: exposed so the shutdown controller can release eval scopes. */
+  evaluationService: EvaluationService
 }> {
   const config = loadConfig()
   const processRuntime = createProcessRuntime(config)
@@ -277,5 +279,5 @@ export async function startServer(
       resolve(s)
     })
   })
-  return { server, processRuntime }
+  return { server, processRuntime, evaluationService }
 }

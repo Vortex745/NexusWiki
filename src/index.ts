@@ -83,7 +83,7 @@ async function main() {
     modeReader: () => runtimeMode,
   })
 
-  const { server, processRuntime } = await startServer(
+  const { server, processRuntime, evaluationService } = await startServer(
     3001,
     mastraBoundary.eventsSource,
     identityAdapter
@@ -133,6 +133,28 @@ async function main() {
     // runtime.close). Shutdown order: runtime (ProcessRuntime's Neo4j) → driver
     // (graph singleton) → db. This is the single authoritative close path.
     driver: { close: closeDriver },
+    // Ticket 14: release evaluation scopes (dedicated index + graph
+    // provenance) before the shared ES/Neo4j clients close. Honest about
+    // leftovers: the log names what was released and whether the wait ran out,
+    // and points at the scoped residue tool for a hard kill.
+    evaluations: {
+      shutdown: async () => {
+        const report = await evaluationService.shutdown()
+        console.log(
+          `[shutdown] evaluation tasks cancelled: ${report.cancelledTaskIds.length}, cleanup budget exhausted: ${report.timedOut}`
+        )
+        for (const release of report.releases) {
+          console.log(
+            `[shutdown]   ${release.taskId} stage=${release.stage} cleanup=${JSON.stringify(release.cleanup)}`
+          )
+        }
+        if (report.timedOut) {
+          console.warn(
+            "[shutdown] evaluation cleanup did not finish in time — residue may remain; after restart run: npm run eval:residue -- --delete"
+          )
+        }
+      },
+    },
   })
   installSignalHandlers(shutdownController)
 }

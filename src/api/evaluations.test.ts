@@ -68,6 +68,8 @@ const FAKE_REPLY = "退款在审核通过后 3 个工作日内回到原支付路
 interface FakeScopeOptions {
   prepareFails?: string
   disposeReport?: EvalDisposeReport
+  /** Ticket 14: make cleanup take time (or outlast a shutdown budget). */
+  disposeDelayMs?: number
   noObservation?: boolean
   caseThrows?: string
   /**
@@ -229,6 +231,11 @@ class FakeScope implements IsolatedEvalResources {
 
   async dispose(): Promise<EvalDisposeReport> {
     this.disposeCalls += 1
+    if (this.options.disposeDelayMs) {
+      await new Promise((resolve) =>
+        setTimeout(resolve, this.options.disposeDelayMs)
+      )
+    }
     this.state = "disposed"
     return (
       this.options.disposeReport ?? {
@@ -311,6 +318,8 @@ interface Harness {
   port: number
   close: () => Promise<void>
   scopes: FakeScope[]
+  /** Ticket 14: the live service, for shutdown tests. */
+  service: EvaluationService
   rebuild: (options?: { maxCasesPerTask?: number; maxRetainedTasks?: number }) => Promise<void>
 }
 
@@ -352,6 +361,8 @@ async function buildHarness(
 ): Promise<Harness> {
   const scopes: FakeScope[] = []
   let server: import("node:http").Server | undefined
+  // Ticket 14: the live service instance, so a test can drive its shutdown.
+  let active: EvaluationService | undefined
   const start = async () => {
     const service = new EvaluationService({
       config: CONFIG,
@@ -368,6 +379,7 @@ async function buildHarness(
       now: () => new Date(),
       ...serviceOptions,
     })
+    active = service
     const app = express()
     app.use(express.json())
     app.use(identityMiddleware)
@@ -385,6 +397,9 @@ async function buildHarness(
   return {
     get port() {
       return (server!.address() as AddressInfo).port
+    },
+    get service() {
+      return active!
     },
     scopes,
     rebuild: async (options) => {
@@ -532,7 +547,9 @@ test("a cleanup failure is reported separately from a successful run", async () 
     const created = await createTask(harness.port, { datasetId: "refund-single-case" })
     const detail = await pollTerminal(harness.port, created.body.id as string)
 
-    assert.equal(detail.stage, "completed", "the run itself succeeded")
+    // Ticket 14: the run's cases all succeeded, but the scope was not fully
+    // released, so the task is NOT reported as an unqualified success.
+    assert.equal(detail.stage, "completed_with_errors", "the leftovers are visible")
     assert.deepEqual(detail.cleanup, {
       esIndex: "failed",
       esError: "es unreachable",
@@ -1356,6 +1373,145 @@ test("an honest refusal keeps its terminal status and reply instead of looking l
     assert.equal(cases[0].error, undefined, "no provider error is invented for a refusal")
     assert.deepEqual(cases[0].ordering, { source: "dedicated_rerank" })
     assert.equal((cases[0].metrics as Record<string, number>).precision, 1)
+  } finally {
+    await harness.close()
+  }
+})
+
+// ---------------------------------------------------------------------------
+// Ticket 14 — cleanup honesty, graceful stop, scoped residue
+// ---------------------------------------------------------------------------
+
+/** Wait for a condition the task reaches asynchronously (bounded). */
+async function waitUntil(predicate: () => boolean, timeoutMs = 2_000): Promise<void> {
+  const deadline = Date.now() + timeoutMs
+  while (!predicate()) {
+    if (Date.now() > deadline) throw new Error("condition was not met in time")
+    await new Promise((resolve) => setTimeout(resolve, 10))
+  }
+}
+
+test("a run that leaves resources behind is not reported as a clean success", async () => {
+  const harness = await buildHarness({
+    disposeReport: {
+      esIndex: "failed",
+      esError: "delete denied for https://elastic:sup3rsecret@es.test",
+      graphProvenance: "failed",
+      graphError: "session refused for neo4j://neo4j:sup3rsecret@bolt.test",
+      dbClosed: true,
+    },
+  })
+  try {
+    const created = await createTask(harness.port, { datasetId: "refund-single-case" })
+    const detail = await pollTerminal(harness.port, created.body.id as string)
+
+    assert.equal(
+      detail.stage,
+      "completed_with_errors",
+      "leftover resources must not read as an unqualified success"
+    )
+    const cleanup = detail.cleanup as Record<string, unknown>
+    assert.equal(cleanup.esIndex, "failed")
+    assert.equal(cleanup.graphProvenance, "failed")
+    assert.equal(
+      JSON.stringify(detail).includes("sup3rsecret"),
+      false,
+      "cleanup errors reach the page redacted"
+    )
+    assert.match(String(cleanup.esError), /\*\*\*@es\.test/)
+  } finally {
+    await harness.close()
+  }
+})
+
+test("a scope that never created resources is not a cleanup failure", async () => {
+  const harness = await buildHarness({
+    disposeReport: { esIndex: "skipped", graphProvenance: "skipped", dbClosed: true },
+  })
+  try {
+    const created = await createTask(harness.port, { datasetId: "refund-single-case" })
+    const detail = await pollTerminal(harness.port, created.body.id as string)
+
+    assert.equal(detail.stage, "completed", "skipped means nothing of ours existed")
+    assert.equal((detail.cleanup as Record<string, unknown>).esIndex, "skipped")
+  } finally {
+    await harness.close()
+  }
+})
+
+test("a run failure keeps its own reason and its cleanup failure stays separate", async () => {
+  const harness = await buildHarness(
+    {
+      delayByCaseMs: { "refund-eta": 2_000 },
+      disposeReport: {
+        esIndex: "failed",
+        esError: "index busy",
+        graphProvenance: "cleaned",
+        dbClosed: true,
+      },
+    },
+    { taskTimeoutMs: 80 }
+  )
+  try {
+    const created = await createTask(harness.port, { datasetId: "refund-single-case" })
+    const detail = await pollTerminal(harness.port, created.body.id as string)
+
+    assert.equal(detail.stage, "failed", "the run outcome is not upgraded by cleanup")
+    const cleanup = detail.cleanup as Record<string, unknown>
+    assert.equal(cleanup.esError, "index busy", "the cleanup failure is still reported")
+    const cases = detail.cases as Array<Record<string, unknown>>
+    assert.equal(cases[0].outcome, "failed", "the original failure is untouched")
+  } finally {
+    await harness.close()
+  }
+})
+
+test("shutdown refuses new tasks and releases the run in flight", async () => {
+  const harness = await buildHarness({ delayByCaseMs: { "refund-eta": 3_000 } })
+  try {
+    const created = await createTask(harness.port, { datasetId: "refund-single-case" })
+    await waitUntil(() => harness.scopes[0]?.preparedCaseOptions.length === 1)
+
+    const report = await harness.service.shutdown({ timeoutMs: 5_000 })
+
+    assert.deepEqual(report.cancelledTaskIds, [created.body.id])
+    assert.equal(report.timedOut, false, "the scope was released inside the budget")
+    assert.equal(harness.scopes[0].disposeCalls, 1, "the cancelled run cleaned up")
+    assert.equal(report.releases[0].cleanup?.esIndex, "deleted")
+
+    const detail = (
+      await api(harness.port, `/api/evaluations/${created.body.id as string}`)
+    ).body
+    assert.equal(detail.stage, "failed")
+    assert.match(
+      String(detail.error),
+      /shutdown/,
+      "a cancelled run says why it stopped instead of looking like a provider fault"
+    )
+
+    const refused = await createTask(harness.port, { datasetId: "refund-single-case" })
+    assert.equal(refused.status, 503, "no new task is accepted once shutdown began")
+    assert.match(String(refused.body.error), /shutting down/)
+  } finally {
+    await harness.close()
+  }
+})
+
+test("shutdown reports a timeout instead of hanging on a stuck cleanup", async () => {
+  const harness = await buildHarness({
+    delayByCaseMs: { "refund-eta": 3_000 },
+    disposeDelayMs: 600,
+  })
+  try {
+    const created = await createTask(harness.port, { datasetId: "refund-single-case" })
+    await waitUntil(() => harness.scopes[0]?.preparedCaseOptions.length === 1)
+
+    const started = Date.now()
+    const report = await harness.service.shutdown({ timeoutMs: 80 })
+
+    assert.equal(report.timedOut, true, "the budget ran out and the report says so")
+    assert.ok(Date.now() - started < 1_000, "shutdown returns promptly anyway")
+    assert.deepEqual(report.cancelledTaskIds, [created.body.id])
   } finally {
     await harness.close()
   }

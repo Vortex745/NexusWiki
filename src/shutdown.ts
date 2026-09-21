@@ -18,6 +18,13 @@ export interface ShutdownDeps {
   conversationGc?: { stop(): Promise<void> | void }
   /** HTTP server — close() stops accepting new connections and waits for active requests. */
   server?: Server
+  /**
+   * Eval refactor Ticket 14: in-process evaluation service. shutdown() refuses
+   * new tasks, cancels the runs still in flight and waits (bounded) for their
+   * scopes to be released. Runs after the server and before the runtime, so
+   * cleanup still has ES + Neo4j.
+   */
+  evaluations?: { shutdown(): Promise<unknown> }
   /** Answer runtime — close() closes the ES client (and any runtime-managed resources). */
   runtime?: { close(): Promise<void> }
   /** Neo4j driver — close() closes the driver and its connection pool. */
@@ -72,6 +79,12 @@ export function createShutdownController(deps: ShutdownDeps): ShutdownController
       await runStep("server.close", () =>
         new Promise<void>((resolve) => deps.server!.close(() => resolve()))
       )
+    }
+    // Ticket 14: release evaluation scopes AFTER the server stopped taking
+    // requests but BEFORE the shared ES/graph clients close below — a scope's
+    // cleanup deletes its own ES index and graph provenance through them.
+    if (deps.evaluations) {
+      await runStep("evaluations.shutdown", () => deps.evaluations!.shutdown())
     }
     if (deps.runtime) {
       await runStep("runtime.close", () => deps.runtime!.close())

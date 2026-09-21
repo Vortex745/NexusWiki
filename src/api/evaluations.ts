@@ -21,6 +21,7 @@ import { singleTenantAccessContext, type AccessContext } from "../access/context
 import {
   EvaluationCapacityError,
   EvaluationRequestError,
+  EvaluationShuttingDownError,
   type EvaluationService,
 } from "../evaluation/service"
 import { EvalDatasetValidationError } from "../evaluation/dataset"
@@ -75,6 +76,12 @@ export function createEvaluationsRouter(service: EvaluationService): Router {
       }
       if (error instanceof EvaluationCapacityError) {
         res.status(429).json({ error: error.message })
+        return
+      }
+      if (error instanceof EvaluationShuttingDownError) {
+        // Ticket 14: the process is stopping — retry against the restarted
+        // service instead of treating this as a bad request.
+        res.status(503).json({ error: error.message })
         return
       }
       throw error

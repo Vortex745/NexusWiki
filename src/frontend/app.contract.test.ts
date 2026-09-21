@@ -211,6 +211,31 @@ test("the evaluation dialog offers only allowed model ids and shows the redacted
   assert.ok(api.includes("allowedModels"), "the client reads the server allowlist")
 })
 
+test("the evaluation dialog separates cleanup failures from the run outcome", () => {
+  const dialog = read("frontend/src/components/panels/EvaluationDialog.tsx")
+  assert.match(
+    dialog,
+    /未完成（可能仍有残留）/,
+    "an incomplete cleanup is never shown as a clean success"
+  )
+  assert.match(
+    dialog,
+    /无残留（未创建专用资源）/,
+    "a scope that never created resources is not dressed up as a failure"
+  )
+  assert.match(
+    dialog,
+    /npm run eval:residue -- --delete/,
+    "the page points at the scoped residue tool"
+  )
+  assert.match(dialog, /cleanup\.dbClosed/, "the page reports the local temp db state")
+  assert.match(
+    dialog,
+    /运行失败与清理失败分开记录/,
+    "the copy states that the two failures stay independent"
+  )
+})
+
 test("the evaluation dialog lists this process's records and never shows a stale one", () => {
   const dialog = read("frontend/src/components/panels/EvaluationDialog.tsx")
   assert.match(dialog, /listEvaluationTasks\(/, "the retained records are read from the API")

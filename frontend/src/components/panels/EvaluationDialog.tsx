@@ -137,25 +137,52 @@ function StageBadge({ stage }: { stage: EvaluationTaskStage }) {
   )
 }
 
+/**
+ * 票 14：清理结果独立于运行结果呈现——有残留就不能读成"毫无问题的成功"，没有残留
+ * 也不该被说成失败（skipped＝本次从未创建专用资源）。错误文本由服务端脱敏。
+ */
 function CleanupLine({ detail }: { detail: EvaluationTaskDetail }) {
-  if (!detail.cleanup) return null
-  const { cleanup } = detail
-  const ok =
-    cleanup.esIndex !== "failed" &&
-    cleanup.graphProvenance !== "failed" &&
-    cleanup.esIndex !== "skipped"
+  const cleanup = detail.cleanup
+  if (!cleanup) return null
+  const incomplete =
+    cleanup.esIndex === "failed" || cleanup.graphProvenance === "failed"
+  const neverCreated = cleanup.esIndex === "skipped"
+  const label = incomplete
+    ? "未完成（可能仍有残留）"
+    : neverCreated
+      ? "无残留（未创建专用资源）"
+      : "已完成"
   return (
-    <p className="text-[11px] text-muted/70">
-      资源清理：
-      <span className={cn("font-medium", ok ? "text-green-700 dark:text-green-400" : "text-red-600")}>
-        {ok ? "已完成" : "失败"}
-      </span>
-      <span className="ml-2 font-mono">
-        索引 {cleanup.esIndex}
-        {cleanup.esError ? `（${cleanup.esError}）` : ""} · 图谱 {cleanup.graphProvenance}
-        {cleanup.graphError ? `（${cleanup.graphError}）` : ""}
-      </span>
-    </p>
+    <div className="flex flex-col gap-1 rounded-lg border border-line bg-surface-subtle/40 px-3 py-2">
+      <p className="text-[11px] text-muted/70">
+        资源清理：
+        <span
+          className={cn(
+            "font-medium",
+            incomplete
+              ? "text-red-600"
+              : neverCreated
+                ? "text-muted/70"
+                : "text-green-700 dark:text-green-400"
+          )}
+        >
+          {label}
+        </span>
+        <span className="ml-2 font-mono">
+          专用索引 {cleanup.esIndex}
+          {cleanup.esError ? `（${cleanup.esError}）` : ""} · 图谱归属 {cleanup.graphProvenance}
+          {cleanup.graphError ? `（${cleanup.graphError}）` : ""} · 本地临时库{" "}
+          {cleanup.dbClosed ? "已关闭" : "未关闭"}
+        </span>
+      </p>
+      {incomplete ? (
+        <p className="text-[11px] text-red-600">
+          专用索引/图谱归属未能释放，重启服务后按所有权清理：
+          <span className="ml-1 font-mono">npm run eval:residue -- --delete</span>
+          。只影响 eval 专用索引与 eval 归属的图谱证据，不动业务数据；运行失败与清理失败分开记录、互不覆盖。
+        </p>
+      ) : null}
+    </div>
   )
 }
 

@@ -55,6 +55,7 @@ import {
 import { EVAL_TEXT_RULE_VERSION } from "./text_rules"
 import {
   EVAL_TASK_TERMINAL_STAGES,
+  cleanupIncomplete,
   type EvalCaseResult,
   type EvalCleanupReport,
   type EvalMetricsSummary,
@@ -103,6 +104,37 @@ export class EvaluationCapacityError extends Error {
   }
 }
 
+/**
+ * Ticket 14: the service stops accepting new tasks the moment shutdown starts.
+ * The HTTP layer reports this as 503, so a client can retry against a restarted
+ * process instead of believing its request was invalid.
+ */
+export class EvaluationShuttingDownError extends Error {
+  constructor(
+    message = "the evaluation service is shutting down and no longer accepts new tasks"
+  ) {
+    super(message)
+    this.name = "EvaluationShuttingDownError"
+  }
+}
+
+/** Ticket 14: bounded budget for releasing the scopes of a stopped service. */
+export const DEFAULT_SHUTDOWN_TIMEOUT_MS = 15_000
+
+/** Ticket 14: what a graceful stop did to the runs that were still in flight. */
+export interface EvalShutdownReport {
+  /** Tasks aborted when shutdown began, in creation order. */
+  cancelledTaskIds: string[]
+  /** False when every cancelled task finished its cleanup inside the budget. */
+  timedOut: boolean
+  /** Cleanup evidence per cancelled task — the same reports the API shows. */
+  releases: Array<{
+    taskId: string
+    stage: EvalTaskStage
+    cleanup: EvalCleanupReport | null
+  }>
+}
+
 export interface EvaluationOwner {
   tenantId: string
   subjectId: string
@@ -135,6 +167,28 @@ export interface EvalModelOverrides {
  * as a "model id" (an operator's allowlist stays the only way in).
  */
 const MODEL_ID_PATTERN = /^(?!.*\/\/)[A-Za-z0-9._:/-]{1,120}$/
+
+/**
+ * Ticket 14: error text reaches the page, and a driver/provider error can quote
+ * a connection URI — so `scheme://user:secret@host` becomes `scheme://***@host`
+ * and the message is capped instead of dumping a whole stack detail.
+ */
+function redactDetail(message: string, limit = 300): string {
+  const scrubbed = message.replace(
+    /([a-zA-Z][a-zA-Z0-9+.-]*:\/\/)[^/\s@]*@/g,
+    "$1***@"
+  )
+  return scrubbed.length > limit ? `${scrubbed.slice(0, limit)}…` : scrubbed
+}
+
+/** Same redaction for a cleanup report's two error fields. */
+function redactCleanupReport(report: EvalCleanupReport): EvalCleanupReport {
+  return {
+    ...report,
+    ...(report.esError ? { esError: redactDetail(report.esError) } : {}),
+    ...(report.graphError ? { graphError: redactDetail(report.graphError) } : {}),
+  }
+}
 
 export interface EvaluationServiceOptions {
   config: AppConfig
@@ -198,6 +252,14 @@ interface TaskRecord {
   /** Ticket 11: the reranker this task actually runs with. */
   reranker?: Reranker
   config: EvalTaskConfigSnapshot
+  /**
+   * Ticket 14: the run's abort seam, the promise the process shutdown waits
+   * for, and why it was cancelled (so a cancelled run never reads as a random
+   * provider failure).
+   */
+  controller: AbortController
+  run?: Promise<void>
+  cancelReason?: string
 }
 
 export class EvaluationService {
@@ -220,6 +282,8 @@ export class EvaluationService {
   private readonly allowedChatModels: readonly string[]
   private readonly allowedRerankModels: readonly string[]
   private readonly createReranker?: (model: string) => Reranker | undefined
+  /** Ticket 14: set once shutdown began — no new task is accepted after it. */
+  private stopped = false
 
   constructor(private readonly options: EvaluationServiceOptions) {
     this.now = options.now ?? (() => new Date())
@@ -288,6 +352,8 @@ export class EvaluationService {
    * immediately — the caller polls {@link getTask}.
    */
   createTask(input: CreateEvaluationTaskInput, owner: EvaluationOwner): EvalTaskSummary {
+    // Ticket 14: a stopping service must not register work it cannot release.
+    if (this.stopped) throw new EvaluationShuttingDownError()
     const { dataset, datasetId } = this.resolveDataset(input)
     // Ticket 11: validate the requested models BEFORE anything exists — an
     // unlisted id never reaches a scope, an index or a paid provider call.
@@ -333,6 +399,8 @@ export class EvaluationService {
       cleanup: null,
       modelOverrides,
       ...(taskReranker ? { reranker: taskReranker } : {}),
+      // Ticket 14: shutdown aborts this run through here.
+      controller: new AbortController(),
       // Snapshot at start: later global config changes cannot re-interpret a
       // task that already ran (ticket 11).
       config: this.configSnapshot(modelOverrides, taskReranker),
@@ -340,7 +408,9 @@ export class EvaluationService {
     this.tasks.set(record.id, record)
 
     // Fire-and-forget: the HTTP response must not wait for prepare/run/cleanup.
-    void this.runTask(record).catch((error) => {
+    // Ticket 14: the chain is kept on the record so shutdown can await every
+    // in-flight task's cleanup instead of hoping it finished in time.
+    record.run = this.runTask(record, record.controller).catch((error) => {
       // runTask already records failures; this is the last-resort guard so a
       // bug in the runner can never leave an unhandled rejection behind.
       record.stage = "failed"
@@ -376,6 +446,60 @@ export class EvaluationService {
         throw new Error(`evaluation task ${id} did not reach a terminal stage in ${timeoutMs}ms`)
       }
       await new Promise((resolve) => setTimeout(resolve, 10))
+    }
+  }
+
+  /**
+   * Ticket 14: stop accepting tasks, cancel what is still running, and wait —
+   * bounded — for their cleanup. The process shutdown controller calls this
+   * BEFORE closing the shared ES/graph clients, because releasing a scope
+   * needs both. Nothing is persisted: the in-memory records disappear with the
+   * process (a hard kill cannot be recovered here by design).
+   */
+  async shutdown(options: { timeoutMs?: number } = {}): Promise<EvalShutdownReport> {
+    this.stopped = true
+    const inFlight = [...this.tasks.values()].filter(
+      (record) => !EVAL_TASK_TERMINAL_STAGES.includes(record.stage)
+    )
+    for (const record of inFlight) {
+      // A record already in `cleaning` decided its outcome before shutdown:
+      // its run is over and only the release is pending. Anything earlier is a
+      // genuine in-flight run — name the reason first, then abort, so the case
+      // loop, the answer run and every provider call observe the signal.
+      if (record.stage === "cleaning") continue
+      record.cancelReason = "cancelled by service shutdown"
+      record.controller.abort()
+    }
+
+    const budget = options.timeoutMs ?? DEFAULT_SHUTDOWN_TIMEOUT_MS
+    let timer: NodeJS.Timeout | undefined
+    const settled = Promise.all(inFlight.map((record) => record.run ?? Promise.resolve()))
+    const timedOut = await Promise.race([
+      settled.then(() => false),
+      new Promise<boolean>((resolve) => {
+        timer = setTimeout(() => resolve(true), budget)
+      }),
+    ]).finally(() => {
+      if (timer) clearTimeout(timer)
+    })
+
+    for (const record of inFlight) {
+      // A run cancelled by the shutdown says why: without this it would read
+      // as an ordinary provider failure. A run that was already deciding its
+      // own outcome (or had settled it) keeps its own, honest reason.
+      if (record.cancelReason && !record.error) {
+        record.error = "cancelled by service shutdown"
+      }
+    }
+
+    return {
+      cancelledTaskIds: inFlight.map((record) => record.id),
+      timedOut,
+      releases: inFlight.map((record) => ({
+        taskId: record.id,
+        stage: record.stage,
+        cleanup: record.cleanup,
+      })),
     }
   }
 
@@ -495,11 +619,10 @@ export class EvaluationService {
     return { dataset }
   }
 
-  private async runTask(record: TaskRecord): Promise<void> {
+  private async runTask(record: TaskRecord, taskController: AbortController): Promise<void> {
     record.stage = "preparing"
     record.startedAt = this.now().toISOString()
 
-    const taskController = new AbortController()
     const taskTimer = setTimeout(() => taskController.abort(), this.taskTimeoutMs)
     let resources: IsolatedEvalResources | undefined
     let resourcesDisposed = false
@@ -522,7 +645,7 @@ export class EvaluationService {
         // The scope cleaned up after itself and reports what it removed —
         // keep that evidence instead of re-running the cleanup.
         if (error instanceof EvalPrepareError) {
-          record.cleanup = error.cleanupReport
+          record.cleanup = redactCleanupReport(error.cleanupReport)
           resourcesDisposed = true
         }
         throw error
@@ -534,7 +657,12 @@ export class EvaluationService {
 
       record.stage = this.terminalStageFor(record.cases)
     } catch (error) {
-      record.error = error instanceof Error ? error.message : String(error)
+      const detail = error instanceof Error ? error.message : String(error)
+      // Ticket 14: a run cancelled by shutdown says so, instead of reading as
+      // a random provider failure.
+      record.error = redactDetail(
+        record.cancelReason ? `${record.cancelReason} (${detail})` : detail
+      )
       record.stage = "failed"
     } finally {
       clearTimeout(taskTimer)
@@ -542,10 +670,18 @@ export class EvaluationService {
       // overwrites it (spec "清理结果单独记录，不能覆盖原始失败原因").
       const outcomeStage = record.stage
       if (resources && !resourcesDisposed) {
+        // Ticket 14: the cleaning stage is observable while dispose runs.
         record.stage = "cleaning"
         record.cleanup = await this.disposeQuietly(resources)
       }
-      record.stage = outcomeStage
+      // Ticket 14: a run that could not release everything must not read as an
+      // unqualified success. The original outcome still wins (a failed run
+      // stays failed, its cleanup error stays visible alongside it), but a
+      // clean run with leftovers is reported as completed_with_errors.
+      record.stage =
+        outcomeStage === "completed" && cleanupIncomplete(record.cleanup)
+          ? "completed_with_errors"
+          : outcomeStage
       record.finishedAt = this.now().toISOString()
     }
   }
@@ -554,11 +690,11 @@ export class EvaluationService {
     resources: IsolatedEvalResources
   ): Promise<EvalCleanupReport> {
     try {
-      return await resources.dispose()
+      return redactCleanupReport(await resources.dispose())
     } catch (error) {
       // A cleanup that throws is itself a cleanup failure — report it as such
       // rather than pretending the scope was released.
-      const message = error instanceof Error ? error.message : String(error)
+      const message = redactDetail(error instanceof Error ? error.message : String(error))
       return {
         esIndex: "failed",
         esError: message,
