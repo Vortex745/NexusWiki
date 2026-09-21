@@ -6,6 +6,7 @@ import { useConversation } from "../conversation/useConversation"
 import { cn } from "../lib/cn"
 import { useAppShell } from "../runtime/AppShellContext"
 import { useMemoryApi } from "../runtime/MemoryContext"
+import { useSignedInSession } from "../runtime/SessionContext"
 import { StatusPopover } from "./StatusPopover"
 import { Icon } from "./ui/Icon"
 
@@ -68,6 +69,11 @@ export function Sidebar({ open, collapsed, isDark, onToggleTheme, onCloseMobile 
   const { openImport, openMemory, openEvaluation } = useAppShell()
   const { memories } = useMemoryApi()
   const { threads } = useConversation()
+  // Ticket 01: navigation mirrors what the server will actually authorize —
+  // the scopes come from `GET /api/session`, never from client-side state.
+  const scopes = useSignedInSession()?.scopes ?? []
+  const canIngest = scopes.includes("ingest")
+  const canAdmin = scopes.includes("admin")
 
   return (
     <>
@@ -119,8 +125,10 @@ export function Sidebar({ open, collapsed, isDark, onToggleTheme, onCloseMobile 
                 <span>新建对话</span>
               </button>
             </ThreadListPrimitive.New>
-            <SidebarButton icon={Database} label="导入文档" onClick={openImport} />
-            <SidebarButton icon={FlaskConical} label="运行评测" onClick={openEvaluation} />
+            {canIngest ? <SidebarButton icon={Database} label="导入文档" onClick={openImport} /> : null}
+            {canAdmin ? (
+              <SidebarButton icon={FlaskConical} label="运行评测" onClick={openEvaluation} />
+            ) : null}
             <SidebarButton
               icon={isDark ? Sun : Moon}
               label={isDark ? "切换浅色模式" : "切换深色模式"}

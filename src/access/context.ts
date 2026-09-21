@@ -43,6 +43,19 @@ export function singleTenantAccessContext(): AccessContext {
   }
 }
 
+/**
+ * Ticket 01 (IAM-01): the coarse role the UI and the demo sign-in flow reason
+ * about. It is DERIVED from the granted scopes — `admin` is the only scope
+ * that unlocks mutations, so it is the only role distinction the server
+ * makes. Finer distinctions (technical reader vs policy reader) are carried
+ * by `groups`, which is the isolation axis.
+ */
+export type AccessRole = "admin" | "reader"
+
+export function accessRole(context: AccessContext): AccessRole {
+  return context.scopes.includes("admin") ? "admin" : "reader"
+}
+
 export type AccessContextOptions =
   | { mode: "single_tenant" }
   | { mode: "enforced" }

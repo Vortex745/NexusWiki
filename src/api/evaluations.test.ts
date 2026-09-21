@@ -47,6 +47,10 @@ const CONFIG: AppConfig = {
   pollIntervalMs: 1,
   claimedTimeoutMs: 1,
   accessMode: "single_tenant",
+  demoOidc: false,
+  demoOidcPort: 3900,
+  demoOidcAudience: "nexusrag-demo",
+  demoOidcPassword: "",
   activationMode: "auto",
   conversationTtlDays: 30,
   conversationGcIntervalMs: 86_400_000,
@@ -95,6 +99,8 @@ interface FakeScopeOptions {
   throwByCase?: Record<string, string>
   /** Ticket 10: terminal status the done event reports (default "completed"). */
   doneStatus?: string
+  doneStatusByCase?: Record<string, AnswerRunResult["status"]>
+  omitDone?: boolean
   /** Ticket 13: which generation round produced the observed context. */
   finalContextRound?: number
 }
@@ -110,7 +116,7 @@ class FakeScope implements IsolatedEvalResources {
   readonly esIndex: string
   readonly accessContext: AccessContext
   readonly corpus: EvalCorpusPassage[] = []
-  readonly preparedCaseOptions: Array<{ caseId?: string; sessionId?: string; message: string }> = []
+  readonly preparedCaseOptions: Array<{ caseId?: string; sessionId?: string; runId?: string; message: string }> = []
   /** Ticket 09: how many cases were really in flight at once. */
   inFlight = 0
   maxInFlight = 0
@@ -174,6 +180,7 @@ class FakeScope implements IsolatedEvalResources {
           message,
           ...(runOptions.caseId ? { caseId: runOptions.caseId } : {}),
           ...(runOptions.sessionId ? { sessionId: runOptions.sessionId } : {}),
+          ...(runOptions.runId ? { runId: runOptions.runId } : {}),
         })
         const scope = this
         return (async function* (): AsyncIterable<AnswerRunEvent> {
@@ -210,13 +217,15 @@ class FakeScope implements IsolatedEvalResources {
                 : {}),
             },
           })
+          if (options.omitDone) return
           yield progressEvent(runOptions, {
             type: "done",
             stage: "done",
             result: runResult(
               runOptions,
               options.reply ?? FAKE_REPLY,
-              (options.doneStatus ?? "completed") as AnswerRunResult["status"]
+              options.doneStatusByCase?.[runOptions.caseId ?? ""] ??
+                (options.doneStatus ?? "completed") as AnswerRunResult["status"]
             ),
           })
           // Keep the unused helper referenced for type clarity.
@@ -1381,6 +1390,70 @@ test("an honest refusal keeps its terminal status and reply instead of looking l
 // ---------------------------------------------------------------------------
 // Ticket 14 — cleanup honesty, graceful stop, scoped residue
 // ---------------------------------------------------------------------------
+
+test("terminal failure events exclude failed cases from every metric while remaining cases finish", async () => {
+  const harness = await buildHarness({
+    doneStatusByCase: { slow: "cancelled", broken: "provider_error" },
+  })
+  try {
+    const created = await createTask(harness.port, { dataset: partialFailureDataset() })
+    const detail = await pollTerminal(harness.port, created.body.id as string)
+    assert.equal(detail.stage, "completed_with_errors")
+    assert.deepEqual(detail.counts, { answered: 1, failed: 2, degraded: 0 })
+    const cases = detail.cases as Array<Record<string, unknown>>
+    for (const [index, status] of ["cancelled", "provider_error"].entries()) {
+      assert.equal(cases[index].outcome, "failed")
+      assert.equal(cases[index].terminalStatus, status)
+      assert.match(String(cases[index].error), new RegExp(status))
+      assert.deepEqual(cases[index].metrics, NULL_METRICS)
+    }
+    assert.equal(cases[2].outcome, "answered")
+    const summary = detail.metrics as { metrics: Record<string, { sampleSize: number; notApplicable: number }> }
+    for (const metric of Object.values(summary.metrics)) {
+      assert.equal(metric.sampleSize, 1)
+      assert.equal(metric.notApplicable, 2)
+    }
+    assert.equal(harness.scopes[0].disposeCalls, 1)
+  } finally {
+    await harness.close()
+  }
+})
+
+test("an event stream without a done result fails rather than scoring an empty answer", async () => {
+  const harness = await buildHarness({ omitDone: true })
+  try {
+    const created = await createTask(harness.port, { datasetId: "refund-single-case" })
+    const detail = await pollTerminal(harness.port, created.body.id as string)
+    assert.equal(detail.stage, "failed")
+    const cases = detail.cases as Array<Record<string, unknown>>
+    assert.match(String(cases[0].error), /terminal result/)
+    assert.deepEqual(cases[0].metrics, NULL_METRICS)
+    assert.equal(harness.scopes[0].disposeCalls, 1)
+  } finally {
+    await harness.close()
+  }
+})
+
+test("uploaded case ids keep their identity without invalidating Answer run and session ids", async () => {
+  const harness = await buildHarness()
+  try {
+    const dataset = partialFailureDataset()
+    dataset.cases[0].caseId = "中文_" + "x".repeat(150)
+    const created = await createTask(harness.port, { dataset })
+    const detail = await pollTerminal(harness.port, created.body.id as string)
+    const cases = detail.cases as Array<Record<string, unknown>>
+    const options = harness.scopes[0].preparedCaseOptions
+    assert.equal(cases[0].caseId, dataset.cases[0].caseId)
+    for (const [index, item] of options.entries()) {
+      assert.match(item.sessionId!, /^[a-zA-Z0-9-]{1,100}$/)
+      assert.match(item.runId!, /^[a-zA-Z0-9-]{1,100}$/)
+      assert.equal(cases[index].runId, item.runId)
+    }
+    assert.equal(new Set(options.map((item) => item.sessionId)).size, dataset.cases.length)
+  } finally {
+    await harness.close()
+  }
+})
 
 /** Wait for a condition the task reaches asynchronously (bounded). */
 async function waitUntil(predicate: () => boolean, timeoutMs = 2_000): Promise<void> {

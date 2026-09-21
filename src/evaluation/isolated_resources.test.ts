@@ -32,7 +32,7 @@ import { readFileSync } from "node:fs"
 import path from "node:path"
 import type OpenAI from "openai"
 import type { Client } from "@elastic/elasticsearch"
-import type { Driver } from "neo4j-driver"
+import type { Driver, Session } from "neo4j-driver"
 import type { AppConfig } from "../config"
 import type { Entity } from "../types"
 import type { WikifierLike } from "../ingestion/pipeline"
@@ -40,8 +40,130 @@ import { Neo4jStore } from "../ingestion/storage/store"
 import {
   createIsolatedEvalResources,
   EvalPrepareError,
+  stripProvenanceForTenant,
   type IsolatedEvalResources,
 } from "./isolated_resources"
+
+test("cleanup re-reads provenance under a write lock so concurrent owners survive", async () => {
+  const own = JSON.stringify(["d1", "c1", "eval-owner0001", [], 0.9])
+  const other = JSON.stringify(["d2", "c2", "business", [], 0.4])
+  let provenance = [own]
+  let deleted = false
+  let locked = false
+  const tx = {
+    async run(query: string, params: Record<string, unknown> = {}) {
+      if (query.includes("RETURN r.provenance AS provenance")) {
+        assert.match(query, /SET r\./, "the relation must be write locked before reading")
+        locked = true
+        return { records: [{ get: () => [...provenance] }] }
+      }
+      if (query.includes("DELETE r")) deleted = true
+      else provenance = [...(params.remaining as string[])]
+      return { records: [] }
+    },
+  }
+  const session = {
+    async run(query: string, params: Record<string, unknown> = {}) {
+      if (query.includes("RETURN elementId(r) AS rid")) {
+        const snapshot = [...provenance]
+        provenance.push(other) // A business writer commits after discovery.
+        return { records: [{ get: (key: string) => key === "rid" ? "r1" : snapshot }] }
+      }
+      return tx.run(query, params)
+    },
+    async executeWrite(work: (transaction: typeof tx) => Promise<void>) { await work(tx) },
+  } as unknown as Session
+  await stripProvenanceForTenant(session, "eval-owner0001")
+  assert.equal(deleted, false, "the new business contribution keeps the relation alive")
+  assert.deepEqual(provenance, [other])
+  assert.equal(locked, true)
+})
+
+test("cleanup continues through graph session creation and close failures", async () => {
+  for (const failure of ["session", "close"]) {
+    const es = new FakeEsCluster()
+    const graph = new FakeGraphCluster()
+    const driver = graph.driver()
+    const resources = createIsolatedEvalResources({
+      taskId: `cleanup-${failure}-0001`, config,
+      clients: { es: es.client(), graphDriver: driver, chatClient: makeEvalChatClient().client, embeddingClient: makeEmbeddingClient() },
+      wikifier: makeFixedWikifier(), readinessIntervalMs: 1,
+    })
+    await resources.prepare(CORPUS)
+    const session = driver.session.bind(driver)
+    driver.session = (() => {
+      if (failure === "session") throw new Error("session failed")
+      const value = session()
+      value.close = async () => { throw new Error("close failed") }
+      return value
+    }) as typeof driver.session
+    const report = await resources.dispose()
+    assert.equal(report.esIndex, "deleted")
+    assert.equal(report.graphProvenance, "failed")
+    assert.match(report.graphError ?? "", new RegExp(`${failure} failed`))
+    assert.equal(report.dbClosed, true, "graph failures must not skip the memory DB")
+    assert.equal(resources.getState(), "disposed")
+  }
+})
+
+test("concurrent scope cleanups cannot restore each other's provenance", async () => {
+  const entry = (tenant: string) => JSON.stringify(["doc", "chunk", tenant, [], 0.4])
+  let provenance = [entry("eval-owner0001"), entry("eval-owner0002"), entry("business")]
+  let tail = Promise.resolve()
+  const session = {
+    async run() {
+      const snapshot = [...provenance]
+      return { records: [{ get: (key: string) => key === "rid" ? "r1" : snapshot }] }
+    },
+    async executeWrite(work: (tx: { run: (query: string, params?: Record<string, unknown>) => Promise<unknown> }) => Promise<void>, options: { timeout: number }) {
+      assert.equal(options.timeout, 5_000)
+      const preceding = tail
+      let release!: () => void
+      tail = new Promise<void>((resolve) => { release = resolve })
+      await preceding
+      try {
+        await work({
+          async run(query, params = {}) {
+            if (query.includes("RETURN r.provenance AS provenance")) {
+              assert.match(query, /SET r\.provenance = r\.provenance/)
+              return { records: [{ get: () => [...provenance] }] }
+            }
+            provenance = query.includes("DELETE r") ? [] : [...(params.remaining as string[])]
+            return { records: [] }
+          },
+        })
+      } finally { release() }
+    },
+  } as unknown as Session
+  await Promise.all([
+    stripProvenanceForTenant(session, "eval-owner0001"),
+    stripProvenanceForTenant(session, "eval-owner0002"),
+  ])
+  assert.deepEqual(provenance, [entry("business")])
+})
+
+test("an ES cleanup timeout still releases graph provenance and the memory DB", async () => {
+  const es = new FakeEsCluster()
+  const graph = new FakeGraphCluster()
+  const client = es.client()
+  const resources = createIsolatedEvalResources({
+    taskId: "cleanup-timeout-0001", config,
+    clients: { es: client, graphDriver: graph.driver(), chatClient: makeEvalChatClient().client, embeddingClient: makeEmbeddingClient() },
+    wikifier: makeFixedWikifier(), readinessIntervalMs: 1,
+  })
+  await resources.prepare(CORPUS)
+  client.indices.delete = (async (_request: unknown, options: { requestTimeout: number; maxRetries: number }) => {
+    assert.equal(options.requestTimeout, 5_000)
+    assert.equal(options.maxRetries, 0)
+    throw new Error("request timed out")
+  }) as typeof client.indices.delete
+  const report = await resources.dispose()
+  assert.equal(report.esIndex, "failed")
+  assert.match(report.esError ?? "", /request timed out/)
+  assert.equal(report.graphProvenance, "cleaned")
+  assert.equal(graph.tenantProvenance(resources.tenantId).length, 0)
+  assert.equal(report.dbClosed, true)
+})
 
 const config: AppConfig = {
   esNode: "http://elasticsearch.test",
@@ -62,6 +184,10 @@ const config: AppConfig = {
   pollIntervalMs: 1,
   claimedTimeoutMs: 1,
   accessMode: "single_tenant",
+  demoOidc: false,
+  demoOidcPort: 3900,
+  demoOidcAudience: "nexusrag-demo",
+  demoOidcPassword: "",
   activationMode: "auto",
   conversationTtlDays: 30,
   conversationGcIntervalMs: 86_400_000,
@@ -466,8 +592,15 @@ class FakeGraphCluster {
     return {
       session() {
         return {
+          async executeWrite<T>(work: (tx: { run: (query: string, params: Record<string, unknown>) => Promise<unknown> }) => Promise<T>) {
+            return work(this)
+          },
           async run(query: string, params: Record<string, unknown>) {
             cluster.queries.push(query)
+            if (query.includes("RETURN r.provenance AS provenance")) {
+              const link = cluster.links.get(String(params.rid))
+              return { records: link ? [{ get: () => [...link.provenance] }] : [] }
+            }
             if (query.includes("RETURN elementId(r) AS rid")) {
               // GRAPH_SELECT_OWNED_RELATIONS — provenance is the only ownership
               // record; the scope decides what to strip by parsing each entry

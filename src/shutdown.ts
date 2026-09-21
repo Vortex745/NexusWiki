@@ -19,6 +19,12 @@ export interface ShutdownDeps {
   /** HTTP server — close() stops accepting new connections and waits for active requests. */
   server?: Server
   /**
+   * Ticket 01: the local demo OIDC issuer. It owns its own loopback listener,
+   * so it is closed alongside the API server — after the server stopped
+   * accepting requests and before the shared runtime resources close.
+   */
+  demoIssuer?: { stop(): Promise<void> }
+  /**
    * Eval refactor Ticket 14: in-process evaluation service. shutdown() refuses
    * new tasks, cancels the runs still in flight and waits (bounded) for their
    * scopes to be released. Runs after the server and before the runtime, so
@@ -79,6 +85,9 @@ export function createShutdownController(deps: ShutdownDeps): ShutdownController
       await runStep("server.close", () =>
         new Promise<void>((resolve) => deps.server!.close(() => resolve()))
       )
+    }
+    if (deps.demoIssuer) {
+      await runStep("demoIssuer.stop", () => deps.demoIssuer!.stop())
     }
     // Ticket 14: release evaluation scopes AFTER the server stopped taking
     // requests but BEFORE the shared ES/graph clients close below — a scope's

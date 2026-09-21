@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react"
 
 import { AppShell } from "./components/AppShell"
+import { LoginScreen } from "./components/LoginScreen"
 import { EvaluationDialog } from "./components/panels/EvaluationDialog"
 import { ImportDialog } from "./components/panels/ImportDialog"
 import { InsightDialog } from "./components/panels/InsightDialog"
@@ -16,8 +17,50 @@ import { AppShellProvider, type AppShellActions } from "./runtime/AppShellContex
 import { MemoryProvider, useMemoryApi } from "./runtime/MemoryContext"
 import { PromptComposerProvider } from "./runtime/PromptComposerContext"
 import { ConversationRuntimeProvider } from "./runtime/ConversationRuntimeProvider"
+import { SessionProvider, useSession } from "./runtime/SessionContext"
 
 export function App() {
+  return (
+    <SessionProvider>
+      <SessionGate />
+    </SessionProvider>
+  )
+}
+
+/**
+ * Ticket 01 (IAM-01): the app only mounts once the server has confirmed who
+ * the caller is. While the session is unresolved there is no application UI,
+ * and an anonymous caller only ever sees the sign-in screen.
+ */
+function SessionGate() {
+  const { state, signIn } = useSession()
+
+  if (state.status === "loading") {
+    return (
+      <div className="grid min-h-dvh place-items-center bg-canvas">
+        <p className="text-xs text-muted">正在确认身份…</p>
+      </div>
+    )
+  }
+
+  if (state.status === "anonymous") {
+    return <LoginScreen authConfig={state.authConfig} onSignIn={signIn} />
+  }
+
+  if (state.status === "error") {
+    return (
+      <div className="grid min-h-dvh place-items-center bg-canvas px-4">
+        <div
+          role="alert"
+          className="w-full max-w-sm rounded-xl border border-line bg-surface p-6 shadow-card"
+        >
+          <p className="text-sm font-medium text-ink">无法进入应用</p>
+          <p className="mt-2 text-xs leading-relaxed text-muted">{state.message}</p>
+        </div>
+      </div>
+    )
+  }
+
   return (
     <MemoryProvider>
       <AppRoot />

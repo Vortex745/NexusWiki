@@ -38,6 +38,22 @@ export interface AppConfig {
   imageAssetPath?: string
   accessMode: "single_tenant" | "enforced"
   /**
+   * Ticket 01 (IAM-01): when true, `main()` starts the local demo OIDC issuer
+   * on loopback and wires the identity adapter to it, so the demo runs through
+   * the enforced identity path instead of the legacy single-tenant one.
+   */
+  demoOidc: boolean
+  /** Ticket 01: loopback port for the demo issuer. */
+  demoOidcPort: number
+  /** Ticket 01: audience claim the demo issuer mints and the adapter expects. */
+  demoOidcAudience: string
+  /**
+   * Ticket 01: the password every demo account signs in with. Verified
+   * server-side only — it never reaches the browser. Required whenever
+   * `demoOidc` is on; there is deliberately no built-in default credential.
+   */
+  demoOidcPassword: string
+  /**
    * Eval refactor Ticket 03: dedicated rerank endpoint (Edgefn-compatible
    * `POST {base}/rerank`). Independent from the Chat/Embedding settings on
    * purpose — the reranker is its own provider and model. An empty key means
@@ -203,6 +219,13 @@ export function loadConfig(): AppConfig {
   if (!Number.isInteger(embeddingDimensions) || embeddingDimensions <= 0) {
     throw new Error("EMBEDDING_DIMENSIONS must be a positive integer")
   }
+  // Ticket 01: the demo identity flow fails closed at startup rather than
+  // falling back to a shipped default credential or to single-tenant access.
+  const demoOidc = process.env.DEMO_OIDC === "1"
+  const demoOidcPassword = process.env.DEMO_OIDC_PASSWORD || ""
+  if (demoOidc && demoOidcPassword.length === 0) {
+    throw new Error("DEMO_OIDC_PASSWORD is required when DEMO_OIDC=1")
+  }
   _config = {
     esNode: process.env.ES_NODE || "http://localhost:9200",
     esApiKey: process.env.ES_API_KEY || "",
@@ -228,7 +251,16 @@ export function loadConfig(): AppConfig {
     parserInputLimitBytes: integerEnv("PARSER_INPUT_LIMIT_BYTES", "positive", 20 * 1024 * 1024),
     parserOutputLimitBytes: integerEnv("PARSER_OUTPUT_LIMIT_BYTES", "positive", 20 * 1024 * 1024),
     imageAssetPath: process.env.IMAGE_ASSET_PATH || "./data/image-assets",
-    accessMode: process.env.ACCESS_MODE === "enforced" ? "enforced" : "single_tenant",
+    // Ticket 01: DEMO_OIDC=1 forces the enforced identity path. The demo
+    // issuer is then the only identity source, so falling back to the
+    // token-less single-tenant context would hand every caller the local
+    // admin scopes and the demo would never ask anyone to sign in.
+    accessMode:
+      demoOidc || process.env.ACCESS_MODE === "enforced" ? "enforced" : "single_tenant",
+    demoOidc,
+    demoOidcPort: integerEnv("DEMO_OIDC_PORT", "positive", 3900),
+    demoOidcAudience: process.env.DEMO_OIDC_AUDIENCE || "nexusrag-demo",
+    demoOidcPassword,
     // Ticket 03: dedicated rerank provider (defaults match the verified
     // Edgefn endpoint + bge-reranker-v2-m3 protocol; the key has no default
     // — an absent key disables dedicated rerank explicitly).

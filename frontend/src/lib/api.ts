@@ -4,6 +4,93 @@ import { MIME_BY_EXTENSION } from "./constants"
 
 const API_BASE = "/api"
 
+/**
+ * Ticket 01: the bearer token lives in this module for the lifetime of the
+ * page. It is deliberately NOT part of any bundle or build-time constant —
+ * it is obtained at runtime from the server after a sign-in.
+ */
+let accessToken: string | null = null
+
+export function setAccessToken(token: string | null): void {
+  accessToken = token
+}
+
+/**
+ * Every API call goes through here so the Authorization header is attached in
+ * exactly one place. A 401 is reported to the session layer through
+ * `onUnauthorized` so the app can fall back to the sign-in screen.
+ */
+let onUnauthorized: (() => void) | null = null
+
+export function setUnauthorizedHandler(handler: (() => void) | null): void {
+  onUnauthorized = handler
+}
+
+async function apiFetch(path: string, init: RequestInit = {}): Promise<Response> {
+  const headers = new Headers(init.headers)
+  const sentToken = accessToken
+  if (sentToken) headers.set("Authorization", `Bearer ${sentToken}`)
+  const response = await fetch(`${API_BASE}${path}`, { ...init, headers })
+  // Only a rejected TOKEN means the session is gone. A 401 on a request that
+  // carried no token is simply "not signed in yet" — reporting that would make
+  // the session probe below re-enter itself without end.
+  if (response.status === 401 && sentToken) onUnauthorized?.()
+  return response
+}
+
+// ---------------------------------------------------------------------------
+// Identity session (ticket 01)
+// ---------------------------------------------------------------------------
+
+export interface SessionPayload {
+  tenantId: string
+  subjectId: string
+  /** Derived server-side from the granted scopes. */
+  role: "admin" | "reader"
+  groups: string[]
+  scopes: string[]
+}
+
+export interface AuthConfigPayload {
+  demoAuth: boolean
+  accounts: Array<{ key: string; label: string }>
+}
+
+export class InvalidCredentialsError extends Error {
+  constructor() {
+    super("账号或密码不正确")
+    this.name = "InvalidCredentialsError"
+  }
+}
+
+export async function fetchAuthConfig(): Promise<AuthConfigPayload> {
+  const response = await apiFetch("/auth/config")
+  if (!response.ok) throw new Error(`登录配置读取失败 (${response.status})`)
+  return (await response.json()) as AuthConfigPayload
+}
+
+/** Sign in and keep the returned token for subsequent calls. */
+export async function signIn(account: string, password: string): Promise<void> {
+  const response = await apiFetch("/auth/login", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ account, password }),
+  })
+  if (response.status === 401) throw new InvalidCredentialsError()
+  if (!response.ok) throw new Error(`登录失败 (${response.status})`)
+  const body = (await response.json()) as { accessToken?: string }
+  if (!body.accessToken) throw new Error("登录失败：服务器未返回凭证")
+  setAccessToken(body.accessToken)
+}
+
+/** Who the server says the caller is. 401 means "not signed in". */
+export async function fetchSession(): Promise<SessionPayload | null> {
+  const response = await apiFetch("/session")
+  if (response.status === 401) return null
+  if (!response.ok) throw new Error(`身份读取失败 (${response.status})`)
+  return (await response.json()) as SessionPayload
+}
+
 export interface StatusChannel {
   status: string
   responseTimeMs?: number
@@ -43,7 +130,7 @@ async function readError(response: Response): Promise<string> {
 }
 
 export async function fetchStatus(): Promise<StatusPayload> {
-  const response = await fetch(`${API_BASE}/status`)
+  const response = await apiFetch("/status")
   if (!response.ok) throw new Error(`HTTP ${response.status}`)
   return (await response.json()) as StatusPayload
 }
@@ -147,7 +234,7 @@ export interface EvaluationTaskDetail extends EvaluationTaskSummary {
 }
 
 export async function fetchEvaluationDatasets(): Promise<EvaluationDatasetsPayload> {
-  const response = await fetch(`${API_BASE}/evaluation-datasets`)
+  const response = await apiFetch("/evaluation-datasets")
   if (!response.ok) throw new Error(`评测样例读取失败 (${response.status})`)
   return (await response.json()) as EvaluationDatasetsPayload
 }
@@ -174,7 +261,7 @@ export class EvaluationRequestError extends Error {
 }
 
 export async function createEvaluationTask(input: EvaluationTaskInput): Promise<EvaluationTaskSummary> {
-  const response = await fetch(`${API_BASE}/evaluations`, {
+  const response = await apiFetch("/evaluations", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(input),
@@ -189,7 +276,7 @@ export async function createEvaluationTask(input: EvaluationTaskInput): Promise<
 
 /** Ticket 12: the evaluation records retained by this process. */
 export async function listEvaluationTasks(): Promise<EvaluationTaskSummary[]> {
-  const response = await fetch(`${API_BASE}/evaluations`)
+  const response = await apiFetch("/evaluations")
   if (!response.ok) throw new Error(`评测记录读取失败 (${response.status})`)
   const body = (await response.json()) as { tasks?: EvaluationTaskSummary[] }
   return Array.isArray(body.tasks) ? body.tasks : []
@@ -197,14 +284,14 @@ export async function listEvaluationTasks(): Promise<EvaluationTaskSummary[]> {
 
 /** 404 → null（任务只存在于当前服务进程，重启后不可查询）。 */
 export async function fetchEvaluationTask(id: string): Promise<EvaluationTaskDetail | null> {
-  const response = await fetch(`${API_BASE}/evaluations/${encodeURIComponent(id)}`)
+  const response = await apiFetch(`/evaluations/${encodeURIComponent(id)}`)
   if (response.status === 404) return null
   if (!response.ok) throw new Error(`评测任务查询失败 (${response.status})`)
   return (await response.json()) as EvaluationTaskDetail
 }
 
 export async function fetchRunHistory(runId: string): Promise<RunHistory> {
-  const response = await fetch(`${API_BASE}/chat/runs/${encodeURIComponent(runId)}`)
+  const response = await apiFetch(`/chat/runs/${encodeURIComponent(runId)}`)
   if (!response.ok) throw new Error(`HTTP ${response.status}`)
   return (await response.json()) as RunHistory
 }
@@ -224,7 +311,7 @@ export async function streamChat(
   onEvent: (data: SseEventData) => void,
   signal: AbortSignal,
 ): Promise<void> {
-  const response = await fetch(`${API_BASE}/chat`, {
+  const response = await apiFetch("/chat", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
@@ -268,7 +355,7 @@ export async function streamChat(
 
 export async function uploadFileToIngest(file: File, relativePath: string): Promise<string> {
   const bytes = new Uint8Array(await file.arrayBuffer())
-  const response = await fetch(`${API_BASE}/ingest/file`, {
+  const response = await apiFetch("/ingest/file", {
     method: "POST",
     headers: {
       "content-type": "application/octet-stream",
@@ -291,7 +378,7 @@ export async function submitUrlImport(
   maxPages: number,
 ): Promise<IngestSubmission> {
   const body = mode === "sitemap" ? { url, mode, maxPages } : { url, mode }
-  const response = await fetch(`${API_BASE}/ingest/url`, {
+  const response = await apiFetch("/ingest/url", {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(body),
@@ -304,13 +391,13 @@ export async function submitUrlImport(
 }
 
 export async function fetchIngestStatus(docId: string): Promise<IngestStatus> {
-  const response = await fetch(`${API_BASE}/ingest/${encodeURIComponent(docId)}/status`)
+  const response = await apiFetch(`/ingest/${encodeURIComponent(docId)}/status`)
   if (!response.ok) throw new Error(`状态查询失败 HTTP ${response.status}`)
   return (await response.json()) as IngestStatus
 }
 
 export async function cancelIngest(docId: string): Promise<void> {
-  await fetch(`${API_BASE}/ingest/${encodeURIComponent(docId)}/cancel`, { method: "POST" })
+  await apiFetch(`/ingest/${encodeURIComponent(docId)}/cancel`, { method: "POST" })
 }
 
 export function guessMimeFromExt(fileName: string): string {

@@ -25,6 +25,7 @@ import { RetirementServiceImpl } from "../knowledge/retirement"
 import { createSourceGovernanceRouter } from "./source_governance"
 import { createStatusRouter } from "./status"
 import { createEvaluationsRouter } from "./evaluations"
+import { createSessionRouter, type DemoAuthOptions } from "./session"
 import { EvaluationService } from "../evaluation/service"
 import { createDedicatedReranker } from "../retrieval/search/dedicated_reranker"
 
@@ -46,6 +47,12 @@ export function createApp(options: {
    */
   ingestAccessMiddleware?: RequestHandler
   managementAccessMiddleware?: RequestHandler
+  /**
+   * Ticket 01: when set, the local demo sign-in is available — the browser can
+   * exchange a demo account + password for a token through the server. Absent
+   * in every non-demo deployment, where /api/auth/login answers 404.
+   */
+  demoAuth?: DemoAuthOptions
   sessionBinder?: SqliteSessionBinder
   eventsSource: AnswerEventsSource
   // Optional runtime surfaces for the /api/status endpoint.
@@ -115,7 +122,14 @@ export function createApp(options: {
     // management surface; the handler keeps its own admin check.
     app.use("/api/evaluations", options.managementAccessMiddleware)
     app.use("/api/evaluation-datasets", options.managementAccessMiddleware)
+    // Ticket 01: reading your own identity needs identity but no particular
+    // scope — a reader must be able to learn its navigation from the server.
+    app.use("/api/session", options.managementAccessMiddleware)
   }
+  // Ticket 01: identity session + demo sign-in. /api/auth/* is deliberately
+  // outside the identity middleware — you cannot be required to authenticate
+  // in order to authenticate.
+  app.use("/api", createSessionRouter(options.demoAuth ? { demoAuth: options.demoAuth } : {}))
   if (options.evaluationService) {
     app.use("/api", createEvaluationsRouter(options.evaluationService))
   }
@@ -184,7 +198,9 @@ export function createApp(options: {
 export async function startServer(
   port: number,
   eventsSource: AnswerEventsSource,
-  identityAdapter?: import("../access/context").IdentityAdapter
+  identityAdapter?: import("../access/context").IdentityAdapter,
+  /** Ticket 01: enables the local demo sign-in when the demo issuer is running. */
+  options: { demoAuth?: DemoAuthOptions } = {}
 ): Promise<{
   server: Server
   processRuntime: ProcessRuntime
@@ -261,6 +277,7 @@ export async function startServer(
     accessMiddleware,
     ...(ingestAccessMiddleware ? { ingestAccessMiddleware } : {}),
     ...(managementAccessMiddleware ? { managementAccessMiddleware } : {}),
+    ...(options.demoAuth ? { demoAuth: options.demoAuth } : {}),
     sessionBinder,
     eventsSource,
     processRuntime,

@@ -6,6 +6,12 @@
  * testing of the OIDC identity flow (JWKS fetch → signature verification →
  * claim validation → AccessContext extraction) without an external OIDC provider.
  *
+ * Ticket 01 (IAM-01): the same server backs the local demo issuer
+ * (`demo_oidc_issuer.ts`). That caller passes a `tokenClaimsResolver`, which
+ * replaces the default "sign whatever claims the request body contains"
+ * behavior with a closed preset lookup — the demo issuer can only ever mint
+ * the three known accounts.
+ *
  * The server uses real HTTP, real JWKS, and real RSA-SHA256 signatures —
  * it is "real" in every sense except that it runs on localhost and generates
  * its own keys. This proves the integration works end-to-end.
@@ -35,6 +41,21 @@ export interface LocalOidcServerOptions {
   kid?: string
   /** Port to listen on (0 = random free port, assigned by OS). */
   port?: number
+  /**
+   * Ticket 01: when provided, `POST /token` mints claims through this
+   * resolver instead of signing the raw request body. Returning null
+   * rejects the request with 400. A closed resolver is what keeps the demo
+   * issuer from signing arbitrary caller-supplied identities.
+   */
+  tokenClaimsResolver?: (body: unknown) => IssueTokenClaims | null
+  /**
+   * Ticket 01: when set, `POST /token` requires `Authorization: Bearer
+   * <tokenAuth>`. The demo issuer passes a per-process secret so that only the
+   * server-side sign-in proxy can mint tokens. Without it the password check
+   * in front of the proxy would be decorative: the issuer listens on loopback,
+   * so any local process could ask it for an admin token directly.
+   */
+  tokenAuth?: string
 }
 
 export interface IssueTokenClaims {
@@ -60,6 +81,9 @@ export class LocalOidcServer {
   private readonly privateKey: KeyObject
   private readonly publicKey: KeyObject
   private readonly jwk: Record<string, unknown>
+  private readonly requestedPort: number
+  private readonly tokenClaimsResolver?: (body: unknown) => IssueTokenClaims | null
+  private readonly tokenAuth?: string
   private server: Server | null = null
   private actualPort: number = 0
 
@@ -71,6 +95,9 @@ export class LocalOidcServer {
     this.audience = options.audience
     this.kid = options.kid ?? "local-test-key"
     this.issuerBase = options.issuer.replace(/:\d+$/, "") // strip port if present
+    this.requestedPort = options.port ?? 0
+    this.tokenClaimsResolver = options.tokenClaimsResolver
+    this.tokenAuth = options.tokenAuth
 
     const { privateKey, publicKey } = generateKeyPairSync("rsa", {
       modulusLength: 2048,
@@ -104,8 +131,8 @@ export class LocalOidcServer {
   async start(): Promise<void> {
     if (this.server) throw new Error("Server already started")
 
-    return new Promise((resolve) => {
-      this.server = createServer((req, res) => {
+    return new Promise((resolve, reject) => {
+      const server = createServer((req, res) => {
         const url = req.url ?? ""
 
         if (url === "/.well-known/jwks.json") {
@@ -117,12 +144,27 @@ export class LocalOidcServer {
         if (url === "/token") {
           // Simple token endpoint — in a real OIDC provider, this would
           // require client authentication. For testing, it just signs
-          // whatever claims are in the request body.
+          // whatever claims are in the request body. A `tokenClaimsResolver`
+          // narrows that to a closed preset (Ticket 01 demo issuer), and
+          // `tokenAuth` restricts who may call it at all.
+          if (this.tokenAuth && req.headers.authorization !== `Bearer ${this.tokenAuth}`) {
+            res.writeHead(401, { "Content-Type": "application/json" })
+            res.end(JSON.stringify({ error: "unauthorized_client" }))
+            return
+          }
           let body = ""
           req.on("data", (chunk) => { body += chunk })
           req.on("end", () => {
             try {
-              const claims = JSON.parse(body) as IssueTokenClaims
+              const parsed = JSON.parse(body) as unknown
+              const claims = this.tokenClaimsResolver
+                ? this.tokenClaimsResolver(parsed)
+                : (parsed as IssueTokenClaims)
+              if (!claims) {
+                res.writeHead(400, { "Content-Type": "application/json" })
+                res.end(JSON.stringify({ error: "invalid_request" }))
+                return
+              }
               const token = this.issueToken(claims)
               res.writeHead(200, { "Content-Type": "application/json" })
               res.end(JSON.stringify({ access_token: token, token_type: "Bearer" }))
@@ -138,8 +180,13 @@ export class LocalOidcServer {
         res.end(JSON.stringify({ error: "not_found" }))
       })
 
-      this.server.listen(0, "127.0.0.1", () => {
-        const addr = this.server!.address()
+      this.server = server
+      // Without this listener a failed bind (EADDRINUSE on the demo's fixed
+      // port, or a permission error) only emits "error" and the awaiting
+      // caller would hang forever with nothing logged.
+      server.on("error", reject)
+      server.listen(this.requestedPort, "127.0.0.1", () => {
+        const addr = server.address()
         if (addr && typeof addr === "object") {
           this.actualPort = addr.port
         }

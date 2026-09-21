@@ -7,6 +7,10 @@ import { validateAccessMode, type IdentityAdapter } from "./access/context"
 import {
   loadOidcConfig,
   JoseIdentityAdapter,
+  DEFAULT_CLAIM_MAPPING,
+  DEFAULT_CLOCK_SKEW_SECONDS,
+  startDemoOidcIssuer,
+  type DemoOidcIssuerHandle,
 } from "./identity"
 import { startServer } from "./api"
 import { startWorker } from "./api/worker"
@@ -33,7 +37,38 @@ async function main() {
   // issuer, audience, algorithm, expiry, and not-before validation in one
   // trust boundary. Remote JWKS caching, cooldown, and key rotation are
   // handled by jose internally — no manual cache warming needed.
-  const oidcConfig = loadOidcConfig(process.env, cfg.accessMode)
+  //
+  // Ticket 01 (IAM-01): when DEMO_OIDC=1 the local demo issuer takes over.
+  // It starts on loopback, mints the three demo accounts, and the adapter
+  // verifies against ITS JWKS. `loadConfig` already reports the demo as
+  // enforced access mode (the demo flag wins over ACCESS_MODE on purpose: a
+  // demo that silently fell back to single-tenant would defeat the security
+  // flow), so the enforced identity path is what the server mounts.
+  let demoIssuer: DemoOidcIssuerHandle | undefined
+  let demoAuth: { tokenEndpoint: string; password: string; tokenAuth: string } | undefined
+  let oidcConfig = loadOidcConfig(process.env, cfg.accessMode)
+  if (cfg.demoOidc) {
+    demoIssuer = await startDemoOidcIssuer({
+      port: cfg.demoOidcPort,
+      audience: cfg.demoOidcAudience,
+    })
+    oidcConfig = {
+      kind: "active",
+      issuer: demoIssuer.issuer,
+      audience: cfg.demoOidcAudience,
+      jwksEndpoint: demoIssuer.jwksEndpoint,
+      claimMapping: DEFAULT_CLAIM_MAPPING,
+      clockSkewSeconds: DEFAULT_CLOCK_SKEW_SECONDS,
+    }
+    demoAuth = {
+      tokenEndpoint: demoIssuer.tokenEndpoint,
+      password: cfg.demoOidcPassword,
+      tokenAuth: demoIssuer.tokenAuth,
+    }
+    console.log(
+      `[kefu-RAG] Demo OIDC issuer listening on ${demoIssuer.issuer} — sign-in requires DEMO_OIDC_PASSWORD`
+    )
+  }
   let identityAdapter: IdentityAdapter | undefined
   if (cfg.accessMode === "enforced") {
     identityAdapter = new JoseIdentityAdapter({ config: oidcConfig })
@@ -44,7 +79,10 @@ async function main() {
   // with code 1, no server, no worker. With the P5.2 adapter wired, enforced
   // mode passes the startup gate; the runtime fail-closed still lives in
   // createAccessMiddleware (enforced + adapter.resolve()=null → 401).
-  validateAccessMode({ accessMode: cfg.accessMode, ...(identityAdapter ? { adapter: identityAdapter } : {}) })
+  validateAccessMode({
+    accessMode: cfg.accessMode,
+    ...(identityAdapter ? { adapter: identityAdapter } : {}),
+  })
 
   const runtimeMode = readMastraRuntimeMode()
   assertRuntimeModeStartupAllowed(
@@ -86,7 +124,8 @@ async function main() {
   const { server, processRuntime, evaluationService } = await startServer(
     3001,
     mastraBoundary.eventsSource,
-    identityAdapter
+    identityAdapter,
+    demoAuth ? { demoAuth } : {}
   )
   const worker = startWorker({ db: processRuntime.db })
 
@@ -110,6 +149,7 @@ async function main() {
     worker,
     conversationGc,
     server,
+    ...(demoIssuer ? { demoIssuer } : {}),
     runtime: {
       close: async () => {
         // T12 (spec issue #12 criterion #6): flush pending Langfuse events

@@ -54,9 +54,18 @@ const config: AppConfig = {
   pollIntervalMs: 1,
   claimedTimeoutMs: 1,
   accessMode: "single_tenant",
+  demoOidc: false,
+  demoOidcPort: 3900,
+  demoOidcAudience: "nexusrag-demo",
+  demoOidcPassword: "",
   activationMode: "auto",
   conversationTtlDays: 30,
   conversationGcIntervalMs: 86_400_000,
+  rerankApiKey: "",
+  rerankBaseUrl: "https://api.edgefn.net/v1",
+  rerankModel: "bge-reranker-v2-m3",
+  rerankTimeoutMs: 30_000,
+  rerankMaxDocumentChars: 4_000,
 }
 
 // ---------------------------------------------------------------------------
