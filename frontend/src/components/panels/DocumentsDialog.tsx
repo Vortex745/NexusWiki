@@ -81,11 +81,13 @@ function DocumentRow({
   canAdmin,
   busy,
   onAction,
+  onView,
 }: {
   doc: DocumentCatalogEntryPayload
   canAdmin: boolean
   busy: boolean
   onAction: (action: () => Promise<void>, successText: string) => void
+  onView: (doc: DocumentCatalogEntryPayload) => void
 }) {
   const [errorDetail, setErrorDetail] = useState<string | null>(null)
   const [retiring, setRetiring] = useState(false)
@@ -134,6 +136,14 @@ function DocumentRow({
             {doc.tags.length > 0 ? ` · ${doc.tags.join("、")}` : ""}
           </p>
         </div>
+        <button
+          type="button"
+          onClick={() => onView(doc)}
+          title="查看该版本"
+          className="flex-none cursor-pointer rounded-lg border border-line px-2 py-1 text-[11px] text-muted transition-colors hover:bg-surface-subtle hover:text-ink"
+        >
+          查看
+        </button>
         {canAdmin && !doc.retired ? (
           <div className="flex flex-none flex-wrap items-center justify-end gap-1.5">
             {doc.status === "pending" ? (
@@ -241,7 +251,7 @@ export function DocumentsDialog({
   const [busy, setBusy] = useState(false)
   const scopes = useSignedInSession()?.scopes ?? []
   const canAdmin = scopes.includes("admin")
-  const { showToast } = useAppShell()
+  const { showToast, openDocument } = useAppShell()
 
   const runAction = (action: () => Promise<void>, successText: string) => {
     setBusy(true)
@@ -403,7 +413,14 @@ export function DocumentsDialog({
           <>
             <ul className="flex flex-col gap-2">
               {catalog?.documents.map((doc) => (
-                <DocumentRow key={doc.docId} doc={doc} canAdmin={canAdmin} busy={busy} onAction={runAction} />
+                <DocumentRow
+                  key={doc.docId}
+                  doc={doc}
+                  canAdmin={canAdmin}
+                  busy={busy}
+                  onAction={runAction}
+                  onView={(target) => openDocument({ documentId: target.docId })}
+                />
               ))}
             </ul>
             {totalPages > 1 ? (

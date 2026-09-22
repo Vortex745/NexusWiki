@@ -418,6 +418,25 @@ export class DocumentRepo {
   }
 
   /**
+   * Ticket 13 (DOC-02): the operational fields the version view shows but the
+   * domain Document type does not carry.
+   */
+  getOperationalState(docId: string): {
+    status: string
+    candidateState: string
+    updatedAt: string
+  } | null {
+    const row = this.db.prepare(
+      `SELECT status, candidate_state, updated_at FROM documents WHERE doc_id = ?`
+    ).get(docId) as
+      | { status: string; candidate_state: string; updated_at: string }
+      | undefined
+    return row
+      ? { status: row.status, candidateState: row.candidate_state, updatedAt: row.updated_at }
+      : null
+  }
+
+  /**
    * Ticket 12 (DOC-01B): the owning source's lifecycle state, for the
    * retry/reprocess precondition — retired sources must not be resurrected.
    */

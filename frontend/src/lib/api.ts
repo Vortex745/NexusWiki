@@ -614,3 +614,79 @@ export async function fetchDocumentStatus(docId: string): Promise<DocumentStatus
   }
   return (await response.json()) as DocumentStatusPayload
 }
+
+// ---------------------------------------------------------------------------
+// Document version view (ticket 13 DOC-02) — catalog and citation paths
+// ---------------------------------------------------------------------------
+
+export interface DocumentVersionPayload {
+  docId: string
+  sourceId: string
+  title: string
+  source: string
+  fileName: string | null
+  mimeType: string
+  status: string
+  candidateState: string
+  version: number
+  active: boolean
+  retired: boolean
+  createdAt: string
+  updatedAt: string
+}
+
+export interface DocumentSectionPayload {
+  nodeId: string
+  title: string
+  sectionPath: string[]
+  pageStart: number | null
+  pageEnd: number | null
+}
+
+export interface DocumentDetailPayload {
+  document: DocumentVersionPayload
+  sections: DocumentSectionPayload[]
+}
+
+export interface DocumentPreviewPayload {
+  available: boolean
+  text?: string
+  reason?: string
+}
+
+export interface DocumentChunkPayload {
+  chunk: {
+    chunkId: string
+    kind: string
+    index: number | null
+    sectionPath: string[] | null
+    page: number | null
+    content: string
+  }
+  document: { docId: string; title: string; version: number; active: boolean; retired: boolean }
+  neighbors: Array<{ chunkId: string; index: number | null; excerpt: string }>
+}
+
+export async function fetchDocumentDetail(docId: string): Promise<DocumentDetailPayload> {
+  const response = await apiFetch(`/documents/${encodeURIComponent(docId)}`)
+  if (!response.ok) throw new Error(`文档详情读取失败 (${response.status})`)
+  return (await response.json()) as DocumentDetailPayload
+}
+
+export async function fetchDocumentPreview(docId: string): Promise<DocumentPreviewPayload> {
+  const response = await apiFetch(`/documents/${encodeURIComponent(docId)}/preview`)
+  if (!response.ok) throw new Error(`文档预览读取失败 (${response.status})`)
+  return (await response.json()) as DocumentPreviewPayload
+}
+
+/** 410 means the chunk text is gone (retired cleanup) or not authorized. */
+export async function fetchDocumentChunk(docId: string, chunkId: string): Promise<DocumentChunkPayload> {
+  const response = await apiFetch(
+    `/documents/${encodeURIComponent(docId)}/chunks/${encodeURIComponent(chunkId)}`,
+  )
+  if (!response.ok) {
+    const body = (await response.json().catch(() => ({}))) as { error?: string }
+    throw new DocumentOperationError(body.error || `引用内容读取失败 (${response.status})`, response.status)
+  }
+  return (await response.json()) as DocumentChunkPayload
+}

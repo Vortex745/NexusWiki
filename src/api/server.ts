@@ -18,6 +18,7 @@ import { SqliteFeedbackStore } from "../answer/feedback_store"
 import { SqliteSessionBinder } from "../access/session_binder"
 import { createAccessMiddleware } from "./access_middleware"
 import { DocumentRepo } from "../ingestion/tracking/doc_repo"
+import { PageIndexRepository } from "../ingestion/tracking/page_index_repo"
 import { TaskRepo } from "../ingestion/tracking/task_repo"
 import { SqliteSourceLifecycleStore } from "../knowledge/source_lifecycle_store"
 import { SqliteCandidateReviewStore } from "../knowledge/candidate_review_store"
@@ -39,7 +40,7 @@ import {
 import { SqliteKnowledgeBaseRepo } from "../knowledge/knowledge_base_repo"
 import { knowledgeBaseEmbeddingProfile } from "../types/knowledge_base"
 import { createKnowledgeBaseRouter } from "./knowledge_bases"
-import { createDocumentsRouter } from "./documents"
+import { createDocumentsRouter, createEsChunkReader } from "./documents"
 
 export function createApp(options: {
   db?: DB
@@ -180,6 +181,12 @@ export function createApp(options: {
     createDocumentsRouter({
       documentRepo,
       knowledgeBaseService: workspaceKnowledgeBaseService,
+      pageIndexRepo: new PageIndexRepository(db),
+      // Ticket 13 (DOC-02): chunk reads need the shared Elasticsearch client —
+      // absent in bare createApp() mounts (tests), where chunk views answer 503.
+      ...(options.processRuntime
+        ? { chunkReader: createEsChunkReader(options.processRuntime.elasticsearch, "kefu-rag-chunks") }
+        : {}),
     })
   )
   if (options.managementAccessMiddleware) {

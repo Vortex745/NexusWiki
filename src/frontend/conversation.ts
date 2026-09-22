@@ -39,6 +39,12 @@ export interface Reference {
   excerpt?: string
   sectionPath?: string[]
   page?: number
+  /**
+   * Ticket 13 (DOC-02): the exact document version + chunk a citation points
+   * at — the viewer opens that version from the citation path.
+   */
+  documentId?: string
+  chunkId?: string
   image?: { assetPath?: string; captions?: string[] }
   [key: string]: unknown
 }
@@ -135,6 +141,14 @@ export interface Conversation {
   setActiveThread(threadId: string): void
   createThread(): Thread
   deleteThread(threadId: string): void
+  renameThread(threadId: string, title: string): void
+
+  /**
+   * Drops `messageId` and everything after it when `inclusive` is true;
+   * otherwise only the messages after it. Backs message editing (inclusive)
+   * and regeneration (exclusive).
+   */
+  truncateMessages(threadId: string, messageId: string, inclusive: boolean): void
 
   addUserMessage(threadId: string, input: AddUserMessageInput): Message
   startAssistantRun(threadId: string, input: StartAssistantRunInput): Message
@@ -161,6 +175,11 @@ export interface Conversation {
   startRun(): void
   completeRun(): void
   cancelRun(): void
+
+  getSidebarCollapsed(): boolean
+  setSidebarCollapsed(collapsed: boolean): void
+  getStreamEnabled(): boolean
+  setStreamEnabled(enabled: boolean): void
 }
 
 const STORAGE_KEY = "kefu-rag-ui-state-v2"
@@ -373,6 +392,24 @@ export class ConversationImpl implements Conversation {
       if (this.threads.length === 0) this.threads.push(next)
       this.activeThreadId = next.id
     }
+    this.save()
+  }
+
+  renameThread(threadId: string, title: string): void {
+    const thread = this.threads.find((t) => t.id === threadId)
+    if (!thread) return
+    const normalized = title.replace(/\s+/g, " ").trim()
+    thread.title = normalized || "新对话"
+    this.save()
+  }
+
+  truncateMessages(threadId: string, messageId: string, inclusive: boolean): void {
+    const thread = this.threads.find((t) => t.id === threadId)
+    if (!thread) return
+    const index = thread.messages.findIndex((m) => m.id === messageId)
+    if (index === -1) return
+    thread.messages.splice(inclusive ? index : index + 1)
+    thread.updatedAt = this.now().toISOString()
     this.save()
   }
 

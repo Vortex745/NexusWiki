@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from "react"
 
 import { AppShell } from "./components/AppShell"
 import { LoginScreen } from "./components/LoginScreen"
+import { DocumentViewerDialog, type DocumentViewTarget } from "./components/panels/DocumentViewerDialog"
 import { EvaluationDialog } from "./components/panels/EvaluationDialog"
 import { ImportDialog } from "./components/panels/ImportDialog"
 import { InsightDialog } from "./components/panels/InsightDialog"
@@ -79,6 +80,10 @@ function AppRoot() {
   const [importOpen, setImportOpen] = useState(false)
   const [evaluationOpen, setEvaluationOpen] = useState(false)
   const [knowledgeOpen, setKnowledgeOpen] = useState(false)
+  const [documentView, setDocumentView] = useState<{ open: boolean; target: DocumentViewTarget | null }>({
+    open: false,
+    target: null,
+  })
   const [insight, setInsight] = useState<{ open: boolean; messageId: string | null }>({
     open: false,
     messageId: null,
@@ -94,10 +99,14 @@ function AppRoot() {
   const openImport = useCallback(() => setImportOpen(true), [])
   const openEvaluation = useCallback(() => setEvaluationOpen(true), [])
   const openKnowledge = useCallback(() => setKnowledgeOpen(true), [])
+  const openDocument = useCallback(
+    (target: DocumentViewTarget) => setDocumentView({ open: true, target }),
+    [],
+  )
 
   const shellActions = useMemo<AppShellActions>(
-    () => ({ openInsight, openMemory, openImport, openEvaluation, openKnowledge, showToast }),
-    [openInsight, openMemory, openImport, openEvaluation, openKnowledge, showToast],
+    () => ({ openInsight, openMemory, openImport, openEvaluation, openKnowledge, openDocument, showToast }),
+    [openInsight, openMemory, openImport, openEvaluation, openKnowledge, openDocument, showToast],
   )
 
   // Staged attachments are consumed the moment a prompt actually goes out.
@@ -174,6 +183,11 @@ function AppRoot() {
           <ImportDialog open={importOpen} onClose={() => setImportOpen(false)} />
           <EvaluationDialog open={evaluationOpen} onClose={() => setEvaluationOpen(false)} />
           <KnowledgeDialog open={knowledgeOpen} onClose={() => setKnowledgeOpen(false)} />
+          <DocumentViewerDialog
+            open={documentView.open}
+            target={documentView.target}
+            onClose={() => setDocumentView((previous) => ({ ...previous, open: false }))}
+          />
           <InsightDialog
             open={insight.open}
             messageId={insight.messageId}

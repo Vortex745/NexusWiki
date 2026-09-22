@@ -6,9 +6,10 @@ import type { AccessContext } from "../access/context"
 import { singleTenantAccessContext } from "../access/context"
 import { openDb, type DB } from "../ingestion/tracking/db"
 import { DocumentRepo } from "../ingestion/tracking/doc_repo"
+import { PageIndexRepository } from "../ingestion/tracking/page_index_repo"
 import { SqliteKnowledgeBaseRepo } from "../knowledge/knowledge_base_repo"
 import { KnowledgeBaseServiceImpl } from "../knowledge/knowledge_base_service"
-import { createDocumentsRouter } from "./documents"
+import { createDocumentsRouter, type ChunkReader, type ChunkViewDoc } from "./documents"
 
 /**
  * Ticket 11 (DOC-01A) — the knowledge-base document catalog HTTP contract.
@@ -36,7 +37,12 @@ interface TestSetup {
 }
 
 function buildApp(
-  options: { tenantId?: string; scopes?: AccessContext["scopes"]; db?: DB } = {}
+  options: {
+    tenantId?: string
+    scopes?: AccessContext["scopes"]
+    db?: DB
+    chunkReader?: ChunkReader
+  } = {}
 ): TestSetup {
   const db = options.db ?? openDb(":memory:")
   const repo = new DocumentRepo(db)
@@ -47,7 +53,12 @@ function buildApp(
     res.locals.accessContext = contextFor(options.tenantId ?? "demo", options.scopes)
     next()
   })
-  app.use("/api", createDocumentsRouter({ documentRepo: repo, knowledgeBaseService: service }))
+  app.use("/api", createDocumentsRouter({
+    documentRepo: repo,
+    knowledgeBaseService: service,
+    pageIndexRepo: new PageIndexRepository(db),
+    ...(options.chunkReader ? { chunkReader: options.chunkReader } : {}),
+  }))
   return { db, app, repo, service }
 }
 
@@ -73,6 +84,9 @@ interface SeedOptions {
   metadata?: Record<string, unknown>
   allowedGroups?: string[]
   activate?: boolean
+  mimeType?: string
+  rawContent?: Buffer
+  content?: string
 }
 
 // Monotonic creation timestamps: documents created in the same millisecond
@@ -100,10 +114,12 @@ function seed(setup: TestSetup, options: SeedOptions): string {
     version: 1,
     title: options.title,
     source: "api",
-    content: `CONTENT-OF-${options.title}`,
+    content: options.content ?? `CONTENT-OF-${options.title}`,
     tenantId,
     allowedGroups: options.allowedGroups ?? [],
     knowledgeBaseId: kbId,
+    ...(options.mimeType ? { mimeType: options.mimeType } : {}),
+    ...(options.rawContent ? { rawContent: options.rawContent } : {}),
     ...(options.metadata ? { metadata: options.metadata } : {}),
   })
   if (options.status && options.status !== "pending") {
@@ -209,7 +225,12 @@ test("Ticket 11: readers see only group-authorized metadata; admins see all; rea
     const kb = setup.service.create("demo", "Docs")
     seed(setup, { knowledgeBaseId: kb.id, title: "TenantWide", allowedGroups: [], activate: true })
     seed(setup, { knowledgeBaseId: kb.id, title: "TechOnly", allowedGroups: ["demo-tech"] })
-    seed(setup, { knowledgeBaseId: kb.id, title: "PolicyOnly", allowedGroups: ["demo-policy"], metadata: { tags: ["secret"] } })
+    const policyDocId = seed(setup, {
+      knowledgeBaseId: kb.id,
+      title: "PolicyOnly",
+      allowedGroups: ["demo-policy"],
+      metadata: { tags: ["secret"] },
+    })
 
     const { server, port } = await listen(setup.app)
     try {
@@ -242,6 +263,170 @@ test("Ticket 11: readers see only group-authorized metadata; admins see all; rea
         body: JSON.stringify({ title: "nope" }),
       })
       assert.equal(postRes.status, 404, "no write route exists")
+
+      // Ticket 13 (DOC-02): the version view and preview obey the same doc
+      // group rule — a doc invisible in the catalog is invisible here too.
+      assert.equal((await request(port, `/documents/${policyDocId}`)).status, 404)
+      assert.equal((await request(port, `/documents/${policyDocId}/preview`)).status, 404)
+    } finally {
+      server.close()
+    }
+  } finally {
+    setup.db.close()
+  }
+})
+
+function makeChunkReader(chunks: Array<Partial<ChunkViewDoc> & { id: string }>): ChunkReader {
+  const docs = chunks.map((chunk) => ({
+    id: chunk.id,
+    documentId: chunk.documentId ?? "doc",
+    kind: chunk.kind ?? "child",
+    content: chunk.content ?? "",
+    parentId: chunk.parentId ?? null,
+    allowedGroups: chunk.allowedGroups ?? [],
+    metadata: chunk.metadata ?? {},
+  })) as ChunkViewDoc[]
+  return {
+    async get(documentId, chunkId) {
+      return docs.find((doc) => doc.documentId === documentId && doc.id === chunkId) ?? null
+    },
+    async listChildChunks(documentId) {
+      return docs.filter((doc) => doc.documentId === documentId && doc.kind === "child")
+    },
+  }
+}
+
+test("Ticket 13 DOC-02: the version view shows exact version, sections and preview", async () => {
+  const setup = buildApp()
+  try {
+    setup.service.ensureDefault("demo")
+    const kb = setup.service.create("demo", "Docs")
+    const docId = seed(setup, { knowledgeBaseId: kb.id, title: "Policy", activate: true })
+    setup.db.prepare(
+      `INSERT INTO page_index_nodes (
+        document_id, node_id, title, section_path, page_start, page_end,
+        summary, parent_id, child_ids, linked_chunk_ids
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, NULL, '[]', '[]')`
+    ).run(docId, "n1", "退款政策", JSON.stringify(["第一章", "退款"]), 3, 4, "summary")
+
+    const { server, port } = await listen(setup.app)
+    try {
+      const detail = await request(port, `/documents/${docId}`)
+      assert.equal(detail.status, 200)
+      const document = detail.json?.document as Record<string, unknown>
+      assert.equal(document.version, 1)
+      assert.equal(document.active, true)
+      assert.equal(document.retired, false)
+      assert.equal(document.mimeType, "text/plain")
+      const sections = detail.json?.sections as Array<Record<string, unknown>>
+      assert.equal(sections.length, 1)
+      assert.deepEqual(sections[0].sectionPath, ["第一章", "退款"])
+      assert.equal(sections[0].pageStart, 3)
+
+      const preview = await request(port, `/documents/${docId}/preview`)
+      assert.equal(preview.status, 200)
+      assert.equal(preview.json?.available, true)
+      assert.match(String(preview.json?.text), /CONTENT-OF-Policy/)
+
+      // Unknown and cross-tenant doc ids are the same 404.
+      assert.equal((await request(port, "/documents/does-not-exist")).status, 404)
+      const foreign = seed(setup, { tenantId: "other", knowledgeBaseId: "kb-other", title: "Foreign" })
+      assert.equal((await request(port, `/documents/${foreign}`)).status, 404)
+    } finally {
+      server.close()
+    }
+  } finally {
+    setup.db.close()
+  }
+})
+
+test("Ticket 13 DOC-02: HTML preview strips markup; unavailable capability is reported, not blank", async () => {
+  const setup = buildApp({
+    chunkReader: makeChunkReader([]),
+  })
+  try {
+    setup.service.ensureDefault("demo")
+    const kb = setup.service.create("demo", "Docs")
+    const htmlDoc = seed(setup, {
+      knowledgeBaseId: kb.id,
+      title: "Web page",
+      mimeType: "text/html",
+      content: "",
+      rawContent: Buffer.from("<html><body><p>退货政策 7 天</p><script>evil()</script></body></html>"),
+    })
+    const pdfDoc = seed(setup, {
+      knowledgeBaseId: kb.id,
+      title: "Scanned PDF",
+      mimeType: "application/pdf",
+      content: "",
+      rawContent: Buffer.from("%PDF-1.4 binary"),
+      activate: true,
+    })
+
+    const { server, port } = await listen(setup.app)
+    try {
+      const htmlPreview = await request(port, `/documents/${htmlDoc}/preview`)
+      assert.equal(htmlPreview.json?.available, true)
+      assert.match(String(htmlPreview.json?.text), /退货政策 7 天/)
+      assert.doesNotMatch(String(htmlPreview.json?.text), /<p>|script/)
+
+      const pdfPreview = await request(port, `/documents/${pdfDoc}/preview`)
+      assert.equal(pdfPreview.json?.available, false, "no silent blank preview")
+      assert.match(String(pdfPreview.json?.reason), /OCR|文本层/)
+      assert.equal(pdfPreview.json?.text, undefined)
+    } finally {
+      server.close()
+    }
+  } finally {
+    setup.db.close()
+  }
+})
+
+test("Ticket 13 DOC-02: chunk views carry metadata and neighbors; retired stays traceable", async () => {
+  const setup = buildApp()
+  try {
+    setup.service.ensureDefault("demo")
+    const kb = setup.service.create("demo", "Docs")
+    const docId = seed(setup, { knowledgeBaseId: kb.id, title: "Policy", activate: true })
+    const chunks: Array<Partial<ChunkViewDoc> & { id: string }> = [
+      { id: "c0", documentId: docId, content: "first", metadata: { index: 0, kind: "child" } },
+      { id: "c1", documentId: docId, content: "middle", metadata: { index: 1, kind: "child", page: 5, sectionPath: ["第一章"] } },
+      { id: "c2", documentId: docId, content: "last", metadata: { index: 2, kind: "child" } },
+      // A group-restricted chunk of the same doc that this viewer cannot see.
+      { id: "secret", documentId: docId, content: "secret", allowedGroups: ["demo-policy"], metadata: { index: 5 } },
+    ]
+    const appSetup = buildApp({ db: setup.db, chunkReader: makeChunkReader(chunks) })
+
+    const { server, port } = await listen(appSetup.app)
+    try {
+      const view = await request(port, `/documents/${docId}/chunks/c1`)
+      assert.equal(view.status, 200)
+      const chunk = view.json?.chunk as Record<string, unknown>
+      assert.equal(chunk.index, 1)
+      assert.equal(chunk.page, 5)
+      assert.deepEqual(chunk.sectionPath, ["第一章"])
+      assert.equal(chunk.content, "middle")
+      const neighbors = view.json?.neighbors as Array<{ chunkId: string }>
+      assert.deepEqual(neighbors.map((n) => n.chunkId), ["c0", "c2"])
+
+      // Missing chunk → 410 but the document stays traceable.
+      const missing = await request(port, `/documents/${docId}/chunks/nope`)
+      assert.equal(missing.status, 410)
+      assert.equal((missing.json?.document as Record<string, unknown>).title, "Policy")
+
+      // Retire the source: the version view survives (traceability), the
+      // chunk text answers 410, and nothing re-enters retrieval.
+      setup.db.prepare(
+        `UPDATE sources SET lifecycle_state = 'retired' WHERE source_id = (
+          SELECT source_id FROM documents WHERE doc_id = ?)`
+      ).run(docId)
+      const detail = await request(port, `/documents/${docId}`)
+      assert.equal(detail.status, 200, "historic citations stay traceable after retirement")
+      assert.equal((detail.json?.document as Record<string, unknown>).retired, true)
+      const retiredPreview = await request(port, `/documents/${docId}/preview`)
+      assert.equal(retiredPreview.json?.available, true, "SQLite text still previews")
+      const retiredChunk = await request(port, `/documents/${docId}/chunks/c1`)
+      assert.equal(retiredChunk.status, 200, "chunk index still holds the text until cleanup")
     } finally {
       server.close()
     }
