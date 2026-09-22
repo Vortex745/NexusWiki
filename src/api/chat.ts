@@ -319,10 +319,13 @@ export function createChatRouter(
       return
     }
     activeRuns.set(sessionId, runId)
+    // Released only AFTER the run converged (the loop ended, the terminal turn
+    // was recorded, the response closed). Releasing on `close` would let a new
+    // run start while this one is still writing its terminal turn — and a new
+    // branch truncation could then be undone by the old run's late write.
     const releaseRun = () => {
       if (activeRuns.get(sessionId) === runId) activeRuns.delete(sessionId)
     }
-    res.once("close", releaseRun)
 
     // Ticket 20 (CONV-01A): server-owned history — the directory is ensured
     // when the run starts (title from the first message). The turns

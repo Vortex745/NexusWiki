@@ -380,6 +380,14 @@ export class SqliteConversationHistoryStore {
           `DELETE FROM conversation_rolling_summaries WHERE session_id = ? AND tenant_id = ?`
         )
         .run(sessionId, tenantId)
+      // A pending clarification belongs to the turn that asked for it: an edit
+      // or regenerate that drops that turn must not leave the question waiting
+      // to swallow the NEXT message as if it were its answer.
+      // (clarification_pending is keyed by session id alone; ownership was
+      // already asserted above.)
+      this.db
+        .prepare(`DELETE FROM clarification_pending WHERE session_id = ?`)
+        .run(sessionId)
       return { validated, history }
     })
     return cut()

@@ -160,6 +160,11 @@ export class SqliteSessionAttachmentStore {
     )
   }
 
+  /**
+   * Settle a row that is still `parsing`. The precondition is what keeps a
+   * retired row dead: a parse that finishes after a removal must not resurrect
+   * the attachment into the session's live set.
+   */
   markStatus(
     id: string,
     sessionId: string,
@@ -171,7 +176,8 @@ export class SqliteSessionAttachmentStore {
     this.db
       .prepare(
         `UPDATE session_attachments SET status = ?, error = ?, updated_at = ?
-         WHERE id = ? AND session_id = ? AND tenant_id = ? AND subject_id = ?`
+         WHERE id = ? AND session_id = ? AND tenant_id = ? AND subject_id = ?
+           AND status = 'parsing'`
       )
       .run(status, options.error ?? null, options.now, id, sessionId, tenantId, subjectId)
   }
@@ -206,13 +212,28 @@ export class SqliteSessionAttachmentStore {
    * Nothing outside this session is ever touched.
    */
   retireUnpromoted(sessionId: string, tenantId: string, subjectId: string, now: string): number {
-    return this.db
-      .prepare(
-        `UPDATE session_attachments SET status = 'retired', updated_at = ?
-         WHERE session_id = ? AND tenant_id = ? AND subject_id = ?
-           AND status IN ('parsing','ready','failed')`
-      )
-      .run(now, sessionId, tenantId, subjectId).changes
+    const retire = this.db.transaction(() => {
+      const changed = this.db
+        .prepare(
+          `UPDATE session_attachments SET status = 'retired', content = '', updated_at = ?
+           WHERE session_id = ? AND tenant_id = ? AND subject_id = ?
+             AND status IN ('parsing','ready','failed')`
+        )
+        .run(now, sessionId, tenantId, subjectId).changes
+      // The text is the attachment: retiring it releases the bytes it held.
+      this.db
+        .prepare(
+          `DELETE FROM session_attachment_chunks
+           WHERE session_id = ? AND tenant_id = ?
+             AND attachment_id IN (
+               SELECT id FROM session_attachments
+               WHERE session_id = ? AND tenant_id = ? AND subject_id = ? AND status = 'retired'
+             )`
+        )
+        .run(sessionId, tenantId, sessionId, tenantId, subjectId)
+      return changed
+    })
+    return retire()
   }
 
   /**
@@ -226,13 +247,25 @@ export class SqliteSessionAttachmentStore {
     subjectId: string,
     now: string
   ): number {
-    return this.db
-      .prepare(
-        `UPDATE session_attachments SET status = 'retired', updated_at = ?
-         WHERE id = ? AND session_id = ? AND tenant_id = ? AND subject_id = ?
-           AND status IN ('parsing','ready','failed')`
-      )
-      .run(now, id, sessionId, tenantId, subjectId).changes
+    const retire = this.db.transaction(() => {
+      const changed = this.db
+        .prepare(
+          `UPDATE session_attachments SET status = 'retired', content = '', updated_at = ?
+           WHERE id = ? AND session_id = ? AND tenant_id = ? AND subject_id = ?
+             AND status IN ('parsing','ready','failed')`
+        )
+        .run(now, id, sessionId, tenantId, subjectId).changes
+      if (changed > 0) {
+        this.db
+          .prepare(
+            `DELETE FROM session_attachment_chunks
+             WHERE attachment_id = ? AND session_id = ? AND tenant_id = ?`
+          )
+          .run(id, sessionId, tenantId)
+      }
+      return changed
+    })
+    return retire()
   }
 
   saveChunks(

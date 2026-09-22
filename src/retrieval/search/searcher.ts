@@ -892,6 +892,27 @@ export class SearcherImpl implements Searcher {
           : {}),
       }
     }
+    // Ticket 05's empty-scope promise still holds: an empty knowledge scope
+    // with NO useful attachment evidence stays the honest "insufficient", not
+    // a silent "ok" with nothing in it. (The attachment channel was the only
+    // reason this search skipped the early return.)
+    if (hasNoKnowledgeContext(retrievalScope) && resultSets.every((set) => set.length === 0)) {
+      return {
+        status: "insufficient",
+        results: [],
+        unavailableChannels,
+        ...(unselectedChannels.length > 0 ? { unselectedChannels } : {}),
+        ...(debug
+          ? {
+              debug: {
+                channels: orderedStages(channelStages),
+                fused: { elapsedMs: 0, rawCandidateCount: 0, distinctCount: 0, candidates: [] },
+                totalMs: performance.now() - searchStarted,
+              },
+            }
+          : {}),
+      }
+    }
 
     const fusionStarted = performance.now()
     const fused = rrf(resultSets)

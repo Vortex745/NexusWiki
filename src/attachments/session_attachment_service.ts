@@ -96,6 +96,8 @@ export class SessionAttachmentService implements AttachmentSearchOperations {
   private readonly store: SqliteSessionAttachmentStore
   private readonly lifecycle: IngestionLifecycle
   private readonly now: () => Date
+  /** Serializes limit accounting across concurrent uploads (one process). */
+  private submitQueue: Promise<void> = Promise.resolve()
 
   constructor(db: DB, options: SessionAttachmentServiceOptions = {}) {
     this.store = new SqliteSessionAttachmentStore(db)
@@ -111,6 +113,23 @@ export class SessionAttachmentService implements AttachmentSearchOperations {
    * five files or fifty megabytes in total.
    */
   async submit(
+    sessionId: string,
+    tenantId: string,
+    subjectId: string,
+    files: readonly AttachmentFile[]
+  ): Promise<AttachmentSubmitOutcome[]> {
+    // Limits are accounted from what the session already holds, so two
+    // concurrent uploads must not both read the same base. This process owns
+    // the database file, so an in-process queue is the whole story.
+    const run = this.submitQueue.then(() => this.submitSerialized(sessionId, tenantId, subjectId, files))
+    this.submitQueue = run.then(
+      () => undefined,
+      () => undefined
+    )
+    return run
+  }
+
+  private async submitSerialized(
     sessionId: string,
     tenantId: string,
     subjectId: string,

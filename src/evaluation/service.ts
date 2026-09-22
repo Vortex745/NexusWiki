@@ -28,6 +28,7 @@ import {
   createIsolatedEvalResources,
   EvalPrepareError,
   type EvalCorpusPassage,
+  type EvalDisposeReport,
   type IsolatedEvalClients,
   type IsolatedEvalResources,
 } from "./isolated_resources"
@@ -275,6 +276,13 @@ interface TaskRecord {
   controller: AbortController
   run?: Promise<void>
   cancelReason?: string
+  /** Ticket 25: the deadline watchdog had to abandon the case loop. */
+  watchdogExpired?: boolean
+  /**
+   * Ticket 25: the record's outcome is FINAL (set by the shutdown deadline),
+   * so the run's own finally must not stage it again.
+   */
+  sealed?: boolean
 }
 
 export class EvaluationService {
@@ -433,8 +441,9 @@ export class EvaluationService {
       // runTask already records failures; this is the last-resort guard so a
       // bug in the runner can never leave an unhandled rejection behind.
       // Ticket 25: it must never RE-open or overwrite a record that already
-      // reached its terminal state, and whatever it reports is redacted.
-      if (EVAL_TASK_TERMINAL_STAGES.includes(record.stage)) return
+      // reached its terminal state (or was sealed by shutdown), and whatever
+      // it reports is redacted.
+      if (EVAL_TASK_TERMINAL_STAGES.includes(record.stage) || record.sealed) return
       record.stage = "failed"
       record.error = redactDetail(error instanceof Error ? error.message : String(error))
       record.finishedAt = this.now().toISOString()
@@ -545,6 +554,8 @@ export class EvaluationService {
         record.stage = "failed"
         record.error = record.error ?? `cancelled by service shutdown (cleanup did not settle within ${budget}ms)`
         record.finishedAt = record.finishedAt ?? this.now().toISOString()
+        // The run's own finally must not stage it back into `cleaning`.
+        record.sealed = true
       }
     }
 
@@ -735,14 +746,30 @@ export class EvaluationService {
 
       record.stage = "running"
       const entry = await resources.createAnswerEntry()
-      await this.runCases(record, entry, resources, taskController.signal)
+      // Ticket 25: the total deadline is a WATCHDOG, not a hope. The signal
+      // reaches every cooperative stage; if a case (or a provider) ignores it,
+      // this race still guarantees the record reaches a terminal stage inside
+      // the task's bounded lifetime.
+      await this.runCasesWithWatchdog(record, entry, resources, taskController, deadlineAt)
+      if (record.watchdogExpired) {
+        throw new Error(
+          `task exceeded its ${this.taskTimeoutMs}ms deadline; the run was abandoned and reported as failed`
+        )
+      }
 
       // Ticket 25: a cancelled run says so at the TASK level too — without
       // this the cancelled cases would only carry their own abort messages.
       if (taskController.signal.aborted && record.cancelReason && !record.error) {
         record.error = record.cancelReason
+        // A cancel that arrives after the last answer is still not a clean
+        // success: the run was cut short, so it says so.
+        // `runCases` may have moved the stage past the literal TS still sees.
+        const current = record.stage as EvalTaskStage
+        record.stage = current === "completed" ? "completed_with_errors" : current
       }
-      record.stage = this.terminalStageFor(record.cases)
+      if (!EVAL_TASK_TERMINAL_STAGES.includes(record.stage)) {
+        record.stage = this.terminalStageFor(record.cases)
+      }
     } catch (error) {
       const detail = error instanceof Error ? error.message : String(error)
       // Ticket 14: a run cancelled by shutdown says so, instead of reading as
@@ -757,7 +784,8 @@ export class EvaluationService {
       const outcomeStage = record.stage
       if (resources && !resourcesDisposed) {
         // Ticket 14: the cleaning stage is observable while dispose runs.
-        record.stage = "cleaning"
+        // Ticket 25: a sealed record keeps the outcome the shutdown reported.
+        if (!record.sealed) record.stage = "cleaning"
         // Ticket 25: cleanup is bounded — the wait may extend the task's total
         // lifetime by at most `cleanupTimeoutMs` (and never more than what is
         // left of `deadlineAt + cleanupTimeoutMs`).
@@ -772,8 +800,9 @@ export class EvaluationService {
       // unqualified success. The original outcome still wins (a failed run
       // stays failed, its cleanup error stays visible alongside it), but a
       // clean run with leftovers is reported as completed_with_errors.
-      record.stage =
-        outcomeStage === "completed" && cleanupIncomplete(record.cleanup)
+      record.stage = record.sealed
+        ? record.stage
+        : outcomeStage === "completed" && cleanupIncomplete(record.cleanup)
           ? "completed_with_errors"
           : outcomeStage
       record.finishedAt = this.now().toISOString()
@@ -786,16 +815,28 @@ export class EvaluationService {
   ): Promise<EvalCleanupReport> {
     let timer: NodeJS.Timeout | undefined
     try {
-      const released = await Promise.race([
-        resources.dispose().then((report) => ({ released: true as const, report })),
-        new Promise<{ released: false; report: null }>((resolve) => {
-          timer = setTimeout(() => resolve({ released: false, report: null }), budgetMs)
+      // The losing branch of the race must never surface as an unhandled
+      // rejection: a release that throws after the budget won is a cleanup
+      // failure we already reported, not a process-level crash.
+      type Release = { released: true; report: EvalDisposeReport } | { released: false; error: string | null }
+      const released = await Promise.race<Release>([
+        resources
+          .dispose()
+          .then((report) => ({ released: true as const, report }))
+          .catch((error) => {
+            const detail = redactDetail(error instanceof Error ? error.message : String(error))
+            console.warn("[evaluation] cleanup failed:", detail)
+            return { released: false as const, error: detail }
+          }),
+        new Promise<Release>((resolve) => {
+          timer = setTimeout(() => resolve({ released: false, error: null }), budgetMs)
         }),
       ])
       if (!released.released) {
-        // Ticket 25: an unbounded release would hang the page. A timeout is a
-        // cleanup FAILURE with evidence, never a silent success.
-        const message = `cleanup did not finish within ${budgetMs}ms`
+        // Ticket 25: an unbounded release would hang the page. A timeout — or
+        // a release that threw — is a cleanup FAILURE with evidence, never a
+        // silent success.
+        const message = released.error ?? `cleanup did not finish within ${budgetMs}ms`
         return {
           esIndex: "failed",
           esError: message,
@@ -827,6 +868,35 @@ export class EvaluationService {
     if (failed === cases.length) return "failed"
     if (failed > 0) return "completed_with_errors"
     return "completed"
+  }
+
+  /**
+   * Ticket 25 (EVAL-01A): the bounded case phase. The signal is the normal
+   * cancellation path; this race is the GUARANTEE — a stage or provider that
+   * ignores the signal still cannot keep the record non-terminal past
+   * `deadlineAt + cleanupTimeoutMs`.
+   */
+  private async runCasesWithWatchdog(
+    record: TaskRecord,
+    entry: Awaited<ReturnType<IsolatedEvalResources["createAnswerEntry"]>>,
+    resources: IsolatedEvalResources,
+    taskController: AbortController,
+    deadlineAt: number
+  ): Promise<void> {
+    const loop = this.runCases(record, entry, resources, taskController.signal)
+    // An abandoned loop must never surface as an unhandled rejection.
+    loop.catch(() => {})
+    const budgetMs = Math.max(0, deadlineAt + this.cleanupTimeoutMs - Date.now())
+    let timer: NodeJS.Timeout | undefined
+    const outcome = await Promise.race<"finished" | "expired">([
+      loop.then(() => "finished" as const),
+      new Promise<"expired">((resolve) => {
+        timer = setTimeout(() => resolve("expired"), budgetMs)
+      }),
+    ]).finally(() => {
+      if (timer) clearTimeout(timer)
+    })
+    if (outcome === "expired") record.watchdogExpired = true
   }
 
   /**

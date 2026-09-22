@@ -131,6 +131,19 @@ test("a session with no knowledge selection still answers from its own attachmen
   assert.notEqual(withSession.status, "insufficient")
   assert.deepEqual(withSession.results.map((result) => result.source), ["attachment"])
   assert.match(withSession.results[0].chunk.content, /预算/)
+
+  // The same empty scope with NO attachment evidence keeps ticket 05's
+  // fail-closed answer instead of turning into a silent "ok".
+  const noHits = await searcher.search(
+    { text: "完全没有出现过的词" },
+    {
+      accessContext: context,
+      retrievalScope: { knowledgeBaseIds: [] },
+      attachments: { sessionId: "sess-2" },
+    }
+  )
+  assert.equal(noHits.status, "insufficient")
+  assert.deepEqual(noHits.results, [])
 })
 
 test("another session's attachment is unreachable, even for the same user", async () => {
