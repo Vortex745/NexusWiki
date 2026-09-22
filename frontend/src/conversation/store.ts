@@ -130,11 +130,14 @@ export class ConversationStore {
     const prompt = anchor.prompt || anchor.content
     if (!prompt.trim()) return
 
+    // Ticket 21 (CONV-01B): name the branch being replaced BEFORE the local
+    // truncation removes it, so the server drops the same branch.
+    const replacedRunId = this.replacedRunId(thread, anchor.id)
     this.conversation.truncateMessages(thread.id, anchor.id, false)
     const assistant = this.conversation.startAssistantRun(thread.id, { runId: createRunId() })
     this.runningMessage = assistant
     this.invalidate()
-    await this.executeRun(thread, assistant, prompt)
+    await this.executeRun(thread, assistant, prompt, replacedRunId)
   }
 
   async editMessage(userMessageId: string, displayText: string, prompt: string): Promise<void> {
@@ -143,19 +146,38 @@ export class ConversationStore {
     if (!thread) return
     if (!thread.messages.some((message) => message.id === userMessageId)) return
 
+    const replacedRunId = this.replacedRunId(thread, userMessageId)
     this.conversation.truncateMessages(thread.id, userMessageId, true)
     this.conversation.addUserMessage(thread.id, { content: displayText, prompt })
     const assistant = this.conversation.startAssistantRun(thread.id, { runId: createRunId() })
     this.runningMessage = assistant
     this.invalidate()
-    await this.executeRun(thread, assistant, prompt)
+    await this.executeRun(thread, assistant, prompt, replacedRunId)
+  }
+
+  /**
+   * Ticket 21 (CONV-01B): the first assistant reply after `messageId` — the
+   * run an edit or regenerate replaces. Undefined when the branch was never
+   * answered, so the server truncates nothing (there is nothing to drop).
+   */
+  private replacedRunId(thread: Thread, messageId: string): string | undefined {
+    const index = thread.messages.findIndex((message) => message.id === messageId)
+    if (index === -1) return undefined
+    return thread.messages
+      .slice(index + 1)
+      .find((message) => message.role === "assistant" && message.runId)?.runId
   }
 
   cancel(): void {
     this.abortController?.abort()
   }
 
-  private async executeRun(thread: Thread, assistant: Message, prompt: string): Promise<void> {
+  private async executeRun(
+    thread: Thread,
+    assistant: Message,
+    prompt: string,
+    truncateFromRunId?: string,
+  ): Promise<void> {
     const controller = new AbortController()
     this.abortController = controller
     this.conversation.startRun()
@@ -177,6 +199,8 @@ export class ConversationStore {
           ...(assistantStore.getSnapshot().selectedId
             ? { assistantId: assistantStore.getSnapshot().selectedId as string }
             : {}),
+          // Ticket 21 (CONV-01B): edit and regenerate name the replaced branch.
+          ...(truncateFromRunId ? { truncateFromRunId } : {}),
         },
         (data) => {
           // Merge policy belongs to Conversation; this store only re-renders.

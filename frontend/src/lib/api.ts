@@ -313,6 +313,12 @@ export interface ChatRequestBody {
    * from the stored immutable version. Omitted → the legacy default path.
    */
   assistantId?: string
+  /**
+   * Ticket 21 (CONV-01B): the run this request REPLACES. Edit and regenerate
+   * name the branch's assistant run so the server drops it — and everything
+   * recorded after it — before the new run starts. Omitted on a normal send.
+   */
+  truncateFromRunId?: string
 }
 
 /**

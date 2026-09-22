@@ -68,6 +68,13 @@ interface TurnRow {
   seq: number
 }
 
+/** Frozen by the first message of a session. Later runs cannot move it. */
+export interface SessionLock {
+  assistantId: string | null
+  assistantVersion: number | null
+  knowledgeBaseIds: string[]
+}
+
 export class ConversationHistoryError extends Error {
   constructor(message: string) {
     super(message)
@@ -261,6 +268,155 @@ export class SqliteConversationHistoryStore {
       else skipped += 1
     }
     return { imported, skipped }
+  }
+
+  /**
+   * Ticket 21 (CONV-01B): freeze assistant version and the authorized knowledge
+   * subset on the first message. A later call returns the original lock and
+   * writes nothing. The directory must already belong to the caller.
+   */
+  lockSession(
+    sessionId: string,
+    tenantId: string,
+    subjectId: string,
+    snapshot: { assistantId: string | null; assistantVersion: number | null; knowledgeBaseIds: string[] }
+  ): SessionLock {
+    this.assertOwned(sessionId, tenantId, subjectId)
+    const existing = this.readLock(sessionId)
+    if (existing) return existing
+    this.db
+      .prepare(
+        `UPDATE conversation_directories
+         SET assistant_id = ?, assistant_version = ?, knowledge_base_ids = ?
+         WHERE id = ? AND assistant_id IS NULL AND knowledge_base_ids IS NULL`
+      )
+      .run(
+        snapshot.assistantId,
+        snapshot.assistantVersion,
+        JSON.stringify(snapshot.knowledgeBaseIds),
+        sessionId
+      )
+    return this.readLock(sessionId) ?? {
+      assistantId: snapshot.assistantId,
+      assistantVersion: snapshot.assistantVersion,
+      knowledgeBaseIds: [...snapshot.knowledgeBaseIds],
+    }
+  }
+
+  /** The lock, or null when the caller does not own the directory. */
+  getSessionLock(sessionId: string, tenantId: string, subjectId: string): SessionLock | null {
+    const row = this.db
+      .prepare(`SELECT subject_id FROM conversation_directories WHERE id = ? AND tenant_id = ?`)
+      .get(sessionId, tenantId) as { subject_id: string } | undefined
+    if (!row || row.subject_id !== subjectId) return null
+    return this.readLock(sessionId)
+  }
+
+  /**
+   * Ticket 21 (CONV-01B): drop the anchored run AND every later turn —
+   * validated memory and history. This is the branch an edit or a regenerate
+   * replaces, so it is matched by run id (a run's user and assistant rows can
+   * carry different timestamps) and everything after the anchor's last row
+   * goes too. An unknown anchor removes nothing.
+   */
+  truncateFromRun(
+    sessionId: string,
+    tenantId: string,
+    subjectId: string,
+    anchorRunId: string
+  ): { validated: number; history: number } {
+    return this.truncateBranch(sessionId, tenantId, subjectId, anchorRunId, true)
+  }
+
+  /**
+   * Ticket 20 (CONV-01A): drop every turn recorded strictly after
+   * `anchorRunId`. Kept beside `truncateFromRun` because the two branch roots
+   * differ: "after" keeps the anchor's own pair (reply to another question),
+   * "from" replaces it (edit / regenerate).
+   */
+  truncateAfterRun(
+    sessionId: string,
+    tenantId: string,
+    subjectId: string,
+    anchorRunId: string
+  ): { validated: number; history: number } {
+    return this.truncateBranch(sessionId, tenantId, subjectId, anchorRunId, false)
+  }
+
+  private truncateBranch(
+    sessionId: string,
+    tenantId: string,
+    subjectId: string,
+    anchorRunId: string,
+    inclusive: boolean
+  ): { validated: number; history: number } {
+    this.assertOwned(sessionId, tenantId, subjectId)
+    // The two tables have independent id sequences, so the cutoff is the
+    // anchor run's created_at; inclusivity additionally matches the anchor's
+    // own rows exactly, by run id.
+    const stamp = this.anchorStamp(sessionId, tenantId, anchorRunId)
+    if (!stamp) return { validated: 0, history: 0 }
+    const predicate = inclusive
+      ? "(run_id = ? OR created_at > ?)"
+      : "created_at > ?"
+    const cut = this.db.transaction(() => {
+      const validated = this.db
+        .prepare(
+          `DELETE FROM conversation_turns
+           WHERE session_id = ? AND tenant_id = ? AND kind = 'validated' AND ${predicate}`
+        )
+        .run(sessionId, tenantId, ...(inclusive ? [anchorRunId, stamp] : [stamp])).changes
+      const history = this.db
+        .prepare(
+          `DELETE FROM conversation_history_turns
+           WHERE session_id = ? AND tenant_id = ? AND ${predicate}`
+        )
+        .run(sessionId, tenantId, ...(inclusive ? [anchorRunId, stamp] : [stamp])).changes
+      // The rolling summary is derived from validated turns and is read back
+      // BEFORE them, so a truncated branch would leak through it. Dropping the
+      // record is honest: the next summarization rebuilds from what is left.
+      this.db
+        .prepare(
+          `DELETE FROM conversation_rolling_summaries WHERE session_id = ? AND tenant_id = ?`
+        )
+        .run(sessionId, tenantId)
+      return { validated, history }
+    })
+    return cut()
+  }
+
+  private anchorStamp(sessionId: string, tenantId: string, runId: string): string | null {
+    const row = this.db
+      .prepare(
+        `SELECT MAX(created_at) AS created_at FROM (
+           SELECT created_at FROM conversation_turns
+           WHERE session_id = ? AND tenant_id = ? AND run_id = ? AND kind = 'validated'
+           UNION ALL
+           SELECT created_at FROM conversation_history_turns
+           WHERE session_id = ? AND tenant_id = ? AND run_id = ?
+         )`
+      )
+      .get(sessionId, tenantId, runId, sessionId, tenantId, runId) as { created_at: string | null }
+    return row.created_at
+  }
+
+  private readLock(sessionId: string): SessionLock | null {
+    const row = this.db
+      .prepare(
+        `SELECT assistant_id, assistant_version, knowledge_base_ids
+         FROM conversation_directories WHERE id = ?`
+      )
+      .get(sessionId) as {
+        assistant_id: string | null
+        assistant_version: number | null
+        knowledge_base_ids: string | null
+      } | undefined
+    if (!row || row.knowledge_base_ids == null) return null
+    return {
+      assistantId: row.assistant_id,
+      assistantVersion: row.assistant_version,
+      knowledgeBaseIds: JSON.parse(row.knowledge_base_ids) as string[],
+    }
   }
 
   /** Another user's directory is indistinguishable from an unknown one. */

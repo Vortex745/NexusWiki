@@ -38,6 +38,14 @@ interface ChatRequest {
    * assistant's scope through raw parameters. Absent → legacy behavior.
    */
   assistantId?: unknown
+  /**
+   * Ticket 21 (CONV-01B): the run this one REPLACES. Everything recorded for
+   * that run and after it — validated memory and history-only turns — is
+   * dropped before the run starts, so an edited question or a regenerated
+   * answer cannot reuse the branch it replaces. Set by edit and regenerate;
+   * absent on a normal send.
+   */
+  truncateFromRunId?: unknown
 }
 
 function streamPayload(event: AnswerRunEvent, sessionId: string) {
@@ -99,6 +107,12 @@ export function createChatRouter(
 ): Router {
   const router = Router()
 
+  // Ticket 21 (CONV-01B): one active run per session, per process. A second
+  // run for a session that already has one in flight is refused BEFORE the
+  // branch truncation and before any answer work, so two overlapping runs can
+  // never interleave rows into the same conversation (or race its branch).
+  const activeRuns = new Map<string, string>()
+
   router.get("/chat/runs/:runId", (req: Request, res: Response) => {
     const history = traceRepository.getRun(String(req.params.runId))
     if (!history) {
@@ -116,6 +130,7 @@ export function createChatRouter(
       sessionId: requestedSessionId,
       knowledgeBaseIds: requestedKnowledgeBaseIds,
       assistantId: requestedAssistantId,
+      truncateFromRunId: requestedTruncateFromRunId,
     } = req.body as ChatRequest
     // Default to streaming so legacy callers and the in-app UI get instant
     // token-by-token output without an opt-in field. Explicit false is honored
@@ -133,6 +148,15 @@ export function createChatRouter(
     const runId = typeof requestedRunId === "string" && /^[a-zA-Z0-9-]{1,100}$/.test(requestedRunId)
       ? requestedRunId
       : uuid()
+    if (
+      requestedTruncateFromRunId !== undefined &&
+      requestedTruncateFromRunId !== null &&
+      (typeof requestedTruncateFromRunId !== "string" ||
+        !/^[a-zA-Z0-9-]{1,100}$/.test(requestedTruncateFromRunId))
+    ) {
+      res.status(400).json({ error: "truncateFromRunId must be a run id" })
+      return
+    }
 
     const accessContext: AccessContext =
       (res.locals.accessContext as AccessContext | undefined) ?? singleTenantAccessContext()
@@ -165,30 +189,46 @@ export function createChatRouter(
     // request supplies only an id — the prompt, knowledge binding, rerank
     // binding and tool policy come from the stored immutable version, so raw
     // parameters can never enlarge the assistant's scope or enable tools.
+    //
+    // Ticket 21/23: the DEFAULT assistant is resolved for every request that
+    // names none — the session still records which assistant (and version) it
+    // ran under, without scanning the workspace.
     let assistantSnapshot: AssistantRunSnapshot | undefined
-    if (assistants && requestedAssistantId !== undefined && requestedAssistantId !== null) {
-      if (typeof requestedAssistantId !== "string" || requestedAssistantId.trim().length === 0) {
+    let sessionAssistant: { id: string; version: number } | undefined
+    const tenantDefaultAssistantId = defaultAssistantId(accessContext.tenantId)
+    if (assistants) {
+      const namingAssistant = requestedAssistantId !== undefined && requestedAssistantId !== null
+      if (namingAssistant && (typeof requestedAssistantId !== "string" || requestedAssistantId.trim().length === 0)) {
         res.status(400).json({ error: "assistantId must be a non-empty string" })
         return
       }
-      const assistantId = requestedAssistantId.trim()
+      const assistantId = namingAssistant
+        ? (requestedAssistantId as string).trim()
+        : tenantDefaultAssistantId
       const assistant =
-        assistantId === defaultAssistantId(accessContext.tenantId)
+        assistantId === tenantDefaultAssistantId
           ? assistants.ensureDefault(accessContext.tenantId)
           : assistants.get(assistantId, accessContext.tenantId)
-      // Unknown, cross-tenant and group-invisible are the same 404.
-      if (!assistant || !assistants.visibleTo(assistant, accessContext)) {
+      if (!assistant) {
         res.status(404).json({ error: "assistant not found" })
         return
       }
-      if (assistant.status === "archived") {
-        res.status(409).json({ error: "assistant is archived" })
-        return
+      if (namingAssistant) {
+        // Unknown, cross-tenant and group-invisible are the same 404.
+        if (!assistants.visibleTo(assistant, accessContext)) {
+          res.status(404).json({ error: "assistant not found" })
+          return
+        }
+        if (assistant.status === "archived") {
+          res.status(409).json({ error: "assistant is archived" })
+          return
+        }
       }
+      sessionAssistant = { id: assistantId, version: assistant.version.version }
       // The deterministic default assistant IS the legacy path: its config is
       // the overlay-free shape, so naming it (or omitting the field entirely)
       // preserves existing chat behavior without a second execution engine.
-      if (assistantId !== defaultAssistantId(accessContext.tenantId)) {
+      if (assistantId !== tenantDefaultAssistantId) {
         const config = assistant.version.config
         assistantSnapshot = {
           id: assistant.id,
@@ -270,6 +310,20 @@ export function createChatRouter(
       }
     }
 
+    // Ticket 21 (CONV-01B): refuse an overlapping run for this session before
+    // the branch truncation and before any answer work. The release runs at
+    // the end of every path AND on response close (belt and braces), so a
+    // failed request cannot wedge its session.
+    if (activeRuns.has(sessionId)) {
+      res.status(409).json({ error: "a run is already active for this session", sessionId })
+      return
+    }
+    activeRuns.set(sessionId, runId)
+    const releaseRun = () => {
+      if (activeRuns.get(sessionId) === runId) activeRuns.delete(sessionId)
+    }
+    res.once("close", releaseRun)
+
     // Ticket 20 (CONV-01A): server-owned history — the directory is ensured
     // when the run starts (title from the first message). The turns
     // themselves are recorded once the run settles: completed runs are
@@ -278,6 +332,72 @@ export function createChatRouter(
     if (conversationHistory) {
       try {
         conversationHistory.ensureDirectory(sessionId, accessContext.tenantId, accessContext.subjectId, message)
+        // Ticket 21: the first message freezes assistant version and the
+        // authorized knowledge subset. A saved session keeps that snapshot
+        // even after the assistant is edited or the selection changes.
+        const locked = conversationHistory.lockSession(
+          sessionId,
+          accessContext.tenantId,
+          accessContext.subjectId,
+          {
+            assistantId: sessionAssistant?.id ?? null,
+            assistantVersion: sessionAssistant?.version ?? null,
+            knowledgeBaseIds: [...(retrievalScope?.knowledgeBaseIds ?? [])],
+          }
+        )
+        // The locked version is authoritative for the whole session: it is
+        // re-read from the immutable version store, never from the request.
+        // The default assistant contributes no overlay (it IS the legacy
+        // path), so a session locked to it keeps legacy behavior.
+        if (
+          locked.assistantId &&
+          locked.assistantVersion != null &&
+          assistants &&
+          locked.assistantId !== tenantDefaultAssistantId
+        ) {
+          const version = assistants.getVersion(
+            locked.assistantId,
+            accessContext.tenantId,
+            locked.assistantVersion
+          )
+          if (version) {
+            assistantSnapshot = {
+              id: locked.assistantId,
+              version: locked.assistantVersion,
+              systemPrompt: version.config.systemPrompt,
+              rerankModelProfileId: version.config.rerankModelProfileId,
+            }
+            runOptions.assistant = assistantSnapshot
+          }
+        }
+        if (retrievalScope && locked.knowledgeBaseIds.length > 0 && retrievalScopeResolver) {
+          // The locked subset is authoritative: a later request cannot widen
+          // it. If it can no longer be resolved (archived/removed base), the
+          // run falls back to NO knowledge context instead of the request's
+          // selection — fail closed, never widen.
+          let lockedScope: RetrievalScope
+          try {
+            lockedScope = retrievalScopeResolver(accessContext, locked.knowledgeBaseIds)
+          } catch {
+            lockedScope = { knowledgeBaseIds: [] }
+          }
+          retrievalScope = lockedScope
+          runOptions.retrievalScope = lockedScope
+        } else if (retrievalScope && locked.knowledgeBaseIds.length === 0) {
+          retrievalScope = { knowledgeBaseIds: [] }
+          runOptions.retrievalScope = retrievalScope
+        }
+        if (
+          typeof requestedTruncateFromRunId === "string" &&
+          requestedTruncateFromRunId.length > 0
+        ) {
+          conversationHistory.truncateFromRun(
+            sessionId,
+            accessContext.tenantId,
+            accessContext.subjectId,
+            requestedTruncateFromRunId
+          )
+        }
       } catch (err) {
         console.error("[chat] history write failed:", err)
       }
@@ -290,6 +410,13 @@ export function createChatRouter(
       if (!conversationHistory) return
       try {
         if (terminal && terminal.result.status === "completed") return
+        // Ticket 21: a terminal event may only be attached to the run that
+        // produced it. A foreign runId (overlapping run, stale stream) is a
+        // bug or a forged event — fail closed instead of writing it here.
+        if (terminal && terminal.result.runId !== runId) {
+          console.error("[chat] terminal event runId does not match the request; not recorded")
+          return
+        }
         const status = terminal
           ? terminal.result.status
           : aborted
@@ -389,6 +516,7 @@ export function createChatRouter(
         res.off("close", onClientClose)
       }
     }
+    releaseRun()
   })
 
   return router

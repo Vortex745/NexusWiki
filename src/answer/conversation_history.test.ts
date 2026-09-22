@@ -319,3 +319,86 @@ test("a stream that dies without a terminal event records a provider_error turn"
     await close()
   }
 })
+
+test("the first message locks the assistant version and knowledge subset", () => {
+  const db = openDb(":memory:")
+  const store = new SqliteConversationHistoryStore(db)
+  // The transport ensures the directory when the first message arrives; the
+  // lock itself only ever applies to a directory its caller already owns.
+  store.ensureDirectory("sess-lock", "t1", "alice", "第一问")
+
+  const first = store.lockSession(
+    "sess-lock",
+    "t1",
+    "alice",
+    { assistantId: "ast-1", assistantVersion: 2, knowledgeBaseIds: ["kb-a", "kb-b"] }
+  )
+  assert.deepEqual(first, {
+    assistantId: "ast-1",
+    assistantVersion: 2,
+    knowledgeBaseIds: ["kb-a", "kb-b"],
+  })
+
+  // A later message naming a newer assistant version and a different knowledge
+  // selection cannot move the lock.
+  const again = store.lockSession(
+    "sess-lock",
+    "t1",
+    "alice",
+    { assistantId: "ast-1", assistantVersion: 9, knowledgeBaseIds: ["kb-other"] }
+  )
+  assert.deepEqual(again, first)
+
+  // Another user cannot read or overwrite the lock.
+  assert.equal(store.getSessionLock("sess-lock", "t1", "bob"), null)
+  assert.throws(
+    () =>
+      store.lockSession("sess-lock", "t1", "bob", {
+        assistantId: "ast-x",
+        assistantVersion: 1,
+        knowledgeBaseIds: ["kb-x"],
+      }),
+    /conversation not found/
+  )
+})
+
+test("editing an earlier question truncates later validated memory", () => {
+  const db = openDb(":memory:")
+  const history = new SqliteConversationHistoryStore(db)
+  const memory = new SqliteConversationStore(db)
+  history.ensureDirectory("sess-edit", "t1", "alice", "第一问")
+
+  const writePair = (runId: string, user: string, assistant: string, at: string) => {
+    memory.saveValidatedTurn({
+      sessionId: "sess-edit", tenantId: "t1", role: "user", content: user, runId, createdAt: at,
+    })
+    memory.saveValidatedTurn({
+      sessionId: "sess-edit", tenantId: "t1", role: "assistant", content: assistant, runId,
+      createdAt: new Date(Date.parse(at) + 5).toISOString(),
+    })
+  }
+  writePair("run-1", "第一问", "第一答", "2026-01-01T00:00:01.000Z")
+  writePair("run-2", "第二问", "第二答", "2026-01-01T00:00:02.000Z")
+  writePair("run-3", "第三问", "第三答", "2026-01-01T00:00:03.000Z")
+  // A refusal after run-2 must go too — truncated history cannot linger.
+  history.recordUnvalidatedRun("sess-edit", "t1", "alice", "插话", "不行", "run-x", "cancelled")
+
+  const removed = history.truncateAfterRun("sess-edit", "t1", "alice", "run-1")
+  assert.ok(removed.validated >= 4)
+  assert.ok(removed.history >= 2)
+
+  const remaining = memory.loadRecentTurns("sess-edit", "t1", 20)
+  assert.deepEqual(remaining.map((turn) => turn.content), ["第一问", "第一答"])
+  assert.deepEqual(
+    history.getTurns("sess-edit", "t1", "alice").map((turn) => turn.content),
+    ["第一问", "第一答"]
+  )
+
+  // An unknown anchor removes nothing.
+  const none = history.truncateAfterRun("sess-edit", "t1", "alice", "run-missing")
+  assert.deepEqual(none, { validated: 0, history: 0 })
+  assert.throws(
+    () => history.truncateAfterRun("sess-edit", "t1", "bob", "run-1"),
+    /conversation not found/
+  )
+})

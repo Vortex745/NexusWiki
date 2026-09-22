@@ -111,6 +111,20 @@ test("store.ts owns the fetch/SSE lifecycle, not the DOM", () => {
   )
 })
 
+test("edit and regenerate name the branch they replace, on the same run id", () => {
+  // Ticket 21 (CONV-01B): the browser truncates locally AND tells the server
+  // which run it replaces, so validated memory cannot keep the dropped branch.
+  assert.match(api, /truncateFromRunId\?: string/, "the chat request carries the field")
+  assert.match(store, /truncateFromRunId/, "the store forwards the replaced run id")
+  assert.match(
+    store,
+    /private replacedRunId\(thread: Thread, messageId: string\): string \| undefined/,
+    "the replaced branch is resolved from the local thread before truncation",
+  )
+  const calls = store.match(/this\.replacedRunId\(thread, /g) ?? []
+  assert.equal(calls.length, 2, "only edit and regenerate name a replaced branch")
+})
+
 test("React components do not own chat state (no direct Conversation access)", () => {
   for (const file of [
     "frontend/src/components/thread/Thread.tsx",
