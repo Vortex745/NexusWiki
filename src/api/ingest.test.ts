@@ -8,6 +8,7 @@ import { createApp } from "./server"
 import { closeDb, openDb } from "../ingestion/tracking"
 import type { DB } from "../ingestion/tracking/db"
 import { DocumentRepo } from "../ingestion/tracking/doc_repo"
+import { TaskRepo } from "../ingestion/tracking/task_repo"
 import { SqliteKnowledgeBaseRepo } from "../knowledge/knowledge_base_repo"
 import { _setTestDefaults } from "../ingestion/url_fetcher"
 import type { HostResolver } from "../ingestion/url_policy"
@@ -1202,6 +1203,163 @@ test("Ticket 11 DOC-01A: imports carry tags and folder into the document metadat
       }),
     })
     assert.equal(badTagsRes.status, 400, "non-string tags are rejected")
+  } finally {
+    await new Promise<void>((resolve, reject) => {
+      server.close((error) => error ? reject(error) : resolve())
+    })
+    closeDb()
+    rmSync(directory, { recursive: true, force: true })
+  }
+})
+
+test("Ticket 12 DOC-01B: same-name content requires explicit version-or-new-document intent", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "kefu-rag-intent-"))
+  process.env.OPENAI_API_KEY = process.env.OPENAI_API_KEY || "test-key"
+  process.env.SQLITE_PATH = join(directory, "ingestion.db")
+  const db = openDb()
+  seedKnowledgeBase(db, "kb-intent", "tenant-a")
+  const server = createApp({ eventsSource, ingestAccessMiddleware: adminAccessMiddleware }).listen(0)
+  try {
+    await new Promise<void>((resolve) => server.once("listening", resolve))
+    const address = server.address()
+    assert.ok(address && typeof address === "object")
+    const upload = (content: string, intent?: string) =>
+      fetch(`http://127.0.0.1:${address!.port}/api/ingest/file`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/octet-stream",
+          "x-file-name": "handbook.md",
+          "x-knowledge-base-id": "kb-intent",
+          ...(intent ? { "x-document-intent": intent } : {}),
+        },
+        body: Buffer.from(content),
+      })
+
+    // First upload — a brand-new source needs no intent.
+    const first = await upload("version one")
+    assert.equal(first.status, 200)
+    const firstBody = await first.json() as { docId: string; version: number }
+    assert.equal(firstBody.version, 1)
+    // No worker runs in this test — activate the version the pipeline's
+    // success path would have activated.
+    new DocumentRepo(db).activate(firstBody.docId)
+
+    // Identical content stays an "unchanged" no-op without intent.
+    const same = await upload("version one")
+    assert.equal(same.status, 200)
+    assert.equal((await same.json() as { status: string }).status, "unchanged")
+
+    // Different content without intent is a 409 that names the active version.
+    const conflict = await upload("version two")
+    assert.equal(conflict.status, 409)
+    const conflictBody = await conflict.json() as { activeDocId: string; activeVersion: number }
+    assert.equal(conflictBody.activeDocId, firstBody.docId)
+    assert.equal(conflictBody.activeVersion, 1)
+
+    // An invalid intent is a 400.
+    assert.equal((await upload("version two", "nonsense")).status, 400)
+
+    // Explicit new_version rides the same source's version history.
+    const replacement = await upload("version two", "new_version")
+    assert.equal(replacement.status, 200)
+    assert.equal((await replacement.json() as { version: number }).version, 2)
+
+    // Explicit new_document detaches into an independent source (version 1).
+    const independent = await upload("version three", "new_document")
+    assert.equal(independent.status, 200)
+    const independentBody = await independent.json() as { docId: string; version: number }
+    assert.equal(independentBody.version, 1)
+    assert.notEqual(independentBody.docId, firstBody.docId)
+    const repo = new DocumentRepo(db)
+    assert.notEqual(repo.get(independentBody.docId)?.sourceId, repo.get(firstBody.docId)?.sourceId)
+  } finally {
+    await new Promise<void>((resolve, reject) => {
+      server.close((error) => error ? reject(error) : resolve())
+    })
+    closeDb()
+    rmSync(directory, { recursive: true, force: true })
+  }
+})
+
+test("Ticket 12 DOC-01B: retry and reprocess reuse the lifecycle and are admin+tenant scoped", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "kefu-rag-retry-"))
+  process.env.OPENAI_API_KEY = process.env.OPENAI_API_KEY || "test-key"
+  process.env.SQLITE_PATH = join(directory, "ingestion.db")
+  const db = openDb()
+  const repo = new DocumentRepo(db)
+  const taskRepo = new TaskRepo(db)
+
+  const makeDoc = (tenantId: string, title: string, status: "failed" | "completed") => {
+    const source = repo.createSource({
+      sourceId: `src-${Math.random().toString(16).slice(2, 8)}`,
+      sourceKey: `key-${Math.random().toString(16).slice(2, 8)}`,
+      kind: "submission",
+      uri: `uri-${Math.random().toString(16).slice(2, 8)}`,
+      namespace: "test",
+      tenantId,
+    })
+    const docId = `doc-${Math.random().toString(16).slice(2, 8)}`
+    repo.insert({ docId, sourceId: source.sourceId, contentHash: `h-${docId}`, version: 1, title, source: "api", content: "x", tenantId })
+    const taskId = taskRepo.enqueue({ docId, op: "ingest", payload: {} })
+    // Simulate a terminal task. (claimNext would grab stale pending tasks from
+    // earlier tests — openDb() is memoized across this file — so set the state
+    // directly.)
+    db.prepare("UPDATE task_pending_ops SET status = ? WHERE id = ?").run(status, taskId)
+    repo.updateStatus(docId, status)
+    return docId
+  }
+
+  const failedDoc = makeDoc("tenant-a", "Broken", "failed")
+  const completedDoc = makeDoc("tenant-a", "Done", "completed")
+  const foreignDoc = makeDoc("tenant-b", "Foreign", "failed")
+  // A retired source's document must not be resurrectable.
+  const retiredDoc = makeDoc("tenant-a", "Retired", "failed")
+  db.prepare(`UPDATE sources SET lifecycle_state = 'retired' WHERE source_id = (
+    SELECT source_id FROM documents WHERE doc_id = ?)`).run(retiredDoc)
+
+  const server = createApp({ eventsSource, ingestAccessMiddleware: adminAccessMiddleware }).listen(0)
+  try {
+    await new Promise<void>((resolve) => server.once("listening", resolve))
+    const port = (server.address() as { port: number }).port
+
+    // Non-admin callers are refused before anything else.
+    const readerServer = createApp({ eventsSource, ingestAccessMiddleware: tenantAccessMiddleware }).listen(0)
+    const readerPort = (readerServer.address() as { port: number }).port
+    try {
+      const readerRes = await fetch(`http://127.0.0.1:${readerPort}/api/ingest/${failedDoc}/retry`, { method: "POST" })
+      assert.equal(readerRes.status, 403)
+    } finally {
+      await new Promise<void>((resolve) => readerServer.close(() => resolve()))
+    }
+
+    // Another tenant's doc id is the same 404 a missing one is.
+    assert.equal((await fetch(`http://127.0.0.1:${port}/api/ingest/${foreignDoc}/status`)).status, 404)
+    assert.equal((await fetch(`http://127.0.0.1:${port}/api/ingest/${foreignDoc}/retry`, { method: "POST" })).status, 404)
+    assert.equal((await fetch(`http://127.0.0.1:${port}/api/ingest/does-not-exist/reprocess`, { method: "POST" })).status, 404)
+
+    // A retired source's document stays retired — no resurrection.
+    const retiredRes = await fetch(`http://127.0.0.1:${port}/api/ingest/${retiredDoc}/retry`, { method: "POST" })
+    assert.equal(retiredRes.status, 409)
+    assert.equal(repo.getStatus(retiredDoc), "failed", "the retired doc was not requeued")
+
+    // Retry the failed doc: task requeued (fail budget reset), doc pending.
+    const retryRes = await fetch(`http://127.0.0.1:${port}/api/ingest/${failedDoc}/retry`, { method: "POST" })
+    assert.equal(retryRes.status, 200)
+    assert.equal((await retryRes.json() as { changed: boolean }).changed, true)
+    assert.equal(taskRepo.getByDocId(failedDoc)?.status, "pending")
+    assert.equal(taskRepo.getByDocId(failedDoc)?.failCount, 0)
+    assert.equal(repo.getStatus(failedDoc), "pending")
+    // Retry again is a state conflict (already pending), not a 500.
+    assert.equal((await fetch(`http://127.0.0.1:${port}/api/ingest/${failedDoc}/retry`, { method: "POST" })).status, 409)
+
+    // Reprocess the completed doc; reprocessing a pending doc is a conflict.
+    const reprocessRes = await fetch(`http://127.0.0.1:${port}/api/ingest/${completedDoc}/reprocess`, { method: "POST" })
+    assert.equal(reprocessRes.status, 200)
+    assert.equal((await reprocessRes.json() as { changed: boolean }).changed, true)
+    assert.equal(taskRepo.getByDocId(completedDoc)?.status, "pending")
+    assert.equal(repo.getStatus(completedDoc), "pending")
+    assert.equal((await fetch(`http://127.0.0.1:${port}/api/ingest/${completedDoc}/reprocess`, { method: "POST" })).status, 409)
+    assert.equal((await fetch(`http://127.0.0.1:${port}/api/ingest/${failedDoc}/reprocess`, { method: "POST" })).status, 409)
   } finally {
     await new Promise<void>((resolve, reject) => {
       server.close((error) => error ? reject(error) : resolve())

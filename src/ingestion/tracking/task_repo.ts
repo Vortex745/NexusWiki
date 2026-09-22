@@ -203,6 +203,24 @@ export class TaskRepo {
     return info.changes === 1
   }
 
+  /**
+   * Ticket 12 (DOC-01B): requeue a TERMINAL task for a manual retry or a
+   * reprocess. The retry budget restarts (fail_count reset) — a manual retry
+   * is a human decision, not another automatic attempt. Only terminal states
+   * are eligible; pending/running tasks are owned by the worker loop.
+   */
+  requeue(taskId: number): boolean {
+    const requeued = this.db.prepare(
+      `UPDATE task_pending_ops
+       SET status = 'pending', fail_count = 0, claimed_at = NULL, next_attempt_at = NULL
+       WHERE id = ? AND status IN ('failed', 'cancelled', 'completed')`
+    ).run(taskId)
+    if (requeued.changes !== 1) return false
+    // A stale dead letter would shadow the NEXT terminal failure's error.
+    this.db.prepare(`DELETE FROM task_dead_letters WHERE task_id = ?`).run(taskId)
+    return true
+  }
+
   finalize(
     taskId: number,
     status: "completed" | "failed",

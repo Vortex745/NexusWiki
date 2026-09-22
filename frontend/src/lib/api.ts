@@ -493,6 +493,7 @@ export function restoreKnowledgeBase(id: string): Promise<KnowledgeBasePayload> 
 
 export interface DocumentCatalogEntryPayload {
   docId: string
+  sourceId: string
   title: string
   source: string
   fileName: string | null
@@ -503,6 +504,7 @@ export interface DocumentCatalogEntryPayload {
   active: boolean
   tags: string[]
   folder: string | null
+  retired: boolean
   createdAt: string
   updatedAt: string
 }
@@ -548,4 +550,67 @@ export async function fetchKnowledgeBaseDocuments(
     tags: Array.isArray(body.tags) ? body.tags : [],
     folders: Array.isArray(body.folders) ? body.folders : [],
   }
+}
+
+// ---------------------------------------------------------------------------
+// Document operations (ticket 12 DOC-01B) — administrators only
+// ---------------------------------------------------------------------------
+
+/** A shared error carrying the server's status for the operate endpoints. */
+export class DocumentOperationError extends Error {
+  constructor(message: string, readonly status: number) {
+    super(message)
+    this.name = "DocumentOperationError"
+  }
+}
+
+async function documentCommand(docId: string, action: "retry" | "cancel" | "reprocess"): Promise<void> {
+  const response = await apiFetch(`/ingest/${encodeURIComponent(docId)}/${action}`, { method: "POST" })
+  if (!response.ok) {
+    const body = (await response.json().catch(() => ({}))) as { error?: string }
+    throw new DocumentOperationError(body.error || `操作失败 (${response.status})`, response.status)
+  }
+}
+
+export function retryDocument(docId: string): Promise<void> {
+  return documentCommand(docId, "retry")
+}
+
+export function cancelDocument(docId: string): Promise<void> {
+  return documentCommand(docId, "cancel")
+}
+
+export function reprocessDocument(docId: string): Promise<void> {
+  return documentCommand(docId, "reprocess")
+}
+
+/** Retire a whole source (all its versions) with a required reason. */
+export async function retireSource(sourceId: string, reason: string): Promise<void> {
+  const response = await apiFetch(`/sources/${encodeURIComponent(sourceId)}/retire`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ reason }),
+  })
+  if (!response.ok) {
+    const body = (await response.json().catch(() => ({}))) as { error?: string }
+    throw new DocumentOperationError(body.error || `退役失败 (${response.status})`, response.status)
+  }
+}
+
+export interface DocumentStatusPayload {
+  documentStatus: string | null
+  lifecycleOutcome: string | null
+  spanTree: Array<{
+    span: { name: string; status: string; errorMessage: string | null }
+    children: unknown[]
+  }>
+}
+
+/** Durable status/error detail for one document (the ingest status endpoint). */
+export async function fetchDocumentStatus(docId: string): Promise<DocumentStatusPayload> {
+  const response = await apiFetch(`/ingest/${encodeURIComponent(docId)}/status`)
+  if (!response.ok) {
+    throw new DocumentOperationError(`状态读取失败 (${response.status})`, response.status)
+  }
+  return (await response.json()) as DocumentStatusPayload
 }

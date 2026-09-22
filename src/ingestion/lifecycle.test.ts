@@ -430,6 +430,7 @@ test("a failed replacement remains inspectable without replacing the active vers
       title: "Policy",
       content: "replacement",
       source: "policy:refunds",
+      versionIntent: "new_version",
     })
     assert.equal(replacement.status, "pending")
     assert.equal(replacement.version, 2)
@@ -475,6 +476,7 @@ test("a successful replacement activates the new immutable version", async () =>
       title: "Policy",
       content: "version two",
       source: "policy:shipping",
+      versionIntent: "new_version",
     })
     await lifecycle.runNext()
 
@@ -516,11 +518,13 @@ test("an older version finishing late cannot replace a newer active version", as
       title: "Policy",
       content: "version two",
       source: "policy:concurrent",
+      versionIntent: "new_version",
     })
     const newer = lifecycle.submit({
       title: "Policy",
       content: "version three",
       source: "policy:concurrent",
+      versionIntent: "new_version",
     })
 
     const olderRun = lifecycle.runNext()

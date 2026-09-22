@@ -74,6 +74,14 @@ export interface SubmitIngestionInput {
    * Stored verbatim on the document row for the knowledge-base catalog.
    */
   metadata?: Record<string, unknown>
+  /**
+   * Ticket 12 (DOC-01B): required when the submission's identity resolves to
+   * an EXISTING source whose active version has DIFFERENT content — the
+   * caller must say whether this is a new version of that document or a new
+   * independent document. Identical content needs no intent (it is an
+   * "unchanged" no-op) and a brand-new source needs none either.
+   */
+  versionIntent?: "new_version" | "new_document"
 }
 
 export type IngestionSubmission = {
@@ -118,8 +126,24 @@ export interface IngestionExecutionResult {
 export interface IngestionCancellationResult {
   docId: string
   taskId: number
-  status: IngestionTask["status"]
+  /** "retired" reports a refused retry/reprocess on a retired source. */
+  status: IngestionTask["status"] | "retired"
   changed: boolean
+}
+
+/**
+ * Ticket 12 (DOC-01B): a submission whose identity resolves to an existing
+ * source with different active content arrived without an explicit
+ * version-or-new-document intent. The route maps it to 409 with the active
+ * version info so the caller can decide.
+ */
+export class SameNameIntentRequiredError extends Error {
+  constructor(readonly activeDocId: string, readonly activeVersion: number) {
+    super(
+      "this source already exists with different content — specify an explicit intent: new_version or new_document"
+    )
+    this.name = "SameNameIntentRequiredError"
+  }
 }
 
 function buildSpanTree(spans: ProcessingSpan[]): SpanNode[] {
@@ -241,17 +265,26 @@ export class IngestionLifecycle {
     const docId = uuid()
     const sourceBytes = input.rawContent ?? Buffer.from(input.content, "utf8")
     const contentHash = createHash("sha256").update(sourceBytes).digest("hex")
-    const identity = resolveSourceIdentity(
+    let identity = resolveSourceIdentity(
       input.sourceIdentity,
       input.source,
       docId,
       input.knowledgeBaseId
     )
+    // Ticket 12 (DOC-01B): "new_document" means this content must NOT ride
+    // the existing source's version history — a fresh namespace detaches the
+    // source key (same uri for display, new identity for isolation).
+    if (input.versionIntent === "new_document") {
+      identity = { ...identity, namespace: uuid() }
+    }
     const sourceKey = sourceIdentityKey(identity)
 
     return this.db.transaction((): IngestionSubmission => {
       let source = this.docRepo.getSourceByKey(sourceKey)
-      if (identity.kind === "file" && input.legacySourceAliases?.length) {
+      // Ticket 12 (DOC-01B): "new_document" must not be re-anchored onto a
+      // legacy alias — the caller explicitly detached this submission into
+      // its own source.
+      if (identity.kind === "file" && input.versionIntent !== "new_document" && input.legacySourceAliases?.length) {
         const matches = this.docRepo.listLegacySources().filter((candidate) =>
           candidate.tenantId === identity.tenantId &&
           // Ticket 03 (KB-02A): a legacy Source may only be adopted into the
@@ -337,6 +370,13 @@ export class IngestionLifecycle {
         }
       }
 
+      // Ticket 12 (DOC-01B): same source + different content + no explicit
+      // intent = refused BEFORE any document row exists. Identical content
+      // (active or in-flight) has already returned above without intent.
+      if (active && !input.versionIntent) {
+        throw new SameNameIntentRequiredError(active.id, active.version)
+      }
+
       const version = this.docRepo.getNextVersion(source.sourceId)
       this.docRepo.insert({
         docId,
@@ -417,6 +457,96 @@ export class IngestionLifecycle {
       this.spanRepo.cancelOpen(docId, this.now().toISOString())
       RUNNING_ABORT_CONTROLLERS.get(docId)?.abort()
       return { docId, taskId: task.id, status: "cancelled", changed: true }
+    })()
+  }
+
+  /**
+   * Ticket 12 (DOC-01B): manual retry of a FAILED or CANCELLED ingestion.
+   * Reuses the existing task row (retry budget restarts) and flips the
+   * document back to 'pending' so the worker pipeline picks it up again —
+   * the same stages, the same activation gate as any other run.
+   */
+  retry(docId: string): IngestionCancellationResult | null {
+    if (!this.docRepo.exists(docId)) return null
+    const documentStatus = this.docRepo.getStatus(docId)
+    const task = this.taskRepo.getByDocId(docId)
+    const retryable =
+      (documentStatus === "failed" || documentStatus === "cancelled") &&
+      (task === null || task.status === "failed" || task.status === "cancelled")
+    if (!retryable) {
+      return {
+        docId,
+        taskId: task?.id ?? 0,
+        status: task?.status ?? documentStatus ?? "pending",
+        changed: false,
+      }
+    }
+    return this.db.transaction((): IngestionCancellationResult => {
+      // Ticket 12 (DOC-01B): a retired source must not be resurrected —
+      // retirement purged its artifacts; requeueing would re-index them.
+      const document = this.docRepo.get(docId)
+      if (document && this.docRepo.getSourceLifecycleState(document.sourceId) === "retired") {
+        return { docId, taskId: task?.id ?? 0, status: "retired", changed: false }
+      }
+      let taskId: number
+      if (task) {
+        if (!this.taskRepo.requeue(task.id)) {
+          // Lost a race (another worker/call moved the task out of a terminal
+          // state) — report the current state instead of throwing.
+          const current = this.taskRepo.getByDocId(docId)
+          return { docId, taskId: task.id, status: current?.status ?? "pending", changed: false }
+        }
+        taskId = task.id
+      } else {
+        taskId = this.taskRepo.enqueue({ docId, op: "ingest", payload: { retried: true } })
+      }
+      this.docRepo.updateStatus(docId, "pending")
+      return { docId, taskId, status: "pending", changed: true }
+    })()
+  }
+
+  /**
+   * Ticket 12 (DOC-01B): reprocess a COMPLETED document — re-runs the whole
+   * pipeline on the stored content (chunk ids are deterministic, so ES and
+   * graph writes land on the same identities; the activation gate is the
+   * same as any run: the active version only moves on full success).
+   *
+   * ponytail: reprocessing the ACTIVE version rewrites its ES/graph artifacts
+   * in place — a mid-run failure can leave them half-updated (criterion 3
+   * only protects candidates). Bounded by idempotent writes; route reprocess
+   * through a fresh candidate version if that ever matters.
+   */
+  reprocess(docId: string): IngestionCancellationResult | null {
+    if (!this.docRepo.exists(docId)) return null
+    const documentStatus = this.docRepo.getStatus(docId)
+    const task = this.taskRepo.getByDocId(docId)
+    if (documentStatus !== "completed" || (task !== null && task.status !== "completed")) {
+      return {
+        docId,
+        taskId: task?.id ?? 0,
+        status: task?.status ?? documentStatus ?? "pending",
+        changed: false,
+      }
+    }
+    return this.db.transaction((): IngestionCancellationResult => {
+      const document = this.docRepo.get(docId)
+      if (document && this.docRepo.getSourceLifecycleState(document.sourceId) === "retired") {
+        return { docId, taskId: task?.id ?? 0, status: "retired", changed: false }
+      }
+      let taskId: number
+      if (task) {
+        if (!this.taskRepo.requeue(task.id)) {
+          const current = this.taskRepo.getByDocId(docId)
+          return { docId, taskId: task.id, status: current?.status ?? "pending", changed: false }
+        }
+        taskId = task.id
+      } else {
+        // A legacy completed document may have no task row at all — enqueue one
+        // instead of requeueing.
+        taskId = this.taskRepo.enqueue({ docId, op: "ingest", payload: { reprocessed: true } })
+      }
+      this.docRepo.updateStatus(docId, "pending")
+      return { docId, taskId, status: "pending", changed: true }
     })()
   }
 

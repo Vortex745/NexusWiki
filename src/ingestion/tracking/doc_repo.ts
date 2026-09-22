@@ -115,6 +115,8 @@ export interface DocumentVersionInfo {
  */
 export interface DocumentCatalogEntry {
   docId: string
+  /** Ticket 12 (DOC-01B): the owning source — retirement operates on it. */
+  sourceId: string
   title: string
   source: string
   fileName: string | null
@@ -125,6 +127,8 @@ export interface DocumentCatalogEntry {
   active: boolean
   tags: string[]
   folder: string | null
+  /** Ticket 12 (DOC-01B): the owning source is retired — no operations. */
+  retired: boolean
   createdAt: string
   updatedAt: string
 }
@@ -413,6 +417,17 @@ export class DocumentRepo {
     return row.version
   }
 
+  /**
+   * Ticket 12 (DOC-01B): the owning source's lifecycle state, for the
+   * retry/reprocess precondition — retired sources must not be resurrected.
+   */
+  getSourceLifecycleState(sourceId: string): string | null {
+    const row = this.db.prepare(
+      `SELECT lifecycle_state FROM sources WHERE source_id = ?`
+    ).get(sourceId) as { lifecycle_state: string } | undefined
+    return row?.lifecycle_state ?? null
+  }
+
   recordOutcome(
     sourceId: string,
     docId: string,
@@ -480,7 +495,9 @@ export class DocumentRepo {
       : null
   }
 
-  updateStatus(docId: string, status: "completed" | "failed" | "cancelled"): void {
+  // Ticket 12 (DOC-01B): "pending" restores a requeued candidate so the
+  // worker pipeline and the status surface agree.
+  updateStatus(docId: string, status: "pending" | "completed" | "failed" | "cancelled"): void {
     const info = this.db.prepare(
       `UPDATE documents SET status = ?, updated_at = ? WHERE doc_id = ?`
     ).run(status, new Date().toISOString(), docId)
@@ -560,9 +577,9 @@ export class DocumentRepo {
     const pageSize = Math.max(1, Math.floor(query.pageSize))
     const rows = this.db
       .prepare(
-        `SELECT d.doc_id, d.title, d.source, d.file_name, d.mime_type, d.status,
+        `SELECT d.doc_id, d.source_id, d.title, d.source, d.file_name, d.mime_type, d.status,
                 d.candidate_state, d.version, d.metadata, d.created_at, d.updated_at,
-                (s.active_doc_id = d.doc_id) AS is_active
+                (s.active_doc_id = d.doc_id) AS is_active, s.lifecycle_state
          FROM documents d
          LEFT JOIN sources s ON s.source_id = d.source_id
          WHERE ${where}
@@ -571,6 +588,7 @@ export class DocumentRepo {
       )
       .all(...params, pageSize, (page - 1) * pageSize) as Array<{
       doc_id: string
+      source_id: string
       title: string
       source: string
       file_name: string | null
@@ -582,6 +600,7 @@ export class DocumentRepo {
       created_at: string
       updated_at: string
       is_active: number | null
+      lifecycle_state: string | null
     }>
     const documents: DocumentCatalogEntry[] = rows.map((row) => {
       const metadata = row.metadata ? (JSON.parse(row.metadata) as Record<string, unknown>) : {}
@@ -590,6 +609,7 @@ export class DocumentRepo {
         : []
       return {
         docId: row.doc_id,
+        sourceId: row.source_id,
         title: row.title,
         source: row.source,
         fileName: row.file_name,
@@ -600,6 +620,7 @@ export class DocumentRepo {
         active: row.is_active === 1,
         tags,
         folder: typeof metadata.folder === "string" && metadata.folder !== "" ? metadata.folder : null,
+        retired: row.lifecycle_state === "retired",
         createdAt: row.created_at,
         updatedAt: row.updated_at,
       }

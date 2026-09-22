@@ -241,6 +241,10 @@ export function createIngestionFixture(input: CreateIngestionFixtureInput): Inge
       // production tenant's default (`kb-default-default`) and leave the row
       // claiming an owner from a tenant it does not belong to.
       knowledgeBaseId: defaultKnowledgeBaseId(tenantId),
+      // Ticket 12 (DOC-01B): the fixture's re-ingest flow is deliberately a
+      // replacement of the anchored acceptance source; identical content
+      // still resolves to "unchanged" before the intent matters.
+      versionIntent: "new_version",
       sourceIdentity: {
         kind: "submission",
         uriOrExternalId,

@@ -6,6 +6,10 @@ import { createIngestionLifecycle } from "../ingestion/pipeline"
 import type { SourceIdentityInput } from "../ingestion/source_identity"
 import { openDb } from "../ingestion/tracking"
 import type { DB } from "../ingestion/tracking/db"
+import { DocumentRepo } from "../ingestion/tracking/doc_repo"
+import {
+  SameNameIntentRequiredError,
+} from "../ingestion/lifecycle"
 import { SqliteKnowledgeBaseRepo } from "../knowledge/knowledge_base_repo"
 import {
   InvalidKnowledgeBaseScopeError,
@@ -43,6 +47,11 @@ interface IngestRequestBody {
    */
   tags?: unknown
   folder?: unknown
+  /**
+   * Ticket 12 (DOC-01B): explicit intent required when the source already
+   * exists with different content ("new_version" | "new_document").
+   */
+  versionIntent?: unknown
 }
 
 interface IngestUrlRequestBody {
@@ -60,6 +69,8 @@ interface IngestUrlRequestBody {
   /** Ticket 11 (DOC-01A): same catalog metadata contract as `/ingest`. */
   tags?: unknown
   folder?: unknown
+  /** Ticket 12 (DOC-01B): same intent contract as `/ingest`. */
+  versionIntent?: unknown
 }
 
 const router = Router()
@@ -149,6 +160,64 @@ function parseCatalogMetadata(
 }
 
 /**
+ * Ticket 12 (DOC-01B): validate the optional version intent. Absent → the
+ * submit-time guard decides whether one is required (→ 409).
+ */
+function parseVersionIntent(
+  versionIntent: unknown
+): { ok: true; intent?: "new_version" | "new_document" } | { ok: false; error: string } {
+  if (versionIntent === undefined || versionIntent === null) return { ok: true }
+  if (versionIntent === "new_version" || versionIntent === "new_document") {
+    return { ok: true, intent: versionIntent }
+  }
+  return { ok: false, error: "versionIntent must be new_version or new_document" }
+}
+
+/** Ticket 12 (DOC-01B): map the submit-time intent guard to a 409 response. */
+function sameNameConflict(error: unknown): { status: 409; body: Record<string, unknown> } | null {
+  if (!(error instanceof SameNameIntentRequiredError)) return null
+  return {
+    status: 409,
+    body: {
+      error: error.message,
+      activeDocId: error.activeDocId,
+      activeVersion: error.activeVersion,
+    },
+  }
+}
+
+/**
+ * Ticket 12 (DOC-01B): the document-operate routes are tenant-scoped — a doc
+ * id that does not exist OR belongs to another tenant is the same 404 (this
+ * closes the long-standing IDOR noted on /status and /cancel in tickets 07/04).
+ */
+function ownedDocumentOrNotFound(
+  res: Response,
+  db: DB,
+  docId: string
+): ReturnType<DocumentRepo["get"]> {
+  const context =
+    (res.locals.accessContext as AccessContext | undefined) ?? singleTenantAccessContext()
+  const document = new DocumentRepo(db).get(docId)
+  if (!document || (document.tenantId ?? "default") !== context.tenantId) {
+    res.status(404).json({ error: "document not found" })
+    return null
+  }
+  return document
+}
+
+/** Ticket 12 (DOC-01B): retry/reprocess are administrator operations. */
+function requireAdminScope(res: Response): AccessContext | null {
+  const context =
+    (res.locals.accessContext as AccessContext | undefined) ?? singleTenantAccessContext()
+  if (!context.scopes.includes("admin")) {
+    res.status(403).json({ error: "admin scope required" })
+    return null
+  }
+  return context
+}
+
+/**
  * Ticket 03 (KB-02A): resolve EXACTLY ONE authorized knowledge base for an
  * import. An absent field resolves to the tenant's deterministic default
  * knowledge base; an unknown or cross-tenant id is a 404 and a malformed one
@@ -232,6 +301,11 @@ rawIngestRouter.post(
     if (!catalogMetadata.ok) {
       return res.status(400).json({ error: catalogMetadata.error })
     }
+    // Ticket 12 (DOC-01B): same-name files require an explicit intent.
+    const versionIntent = parseVersionIntent(req.get("x-document-intent")?.trim() || undefined)
+    if (!versionIntent.ok) {
+      return res.status(400).json({ error: versionIntent.error })
+    }
 
     const sourceExternalId = req.get("x-source-id")?.trim() || fileName
     const db = openDb()
@@ -240,21 +314,30 @@ rawIngestRouter.post(
       return res.status(resolved.status).json(resolved.body)
     }
     const lifecycle = createIngestionLifecycle(db)
-    return res.json(lifecycle.submit({
-      title: req.get("x-document-title")?.trim() || fileName,
-      content: "",
-      rawContent: req.body,
-      fileName,
-      mimeType: req.get("x-file-mime-type")?.trim() || "application/octet-stream",
-      parserOverride,
-      knowledgeBaseId: resolved.knowledgeBaseId,
-      ...(catalogMetadata.metadata ? { metadata: catalogMetadata.metadata } : {}),
-      sourceIdentity: trustedSourceIdentity(res, {
-        kind: req.get("x-source-kind")?.trim() || "file",
-        uriOrExternalId: sourceExternalId,
-        namespace: req.get("x-source-namespace")?.trim() || "upload",
-      }),
-    }))
+    let submission
+    try {
+      submission = lifecycle.submit({
+        title: req.get("x-document-title")?.trim() || fileName,
+        content: "",
+        rawContent: req.body,
+        fileName,
+        mimeType: req.get("x-file-mime-type")?.trim() || "application/octet-stream",
+        parserOverride,
+        knowledgeBaseId: resolved.knowledgeBaseId,
+        ...(catalogMetadata.metadata ? { metadata: catalogMetadata.metadata } : {}),
+        ...(versionIntent.intent ? { versionIntent: versionIntent.intent } : {}),
+        sourceIdentity: trustedSourceIdentity(res, {
+          kind: req.get("x-source-kind")?.trim() || "file",
+          uriOrExternalId: sourceExternalId,
+          namespace: req.get("x-source-namespace")?.trim() || "upload",
+        }),
+      })
+    } catch (error) {
+      const conflict = sameNameConflict(error)
+      if (conflict) return res.status(conflict.status).json(conflict.body)
+      throw error
+    }
+    return res.json(submission)
   }
 )
 
@@ -274,18 +357,30 @@ router.post("/ingest", (req: Request, res: Response) => {
   if (!catalogMetadata.ok) {
     return res.status(400).json({ error: catalogMetadata.error })
   }
+  // Ticket 12 (DOC-01B): optional version intent.
+  const versionIntent = parseVersionIntent(body.versionIntent)
+  if (!versionIntent.ok) {
+    return res.status(400).json({ error: versionIntent.error })
+  }
 
   const lifecycle = createIngestionLifecycle(db)
-  return res.json(
-    lifecycle.submit({
-      title: body.title,
-      content: body.content,
-      source: body.source,
-      knowledgeBaseId: resolved.knowledgeBaseId,
-      ...(catalogMetadata.metadata ? { metadata: catalogMetadata.metadata } : {}),
-      sourceIdentity: trustedSourceIdentity(res, requestSourceIdentity(body)),
-    })
-  )
+  try {
+    return res.json(
+      lifecycle.submit({
+        title: body.title,
+        content: body.content,
+        source: body.source,
+        knowledgeBaseId: resolved.knowledgeBaseId,
+        ...(catalogMetadata.metadata ? { metadata: catalogMetadata.metadata } : {}),
+        ...(versionIntent.intent ? { versionIntent: versionIntent.intent } : {}),
+        sourceIdentity: trustedSourceIdentity(res, requestSourceIdentity(body)),
+      })
+    )
+  } catch (error) {
+    const conflict = sameNameConflict(error)
+    if (conflict) return res.status(conflict.status).json(conflict.body)
+    throw error
+  }
 })
 
 router.post("/ingest/url", async (req: Request, res: Response) => {
@@ -326,6 +421,12 @@ router.post("/ingest/url", async (req: Request, res: Response) => {
   if (!catalogMetadata.ok) {
     return res.status(400).json({ error: catalogMetadata.error })
   }
+  // Ticket 12 (DOC-01B): optional version intent (a URL re-import whose page
+  // content changed must declare version-or-new-document).
+  const versionIntent = parseVersionIntent(body.versionIntent)
+  if (!versionIntent.ok) {
+    return res.status(400).json({ error: versionIntent.error })
+  }
 
   const lifecycle = createIngestionLifecycle(db)
 
@@ -355,21 +456,29 @@ router.post("/ingest/url", async (req: Request, res: Response) => {
         retryable: true,
       })
     }
-    const submission = lifecycle.submit({
-      title: body.title?.trim() || fetched.title || fetched.fileName,
-      content: "",
-      rawContent: fetched.buffer,
-      fileName: fetched.fileName,
-      mimeType: fetched.mimeType,
-      parserOverride,
-      knowledgeBaseId,
-      ...(catalogMetadata.metadata ? { metadata: catalogMetadata.metadata } : {}),
-      sourceIdentity: trustedSourceIdentity(res, {
-        kind: "web",
-        uriOrExternalId: url,
-        namespace: "web",
-      }),
-    })
+    let submission
+    try {
+      submission = lifecycle.submit({
+        title: body.title?.trim() || fetched.title || fetched.fileName,
+        content: "",
+        rawContent: fetched.buffer,
+        fileName: fetched.fileName,
+        mimeType: fetched.mimeType,
+        parserOverride,
+        knowledgeBaseId,
+        ...(catalogMetadata.metadata ? { metadata: catalogMetadata.metadata } : {}),
+        ...(versionIntent.intent ? { versionIntent: versionIntent.intent } : {}),
+        sourceIdentity: trustedSourceIdentity(res, {
+          kind: "web",
+          uriOrExternalId: url,
+          namespace: "web",
+        }),
+      })
+    } catch (error) {
+      const conflict = sameNameConflict(error)
+      if (conflict) return res.status(conflict.status).json(conflict.body)
+      throw error
+    }
     return res.json(submission)
   }
 
@@ -432,22 +541,40 @@ router.post("/ingest/url", async (req: Request, res: Response) => {
       }
       continue
     }
-    const submission = lifecycle.submit({
-      title: pageFetched.title || pageFetched.fileName,
-      content: "",
-      rawContent: pageFetched.buffer,
-      fileName: pageFetched.fileName,
-      mimeType: pageFetched.mimeType,
-      parserOverride,
-      knowledgeBaseId,
-      // Ticket 11 (DOC-01A): the whole sitemap batch shares one catalog entry.
-      ...(catalogMetadata.metadata ? { metadata: catalogMetadata.metadata } : {}),
-      sourceIdentity: trustedSourceIdentity(res, {
-        kind: "web",
-        uriOrExternalId: page.url.toString(),
-        namespace: "web-sitemap",
-      }),
-    })
+    let submission
+    try {
+      submission = lifecycle.submit({
+        title: pageFetched.title || pageFetched.fileName,
+        content: "",
+        rawContent: pageFetched.buffer,
+        fileName: pageFetched.fileName,
+        mimeType: pageFetched.mimeType,
+        parserOverride,
+        knowledgeBaseId,
+        // Ticket 11 (DOC-01A): the whole sitemap batch shares one catalog entry.
+        ...(catalogMetadata.metadata ? { metadata: catalogMetadata.metadata } : {}),
+        ...(versionIntent.intent ? { versionIntent: versionIntent.intent } : {}),
+        sourceIdentity: trustedSourceIdentity(res, {
+          kind: "web",
+          uriOrExternalId: page.url.toString(),
+          namespace: "web-sitemap",
+        }),
+      })
+    } catch (error) {
+      // Ticket 12 (DOC-01B): a page whose content changed is a per-page
+      // conflict — reported in the batch like any other page failure.
+      const conflict = sameNameConflict(error)
+      if (conflict) {
+        submissions.push({
+          url: page.url.toString(),
+          docId: "",
+          status: "intent_required: versionIntent (new_version or new_document) is required when page content changed",
+          retryable: false,
+        })
+        continue
+      }
+      throw error
+    }
     submissions.push({
       url: page.url.toString(),
       docId: submission.docId,
@@ -469,7 +596,10 @@ router.post("/ingest/url", async (req: Request, res: Response) => {
 })
 
 router.get("/ingest/:docId/status", (req: Request, res: Response) => {
-  const lifecycle = createIngestionLifecycle(openDb())
+  const db = openDb()
+  // Ticket 12 (DOC-01B): tenant-scoped — another tenant's doc id is 404.
+  if (!ownedDocumentOrNotFound(res, db, String(req.params.docId))) return
+  const lifecycle = createIngestionLifecycle(db)
   const status = lifecycle.getStatus(String(req.params.docId))
 
   if (!status) {
@@ -480,13 +610,48 @@ router.get("/ingest/:docId/status", (req: Request, res: Response) => {
 })
 
 router.post("/ingest/:docId/cancel", (req: Request, res: Response) => {
-  const lifecycle = createIngestionLifecycle(openDb())
+  const db = openDb()
+  if (!ownedDocumentOrNotFound(res, db, String(req.params.docId))) return
+  const lifecycle = createIngestionLifecycle(db)
   const result = lifecycle.cancel(String(req.params.docId))
 
   if (!result) {
     return res.status(404).json({ error: "document not found" })
   }
 
+  return res.json(result)
+})
+
+// Ticket 12 (DOC-01B): administrator document operations. Both reuse the
+// existing lifecycle task machinery (TaskRepo.requeue → the worker pipeline's
+// normal stages and activation gate) and answer the resolved durable status.
+router.post("/ingest/:docId/retry", (req: Request, res: Response) => {
+  if (!requireAdminScope(res)) return
+  const db = openDb()
+  if (!ownedDocumentOrNotFound(res, db, String(req.params.docId))) return
+  const lifecycle = createIngestionLifecycle(db)
+  const result = lifecycle.retry(String(req.params.docId))
+  if (!result) {
+    return res.status(404).json({ error: "document not found" })
+  }
+  if (!result.changed) {
+    return res.status(409).json({ error: `document is not retryable in state "${result.status}"`, ...result })
+  }
+  return res.json(result)
+})
+
+router.post("/ingest/:docId/reprocess", (req: Request, res: Response) => {
+  if (!requireAdminScope(res)) return
+  const db = openDb()
+  if (!ownedDocumentOrNotFound(res, db, String(req.params.docId))) return
+  const lifecycle = createIngestionLifecycle(db)
+  const result = lifecycle.reprocess(String(req.params.docId))
+  if (!result) {
+    return res.status(404).json({ error: "document not found" })
+  }
+  if (!result.changed) {
+    return res.status(409).json({ error: `document is not reprocessable in state "${result.status}"`, ...result })
+  }
   return res.json(result)
 })
 

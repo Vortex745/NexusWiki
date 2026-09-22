@@ -2,8 +2,15 @@ import { BookOpen, FileText, X } from "lucide"
 import { useEffect, useRef, useState } from "react"
 
 import { Icon } from "../ui/Icon"
+import { useSignedInSession } from "../../runtime/SessionContext"
+import { useAppShell } from "../../runtime/AppShellContext"
 import {
+  cancelDocument,
+  fetchDocumentStatus,
   fetchKnowledgeBaseDocuments,
+  reprocessDocument,
+  retireSource,
+  retryDocument,
   type DocumentCatalogEntryPayload,
   type DocumentCatalogPayload,
   type DocumentCatalogView,
@@ -60,33 +67,155 @@ function persistView(kbId: string, view: DocumentCatalogView): void {
 const selectClass =
   "h-8 min-w-0 rounded-md border border-line bg-surface px-2 text-xs text-ink outline-none focus:border-brand disabled:opacity-50"
 
-function DocumentRow({ doc }: { doc: DocumentCatalogEntryPayload }) {
+const rowButtonClass =
+  "inline-flex h-7 cursor-pointer items-center gap-1 rounded-lg border border-line px-2 text-[11px] text-muted transition-colors hover:bg-surface-subtle hover:text-ink disabled:cursor-not-allowed disabled:opacity-50"
+
+/**
+ * Ticket 12 (DOC-01B): administrator actions reuse the server's lifecycle —
+ * cancel (pending), retry (failed/cancelled), reprocess (completed) and
+ * retire (whole source, requires a reason). Durable errors are read from the
+ * ingest status endpoint on demand.
+ */
+function DocumentRow({
+  doc,
+  canAdmin,
+  busy,
+  onAction,
+}: {
+  doc: DocumentCatalogEntryPayload
+  canAdmin: boolean
+  busy: boolean
+  onAction: (action: () => Promise<void>, successText: string) => void
+}) {
+  const [errorDetail, setErrorDetail] = useState<string | null>(null)
+  const [retiring, setRetiring] = useState(false)
+  const [reason, setReason] = useState("")
+
+  const showError = () => {
+    if (errorDetail !== null) {
+      setErrorDetail(null)
+      return
+    }
+    void fetchDocumentStatus(doc.docId)
+      .then((payload) => {
+        const failed = collectErrors(payload)
+        setErrorDetail(failed.length > 0 ? failed : "没有记录到错误信息")
+      })
+      .catch((err: unknown) => setErrorDetail(err instanceof Error ? err.message : String(err)))
+  }
+
   return (
-    <li className="flex items-center gap-3 rounded-lg border border-line px-3 py-2.5 max-md:flex-wrap">
-      <Icon icon={FileText} className="size-4 flex-none text-muted" />
-      <div className="min-w-0 flex-1">
-        <div className="flex flex-wrap items-center gap-1.5">
-          <span className="truncate text-xs font-medium text-ink">{doc.title}</span>
-          {doc.active ? (
-            <span className="flex-none rounded-full border border-brand-line bg-brand-subtle px-1.5 py-0.5 font-mono text-[10px] text-brand">
-              活动版本
+    <li className="rounded-lg border border-line px-3 py-2.5">
+      <div className="flex items-center gap-3 max-md:flex-wrap">
+        <Icon icon={FileText} className="size-4 flex-none text-muted" />
+        <div className="min-w-0 flex-1">
+          <div className="flex flex-wrap items-center gap-1.5">
+            <span className="truncate text-xs font-medium text-ink">{doc.title}</span>
+            {doc.retired ? (
+              <span className="flex-none rounded-full border border-line bg-surface-subtle px-1.5 py-0.5 font-mono text-[10px] text-muted">
+                已退役
+              </span>
+            ) : null}
+            {doc.active ? (
+              <span className="flex-none rounded-full border border-brand-line bg-brand-subtle px-1.5 py-0.5 font-mono text-[10px] text-brand">
+                活动版本
+              </span>
+            ) : null}
+            <span className="flex-none rounded-full border border-line bg-surface-subtle px-1.5 py-0.5 font-mono text-[10px] text-muted">
+              {STATUS_LABELS[doc.status] ?? doc.status}
             </span>
-          ) : null}
-          <span className="flex-none rounded-full border border-line bg-surface-subtle px-1.5 py-0.5 font-mono text-[10px] text-muted">
-            {STATUS_LABELS[doc.status] ?? doc.status}
-          </span>
-          <span className="flex-none rounded-full border border-line bg-surface-subtle px-1.5 py-0.5 font-mono text-[10px] text-muted">
-            v{doc.version}
-          </span>
+            <span className="flex-none rounded-full border border-line bg-surface-subtle px-1.5 py-0.5 font-mono text-[10px] text-muted">
+              v{doc.version}
+            </span>
+          </div>
+          <p className="mt-0.5 truncate text-[11px] text-muted/80">
+            {doc.folder ? `${doc.folder} · ` : ""}
+            {doc.fileName ?? doc.source}
+            {doc.tags.length > 0 ? ` · ${doc.tags.join("、")}` : ""}
+          </p>
         </div>
-        <p className="mt-0.5 truncate text-[11px] text-muted/80">
-          {doc.folder ? `${doc.folder} · ` : ""}
-          {doc.fileName ?? doc.source}
-          {doc.tags.length > 0 ? ` · ${doc.tags.join("、")}` : ""}
-        </p>
+        {canAdmin && !doc.retired ? (
+          <div className="flex flex-none flex-wrap items-center justify-end gap-1.5">
+            {doc.status === "pending" ? (
+              <button type="button" disabled={busy} className={rowButtonClass}
+                onClick={() => onAction(() => cancelDocument(doc.docId), "已请求取消")}>
+                取消
+              </button>
+            ) : null}
+            {doc.status === "failed" || doc.status === "cancelled" ? (
+              <>
+                <button type="button" disabled={busy} className={rowButtonClass} onClick={showError}>
+                  {errorDetail !== null ? "收起错误" : "查看错误"}
+                </button>
+                <button type="button" disabled={busy} className={rowButtonClass}
+                  onClick={() => onAction(() => retryDocument(doc.docId), "已重新排队")}>
+                  重试
+                </button>
+              </>
+            ) : null}
+            {doc.status === "completed" ? (
+              <button type="button" disabled={busy} className={rowButtonClass}
+                onClick={() => onAction(() => reprocessDocument(doc.docId), "已重新处理")}>
+                重新处理
+              </button>
+            ) : null}
+            {retiring ? (
+              <span className="flex items-center gap-1">
+                <input
+                  value={reason}
+                  onChange={(event) => setReason(event.target.value)}
+                  placeholder="退役原因"
+                  maxLength={200}
+                  className="h-7 w-32 rounded-md border border-line bg-surface px-2 text-[11px] outline-none focus:border-brand"
+                />
+                <button
+                  type="button"
+                  disabled={busy || !reason.trim()}
+                  className={rowButtonClass}
+                  onClick={() => {
+                    const finalReason = reason.trim()
+                    setRetiring(false)
+                    setReason("")
+                    onAction(() => retireSource(doc.sourceId, finalReason), "已退役该文档的全部版本")
+                  }}
+                >
+                  确认退役
+                </button>
+              </span>
+            ) : (
+              <button type="button" disabled={busy} className={rowButtonClass}
+                title="退役该文档的全部版本，历史引用保持可追溯"
+                onClick={() => setRetiring(true)}>
+                退役
+              </button>
+            )}
+          </div>
+        ) : null}
       </div>
+      {errorDetail !== null ? (
+        <p role="alert" className="mt-2 rounded-md border border-red-200 bg-red-50 px-2 py-1.5 text-[11px] text-red-700 dark:border-red-900 dark:bg-red-950/40 dark:text-red-300">
+          {errorDetail}
+        </p>
+      ) : null}
     </li>
   )
+}
+
+function collectErrors(payload: Awaited<ReturnType<typeof fetchDocumentStatus>>): string {
+  const messages: string[] = []
+  const walk = (nodes: Array<{ span: { name: string; status: string; errorMessage: string | null }; children: unknown[] }>) => {
+    for (const node of nodes) {
+      if (
+        (node.span.status === "failed" || node.span.status === "cancelled") &&
+        node.span.errorMessage
+      ) {
+        messages.push(`${node.span.name}: ${node.span.errorMessage}`)
+      }
+      if (Array.isArray(node.children)) walk(node.children as typeof nodes)
+    }
+  }
+  walk(payload.spanTree ?? [])
+  return messages.join("；") || "没有记录到错误信息"
 }
 
 export function DocumentsDialog({
@@ -107,6 +236,26 @@ export function DocumentsDialog({
   const [catalog, setCatalog] = useState<DocumentCatalogPayload | null>(null)
   const [status, setStatus] = useState<"idle" | "loading" | "ready" | "error">("idle")
   const [error, setError] = useState<string | null>(null)
+  // Ticket 12 (DOC-01B): bumped after an admin action so the list refetches.
+  const [refreshTick, setRefreshTick] = useState(0)
+  const [busy, setBusy] = useState(false)
+  const scopes = useSignedInSession()?.scopes ?? []
+  const canAdmin = scopes.includes("admin")
+  const { showToast } = useAppShell()
+
+  const runAction = (action: () => Promise<void>, successText: string) => {
+    setBusy(true)
+    action()
+      .then(() => {
+        showToast(successText)
+        setRefreshTick((tick) => tick + 1)
+      })
+      .catch((err: unknown) => {
+        showToast(err instanceof Error ? err.message : "操作失败")
+        setRefreshTick((tick) => tick + 1)
+      })
+      .finally(() => setBusy(false))
+  }
 
   useEffect(() => {
     const dialog = dialogRef.current
@@ -148,7 +297,7 @@ export function DocumentsDialog({
     return () => {
       discarded = true
     }
-  }, [open, kbId, view])
+  }, [open, kbId, view, refreshTick])
 
   const totalPages = catalog ? Math.max(1, Math.ceil(catalog.total / PAGE_SIZE)) : 1
   const setViewPage = (page: number) =>
@@ -253,7 +402,9 @@ export function DocumentsDialog({
         ) : (
           <>
             <ul className="flex flex-col gap-2">
-              {catalog?.documents.map((doc) => <DocumentRow key={doc.docId} doc={doc} />)}
+              {catalog?.documents.map((doc) => (
+                <DocumentRow key={doc.docId} doc={doc} canAdmin={canAdmin} busy={busy} onAction={runAction} />
+              ))}
             </ul>
             {totalPages > 1 ? (
               <div className="mt-4 flex flex-none items-center justify-center gap-3">

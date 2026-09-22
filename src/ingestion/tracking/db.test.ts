@@ -313,6 +313,7 @@ test("a canonical CLI submission consolidates aliases before an in-flight versio
         uriOrExternalId: filePath,
         namespace: "local",
       },
+      versionIntent: "new_version",
     })
     assert.equal(pending.status, "pending")
     assert.equal(pending.version, 2)
