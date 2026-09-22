@@ -196,21 +196,30 @@ export function createChatRouter(
           systemPrompt: config.systemPrompt,
           rerankModelProfileId: config.rerankModelProfileId,
         }
-        // Bound scope: the effective knowledge scope is the INTERSECTION of
-        // the request-resolved scope and the assistant's binding. An empty
-        // binding means "no knowledge context"; toolPolicy "none" forbids
-        // retrieval entirely (retrieval is the only tool chat exposes).
-        const boundIds = config.knowledgeBaseIds
-        const retrievalAllowed = config.toolPolicy !== "none"
-        const effectiveIds = !retrievalAllowed
-          ? []
-          : boundIds.length === 0
-            ? null // no assistant constraint — the request-resolved scope stands
-            : (retrievalScope?.knowledgeBaseIds ?? []).filter((id) => boundIds.includes(id))
-        if (effectiveIds !== null && retrievalScope) {
-          retrievalScope = { ...retrievalScope, knowledgeBaseIds: effectiveIds }
-        } else if (effectiveIds !== null && !retrievalScope) {
-          retrievalScope = { knowledgeBaseIds: effectiveIds }
+        // Bound scope: the assistant's own binding REPLACES the request's
+        // knowledge selection (the request cannot influence it at all — it
+        // can neither widen nor narrow the assistant). The binding was
+        // validated at save time; re-resolving here re-checks existence and
+        // archived state against the caller's identity (404/409 mapped like
+        // any selection). An empty binding means "no knowledge context"
+        // (ticket 18's contract); toolPolicy "none" forbids retrieval
+        // entirely (retrieval is the only tool chat exposes).
+        if (config.toolPolicy === "none" || config.knowledgeBaseIds.length === 0) {
+          retrievalScope = { knowledgeBaseIds: [] }
+        } else if (retrievalScopeResolver) {
+          const resolved = resolveScopeOrRespond(
+            res,
+            retrievalScopeResolver,
+            accessContext,
+            config.knowledgeBaseIds
+          )
+          if (!resolved) return
+          retrievalScope = resolved
+        } else {
+          res.status(400).json({
+            error: "knowledge-base scope is not supported by this deployment",
+          })
+          return
         }
       }
     }
@@ -261,43 +270,40 @@ export function createChatRouter(
       }
     }
 
-    // Ticket 20 (CONV-01A): server-owned history — the directory (title from
-    // the first message) and the user turn are written when the run starts;
-    // the assistant turn is written from the terminal event below. History
-    // failures are logged, never fatal to the chat itself.
+    // Ticket 20 (CONV-01A): server-owned history — the directory is ensured
+    // when the run starts (title from the first message). The turns
+    // themselves are recorded once the run settles: completed runs are
+    // already persisted by the memory layer (validated pairs), so only
+    // NON-completed terminals are written to the history-only table.
     if (conversationHistory) {
       try {
         conversationHistory.ensureDirectory(sessionId, accessContext.tenantId, accessContext.subjectId, message)
-        conversationHistory.appendUserTurn(sessionId, accessContext.tenantId, accessContext.subjectId, message, runId)
       } catch (err) {
         console.error("[chat] history write failed:", err)
       }
     }
     const recordTerminal = (
       terminal: Extract<AnswerRunEvent, { type: "done" }> | undefined,
-      runFailed: boolean
+      runFailed: boolean,
+      aborted: boolean
     ): void => {
       if (!conversationHistory) return
       try {
-        if (terminal) {
-          conversationHistory.appendAssistantTurn(
-            sessionId,
-            accessContext.tenantId,
-            accessContext.subjectId,
-            terminal.result.reply,
-            terminal.result.runId,
-            terminal.result.status
-          )
-        } else if (runFailed) {
-          conversationHistory.appendAssistantTurn(
-            sessionId,
-            accessContext.tenantId,
-            accessContext.subjectId,
-            "",
-            runId,
-            "provider_error"
-          )
-        }
+        if (terminal && terminal.result.status === "completed") return
+        const status = terminal
+          ? terminal.result.status
+          : aborted
+            ? "cancelled"
+            : "provider_error"
+        conversationHistory.recordUnvalidatedRun(
+          sessionId,
+          accessContext.tenantId,
+          accessContext.subjectId,
+          message,
+          terminal?.result.reply ?? "",
+          terminal?.result.runId ?? runId,
+          status
+        )
       } catch (err) {
         console.error("[chat] history write failed:", err)
       }
@@ -334,7 +340,7 @@ export function createChatRouter(
         streamFailed = true
         if (!clientGone.value) console.error("[chat] Error:", err)
       }
-      recordTerminal(streamTerminal, streamFailed)
+      recordTerminal(streamTerminal, streamFailed, abortController.signal.aborted)
       res.off("close", onClientClose)
       if (!res.writableEnded) res.end()
     } else {
@@ -358,7 +364,7 @@ export function createChatRouter(
           if (event.type === "done") terminal = event
         }
         if (!terminal) throw new Error("Answer run ended without a terminal event")
-        recordTerminal(terminal, false)
+        recordTerminal(terminal, false, abortController.signal.aborted)
         res.json({
           reply: terminal.result.reply,
           sessionId,
@@ -370,7 +376,7 @@ export function createChatRouter(
         })
       } catch (err) {
         if (!clientGone.value) console.error("[chat] Error:", err)
-        recordTerminal(undefined, true)
+        recordTerminal(undefined, true, abortController.signal.aborted)
         if (!clientGone.value && !res.writableEnded) {
           res.status(500).json({
             error: "Internal error",

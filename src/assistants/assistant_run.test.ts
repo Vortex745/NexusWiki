@@ -130,10 +130,10 @@ test("a named assistant runs through the shared entry with its immutable snapsho
       },
     })
 
-    // The request selection includes a base outside the binding — the
-    // effective scope must be the INTERSECTION (only the bound base).
+    // The assistant's binding REPLACES the request selection: even though the
+    // request named only 库A, the run is scoped to the bound 库B.
     const response = await chat(base, {
-      knowledgeBaseIds: [kbA.id, kbB.id],
+      knowledgeBaseIds: [kbA.id],
       assistantId: created.id,
     })
     assert.equal(response.status, 200)
@@ -143,7 +143,6 @@ test("a named assistant runs through the shared entry with its immutable snapsho
     assert.equal(options.assistant.version, 1)
     assert.equal(options.assistant.systemPrompt, "你只回答政策问题")
     assert.equal(options.assistant.rerankModelProfileId, null)
-    // The snapshot is immutable per run: the version config is copied in.
     assert.deepEqual(options.retrievalScope?.knowledgeBaseIds, [kbB.id])
   } finally {
     await close()
@@ -181,10 +180,11 @@ test("an empty binding leaves the request-resolved scope standing; toolPolicy no
       },
     })
 
-    // Empty binding → no assistant constraint; the resolved default stands.
+    // Empty binding = "no knowledge context" (ticket 18's contract): the run
+    // gets an empty scope instead of the caller's default base.
     await chat(base, { assistantId: unconstrained.id })
     const unconstrainedRun = harness.captured.at(-1)
-    assert.ok(unconstrainedRun?.retrievalScope?.knowledgeBaseIds.length, "default base scope stands")
+    assert.deepEqual(unconstrainedRun?.retrievalScope?.knowledgeBaseIds, [])
     assert.ok(!unconstrainedRun.assistant?.systemPrompt)
 
     // toolPolicy "none" → retrieval refused entirely (empty scope).

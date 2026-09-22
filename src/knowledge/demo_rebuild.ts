@@ -57,8 +57,10 @@ export const DEMO_REBUILD_SQLITE_TABLES = [
   // DELETE has no FK constraints here).
   "assistants",
   "assistant_versions",
-  // Ticket 20 (CONV-01A): server-owned conversation directories are user data.
+  // Ticket 20 (CONV-01A): server-owned conversation directories and their
+  // non-validated history turns are user data.
   "conversation_directories",
+  "conversation_history_turns",
 ] as const
 
 /**

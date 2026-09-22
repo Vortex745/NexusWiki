@@ -4,8 +4,10 @@
  * Focus: user isolation (another user = 404), terminal statuses that keep
  * success / refusal / failure / cancellation distinguishable after reload,
  * the one-time idempotent browser import (never destructive), and the
- * transport write path (user turn at start, assistant turn from the terminal
- * event — including a forced provider_error when the stream dies).
+ * transport write path — completed runs are covered by the memory layer's
+ * validated pairs and are NOT duplicated; non-completed terminals land in
+ * the history-only table; a stream that dies records provider_error or
+ * cancelled.
  */
 
 import assert from "node:assert/strict"
@@ -18,6 +20,7 @@ import { createApp } from "../api/server"
 import type { AnswerRunOptions } from "../answer/generation"
 import type { AnswerRunEvent } from "../types"
 import { SqliteConversationHistoryStore } from "./conversation_history_store"
+import { SqliteConversationStore } from "./conversation_store"
 import type { AccessContext } from "../access/context"
 
 function identity(ctx: Partial<AccessContext> & { scopes: AccessContext["scopes"] }): RequestHandler {
@@ -71,17 +74,52 @@ function doneEvent(sessionId: string, runId: string, status: string, reply: stri
 }
 
 test("history is user-isolated and terminal statuses stay distinguishable", () => {
-  const store = new SqliteConversationHistoryStore(openDb(":memory:"))
+  const db = openDb(":memory:")
+  const store = new SqliteConversationHistoryStore(db)
 
+  // A completed run: the memory layer wrote the validated pair — history
+  // adds nothing and the assistant turn reads as "completed".
+  const memory = new SqliteConversationStore(db)
   store.ensureDirectory("sess-1", "t1", "alice", "退款政策是什么？")
-  store.appendUserTurn("sess-1", "t1", "alice", "退款政策是什么？", "run-1")
-  store.appendAssistantTurn("sess-1", "t1", "alice", "退款在 3 个工作日内到账。", "run-1", "completed")
-  // A refusal, a cancellation and a failure are all visible, all distinct.
+  memory.saveValidatedTurn({
+    sessionId: "sess-1",
+    tenantId: "t1",
+    role: "user",
+    content: "退款政策是什么？",
+    runId: "run-1",
+    createdAt: "2026-01-01T00:00:01.000Z",
+  })
+  memory.saveValidatedTurn({
+    sessionId: "sess-1",
+    tenantId: "t1",
+    role: "assistant",
+    content: "退款在 3 个工作日内到账。",
+    runId: "run-1",
+    createdAt: "2026-01-01T00:00:02.000Z",
+  })
+
+  // Refusal, cancellation and failure runs: history-only turns with their
+  // terminal status — visible in history, invisible to validated memory.
   store.ensureDirectory("sess-2", "t1", "alice", "能帮我操作退款吗")
-  store.appendUserTurn("sess-2", "t1", "alice", "能帮我操作退款吗", "run-2")
-  store.appendAssistantTurn("sess-2", "t1", "alice", "需要您补充订单号。", "run-2", "clarification_required")
-  store.appendAssistantTurn("sess-2", "t1", "alice", "退款在 3 个工", "run-3", "cancelled")
-  store.appendAssistantTurn("sess-2", "t1", "alice", "", "run-4", "provider_error")
+  store.recordUnvalidatedRun(
+    "sess-2",
+    "t1",
+    "alice",
+    "能帮我操作退款吗",
+    "需要您补充订单号。",
+    "run-2",
+    "clarification_required"
+  )
+  store.recordUnvalidatedRun(
+    "sess-2",
+    "t1",
+    "alice",
+    "继续",
+    "退款在 3 个工",
+    "run-3",
+    "cancelled"
+  )
+  store.recordUnvalidatedRun("sess-2", "t1", "alice", "再试一次", "", "run-4", "provider_error")
 
   const directories = store.listDirectories("t1", "alice")
   assert.equal(directories.length, 2)
@@ -89,24 +127,42 @@ test("history is user-isolated and terminal statuses stay distinguishable", () =
   assert.equal(directories[1].title, "退款政策是什么？", "title derives from the first user message")
 
   const turns = store.getTurns("sess-2", "t1", "alice")
+  // Every non-completed run records its own user turn + assistant turn pair.
   assert.deepEqual(
-    turns.map((t) => t.terminalStatus),
-    [null, "clarification_required", "cancelled", "provider_error"]
+    turns.map((t) => `${t.role}:${t.terminalStatus}`),
+    [
+      "user:null",
+      "assistant:clarification_required",
+      "user:null",
+      "assistant:cancelled",
+      "user:null",
+      "assistant:provider_error",
+    ]
   )
+  // The completed run's unified view reads "completed" from the memory pair.
+  const completedTurns = store.getTurns("sess-1", "t1", "alice")
+  assert.deepEqual(
+    completedTurns.map((t) => `${t.role}:${t.terminalStatus}`),
+    ["user:null", "assistant:completed"]
+  )
+  // Validated memory contains ONLY the memory pair — the refused, cancelled
+  // and failed runs never entered it (criterion 4).
+  const memoryTurns = db
+    .prepare(`SELECT role FROM conversation_turns WHERE kind = 'validated'`)
+    .all() as Array<{ role: string }>
+  assert.deepEqual(memoryTurns.map((r) => r.role), ["user", "assistant"])
 
-  // Another user's directory: 404-equivalent, both for reads and appends.
+  // Another user's directory: 404-equivalent, both for reads and writes.
   assert.throws(() => store.getTurns("sess-1", "t1", "bob"), /conversation not found/)
-  assert.throws(
-    () => store.appendUserTurn("sess-1", "t1", "bob", "hi", "run-x"),
-    /conversation not found/
-  )
+  assert.throws(() => store.recordUnvalidatedRun("sess-1", "t1", "bob", "hi", "", "run-x", "cancelled"), /conversation not found/)
   assert.throws(() => store.getTurns("sess-1", "other-tenant", "alice"), /conversation not found/)
   // listDirectories never leaks other users' directories.
   assert.equal(store.listDirectories("t1", "bob").length, 0)
 })
 
-test("the one-time browser import is idempotent and never destructive", () => {
-  const store = new SqliteConversationHistoryStore(openDb(":memory:"))
+test("the one-time browser import is idempotent, user-isolated and never touches memory", () => {
+  const db = openDb(":memory:")
+  const store = new SqliteConversationHistoryStore(db)
   const threads = [
     {
       id: "local-thread-1",
@@ -132,14 +188,42 @@ test("the one-time browser import is idempotent and never destructive", () => {
   assert.equal(turns[0].content, "你好")
   assert.equal(turns[1].content, "您好，请问有什么可以帮您？")
 
-  // Imported threads belong to the importing user only.
+  // Imported messages live in the history table, never in validated memory.
+  const memoryCount = db
+    .prepare(`SELECT COUNT(*) AS n FROM conversation_turns WHERE kind = 'validated'`)
+    .get() as { n: number }
+  assert.equal(memoryCount.n, 0)
+
+  // A same-id thread of another user is a skip (PK conflict → no error, no
+  // leak either way); bob then cannot read alice's thread by that id.
+  const other = store.importThreads("t1", "bob", threads)
+  assert.deepEqual(other, { imported: 0, skipped: 2 })
+  assert.equal(store.getTurns("local-thread-1", "t1", "alice").length, 2)
   assert.throws(() => store.getTurns("local-thread-1", "t1", "bob"), /conversation not found/)
 })
 
-test("the chat transport records the user turn and the assistant terminal turn", async () => {
+test("the chat transport records only non-completed terminals; completed runs are not duplicated", async () => {
   process.env.OPENAI_API_KEY = process.env.OPENAI_API_KEY || "test-key"
   const db = openDb(":memory:")
   const history = new SqliteConversationHistoryStore(db)
+  const memory = new SqliteConversationStore(db)
+  // The completed run's pair is written by the memory layer (runner side).
+  memory.saveValidatedTurn({
+    sessionId: "sess-http-1",
+    tenantId: "t1",
+    role: "user",
+    content: "能帮我操作退款吗",
+    runId: "run-ok",
+    createdAt: "2026-01-01T00:00:01.000Z",
+  })
+  memory.saveValidatedTurn({
+    sessionId: "sess-http-1",
+    tenantId: "t1",
+    role: "assistant",
+    content: "已受理。",
+    runId: "run-ok",
+    createdAt: "2026-01-01T00:00:02.000Z",
+  })
   const app = createApp({
     db,
     eventsSource: async function* (_message: string, options: AnswerRunOptions): AsyncIterable<AnswerRunEvent> {
@@ -150,6 +234,7 @@ test("the chat transport records the user turn and the assistant terminal turn",
   })
   const { base, close } = await listen(app)
   try {
+    // Run 1: a refusal (the fake source always answers clarification_required).
     const response = await fetch(`${base}/api/chat`, {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -166,11 +251,23 @@ test("the chat transport records the user turn and the assistant terminal turn",
     assert.equal(directories[0].id, "sess-http-1")
     assert.equal(directories[0].title, "能帮我操作退款吗")
 
+    // The unified view: the memory pair (completed) + the refusal run's
+    // user turn and assistant turn.
     const turns = history.getTurns("sess-http-1", "t1", "u1")
-    assert.equal(turns.length, 2)
-    assert.equal(turns[0].role, "user")
-    assert.equal(turns[1].role, "assistant")
-    assert.equal(turns[1].terminalStatus, "clarification_required", "a refusal stays a refusal")
+    assert.deepEqual(
+      turns.map((t) => `${t.role}:${t.terminalStatus}`),
+      [
+        "user:null",
+        "assistant:completed",
+        "user:null",
+        "assistant:clarification_required",
+      ]
+    )
+    // The refusal run never entered validated memory (criterion 4).
+    const memoryRows = db
+      .prepare(`SELECT role, content FROM conversation_turns WHERE kind = 'validated' ORDER BY id`)
+      .all() as Array<{ role: string; content: string }>
+    assert.deepEqual(memoryRows.map((r) => r.content), ["能帮我操作退款吗", "已受理。"])
   } finally {
     await close()
   }

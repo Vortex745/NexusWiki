@@ -288,6 +288,23 @@ const SCHEMA = [
   )`,
   `CREATE INDEX IF NOT EXISTS idx_conversation_directories_owner
     ON conversation_directories(tenant_id, subject_id, updated_at)`,
+  // Ticket 20 (CONV-01A): history turns that are NOT validated memory. The
+  // memory layer (conversation_turns, kind='validated') only ever records
+  // pairs whose answer passed the Critic; runs that ended otherwise —
+  // refusal, cancellation, failure — are recorded HERE with their terminal
+  // status, so history stays complete while validated memory stays clean.
+  `CREATE TABLE IF NOT EXISTS conversation_history_turns (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id TEXT NOT NULL,
+    tenant_id TEXT NOT NULL,
+    role TEXT NOT NULL CHECK(role IN ('user', 'assistant')),
+    content TEXT NOT NULL,
+    run_id TEXT NOT NULL,
+    terminal_status TEXT,
+    created_at TEXT NOT NULL
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_conversation_history_turns_session
+    ON conversation_history_turns(session_id, id)`,
 ].join(";\n")
 
 let _db: DB | null = null
@@ -395,14 +412,6 @@ export function openDb(dbPath?: string): DB {
   const conversationColumns = db.pragma("table_info(conversation_turns)") as Array<{ name: string }>
   if (!conversationColumns.some(({ name }) => name === "kind")) {
     db.exec("ALTER TABLE conversation_turns ADD COLUMN kind TEXT NOT NULL DEFAULT 'validated'")
-  }
-  // Ticket 20 (CONV-01A): the terminal status of an ASSISTANT turn
-  // (completed / clarification_required / insufficient_evidence / …).
-  // Nullable — user turns and legacy rows have none. This is what keeps
-  // success, refusal, failure and cancellation distinguishable after reload;
-  // it never affects validated memory (kind stays the memory discriminator).
-  if (!conversationColumns.some(({ name }) => name === "terminal_status")) {
-    db.exec("ALTER TABLE conversation_turns ADD COLUMN terminal_status TEXT")
   }
   const legacyDocuments = db.prepare(
     `SELECT doc_id, source, content, status, created_at, updated_at
