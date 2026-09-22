@@ -69,6 +69,11 @@ export interface SubmitIngestionInput {
    * working); the resolved value is always carried on the submission.
    */
   knowledgeBaseId?: string
+  /**
+   * Ticket 11 (DOC-01A): catalog metadata the caller validated (tags/folder).
+   * Stored verbatim on the document row for the knowledge-base catalog.
+   */
+  metadata?: Record<string, unknown>
 }
 
 export type IngestionSubmission = {
@@ -351,6 +356,8 @@ export class IngestionLifecycle {
         tenantId: source.tenantId,
         allowedGroups: source.allowedGroups,
         knowledgeBaseId: source.knowledgeBaseId,
+        // Ticket 11 (DOC-01A): caller-validated catalog metadata (tags/folder).
+        metadata: input.metadata,
       })
       const taskId = this.taskRepo.enqueue({
         docId,

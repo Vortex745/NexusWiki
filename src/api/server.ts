@@ -39,6 +39,7 @@ import {
 import { SqliteKnowledgeBaseRepo } from "../knowledge/knowledge_base_repo"
 import { knowledgeBaseEmbeddingProfile } from "../types/knowledge_base"
 import { createKnowledgeBaseRouter } from "./knowledge_bases"
+import { createDocumentsRouter } from "./documents"
 
 export function createApp(options: {
   db?: DB
@@ -155,21 +156,30 @@ export function createApp(options: {
       options.retrievalScopeResolver
     )
   )
-  // Ticket 08 (KB-04): the knowledge-base workspace routes. The service is the
-  // one the caller injected (startServer shares it with the retrieval-scope
-  // resolver), or a local one over the tenant database for bare mounts.
+  // Ticket 08 (KB-04) + Ticket 11 (DOC-01A): ONE knowledge-base service shared
+  // by the workspace routes and the document catalog (and, in startServer, by
+  // the retrieval-scope resolver).
+  const workspaceKnowledgeBaseService =
+    options.knowledgeBaseService ??
+    new KnowledgeBaseServiceImpl(
+      new SqliteKnowledgeBaseRepo(db),
+      knowledgeBaseEmbeddingProfile(
+        options.config?.embeddingModel ?? "unspecified",
+        options.config?.embeddingDimensions ?? 0
+      )
+    )
   app.use(
     "/api",
-    createKnowledgeBaseRouter({
-      service:
-        options.knowledgeBaseService ??
-        new KnowledgeBaseServiceImpl(
-          new SqliteKnowledgeBaseRepo(db),
-          knowledgeBaseEmbeddingProfile(
-            options.config?.embeddingModel ?? "unspecified",
-            options.config?.embeddingDimensions ?? 0
-          )
-        ),
+    createKnowledgeBaseRouter({ service: workspaceKnowledgeBaseService })
+  )
+  // Ticket 11 (DOC-01A): the knowledge-base document catalog. The chat-scope
+  // identity middleware mounted at the /api/knowledge-bases prefix above also
+  // guards this route; reader/admin visibility is resolved in-handler.
+  app.use(
+    "/api",
+    createDocumentsRouter({
+      documentRepo,
+      knowledgeBaseService: workspaceKnowledgeBaseService,
     })
   )
   if (options.managementAccessMiddleware) {

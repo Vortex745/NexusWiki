@@ -1,6 +1,6 @@
 import { ThreadListItemPrimitive, ThreadListPrimitive } from "@assistant-ui/react"
-import { BookOpen, Brain, Check, Database, FlaskConical, MessageCircle, Moon, Plus, Sun, Trash2 } from "lucide"
-import { useEffect } from "react"
+import { BookOpen, Brain, Check, Database, FileText, FlaskConical, MessageCircle, Moon, Plus, Sun, Trash2 } from "lucide"
+import { useEffect, useState } from "react"
 import type { IconProps } from "./ui/Icon"
 
 import { useConversation } from "../conversation/useConversation"
@@ -9,6 +9,7 @@ import { useAppShell } from "../runtime/AppShellContext"
 import { knowledgeStore, useKnowledgeBases } from "../runtime/knowledgeStore"
 import { useMemoryApi } from "../runtime/MemoryContext"
 import { useSignedInSession } from "../runtime/SessionContext"
+import { DocumentsDialog } from "./panels/DocumentsDialog"
 import { StatusPopover } from "./StatusPopover"
 import { Icon } from "./ui/Icon"
 
@@ -71,6 +72,9 @@ function KnowledgeSelector() {
   const { openKnowledge } = useAppShell()
   const scopes = useSignedInSession()?.scopes ?? []
   const canAdmin = scopes.includes("admin")
+  // Ticket 11 (DOC-01A): browsing a base's document catalog is for every
+  // signed-in member — the server applies the tenant/group/kb scoping.
+  const [browsingDocs, setBrowsingDocs] = useState<{ id: string; name: string } | null>(null)
 
   return (
     <div className="mt-4">
@@ -107,7 +111,7 @@ function KnowledgeSelector() {
           {bases.map((base) => {
             const selected = selectedIds.includes(base.id)
             return (
-              <li key={base.id}>
+              <li key={base.id} className="group/kb relative">
                 <button
                   type="button"
                   onClick={() => knowledgeStore.toggleSelected(base.id)}
@@ -128,6 +132,14 @@ function KnowledgeSelector() {
                   </span>
                   <span className="truncate">{base.name}</span>
                 </button>
+                <button
+                  type="button"
+                  onClick={() => setBrowsingDocs({ id: base.id, name: base.name })}
+                  title={`浏览「${base.name}」的文档目录`}
+                  className="absolute top-1/2 right-1.5 grid size-6 -translate-y-1/2 cursor-pointer place-items-center rounded-md text-muted/70 opacity-0 transition-[colors,opacity] hover:text-ink group-hover/kb:opacity-100 max-md:opacity-100 focus-visible:opacity-100 focus-visible:outline-2 focus-visible:outline-brand"
+                >
+                  <Icon icon={FileText} className="size-3.5" />
+                </button>
               </li>
             )
           })}
@@ -138,6 +150,11 @@ function KnowledgeSelector() {
           ? `新对话将检索选中的 ${selectedIds.length} 个知识库`
           : "未选择时检索默认知识库"}
       </p>
+      <DocumentsDialog
+        open={browsingDocs !== null}
+        knowledgeBase={browsingDocs}
+        onClose={() => setBrowsingDocs(null)}
+      />
     </div>
   )
 }

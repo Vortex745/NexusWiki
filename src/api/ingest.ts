@@ -37,6 +37,12 @@ interface IngestRequestBody {
    * instead of trusting the cast.
    */
   knowledgeBaseId?: unknown
+  /**
+   * Ticket 11 (DOC-01A): catalog metadata. Tags are a string array, folder a
+   * one-level name; both validated by parseCatalogMetadata before use.
+   */
+  tags?: unknown
+  folder?: unknown
 }
 
 interface IngestUrlRequestBody {
@@ -51,6 +57,9 @@ interface IngestUrlRequestBody {
    * untrusted JSON: the resolver validates the type instead of trusting it.
    */
   knowledgeBaseId?: unknown
+  /** Ticket 11 (DOC-01A): same catalog metadata contract as `/ingest`. */
+  tags?: unknown
+  folder?: unknown
 }
 
 const router = Router()
@@ -99,6 +108,45 @@ function requestSourceIdentity(body: IngestRequestBody): Omit<SourceIdentityInpu
 type KnowledgeBaseResolution =
   | { ok: true; knowledgeBaseId: string }
   | { ok: false; status: number; body: { error: string } }
+
+/**
+ * Ticket 11 (DOC-01A): validate the optional catalog metadata an import may
+ * carry. Tags: array of non-empty strings (≤ 20, each ≤ 64 chars). Folder: a
+ * non-empty one-level name (≤ 200 chars, no separators — one level by
+ * contract). Absent/empty fields contribute nothing to the document metadata.
+ */
+function parseCatalogMetadata(
+  tags: unknown,
+  folder: unknown
+): { ok: true; metadata?: Record<string, unknown> } | { ok: false; error: string } {
+  let cleanTags: string[] | undefined
+  if (tags !== undefined) {
+    if (!Array.isArray(tags) || tags.some((tag) => typeof tag !== "string")) {
+      return { ok: false, error: "tags must be an array of strings" }
+    }
+    cleanTags = [...new Set((tags as string[]).map((tag) => tag.trim()).filter(Boolean))]
+    if (cleanTags.length > 20 || cleanTags.some((tag) => tag.length > 64)) {
+      return { ok: false, error: "tags must have at most 20 values of 64 characters" }
+    }
+  }
+  let cleanFolder: string | undefined
+  if (folder !== undefined) {
+    if (typeof folder !== "string") {
+      return { ok: false, error: "folder must be a string" }
+    }
+    cleanFolder = folder.trim()
+    if (cleanFolder.includes("/") || cleanFolder.includes("\\")) {
+      return { ok: false, error: "folder must be a single level (no separators)" }
+    }
+    if (cleanFolder.length > 200) {
+      return { ok: false, error: "folder must be at most 200 characters" }
+    }
+  }
+  const metadata: Record<string, unknown> = {}
+  if (cleanTags?.length) metadata.tags = cleanTags
+  if (cleanFolder) metadata.folder = cleanFolder
+  return Object.keys(metadata).length > 0 ? { ok: true, metadata } : { ok: true }
+}
 
 /**
  * Ticket 03 (KB-02A): resolve EXACTLY ONE authorized knowledge base for an
@@ -174,6 +222,16 @@ rawIngestRouter.post(
         error: "x-parser must be markitdown, marker, or mineru",
       })
     }
+    // Ticket 11 (DOC-01A): optional catalog metadata via headers.
+    const catalogMetadata = parseCatalogMetadata(
+      req.get("x-document-tags")?.trim()
+        ? req.get("x-document-tags")?.split(",").map((tag) => tag.trim())
+        : undefined,
+      req.get("x-document-folder")
+    )
+    if (!catalogMetadata.ok) {
+      return res.status(400).json({ error: catalogMetadata.error })
+    }
 
     const sourceExternalId = req.get("x-source-id")?.trim() || fileName
     const db = openDb()
@@ -190,6 +248,7 @@ rawIngestRouter.post(
       mimeType: req.get("x-file-mime-type")?.trim() || "application/octet-stream",
       parserOverride,
       knowledgeBaseId: resolved.knowledgeBaseId,
+      ...(catalogMetadata.metadata ? { metadata: catalogMetadata.metadata } : {}),
       sourceIdentity: trustedSourceIdentity(res, {
         kind: req.get("x-source-kind")?.trim() || "file",
         uriOrExternalId: sourceExternalId,
@@ -210,6 +269,11 @@ router.post("/ingest", (req: Request, res: Response) => {
   if (!resolved.ok) {
     return res.status(resolved.status).json(resolved.body)
   }
+  // Ticket 11 (DOC-01A): optional catalog metadata.
+  const catalogMetadata = parseCatalogMetadata(body.tags, body.folder)
+  if (!catalogMetadata.ok) {
+    return res.status(400).json({ error: catalogMetadata.error })
+  }
 
   const lifecycle = createIngestionLifecycle(db)
   return res.json(
@@ -218,6 +282,7 @@ router.post("/ingest", (req: Request, res: Response) => {
       content: body.content,
       source: body.source,
       knowledgeBaseId: resolved.knowledgeBaseId,
+      ...(catalogMetadata.metadata ? { metadata: catalogMetadata.metadata } : {}),
       sourceIdentity: trustedSourceIdentity(res, requestSourceIdentity(body)),
     })
   )
@@ -255,6 +320,13 @@ router.post("/ingest/url", async (req: Request, res: Response) => {
   }
   const { knowledgeBaseId } = resolved
 
+  // Ticket 11 (DOC-01A): optional catalog metadata, resolved with the
+  // ownership so a rejected import still does zero network work.
+  const catalogMetadata = parseCatalogMetadata(body.tags, body.folder)
+  if (!catalogMetadata.ok) {
+    return res.status(400).json({ error: catalogMetadata.error })
+  }
+
   const lifecycle = createIngestionLifecycle(db)
 
   if (mode === "single") {
@@ -291,6 +363,7 @@ router.post("/ingest/url", async (req: Request, res: Response) => {
       mimeType: fetched.mimeType,
       parserOverride,
       knowledgeBaseId,
+      ...(catalogMetadata.metadata ? { metadata: catalogMetadata.metadata } : {}),
       sourceIdentity: trustedSourceIdentity(res, {
         kind: "web",
         uriOrExternalId: url,
@@ -367,6 +440,8 @@ router.post("/ingest/url", async (req: Request, res: Response) => {
       mimeType: pageFetched.mimeType,
       parserOverride,
       knowledgeBaseId,
+      // Ticket 11 (DOC-01A): the whole sitemap batch shares one catalog entry.
+      ...(catalogMetadata.metadata ? { metadata: catalogMetadata.metadata } : {}),
       sourceIdentity: trustedSourceIdentity(res, {
         kind: "web",
         uriOrExternalId: page.url.toString(),

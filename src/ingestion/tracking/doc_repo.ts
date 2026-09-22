@@ -109,6 +109,54 @@ export interface DocumentVersionInfo {
   active: boolean
 }
 
+/**
+ * Ticket 11 (DOC-01A): one catalog row — document metadata without content.
+ * Tags/folder come from the metadata JSON (`$.tags` / `$.folder`).
+ */
+export interface DocumentCatalogEntry {
+  docId: string
+  title: string
+  source: string
+  fileName: string | null
+  mimeType: string | null
+  status: string
+  candidateState: string
+  version: number
+  active: boolean
+  tags: string[]
+  folder: string | null
+  createdAt: string
+  updatedAt: string
+}
+
+export interface DocumentCatalogQuery {
+  tenantId: string
+  knowledgeBaseId: string
+  page: number
+  pageSize: number
+  status?: string
+  tag?: string
+  folder?: string
+  /**
+   * The viewer's groups. Mirrors the retrieval ACL (graph_acl.ts): the group
+   * filter only applies when the viewer HAS groups; a zero-group viewer (or
+   * an admin) sees every same-tenant row. Non-admin viewers with groups see
+   * rows whose allowedGroups is empty (tenant-wide) or intersects their own
+   * (ticket 10 import semantics).
+   */
+  viewerGroups?: string[]
+  admin?: boolean
+}
+
+export interface DocumentCatalogPage {
+  documents: DocumentCatalogEntry[]
+  total: number
+  page: number
+  pageSize: number
+  tags: string[]
+  folders: string[]
+}
+
 export class DocumentRepo {
   constructor(private db: DB) {}
 
@@ -459,5 +507,146 @@ export class DocumentRepo {
       `UPDATE documents SET candidate_state = 'pending_review', updated_at = ?
        WHERE doc_id = ?`
     ).run(new Date().toISOString(), docId)
+  }
+
+  /**
+   * Ticket 11 (DOC-01A): the knowledge-base document catalog — paginated,
+   * tenant+knowledge-base scoped, filtered by processing state (status),
+   * metadata tag and one-level folder. Group visibility mirrors the retrieval
+   * ACL (graph_acl.ts): only viewers WITH groups are restricted, and they see
+   * tenant-wide rows (allowedGroups '[]') plus rows addressed to their own
+   * groups; zero-group viewers and admins see every same-tenant row. Content
+   * is never returned — catalog rows are metadata only.
+   */
+  listCatalog(query: DocumentCatalogQuery): DocumentCatalogPage {
+    const conditions: string[] = ["d.tenant_id = ?", "d.knowledge_base_id = ?"]
+    const params: Array<string | number> = [query.tenantId, query.knowledgeBaseId]
+    if (query.status) {
+      conditions.push("d.status = ?")
+      params.push(query.status)
+    }
+    if (query.tag) {
+      conditions.push(
+        "EXISTS (SELECT 1 FROM json_each(d.metadata, '$.tags') je WHERE je.value = ?)"
+      )
+      params.push(query.tag)
+    }
+    if (query.folder) {
+      conditions.push("json_extract(d.metadata, '$.folder') = ?")
+      params.push(query.folder)
+    }
+    // Group visibility mirrors the retrieval ACL: the filter only applies
+    // when the viewer HAS groups; zero-group viewers and admins see all
+    // same-tenant rows.
+    if (!query.admin) {
+      const groups = query.viewerGroups ?? []
+      if (groups.length > 0) {
+        conditions.push(
+          `(d.allowed_groups = '[]' OR EXISTS (
+             SELECT 1 FROM json_each(d.allowed_groups) ag
+             WHERE ag.value IN (${groups.map(() => "?").join(", ")})))`
+        )
+        params.push(...groups)
+      }
+    }
+    const where = conditions.join(" AND ")
+    const total = (
+      this.db.prepare(`SELECT COUNT(*) AS n FROM documents d WHERE ${where}`).get(...params) as {
+        n: number
+      }
+    ).n
+
+    const page = Math.max(1, Math.floor(query.page))
+    const pageSize = Math.max(1, Math.floor(query.pageSize))
+    const rows = this.db
+      .prepare(
+        `SELECT d.doc_id, d.title, d.source, d.file_name, d.mime_type, d.status,
+                d.candidate_state, d.version, d.metadata, d.created_at, d.updated_at,
+                (s.active_doc_id = d.doc_id) AS is_active
+         FROM documents d
+         LEFT JOIN sources s ON s.source_id = d.source_id
+         WHERE ${where}
+         ORDER BY d.created_at DESC, d.doc_id ASC
+         LIMIT ? OFFSET ?`
+      )
+      .all(...params, pageSize, (page - 1) * pageSize) as Array<{
+      doc_id: string
+      title: string
+      source: string
+      file_name: string | null
+      mime_type: string | null
+      status: string
+      candidate_state: string
+      version: number
+      metadata: string
+      created_at: string
+      updated_at: string
+      is_active: number | null
+    }>
+    const documents: DocumentCatalogEntry[] = rows.map((row) => {
+      const metadata = row.metadata ? (JSON.parse(row.metadata) as Record<string, unknown>) : {}
+      const tags = Array.isArray(metadata.tags)
+        ? metadata.tags.filter((tag): tag is string => typeof tag === "string")
+        : []
+      return {
+        docId: row.doc_id,
+        title: row.title,
+        source: row.source,
+        fileName: row.file_name,
+        mimeType: row.mime_type,
+        status: row.status,
+        candidateState: row.candidate_state,
+        version: row.version,
+        active: row.is_active === 1,
+        tags,
+        folder: typeof metadata.folder === "string" && metadata.folder !== "" ? metadata.folder : null,
+        createdAt: row.created_at,
+        updatedAt: row.updated_at,
+      }
+    })
+    return {
+      documents,
+      total,
+      page,
+      pageSize,
+      tags: this.listFacets(query, "tags"),
+      folders: this.listFacets(query, "folder"),
+    }
+  }
+
+  /** Distinct tag values / folder names over the visible rows of the KB. */
+  private listFacets(query: DocumentCatalogQuery, kind: "tags" | "folder"): string[] {
+    const conditions = ["d.tenant_id = ?", "d.knowledge_base_id = ?"]
+    const params: Array<string | number> = [query.tenantId, query.knowledgeBaseId]
+    if (!query.admin) {
+      const groups = query.viewerGroups ?? []
+      if (groups.length > 0) {
+        conditions.push(
+          `(d.allowed_groups = '[]' OR EXISTS (
+             SELECT 1 FROM json_each(d.allowed_groups) ag
+             WHERE ag.value IN (${groups.map(() => "?").join(", ")})))`
+        )
+        params.push(...groups)
+      }
+    }
+    const expr =
+      kind === "tags"
+        ? "je.value"
+        : "json_extract(d.metadata, '$.folder')"
+    const rows = this.db
+      .prepare(
+        kind === "tags"
+          ? `SELECT DISTINCT ${expr} AS v
+             FROM documents d, json_each(d.metadata, '$.tags') je
+             WHERE ${conditions.join(" AND ")} ORDER BY v ASC`
+          : `SELECT DISTINCT ${expr} AS v
+             FROM documents d
+             WHERE ${conditions.join(" AND ")}
+               AND json_extract(d.metadata, '$.folder') IS NOT NULL
+               AND json_extract(d.metadata, '$.folder') != ''
+             ORDER BY v ASC`
+      )
+      .all(...params) as Array<{ v: unknown }>
+    return rows.map((row) => row.v).filter((v): v is string => typeof v === "string")
   }
 }

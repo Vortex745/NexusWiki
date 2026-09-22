@@ -1129,3 +1129,84 @@ test("Ticket 08 KB-04: an import naming an archived knowledge base is refused wi
     rmSync(directory, { recursive: true, force: true })
   }
 })
+
+test("Ticket 11 DOC-01A: imports carry tags and folder into the document metadata", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "kefu-rag-doc-catalog-"))
+  process.env.OPENAI_API_KEY = process.env.OPENAI_API_KEY || "test-key"
+  process.env.SQLITE_PATH = join(directory, "ingestion.db")
+  const db = openDb()
+  seedKnowledgeBase(db, "kb-catalog", "tenant-a")
+  const server = createApp({ eventsSource, ingestAccessMiddleware: tenantAccessMiddleware }).listen(0)
+  try {
+    await new Promise<void>((resolve) => server.once("listening", resolve))
+    const address = server.address()
+    assert.ok(address && typeof address === "object")
+
+    // Text import with catalog metadata.
+    const textRes = await fetch(`http://127.0.0.1:${address.port}/api/ingest`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        title: "Policy",
+        content: "catalog metadata",
+        knowledgeBaseId: "kb-catalog",
+        tags: ["policy", "policy", " hr "],
+        folder: "HR",
+      }),
+    })
+    assert.equal(textRes.status, 200)
+    const textSubmitted = await textRes.json() as { docId: string }
+    const repo = new DocumentRepo(db)
+    const textDoc = repo.get(textSubmitted.docId)
+    assert.deepEqual(textDoc?.metadata.tags, ["policy", "hr"], "tags are trimmed and deduped")
+    assert.equal(textDoc?.metadata.folder, "HR")
+
+    // File import with catalog metadata via headers.
+    const fileRes = await fetch(`http://127.0.0.1:${address.port}/api/ingest/file`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/octet-stream",
+        "x-file-name": "notes.md",
+        "x-knowledge-base-id": "kb-catalog",
+        "x-document-tags": "notes, draft",
+        "x-document-folder": "Meetings",
+      },
+      body: Buffer.from("meeting notes"),
+    })
+    assert.equal(fileRes.status, 200)
+    const fileSubmitted = await fileRes.json() as { docId: string }
+    const fileDoc = repo.get(fileSubmitted.docId)
+    assert.deepEqual(fileDoc?.metadata.tags, ["notes", "draft"])
+    assert.equal(fileDoc?.metadata.folder, "Meetings")
+
+    // Malformed catalog metadata is a 400 and files nothing.
+    const badRes = await fetch(`http://127.0.0.1:${address.port}/api/ingest`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        title: "Bad",
+        content: "nested folder",
+        knowledgeBaseId: "kb-catalog",
+        folder: "HR/2026",
+      }),
+    })
+    assert.equal(badRes.status, 400, "a one-level folder rejects separators")
+    const badTagsRes = await fetch(`http://127.0.0.1:${address.port}/api/ingest`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        title: "Bad",
+        content: "tags are strings",
+        knowledgeBaseId: "kb-catalog",
+        tags: ["policy", 7],
+      }),
+    })
+    assert.equal(badTagsRes.status, 400, "non-string tags are rejected")
+  } finally {
+    await new Promise<void>((resolve, reject) => {
+      server.close((error) => error ? reject(error) : resolve())
+    })
+    closeDb()
+    rmSync(directory, { recursive: true, force: true })
+  }
+})

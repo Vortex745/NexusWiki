@@ -486,3 +486,66 @@ export function archiveKnowledgeBase(id: string): Promise<KnowledgeBasePayload> 
 export function restoreKnowledgeBase(id: string): Promise<KnowledgeBasePayload> {
   return knowledgeBaseCommand(`/${encodeURIComponent(id)}/restore`, "POST")
 }
+
+// ---------------------------------------------------------------------------
+// Knowledge-base document catalog (ticket 11 DOC-01A)
+// ---------------------------------------------------------------------------
+
+export interface DocumentCatalogEntryPayload {
+  docId: string
+  title: string
+  source: string
+  fileName: string | null
+  mimeType: string | null
+  status: "pending" | "completed" | "failed" | "cancelled"
+  candidateState: string
+  version: number
+  active: boolean
+  tags: string[]
+  folder: string | null
+  createdAt: string
+  updatedAt: string
+}
+
+export interface DocumentCatalogPayload {
+  documents: DocumentCatalogEntryPayload[]
+  total: number
+  page: number
+  pageSize: number
+  tags: string[]
+  folders: string[]
+}
+
+export interface DocumentCatalogView {
+  page: number
+  status: string
+  tag: string
+  folder: string
+}
+
+export async function fetchKnowledgeBaseDocuments(
+  kbId: string,
+  view: DocumentCatalogView,
+  pageSize = 20,
+): Promise<DocumentCatalogPayload> {
+  const params = new URLSearchParams({
+    page: String(view.page),
+    pageSize: String(pageSize),
+  })
+  if (view.status) params.set("status", view.status)
+  if (view.tag) params.set("tag", view.tag)
+  if (view.folder) params.set("folder", view.folder)
+  const response = await apiFetch(
+    `/knowledge-bases/${encodeURIComponent(kbId)}/documents?${params.toString()}`,
+  )
+  if (!response.ok) throw new Error(`文档目录读取失败 (${response.status})`)
+  const body = (await response.json()) as Partial<DocumentCatalogPayload>
+  return {
+    documents: Array.isArray(body.documents) ? body.documents : [],
+    total: typeof body.total === "number" ? body.total : 0,
+    page: typeof body.page === "number" ? body.page : view.page,
+    pageSize: typeof body.pageSize === "number" ? body.pageSize : pageSize,
+    tags: Array.isArray(body.tags) ? body.tags : [],
+    folders: Array.isArray(body.folders) ? body.folders : [],
+  }
+}
