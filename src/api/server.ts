@@ -41,6 +41,7 @@ import { SqliteKnowledgeBaseRepo } from "../knowledge/knowledge_base_repo"
 import { knowledgeBaseEmbeddingProfile } from "../types/knowledge_base"
 import { createKnowledgeBaseRouter } from "./knowledge_bases"
 import { createDocumentsRouter, createEsChunkReader } from "./documents"
+import { createRetrievalDebugRouter } from "./retrieval_debug"
 
 export function createApp(options: {
   db?: DB
@@ -84,6 +85,12 @@ export function createApp(options: {
    * from the tenant database when omitted.
    */
   knowledgeBaseService?: KnowledgeBaseService
+  /**
+   * Ticket 14 (RET-01): the shared SearchOperations behind the retrieval-debug
+   * endpoint. startServer receives chat's own operations (single retrieval
+   * configuration); absent in bare createApp() mounts → the endpoint 503s.
+   */
+  searchOperations?: import("../retrieval/search/searcher").SearchOperations
   eventsSource: AnswerEventsSource
   // Optional runtime surfaces for the /api/status endpoint.
   // When omitted (e.g. tests), the status route is not mounted.
@@ -147,6 +154,9 @@ export function createApp(options: {
     // knowledge-base workspace — browsing is for every authenticated member,
     // and the admin commands re-check the admin scope in-handler.
     app.use("/api/knowledge-bases", options.accessMiddleware)
+    // Ticket 14 (RET-01): the retrieval-debug run is an authorized read —
+    // same chat scope, same identity that constrains the channels.
+    app.use("/api/retrieval-debug", options.accessMiddleware)
   }
   app.use(
     "/api",
@@ -156,6 +166,16 @@ export function createApp(options: {
       options.sessionBinder,
       options.retrievalScopeResolver
     )
+  )
+  // Ticket 14 (RET-01): the read-only retrieval-debug run. Built from the
+  // SHARED search operations (same clients + reranker as chat) and the SAME
+  // scope resolver; absent operations (bare mounts) → 503.
+  app.use(
+    "/api",
+    createRetrievalDebugRouter({
+      searchOperations: options.searchOperations,
+      retrievalScopeResolver: options.retrievalScopeResolver,
+    })
   )
   // Ticket 08 (KB-04) + Ticket 11 (DOC-01A): ONE knowledge-base service shared
   // by the workspace routes and the document catalog (and, in startServer, by
@@ -274,7 +294,11 @@ export async function startServer(
   eventsSource: AnswerEventsSource,
   identityAdapter?: import("../access/context").IdentityAdapter,
   /** Ticket 01: enables the local demo sign-in when the demo issuer is running. */
-  options: { demoAuth?: DemoAuthOptions } = {}
+  options: {
+    demoAuth?: DemoAuthOptions
+    /** Ticket 14 (RET-01): chat's shared search operations for the debug run. */
+    searchOperations?: import("../retrieval/search/searcher").SearchOperations
+  } = {}
 ): Promise<{
   server: Server
   processRuntime: ProcessRuntime
@@ -370,6 +394,8 @@ export async function startServer(
     sessionBinder,
     retrievalScopeResolver,
     knowledgeBaseService,
+    // Ticket 14 (RET-01): the debug run shares chat's retrieval configuration.
+    ...(options.searchOperations ? { searchOperations: options.searchOperations } : {}),
     eventsSource,
     processRuntime,
     config,

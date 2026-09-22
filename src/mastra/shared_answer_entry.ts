@@ -133,6 +133,14 @@ export interface SharedAnswerEntryOptions {
 export interface SharedAnswerEntry {
   /** The single shared Answer run entry (transport-agnostic). */
   eventsSource: SharedAnswerEventsSource
+  /**
+   * Ticket 14 (RET-01): the SAME search operations chat uses (same clients,
+   * same dedicated reranker) — the retrieval-debug endpoint builds its
+   * Searcher from this so debug and chat share configuration and
+   * implementation. Stateless beyond its clients; a new SearcherImpl per run
+   * is exactly what the chat runners do.
+   */
+  searchOperations: SearchOperations
 }
 
 /**
@@ -321,5 +329,5 @@ export async function createSharedAnswerEntry(
     resourceBudget,
   })
 
-  return { eventsSource }
+  return { eventsSource, searchOperations }
 }

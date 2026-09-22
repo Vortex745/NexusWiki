@@ -9,8 +9,10 @@ import type { AccessContext } from "../../access/context"
 import type { Query, RetrievalResult, Chunk } from "../../types"
 import type { RetrievalScope } from "../../types/retrieval_scope"
 import type {
+  DebugCandidate,
   Reranker,
   RetrievalChannel,
+  RetrievalDebugTrace,
   RetrievalOrdering,
   SearchOptions,
   SearchOutcome,
@@ -717,6 +719,21 @@ export class SearcherImpl implements Searcher {
     const unselectedChannels = ALL_RETRIEVAL_CHANNELS.filter(
       (ch) => !selectedSet.has(ch)
     )
+    // Ticket 14 (RET-01): the debug trace — the same implementation runs, only
+    // instrumented. Ranks are 1-based stage positions.
+    const debug = options?.debug === true
+    const searchStarted = performance.now()
+    const channelStages: RetrievalDebugTrace["channels"] = []
+    const debugCandidate = (result: RetrievalResult, rank: number, score: number | null): DebugCandidate => ({
+      rank,
+      chunkId: result.chunk.id,
+      documentId: result.chunk.documentId,
+      title: typeof result.chunk.metadata.title === "string"
+        ? (result.chunk.metadata.title as string).slice(0, 200)
+        : "",
+      excerpt: result.chunk.content.slice(0, 300),
+      score,
+    })
     // Ticket 05 (KB-03A): an explicit empty scope means "no knowledge context",
     // and that promise belongs to the whole search, not to two of its four
     // channels. Graph and PageIndex receive their own knowledge filter in
@@ -733,6 +750,7 @@ export class SearcherImpl implements Searcher {
         // blame the channels for a scope decision the caller made.
         unavailableChannels: [],
         ...(unselectedChannels.length > 0 ? { unselectedChannels } : {}),
+        ...(debug ? { debug: { channels: [], fused: { elapsedMs: 0, rawCandidateCount: 0, distinctCount: 0, candidates: [] }, totalMs: performance.now() - searchStarted } } : {}),
       }
     }
     const allChannelRunners: Array<{
@@ -756,7 +774,39 @@ export class SearcherImpl implements Searcher {
         run: () => this.operations.pageIndexSearch(query, CHANNEL_TOP_K, accessContext, retrievalScope, signal),
       },
     ]
-    const channelRunners = allChannelRunners.filter(({ name }) => selectedSet.has(name))
+    const channelRunners = allChannelRunners
+      .filter(({ name }) => selectedSet.has(name))
+      .map(({ name, run }) => ({
+        name,
+        run: async (): Promise<RetrievalResult[]> => {
+          if (!debug) return run()
+          // Ticket 14 (RET-01): time the channel and record its raw ranks.
+          const started = performance.now()
+          try {
+            const value = await run()
+            channelStages.push({
+              channel: name,
+              ok: true,
+              elapsedMs: performance.now() - started,
+              candidates: value
+                .filter(({ chunk }) => chunk.metadata.kind !== "parent")
+                .map((result, index) => debugCandidate(result, index + 1, result.score)),
+            })
+            return value
+          } catch (error) {
+            channelStages.push({
+              channel: name,
+              ok: false,
+              // Ticket 14 (RET-01): bounded — driver messages can embed
+              // endpoints; the trace is bounded like every other field.
+              error: (error instanceof Error ? error.message : String(error)).slice(0, 200),
+              elapsedMs: performance.now() - started,
+              candidates: [],
+            })
+            throw error
+          }
+        },
+      }))
     const settled = await Promise.allSettled(channelRunners.map(({ run }) => run()))
     // P7.2: if the signal aborted while channel fetches were in flight,
     // stop downstream work (rerank/parent-load) at this boundary.
@@ -793,31 +843,55 @@ export class SearcherImpl implements Searcher {
         ...(unselectedChannels.length > 0
           ? { unselectedChannels }
           : {}),
+        ...(debug
+          ? {
+              debug: {
+                channels: orderedStages(channelStages),
+                fused: { elapsedMs: 0, rawCandidateCount: 0, distinctCount: 0, candidates: [] },
+                totalMs: performance.now() - searchStarted,
+              },
+            }
+          : {}),
       }
     }
 
+    const fusionStarted = performance.now()
     const fused = rrf(resultSets)
+    const fusionElapsed = performance.now() - fusionStarted
     // Ticket 03: the published ordering carries its own score source. A fused
     // fallback is never presented as a dedicated-rerank result.
     let reranked = fused
     let rerankerFailed = false
     let ordering: RetrievalOrdering
+    let rerankStage: RetrievalDebugTrace["rerank"]
     if (fused.length < RERANK_MIN_CANDIDATES) {
       ordering = { source: "fused", reason: "below_threshold" }
+      rerankStage = debug
+        ? { applied: false, reason: "below_threshold", elapsedMs: 0 }
+        : undefined
     } else {
+      const rerankStarted = performance.now()
       try {
         reranked = await this.operations.rerank(query.text, fused, signal)
         ordering = { source: "dedicated_rerank" }
+        rerankStage = debug
+          ? {
+              applied: true,
+              elapsedMs: performance.now() - rerankStarted,
+              candidates: reranked.map((result, index) => debugCandidate(result, index + 1, result.score)),
+            }
+          : undefined
       } catch (error) {
         // P7.2: a cancellation that fires mid-rerank must terminate the run,
         // not degrade to "reranker unavailable" — aborts are rethrown so the
         // run converges to the single AbortError terminal.
         if (signal?.aborted) throw error
         rerankerFailed = true
-        ordering = {
-          source: "fused",
-          reason: error instanceof RerankerNotConfiguredError ? "not_configured" : "unavailable",
-        }
+        const reason = error instanceof RerankerNotConfiguredError ? "not_configured" : "unavailable"
+        ordering = { source: "fused", reason }
+        rerankStage = debug
+          ? { applied: false, reason, elapsedMs: performance.now() - rerankStarted }
+          : undefined
         const message = error instanceof Error ? error.message : String(error)
         console.warn("[search] reranker unavailable:", message)
       }
@@ -886,6 +960,32 @@ export class SearcherImpl implements Searcher {
       ...(unselectedChannels.length > 0
         ? { unselectedChannels }
         : {}),
+      ...(debug
+        ? {
+            debug: {
+              channels: orderedStages(channelStages),
+              fused: {
+                elapsedMs: fusionElapsed,
+                rawCandidateCount: resultSets.reduce((sum, set) => sum + set.length, 0),
+                distinctCount: fused.length,
+                candidates: fused.map((result, index) => debugCandidate(result, index + 1, null)),
+              },
+              ...(rerankStage ? { rerank: rerankStage } : {}),
+              totalMs: performance.now() - searchStarted,
+            },
+          }
+        : {}),
     }
   }
+}
+
+/**
+ * Ticket 14 (RET-01): channels run concurrently, so the trace is assembled in
+ * the declared channel order, not completion order.
+ */
+function orderedStages(stages: RetrievalDebugTrace["channels"]): RetrievalDebugTrace["channels"] {
+  const order = new Map(ALL_RETRIEVAL_CHANNELS.map((channel, index) => [channel, index]))
+  return [...stages].sort(
+    (left, right) => (order.get(left.channel) ?? 0) - (order.get(right.channel) ?? 0)
+  )
 }

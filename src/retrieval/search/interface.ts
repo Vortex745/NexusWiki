@@ -37,6 +37,13 @@ export interface SearchOptions {
    */
   channels?: RetrievalChannel[]
   /**
+   * Ticket 14 (RET-01): request a read-only debug trace. The SAME search
+   * implementation runs (no separate debug pipeline); when true the outcome
+   * carries a `debug` trace with per-channel raw ranks, the fused order, the
+   * reranked order and elapsed times. The Answer path never sets this.
+   */
+  debug?: boolean
+  /**
    * P7.2: Optional AbortSignal honored at retrieval stage boundaries
    * (before channel dispatch, after Promise.allSettled, after rerank).
    * When the signal is already aborted at entry, `search` rejects with
@@ -104,6 +111,48 @@ export class RerankerNotConfiguredError extends Error {
   }
 }
 
+/**
+ * Ticket 14 (RET-01): stage-level debug trace of one search run. Ranks are
+ * 1-based positions as each stage published them; raw channel scores are the
+ * channels' own scores, fused candidates are rank-based (RRF sums are
+ * internal), reranked candidates carry the reranker's scores.
+ */
+export interface DebugCandidate {
+  rank: number
+  chunkId: string
+  documentId: string
+  title: string
+  excerpt: string
+  score: number | null
+}
+
+export interface DebugChannelStage {
+  channel: RetrievalChannel
+  ok: boolean
+  error?: string
+  elapsedMs: number
+  candidates: DebugCandidate[]
+}
+
+export interface RetrievalDebugTrace {
+  channels: DebugChannelStage[]
+  /** RRF fusion — also the dedup point (raw → distinct candidates). */
+  fused: {
+    elapsedMs: number
+    rawCandidateCount: number
+    distinctCount: number
+    candidates: DebugCandidate[]
+  }
+  rerank?: {
+    applied: boolean
+    /** "below_threshold" | "not_configured" | "unavailable" when not applied. */
+    reason?: string
+    elapsedMs: number
+    candidates?: DebugCandidate[]
+  }
+  totalMs: number
+}
+
 export interface SearchOutcome {
   status: "ok" | "degraded" | "insufficient"
   results: RetrievalResult[]
@@ -124,6 +173,8 @@ export interface SearchOutcome {
    * set; omitted on the `insufficient` early return (no results to rank).
    */
   ordering?: RetrievalOrdering
+  /** Ticket 14 (RET-01): present only when SearchOptions.debug was set. */
+  debug?: RetrievalDebugTrace
 }
 
 export interface Searcher {

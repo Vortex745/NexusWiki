@@ -151,7 +151,12 @@ async function main() {
     3001,
     mastraBoundary.eventsSource,
     identityAdapter,
-    demoAuth ? { demoAuth } : {}
+    {
+      ...(demoAuth ? demoAuth : {}),
+      // Ticket 14 (RET-01): the retrieval-debug endpoint shares chat's search
+      // operations (same clients + reranker) — no second retrieval config.
+      searchOperations: sharedAnswerEntry.searchOperations,
+    }
   )
   const worker = startWorker({ db: processRuntime.db })
 

@@ -5,13 +5,9 @@ import { AnswerTraceRepository } from "../answer/trace_repository"
 import type { AnswerRunEvent } from "../types"
 import { singleTenantAccessContext, type AccessContext } from "../access/context"
 import type { SqliteSessionBinder } from "../access/session_binder"
-import {
-  InvalidKnowledgeBaseScopeError,
-  KnowledgeBaseArchivedError,
-  KnowledgeBaseNotFoundError,
-} from "../knowledge/knowledge_base_service"
 import type { RetrievalScopeResolver } from "../retrieval/scope"
 import type { RetrievalScope } from "../types/retrieval_scope"
+import { resolveScopeOrRespond } from "./scope_http"
 
 interface ChatRequest {
   message: string
@@ -124,26 +120,11 @@ export function createChatRouter(
     // ids that must already belong to its own tenant.
     let retrievalScope: RetrievalScope | undefined
     if (retrievalScopeResolver) {
-      try {
-        retrievalScope = retrievalScopeResolver(accessContext, requestedKnowledgeBaseIds)
-      } catch (error) {
-        if (error instanceof KnowledgeBaseNotFoundError) {
-          res.status(404).json({ error: "knowledge base not found" })
-          return
-        }
-        if (error instanceof KnowledgeBaseArchivedError) {
-          // Ticket 08 (KB-04): archived bases remain inspectable but stop
-          // joining NEW retrieval — the selection is a state conflict, not a
-          // missing row, so the client can restore or reselect.
-          res.status(409).json({ error: "knowledge base is archived" })
-          return
-        }
-        if (error instanceof InvalidKnowledgeBaseScopeError) {
-          res.status(400).json({ error: error.message })
-          return
-        }
-        throw error
-      }
+      // Ticket 14: the ONE shared HTTP mapping (also used by the
+      // retrieval-debug route) — identical statuses, no drift.
+      const resolved = resolveScopeOrRespond(res, retrievalScopeResolver, accessContext, requestedKnowledgeBaseIds)
+      if (!resolved) return
+      retrievalScope = resolved
     } else if (requestedKnowledgeBaseIds !== undefined) {
       // No resolver wired: the server cannot honour a knowledge selection, and
       // ignoring it would answer from knowledge the caller did not ask for.
