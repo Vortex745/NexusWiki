@@ -791,6 +791,9 @@ export function createComplexKnowledgeMastraRunner(
             // Ticket 05 (KB-03A): every decomposed sub-query shares the run's
             // server-computed knowledge scope.
             ...(retrievalScope ? { retrievalScope } : {}),
+            // Ticket 22 (ATT-01): sub-queries share the run's session, so the
+            // temporary attachments stay available to all of them.
+            ...(sessionId ? { attachments: { sessionId } } : {}),
             signal,
           }),
           signal
@@ -1254,6 +1257,8 @@ export function createComplexKnowledgeMastraRunner(
                 // Ticket 05 (KB-03A): the deterministic fallback stays inside
                 // the run's server-computed knowledge scope.
                 ...(retrievalScope ? { retrievalScope } : {}),
+                // Ticket 22 (ATT-01): the fallback reads the same session.
+                ...(sessionId ? { attachments: { sessionId } } : {}),
                 signal,
               }),
               signal
@@ -1287,6 +1292,8 @@ export function createComplexKnowledgeMastraRunner(
               // Ticket 05 (KB-03A): a legacy correction search stays inside
               // the run's server-computed knowledge scope.
               ...(retrievalScope ? { retrievalScope } : {}),
+              // Ticket 22 (ATT-01): a legacy correction reads the same session.
+              ...(sessionId ? { attachments: { sessionId } } : {}),
               signal,
             }),
             signal

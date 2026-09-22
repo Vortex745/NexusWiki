@@ -66,6 +66,7 @@ import {
 import type { AccessContext } from "../access/context"
 import type { AgentMessage, AnswerRunEvent } from "../types"
 import type { AnswerModelProfileSnapshot } from "../types/answer"
+import type { AttachmentSearchOperations } from "../types/retrieval"
 import { knowledgeBaseEmbeddingProfile } from "../types/knowledge_base"
 import { createMastraChatEventAdapter } from "./chat_event_adapter"
 import type { AssistantRunSnapshot } from "../assistants/assistant_service"
@@ -131,6 +132,12 @@ export interface SharedAnswerEntryOptions {
   budgetMs?: number
   /** Whole-run aggregate model call/token/cost limits. Default: from config. */
   resourceBudget?: RunResourceBudgetOptions
+  /**
+   * Ticket 22 (ATT-01): the session-scoped attachment channel. Default:
+   * undefined — a composition without the attachment service simply never
+   * reads temporary attachments (evaluation scopes, probes).
+   */
+  attachments?: AttachmentSearchOperations
 }
 
 export interface SharedAnswerEntry {
@@ -272,7 +279,8 @@ export async function createSharedAnswerEntry(
   const contextualizer = new ContextualizerImpl(chatClient, cfg.openaiChatModel)
   const simpleRunner = createSimpleKnowledgeMastraRunner({
     router,
-    createSearcher: (assistant) => new SearcherImpl(searcherOperationsFor(assistant)),
+    createSearcher: (assistant) =>
+      new SearcherImpl(searcherOperationsFor(assistant), options.attachments),
     assembler: new ContextAssemblerImpl(),
     validator: new ValidatorImpl(chatClient, cfg.openaiChatModel),
     replanner: new RePlannerImpl(),
@@ -296,7 +304,8 @@ export async function createSharedAnswerEntry(
   const planner = new PlannerImpl(chatClient, cfg.openaiChatModel)
   const complexRunner = createComplexKnowledgeMastraRunner({
     router,
-    createSearcher: (assistant) => new SearcherImpl(searcherOperationsFor(assistant)),
+    createSearcher: (assistant) =>
+      new SearcherImpl(searcherOperationsFor(assistant), options.attachments),
     assembler: new ContextAssemblerImpl(),
     validator: new ValidatorImpl(chatClient, cfg.openaiChatModel),
     replanner: new RePlannerImpl(),

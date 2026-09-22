@@ -27,6 +27,14 @@ export interface SearchOptions {
    */
   retrievalScope?: RetrievalScope
   /**
+   * Ticket 22 (ATT-01): the session whose temporary attachments may join this
+   * search. The server derives it from the run's own session id — a caller
+   * cannot name another session, and the attachment channel itself only ever
+   * reads that session's rows. Absent → no attachment channel at all, which
+   * is every non-chat caller (evaluation, probes, laboratory).
+   */
+  attachments?: { sessionId: string }
+  /**
    * Ticket 06: Select an allowed subset of retrieval channels to execute.
    * Undefined/omitted → execute all four channels (backward compat with
    * pre-Ticket 06 callers). Non-empty array of known channels → execute

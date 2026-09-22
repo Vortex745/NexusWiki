@@ -45,6 +45,7 @@ import { createRetrievalDebugRouter } from "./retrieval_debug"
 import { createModelProfilesRouter } from "./model_profiles"
 import { createAssistantsRouter } from "./assistants"
 import { createConversationsRouter } from "./conversations"
+import { createAttachmentsRouter } from "./attachments"
 import { SqliteConversationHistoryStore } from "../answer/conversation_history_store"
 import {
   AssistantService,
@@ -111,6 +112,11 @@ export function createApp(options: {
   assistants?: import("../assistants/assistant_service").AssistantService
   /** Ticket 20 (CONV-01A): server-owned conversation history; omitted → routes not mounted. */
   conversationHistory?: import("../answer/conversation_history_store").SqliteConversationHistoryStore
+  /**
+   * Ticket 22 (ATT-01): temporary session attachments; omitted → routes not
+   * mounted and no run can read attachment evidence.
+   */
+  attachments?: import("../attachments/session_attachment_service").SessionAttachmentService
 }) {
   const app = express()
   const db = options.db || openDb()
@@ -192,6 +198,7 @@ export function createApp(options: {
       options.conversationHistory
     )
   )
+
   // Ticket 14 (RET-01): the read-only retrieval-debug run. Built from the
   // SHARED search operations (same clients + reranker as chat) and the SAME
   // scope resolver; absent operations (bare mounts) → 503.
@@ -218,6 +225,16 @@ export function createApp(options: {
     "/api",
     createKnowledgeBaseRouter({ service: workspaceKnowledgeBaseService })
   )
+  // Ticket 22 (ATT-01): the session attachment routes. They live under
+  // /api/chat so they inherit the chat identity gate; promotion re-checks the
+  // ingest capability in-handler and resolves its target base through the SAME
+  // knowledge-base service the workspace uses.
+  if (options.attachments) {
+    app.use(
+      "/api",
+      createAttachmentsRouter(options.attachments, options.sessionBinder, workspaceKnowledgeBaseService)
+    )
+  }
   // Ticket 11 (DOC-01A): the knowledge-base document catalog. The chat-scope
   // identity middleware mounted at the /api/knowledge-bases prefix above also
   // guards this route; reader/admin visibility is resolved in-handler.
@@ -352,6 +369,13 @@ export async function startServer(
     demoAuth?: DemoAuthOptions
     /** Ticket 14 (RET-01): chat's shared search operations for the debug run. */
     searchOperations?: import("../retrieval/search/searcher").SearchOperations
+    /**
+     * Ticket 22 (ATT-01): the SAME session attachment service the shared
+     * answer entry reads its attachment channel from — one instance, so a
+     * file uploaded through these routes is immediately retrievable by the
+     * next run of that session.
+     */
+    attachments?: import("../attachments/session_attachment_service").SessionAttachmentService
   } = {}
 ): Promise<{
   server: Server
@@ -475,6 +499,10 @@ export async function startServer(
     assistants,
     // Ticket 20 (CONV-01A): server-owned conversation directories + history.
     conversationHistory: new SqliteConversationHistoryStore(processRuntime.db),
+    // Ticket 22 (ATT-01): the session attachment routes (upload/list/promote/
+    // cleanup). Absent when the composition did not build the service — the
+    // routes then simply do not exist and no run reads attachments.
+    ...(options.attachments ? { attachments: options.attachments } : {}),
   })
   const server = await new Promise<Server>((resolve) => {
     const s = app.listen(port, () => {

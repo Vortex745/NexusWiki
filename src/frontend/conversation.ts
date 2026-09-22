@@ -46,6 +46,13 @@ export interface Reference {
   documentId?: string
   chunkId?: string
   image?: { assetPath?: string; captions?: string[] }
+  /**
+   * Ticket 22 (ATT-01): "attachment" marks a TEMPORARY citation from a
+   * session attachment. It is not a knowledge-base document, so it is never
+   * presented as one and never opened through the document viewer.
+   */
+  origin?: "attachment"
+  attachmentName?: string
   [key: string]: unknown
 }
 

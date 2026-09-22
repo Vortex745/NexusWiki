@@ -284,7 +284,11 @@ const SCHEMA = [
     title TEXT NOT NULL,
     imported INTEGER NOT NULL DEFAULT 0,
     created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL
+    updated_at TEXT NOT NULL,
+    -- Ticket 21 (CONV-01B): locked by the first message. NULL until then.
+    assistant_id TEXT,
+    assistant_version INTEGER,
+    knowledge_base_ids TEXT
   )`,
   `CREATE INDEX IF NOT EXISTS idx_conversation_directories_owner
     ON conversation_directories(tenant_id, subject_id, updated_at)`,
@@ -305,6 +309,39 @@ const SCHEMA = [
   )`,
   `CREATE INDEX IF NOT EXISTS idx_conversation_history_turns_session
     ON conversation_history_turns(session_id, id)`,
+  // Ticket 22 (ATT-01): temporary SESSION-SCOPED attachments. The triple
+  // (session_id, tenant_id, subject_id) is the isolation key — another
+  // session, even of the same user, is the same 404 as an unknown one.
+  // `content` keeps the decoded text so an explicit promotion can re-submit
+  // it through the normal ingestion rules without re-reading the browser.
+  `CREATE TABLE IF NOT EXISTS session_attachments (
+    id TEXT PRIMARY KEY,
+    session_id TEXT NOT NULL,
+    tenant_id TEXT NOT NULL,
+    subject_id TEXT NOT NULL,
+    name TEXT NOT NULL,
+    mime_type TEXT,
+    bytes INTEGER NOT NULL,
+    status TEXT NOT NULL CHECK(status IN ('parsing','ready','failed','promoted','retired')),
+    content TEXT NOT NULL,
+    error TEXT,
+    promoted_document_id TEXT,
+    promoted_knowledge_base_id TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_session_attachments_owner
+    ON session_attachments(session_id, tenant_id, subject_id, created_at)`,
+  `CREATE TABLE IF NOT EXISTS session_attachment_chunks (
+    attachment_id TEXT NOT NULL,
+    session_id TEXT NOT NULL,
+    tenant_id TEXT NOT NULL,
+    position INTEGER NOT NULL,
+    content TEXT NOT NULL,
+    PRIMARY KEY (attachment_id, position)
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_session_attachment_chunks_session
+    ON session_attachment_chunks(session_id, tenant_id, attachment_id, position)`,
 ].join(";\n")
 
 let _db: DB | null = null
@@ -525,6 +562,14 @@ export function openDb(dbPath?: string): DB {
   const spanColumns = db.pragma("table_info(processing_spans)") as Array<{ name: string }>
   if (!spanColumns.some(({ name }) => name === "error_stack")) {
     db.exec("ALTER TABLE processing_spans ADD COLUMN error_stack TEXT")
+  }
+  // Ticket 21 (CONV-01B): the first message locks assistant version + knowledge
+  // subset onto the directory. Existing rows stay unlocked (NULL) until a run.
+  const directoryColumns = db.pragma("table_info(conversation_directories)") as Array<{ name: string }>
+  if (directoryColumns.length > 0 && !directoryColumns.some(({ name }) => name === "assistant_id")) {
+    db.exec("ALTER TABLE conversation_directories ADD COLUMN assistant_id TEXT")
+    db.exec("ALTER TABLE conversation_directories ADD COLUMN assistant_version INTEGER")
+    db.exec("ALTER TABLE conversation_directories ADD COLUMN knowledge_base_ids TEXT")
   }
   db.exec(
     "CREATE INDEX IF NOT EXISTS idx_task_claimable ON task_pending_ops(status, next_attempt_at, id)"

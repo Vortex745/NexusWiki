@@ -46,6 +46,20 @@ export interface Evidence {
   wikilinks: RetrievalResult["wikilinks"]
   tenantId?: string
   allowedGroups?: string[]
+  /**
+   * Ticket 22 (ATT-01): "attachment" marks a TEMPORARY, session-scoped
+   * citation. It is not a knowledge-base document and must never be presented
+   * as one. Absent → the evidence came from knowledge, not from a session
+   * attachment.
+   */
+  origin?: "attachment"
+  attachmentId?: string
+  attachmentName?: string
+  /**
+   * Ticket 22: the session the temporary evidence belongs to. The reference
+   * stays inside that session; opening it elsewhere is not offered.
+   */
+  attachmentSessionId?: string
 }
 
 export type AnswerReference = Evidence

@@ -571,6 +571,9 @@ export function createSimpleKnowledgeMastraRunner(
         // Ticket 05 (KB-03A): carry the server-computed knowledge scope into
         // the retrieval channels.
         ...(retrievalScope ? { retrievalScope } : {}),
+        // Ticket 22 (ATT-01): this run may also read its OWN session's
+        // temporary attachments — never another session's.
+        ...(sessionId ? { attachments: { sessionId } } : {}),
         signal,
       }),
       signal
@@ -884,6 +887,8 @@ export function createSimpleKnowledgeMastraRunner(
             // Ticket 05 (KB-03A): a correction gap query stays inside the run's
             // server-computed knowledge scope — a retry never widens the read.
             ...(retrievalScope ? { retrievalScope } : {}),
+            // Ticket 22 (ATT-01): a retry reads the same session's attachments.
+            ...(sessionId ? { attachments: { sessionId } } : {}),
             signal,
           }),
           signal

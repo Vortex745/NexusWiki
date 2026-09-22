@@ -26,6 +26,7 @@ import { closeDriver } from "./graph"
 import { createShutdownController, installSignalHandlers } from "./shutdown"
 import { createMastraRuntimeBoundary } from "./mastra/runtime_boundary"
 import { createSharedAnswerEntry } from "./mastra/shared_answer_entry"
+import { createSessionAttachmentService } from "./attachments/session_attachment_service"
 import { readMastraRuntimeMode } from "./mastra/runtime_mode"
 import {
   MASTRA_PROMOTION_ARTIFACT_ENV,
@@ -136,9 +137,16 @@ async function main() {
   // single injection point passed to `startServer` (T07 §3.4
   // single-publisher invariant). Evaluation will reuse the same entry with
   // injected isolated repositories and observers.
+  // Ticket 22 (ATT-01): ONE attachment service for the whole process — the
+  // upload routes write it and the answer runs read it. Session-scoped, so a
+  // run can only ever retrieve the attachments of its own conversation.
+  const attachments = createSessionAttachmentService(answerRuntime.processRuntime.db)
+
   const sharedAnswerEntry = await createSharedAnswerEntry({
     config: cfg,
     answerRuntime,
+    // The retrieval channel that reads this session's temporary attachments.
+    attachments,
   })
   console.log("[kefu-RAG] Mastra runner wired — direct + ambiguous + simple + complex knowledge routes enabled with Conversation Memory + Handoff + Observer fanout")
 
@@ -156,6 +164,8 @@ async function main() {
       // Ticket 14 (RET-01): the retrieval-debug endpoint shares chat's search
       // operations (same clients + reranker) — no second retrieval config.
       searchOperations: sharedAnswerEntry.searchOperations,
+      // Ticket 22 (ATT-01): the routes and the runs share ONE instance.
+      attachments,
     }
   )
   const worker = startWorker({ db: processRuntime.db })

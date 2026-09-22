@@ -63,9 +63,13 @@ export function ReferencesPanel({ references, detailsRef, highlightedId }: Refer
         {references.map((reference) => {
           const location = formatReferenceLocation(reference)
           const imageUrl = assetUrl(reference, ASSET_API_BASE)
+          // Ticket 22 (ATT-01): a temporary attachment citation is NOT a
+          // knowledge-base document — it is labelled as temporary and cannot
+          // be opened as one.
+          const temporary = reference.origin === "attachment"
           // Ticket 13 (DOC-02): a citation that carries its document version
           // opens the exact authorized version (and the cited chunk).
-          const openable = typeof reference.documentId === "string"
+          const openable = !temporary && typeof reference.documentId === "string"
           return (
             <li
               key={reference.id}
@@ -90,9 +94,22 @@ export function ReferencesPanel({ references, detailsRef, highlightedId }: Refer
                   : "block w-full px-1 py-0.5 text-left"}
               >
                 <div className="text-xs font-medium text-ink">
-                  {[reference.title || reference.source || "未命名来源", location]
+                  {[
+                    temporary && reference.attachmentName
+                      ? reference.attachmentName
+                      : reference.title || reference.source || "未命名来源",
+                    location,
+                  ]
                     .filter(Boolean)
                     .join(" · ")}
+                  {temporary ? (
+                    <span
+                      className="ml-1.5 rounded bg-surface-subtle px-1 text-[10px] font-normal text-muted"
+                      title="来自本次会话的临时附件，不属于知识库"
+                    >
+                      临时
+                    </span>
+                  ) : null}
                   {openable ? <span className="ml-1.5 text-[10px] font-normal text-brand">查看来源</span> : null}
                 </div>
                 {reference.excerpt ? (

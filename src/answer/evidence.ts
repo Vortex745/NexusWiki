@@ -83,6 +83,30 @@ function graphPath(metadata: Record<string, unknown>): string[] | undefined {
   return [...metadata.graphPath]
 }
 
+/**
+ * Ticket 22 (ATT-01): attachment provenance, or undefined for knowledge. The
+ * fields are only emitted when the chunk really is a session attachment, so
+ * every pre-existing evidence shape is untouched.
+ */
+function attachmentProvenance(
+  metadata: Record<string, unknown>
+): Pick<Evidence, "origin" | "attachmentId" | "attachmentName" | "attachmentSessionId"> | undefined {
+  if (metadata.origin !== "attachment") return undefined
+  const attachmentId = typeof metadata.attachmentId === "string" ? metadata.attachmentId : undefined
+  const attachmentName = typeof metadata.attachmentName === "string"
+    ? metadata.attachmentName
+    : undefined
+  const attachmentSessionId = typeof metadata.attachmentSessionId === "string"
+    ? metadata.attachmentSessionId
+    : undefined
+  return {
+    origin: "attachment",
+    ...(attachmentId ? { attachmentId } : {}),
+    ...(attachmentName ? { attachmentName } : {}),
+    ...(attachmentSessionId ? { attachmentSessionId } : {}),
+  }
+}
+
 export function buildEvidence(results: RetrievalResult[]): Evidence[] {
   const evidence = new Map<string, Evidence>()
   for (const result of results) {
@@ -117,6 +141,10 @@ export function buildEvidence(results: RetrievalResult[]): Evidence[] {
     const location = blockLocation(metadata)
     const path = graphPath(metadata)
     const image = imageReference(metadata)
+    // Ticket 22 (ATT-01): a session attachment is TEMPORARY context. Its
+    // provenance travels with the citation so no layer mistakes it for a
+    // knowledge-base document.
+    const attachment = attachmentProvenance(metadata)
     evidence.set(key, {
       id: stableEvidenceId(result),
       documentId: result.chunk.documentId,
@@ -128,6 +156,7 @@ export function buildEvidence(results: RetrievalResult[]): Evidence[] {
       chunkId: result.chunk.id,
       title: typeof metadata.title === "string" ? metadata.title : "Untitled",
       source: typeof metadata.source === "string" ? metadata.source : "unknown",
+      ...(attachment ?? {}),
       ...location,
       ...(image ? { image } : {}),
       excerpt: result.chunk.content.slice(0, EXCERPT_LIMIT),

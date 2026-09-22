@@ -15,6 +15,20 @@ export const CONTEXT_SUFFIX = "\n请基于以上文档片段回答用户的问�
 const INTRO = CONTEXT_INTRO
 const SUFFIX = CONTEXT_SUFFIX
 
+/**
+ * Ticket 22 (ATT-01): temporary attachment context is labelled as such, both
+ * per group ("临时引用: 附件 <name>") and once up front, so neither the model
+ * nor the reader can mistake it for knowledge-base membership.
+ */
+const TEMPORARY_CONTEXT_NOTE =
+  "（标注为“临时引用”的片段来自本次会话的临时附件，不属于知识库。）\n"
+
+function sourceLabel(group: { source: string; temporary?: boolean }): string {
+  if (!group.temporary) return `来源: ${group.source}`
+  const name = group.source.startsWith("附件:") ? group.source.slice("附件:".length) : group.source
+  return `临时引用: 附件 ${name}`
+}
+
 const MODEL_TOKENIZER = tokenizers.tokenizer()
 
 export interface ContextAssemblerOptions {
@@ -42,6 +56,11 @@ export class ContextAssemblerImpl {
       content: string
       source: string
       matches: Array<{ content: string; citationId?: string }>
+      /**
+       * Ticket 22 (ATT-01): this group is a session attachment, not a
+       * knowledge-base document.
+       */
+      temporary?: boolean
     }>()
     const parts: string[] = [INTRO]
 
@@ -54,6 +73,9 @@ export class ContextAssemblerImpl {
       const group = groups.get(key) ?? {
         content: contextChunk.content,
         source: (contextChunk.metadata?.source as string) || "unknown",
+        // Ticket 22 (ATT-01): provenance decides the header, so a temporary
+        // attachment is never presented as knowledge-base membership.
+        ...(contextChunk.metadata?.origin === "attachment" ? { temporary: true } : {}),
         matches: [],
       }
       if (!group.matches.some((match) =>
@@ -64,13 +86,18 @@ export class ContextAssemblerImpl {
       groups.set(key, group)
     }
 
+    // Ticket 22 (ATT-01): one honest note when the context carries temporary
+    // attachments at all — the reader must never take them for knowledge.
+    if ([...groups.values()].some((group) => group.temporary)) {
+      parts[0] = `${INTRO}${TEMPORARY_CONTEXT_NOTE}`
+    }
     let remaining = this.maxContextTokens - this.countTokens(INTRO + SUFFIX)
     for (const group of groups.values()) {
       if (remaining <= 0) break
       const provisionalCitations = group.matches
         .flatMap(({ citationId }) => citationId ? [`[cite:${citationId}]`] : [])
         .join(" ")
-      const provisionalHeader = `${provisionalCitations}${provisionalCitations ? " " : ""}[来源: ${group.source}]\n`
+      const provisionalHeader = `${provisionalCitations}${provisionalCitations ? " " : ""}[${sourceLabel(group)}]\n`
       const wrapperTokens = this.countTokens(`${provisionalHeader}\n`)
       const contentBudget = Math.min(
         this.maxParentTokens,
@@ -88,7 +115,7 @@ export class ContextAssemblerImpl {
           included.has(match) && citationId ? [`[cite:${citationId}]`] : []
         )
         .join(" ")
-      const header = `${citations}${citations ? " " : ""}[来源: ${group.source}]\n`
+      const header = `${citations}${citations ? " " : ""}[${sourceLabel(group)}]\n`
       const part = `${header}${window.content}\n`
       const partTokens = this.countTokens(part)
       if (partTokens > remaining) break

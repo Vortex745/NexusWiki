@@ -12,10 +12,16 @@ import { MemoryDialog } from "./components/panels/MemoryDialog"
 import { SettingsDialog } from "./components/panels/SettingsDialog"
 import type { Attachment } from "./components/thread/Thread"
 import { Toast, type ToastMessage } from "./components/Toast"
-import { conversationStore } from "./conversation/useConversation"
-import { MAX_ATTACHMENT_BYTES, MAX_ATTACHMENTS } from "./lib/constants"
-import { createId } from "./lib/id"
+import { conversationStore, useConversation } from "./conversation/useConversation"
+import {
+  listSessionAttachments,
+  promoteSessionAttachment,
+  removeSessionAttachment,
+  uploadSessionAttachment,
+  type SessionAttachmentPayload,
+} from "./lib/api"
 import { getMemoriesPromptContext } from "./lib/memory"
+import { knowledgeStore } from "./runtime/knowledgeStore"
 import { useTheme } from "./lib/theme"
 import { AppShellProvider, type AppShellActions } from "./runtime/AppShellContext"
 import { MemoryProvider, useMemoryApi } from "./runtime/MemoryContext"
@@ -72,6 +78,18 @@ function SessionGate() {
   )
 }
 
+/** Ticket 22 (ATT-01): a server attachment row in the composer's chip shape. */
+function toChipAttachment(attachment: SessionAttachmentPayload): Attachment {
+  return {
+    id: attachment.id,
+    name: attachment.name,
+    content: "",
+    status: attachment.status,
+    error: attachment.error,
+    promoted: attachment.status === "promoted",
+  }
+}
+
 function AppRoot() {
   const { memories } = useMemoryApi()
   const { isDark, toggleTheme } = useTheme()
@@ -115,60 +133,114 @@ function AppRoot() {
     [openInsight, openMemory, openImport, openEvaluation, openKnowledge, openSettings, openAssistants, openDocument, showToast],
   )
 
-  // Staged attachments are consumed the moment a prompt actually goes out.
-  useEffect(() => {
-    conversationStore.onSendStart = () => setAttachments([])
-    return () => {
-      conversationStore.onSendStart = undefined
-    }
-  }, [])
-
   // Replay server-side trace history for runs persisted before this page load.
   useEffect(() => {
     void conversationStore.restoreTraceHistories()
   }, [])
 
+  const activeThreadId = useConversation().activeThreadId
+
+  // Ticket 22 (ATT-01): attachments are SERVER-owned rows of the current
+  // conversation. The list is re-read whenever the conversation changes, so
+  // the chips always show what this session can actually retrieve and cite.
+  useEffect(() => {
+    if (!activeThreadId) {
+      setAttachments([])
+      return
+    }
+    let cancelled = false
+    void listSessionAttachments(activeThreadId)
+      .then((payload) => {
+        if (!cancelled) setAttachments(payload.attachments.map(toChipAttachment))
+      })
+      .catch(() => {
+        if (!cancelled) setAttachments([])
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [activeThreadId])
+
+  const refreshAttachments = useCallback(async () => {
+    if (!activeThreadId) return
+    try {
+      const payload = await listSessionAttachments(activeThreadId)
+      setAttachments(payload.attachments.map(toChipAttachment))
+    } catch {
+      // The chips keep their last known state; the server stays the source.
+    }
+  }, [activeThreadId])
+
   const composePrompt = useCallback(
     (displayText: string) => {
-      const attachmentContext = attachments
-        .map((file) => `\n\n[附件：${file.name}]\n${file.content}`)
-        .join("")
+      // Ticket 22: attachment text is NOT pasted into the prompt anymore —
+      // the run retrieves the session's own attachments through the
+      // attachment search channel, so they can be retrieved and cited.
       const memoryContext = getMemoriesPromptContext(memories)
-      return `${displayText}${attachmentContext}${memoryContext}`.trim()
+      return `${displayText}${memoryContext}`.trim()
     },
-    [attachments, memories],
+    [memories],
   )
 
   const handleAddAttachments = useCallback(
     async (files: File[]) => {
-      let count = attachments.length
+      const sessionId = conversationStore.getActiveThread()?.id
+      if (!sessionId) {
+        showToast("请先新建一个对话，再添加附件")
+        return
+      }
       for (const file of files) {
-        if (count >= MAX_ATTACHMENTS) {
-          showToast(`最多添加 ${MAX_ATTACHMENTS} 个文本附件`)
-          break
-        }
-        if (file.size > MAX_ATTACHMENT_BYTES) {
-          showToast(`${file.name} 超过 128 KB，未添加`)
-          continue
-        }
         try {
-          const content = await file.text()
-          setAttachments((previous) => [
-            ...previous,
-            { id: createId("attachment"), name: file.name, content },
-          ])
-          count += 1
-        } catch {
-          showToast(`${file.name} 读取失败`)
+          const attachment = await uploadSessionAttachment(sessionId, file)
+          if (attachment.status === "failed") {
+            showToast(`${file.name} 解析失败：${attachment.error ?? "未知原因"}`)
+          }
+        } catch (error) {
+          showToast(error instanceof Error ? error.message : `${file.name} 上传失败`)
         }
       }
+      await refreshAttachments()
     },
-    [attachments.length, showToast],
+    [refreshAttachments, showToast],
   )
 
-  const handleRemoveAttachment = useCallback((id: string) => {
-    setAttachments((previous) => previous.filter((attachment) => attachment.id !== id))
-  }, [])
+  const handleRemoveAttachment = useCallback(
+    async (id: string) => {
+      const sessionId = conversationStore.getActiveThread()?.id
+      if (!sessionId) return
+      try {
+        await removeSessionAttachment(sessionId, id)
+      } catch (error) {
+        showToast(error instanceof Error ? error.message : "移除附件失败")
+      }
+      await refreshAttachments()
+    },
+    [refreshAttachments, showToast],
+  )
+
+  /**
+   * Promotion is explicit: it files the attachment into the knowledge base the
+   * user has SELECTED in the workspace, through the normal ingestion rules.
+   */
+  const handlePromoteAttachment = useCallback(
+    async (id: string) => {
+      const sessionId = conversationStore.getActiveThread()?.id
+      const target = knowledgeStore.getSnapshot().selectedIds[0]
+      if (!sessionId) return
+      if (!target) {
+        showToast("请先在知识库面板中选择要提升到的知识库")
+        return
+      }
+      try {
+        await promoteSessionAttachment(sessionId, id, target)
+        showToast("附件已提升到知识库")
+      } catch (error) {
+        showToast(error instanceof Error ? error.message : "提升失败")
+      }
+      await refreshAttachments()
+    },
+    [refreshAttachments, showToast],
+  )
 
   return (
     <AppShellProvider value={shellActions}>
@@ -183,6 +255,7 @@ function AppRoot() {
               attachments,
               onAdd: handleAddAttachments,
               onRemove: handleRemoveAttachment,
+              onPromote: handlePromoteAttachment,
             }}
           />
           <MemoryDialog open={memoryOpen} onClose={() => setMemoryOpen(false)} />

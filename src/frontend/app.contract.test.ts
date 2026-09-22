@@ -125,6 +125,26 @@ test("edit and regenerate name the branch they replace, on the same run id", () 
   assert.equal(calls.length, 2, "only edit and regenerate name a replaced branch")
 })
 
+test("attachments are server-owned session resources, not prompt text", () => {
+  const references = read("frontend/src/components/thread/References.tsx")
+  const attachmentsApi = read("frontend/src/lib/api.ts")
+  // Ticket 22 (ATT-01): the browser uploads to the conversation's attachment
+  // endpoint instead of pasting file text into the prompt, so the run can
+  // retrieve and cite the file — and only inside that conversation.
+  assert.match(app, /uploadSessionAttachment/, "the composer uploads attachments to the session")
+  assert.match(app, /removeSessionAttachment/, "removal is a server action")
+  assert.match(app, /promoteSessionAttachment/, "promotion is an explicit action")
+  assert.equal(/\[附件：/.test(app), false, "file text is no longer pasted into the prompt")
+  assert.match(attachmentsApi, /chat\/sessions\/\$\{encodeURIComponent\(sessionId\)\}\/attachments/)
+  assert.match(references, /origin === "attachment"/, "temporary citations are recognised")
+  assert.match(references, /临时/, "and labelled temporary")
+  assert.equal(
+    /attachment[\s\S]{0,120}查看来源/.test(references),
+    false,
+    "a temporary attachment is never offered as an openable knowledge source",
+  )
+})
+
 test("React components do not own chat state (no direct Conversation access)", () => {
   for (const file of [
     "frontend/src/components/thread/Thread.tsx",

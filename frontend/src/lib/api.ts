@@ -425,6 +425,119 @@ export async function cancelIngest(docId: string): Promise<void> {
   await apiFetch(`/ingest/${encodeURIComponent(docId)}/cancel`, { method: "POST" })
 }
 
+// ---------------------------------------------------------------------------
+// Ticket 22 (ATT-01): temporary session attachments. The session id is the
+// thread id; the server scopes every read/write to (session, tenant, subject)
+// and answers each file with its own status or its own typed rejection.
+// ---------------------------------------------------------------------------
+
+export type SessionAttachmentStatus = "parsing" | "ready" | "failed" | "promoted" | "retired"
+
+export interface SessionAttachmentPayload {
+  id: string
+  sessionId: string
+  name: string
+  mimeType: string | null
+  bytes: number
+  status: SessionAttachmentStatus
+  error: string | null
+  promotedDocumentId: string | null
+  promotedKnowledgeBaseId: string | null
+}
+
+export interface SessionAttachmentLimits {
+  maxFiles: number
+  maxFileBytes: number
+  maxSessionBytes: number
+  supportedExtensions: string[]
+}
+
+export interface SessionAttachmentList {
+  attachments: SessionAttachmentPayload[]
+  limits: SessionAttachmentLimits
+  usage: { live: number; bytes: number }
+}
+
+/** A refused attachment carries the server's typed reason (limit, type, …). */
+export class AttachmentRejectedError extends Error {
+  constructor(message: string, readonly kind: string, readonly status: number) {
+    super(message)
+    this.name = "AttachmentRejectedError"
+  }
+}
+
+async function attachmentError(response: Response): Promise<AttachmentRejectedError> {
+  const payload = (await response.json().catch(() => ({}))) as {
+    error?: string | { kind?: string; message?: string }
+  }
+  if (payload.error && typeof payload.error === "object") {
+    return new AttachmentRejectedError(
+      payload.error.message || `附件被拒绝 (${response.status})`,
+      payload.error.kind || "unknown",
+      response.status,
+    )
+  }
+  return new AttachmentRejectedError(
+    typeof payload.error === "string" ? payload.error : `附件请求失败 (${response.status})`,
+    "unknown",
+    response.status,
+  )
+}
+
+export async function uploadSessionAttachment(
+  sessionId: string,
+  file: File,
+): Promise<SessionAttachmentPayload> {
+  const bytes = new Uint8Array(await file.arrayBuffer())
+  const response = await apiFetch(
+    `/chat/sessions/${encodeURIComponent(sessionId)}/attachments`,
+    {
+      method: "POST",
+      headers: {
+        "content-type": "application/octet-stream",
+        "x-file-name": file.name,
+        "x-file-mime-type": file.type || guessMimeFromExt(file.name),
+      },
+      body: bytes,
+    },
+  )
+  if (!response.ok) throw await attachmentError(response)
+  const data = (await response.json()) as { attachment: SessionAttachmentPayload }
+  return data.attachment
+}
+
+export async function listSessionAttachments(sessionId: string): Promise<SessionAttachmentList> {
+  const response = await apiFetch(`/chat/sessions/${encodeURIComponent(sessionId)}/attachments`)
+  if (!response.ok) throw new Error(`附件列表加载失败 (${response.status})`)
+  return (await response.json()) as SessionAttachmentList
+}
+
+export async function promoteSessionAttachment(
+  sessionId: string,
+  attachmentId: string,
+  knowledgeBaseId: string,
+): Promise<SessionAttachmentPayload> {
+  const response = await apiFetch(
+    `/chat/sessions/${encodeURIComponent(sessionId)}/attachments/${encodeURIComponent(attachmentId)}/promote`,
+    {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ knowledgeBaseId }),
+    },
+  )
+  if (!response.ok) throw await attachmentError(response)
+  const data = (await response.json()) as { attachment: SessionAttachmentPayload }
+  return data.attachment
+}
+
+export async function removeSessionAttachment(sessionId: string, attachmentId: string): Promise<void> {
+  const response = await apiFetch(
+    `/chat/sessions/${encodeURIComponent(sessionId)}/attachments/${encodeURIComponent(attachmentId)}`,
+    { method: "DELETE" },
+  )
+  if (!response.ok) throw await attachmentError(response)
+}
+
 export function guessMimeFromExt(fileName: string): string {
   const dotIndex = fileName.lastIndexOf(".")
   const ext = dotIndex >= 0 ? fileName.slice(dotIndex).toLowerCase() : ""

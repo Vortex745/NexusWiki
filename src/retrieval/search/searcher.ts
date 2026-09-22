@@ -8,6 +8,7 @@ import type { ActiveVersionRepository } from "../../ingestion/tracking/active_ve
 import type { AccessContext } from "../../access/context"
 import type { Query, RetrievalResult, Chunk } from "../../types"
 import type { RetrievalScope } from "../../types/retrieval_scope"
+import type { AttachmentSearchOperations } from "../../types/retrieval"
 import type {
   DebugCandidate,
   Reranker,
@@ -693,12 +694,25 @@ function parseGraphProvenance(values: unknown): NonNullable<
 }
 
 export class SearcherImpl implements Searcher {
-  constructor(private operations: SearchOperations) {}
+  constructor(
+    private operations: SearchOperations,
+    /**
+     * Ticket 22 (ATT-01): the session-scoped attachment channel. Optional —
+     * a deployment without attachments (or an evaluation scope) simply has no
+     * attachment evidence, and a search without `options.attachments` never
+     * calls it at all.
+     */
+    private attachments?: AttachmentSearchOperations
+  ) {}
 
   async search(query: Query, options?: SearchOptions): Promise<SearchOutcome> {
     const hypothesis = options?.hypothesis
     const graphSeeds = options?.graphSeeds
     const accessContext = options?.accessContext
+    // Ticket 22 (ATT-01): the run's own session. It is the ONLY input to the
+    // attachment channel, so this search can only ever see this session's
+    // temporary files.
+    const attachmentSessionId = options?.attachments?.sessionId
     // Ticket 05 (KB-03A): the server-computed knowledge scope. Vector and BM25
     // enforce it here; graph and PageIndex follow in Ticket 06.
     const retrievalScope = options?.retrievalScope
@@ -742,7 +756,26 @@ export class SearcherImpl implements Searcher {
     // same honest "insufficient" a caller gets when every channel fails, and
     // the existing Answer path turns it into an honest refusal. This guard is
     // what makes the empty-scope contract fail-closed rather than best-effort.
-    if (hasNoKnowledgeContext(retrievalScope)) {
+    // Ticket 22 (ATT-01): a session-scoped attachment channel is the ONE
+    // exception to the empty-knowledge-context guard. "No knowledge context"
+    // says nothing about the caller's OWN temporary files: an empty knowledge
+    // selection with attachments still answers from those attachments alone,
+    // and the knowledge channels still return nothing.
+    const attachmentRunner =
+      attachmentSessionId && this.attachments && accessContext
+        ? {
+            name: "attachment" as const,
+            run: () =>
+              this.attachments!.search({
+                sessionId: attachmentSessionId,
+                tenantId: accessContext.tenantId,
+                subjectId: accessContext.subjectId,
+                query: query.text,
+                limit: CHANNEL_TOP_K,
+              }),
+          }
+        : undefined
+    if (hasNoKnowledgeContext(retrievalScope) && !attachmentRunner) {
       return {
         status: "insufficient",
         results: [],
@@ -774,8 +807,13 @@ export class SearcherImpl implements Searcher {
         run: () => this.operations.pageIndexSearch(query, CHANNEL_TOP_K, accessContext, retrievalScope, signal),
       },
     ]
-    const channelRunners = allChannelRunners
-      .filter(({ name }) => selectedSet.has(name))
+    const selectedRunners = allChannelRunners.filter(({ name }) => selectedSet.has(name))
+    // Ticket 22 (ATT-01): the attachment channel runs whenever the run
+    // carries a session — it is not part of the caller's channel selection,
+    // because it is not knowledge the caller may or may not read: it is the
+    // caller's OWN temporary context.
+    const runnersToRun = attachmentRunner ? [...selectedRunners, attachmentRunner] : selectedRunners
+    const channelRunners = runnersToRun
       .map(({ name, run }) => ({
         name,
         run: async (): Promise<RetrievalResult[]> => {
