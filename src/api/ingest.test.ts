@@ -1036,3 +1036,54 @@ test("Ticket 04 KB-02B: every sitemap page is filed under the resolved knowledge
     rmSync(directory, { recursive: true, force: true })
   }
 })
+
+test("Ticket 08 KB-04: an import naming an archived knowledge base is refused with 409", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "kefu-rag-kb-archived-"))
+  process.env.OPENAI_API_KEY = process.env.OPENAI_API_KEY || "test-key"
+  process.env.SQLITE_PATH = join(directory, "ingestion.db")
+  const db = openDb()
+  seedKnowledgeBase(db, "kb-policies", "tenant-a")
+  // 归档（KB-04 之后：归档库停止加入新检索，导入也不许落进去）。
+  new SqliteKnowledgeBaseRepo(db).setStatus(
+    "kb-policies",
+    "tenant-a",
+    "archived",
+    "2026-09-22T00:00:00.000Z",
+  )
+  const server = createApp({ eventsSource, ingestAccessMiddleware: tenantAccessMiddleware }).listen(0)
+  try {
+    await new Promise<void>((resolve) => server.once("listening", resolve))
+    const address = server.address()
+    assert.ok(address && typeof address === "object")
+
+    const countRows = (table: string) =>
+      (db.prepare(`SELECT COUNT(*) AS count FROM ${table}`).get() as { count: number }).count
+    const before = { documents: countRows("documents"), sources: countRows("sources") }
+
+    const response = await fetch(`http://127.0.0.1:${address.port}/api/ingest`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        title: "Policy",
+        content: "into an archived base",
+        source: "https://example.com/policy",
+        knowledgeBaseId: "kb-policies",
+      }),
+    })
+    assert.equal(response.status, 409, "archived is a state conflict, not a 500")
+    const body = await response.json() as { error: string }
+    assert.match(body.error, /archived/i)
+
+    // 被拒绝的导入没有留下任何产物。
+    assert.deepEqual(
+      { documents: countRows("documents"), sources: countRows("sources") },
+      before,
+    )
+  } finally {
+    await new Promise<void>((resolve, reject) => {
+      server.close((error) => error ? reject(error) : resolve())
+    })
+    closeDb()
+    rmSync(directory, { recursive: true, force: true })
+  }
+})

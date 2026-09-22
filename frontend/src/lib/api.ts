@@ -300,6 +300,13 @@ export interface ChatRequestBody {
   message: string
   runId: string
   sessionId: string
+  /**
+   * Ticket 08 (KB-04): the caller's knowledge SELECTION — which knowledge
+   * bases a new chat may search. Omitted → the tenant's default base; the
+   * server validates every id against the session's tenant (404/409/400), so
+   * the client can narrow the scope but never widen it.
+   */
+  knowledgeBaseIds?: string[]
 }
 
 /**
@@ -318,7 +325,13 @@ export async function streamChat(
     signal,
   })
 
-  if (!response.ok) throw new Error(`服务器错误 (${response.status})`)
+  if (!response.ok) {
+    // Ticket 08 (KB-04): a rejected knowledge selection (400/404/409) carries
+    // the server's reason — surface it instead of a bare status code, so the
+    // user learns the selected knowledge base is archived or unknown.
+    const payload = (await response.json().catch(() => ({}))) as { error?: string }
+    throw new Error(payload.error || `服务器错误 (${response.status})`)
+  }
   if (!response.body) throw new Error("浏览器不支持流式响应")
 
   const reader = response.body.getReader()
@@ -404,4 +417,72 @@ export function guessMimeFromExt(fileName: string): string {
   const dotIndex = fileName.lastIndexOf(".")
   const ext = dotIndex >= 0 ? fileName.slice(dotIndex).toLowerCase() : ""
   return MIME_BY_EXTENSION[ext] ?? "application/octet-stream"
+}
+
+// ---------------------------------------------------------------------------
+// Ticket 08 (KB-04): the knowledge-base workspace client. The server derives
+// the tenant from the session (never the body); a reader's list contains only
+// ACTIVE bases while an admin also sees archived ones.
+// ---------------------------------------------------------------------------
+
+export interface KnowledgeBasePayload {
+  id: string
+  tenantId: string
+  name: string
+  description: string
+  status: "active" | "archived"
+  embeddingProfile: string
+  createdAt: string
+  updatedAt: string
+}
+
+/** 400/403/404/409 with the server's message (e.g. archiving the default). */
+export class KnowledgeBaseCommandError extends Error {
+  constructor(message: string, readonly status: number) {
+    super(message)
+    this.name = "KnowledgeBaseCommandError"
+  }
+}
+
+async function knowledgeBaseCommand(
+  path: string,
+  method: "POST" | "PATCH",
+  body?: unknown,
+): Promise<KnowledgeBasePayload> {
+  const response = await apiFetch(`/knowledge-bases${path}`, {
+    method,
+    headers: { "Content-Type": "application/json" },
+    ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+  })
+  if (!response.ok) {
+    const payload = (await response.json().catch(() => ({}))) as { error?: string }
+    throw new KnowledgeBaseCommandError(
+      payload.error || `知识库操作失败 (${response.status})`,
+      response.status,
+    )
+  }
+  return (await response.json()) as KnowledgeBasePayload
+}
+
+export async function fetchKnowledgeBases(): Promise<KnowledgeBasePayload[]> {
+  const response = await apiFetch("/knowledge-bases")
+  if (!response.ok) throw new Error(`知识库读取失败 (${response.status})`)
+  const body = (await response.json()) as { knowledgeBases?: KnowledgeBasePayload[] }
+  return Array.isArray(body.knowledgeBases) ? body.knowledgeBases : []
+}
+
+export function createKnowledgeBase(name: string, description?: string): Promise<KnowledgeBasePayload> {
+  return knowledgeBaseCommand("", "POST", { name, ...(description ? { description } : {}) })
+}
+
+export function renameKnowledgeBase(id: string, name: string): Promise<KnowledgeBasePayload> {
+  return knowledgeBaseCommand(`/${encodeURIComponent(id)}`, "PATCH", { name })
+}
+
+export function archiveKnowledgeBase(id: string): Promise<KnowledgeBasePayload> {
+  return knowledgeBaseCommand(`/${encodeURIComponent(id)}/archive`, "POST")
+}
+
+export function restoreKnowledgeBase(id: string): Promise<KnowledgeBasePayload> {
+  return knowledgeBaseCommand(`/${encodeURIComponent(id)}/restore`, "POST")
 }

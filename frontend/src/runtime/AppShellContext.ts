@@ -5,6 +5,8 @@ export interface AppShellActions {
   openMemory: () => void
   openImport: () => void
   openEvaluation: () => void
+  /** Ticket 08 (KB-04): the knowledge-base workspace (admin). */
+  openKnowledge: () => void
   showToast: (message: string) => void
 }
 
@@ -15,6 +17,7 @@ const AppShellContext = createContext<AppShellActions>({
   openMemory: noop,
   openImport: noop,
   openEvaluation: noop,
+  openKnowledge: noop,
   showToast: noop,
 })
 

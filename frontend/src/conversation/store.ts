@@ -1,0 +1,287 @@
+import type { Conversation, Message, Thread } from "@core/conversation"
+import { ConversationImpl, LocalStorageConversationStorage } from "@core/conversation"
+
+import { fetchRunHistory, streamChat } from "../lib/api"
+import { knowledgeStore } from "../runtime/knowledgeStore"
+
+export interface ThreadSummary {
+  id: string
+  title: string
+  updatedAt: string
+}
+
+export interface ConversationSnapshot {
+  /** Threads that already hold at least one message, newest activity first. */
+  threads: ThreadSummary[]
+  activeThreadId: string
+  activeThreadTitle: string
+  /** Immutable views of the active thread's messages. */
+  messages: Message[]
+  isRunning: boolean
+  runningMessageId: string | null
+  sidebarCollapsed: boolean
+  online: boolean
+}
+
+function createRunId(): string {
+  const randomId =
+    typeof globalThis.crypto !== "undefined" && typeof globalThis.crypto.randomUUID === "function"
+      ? globalThis.crypto.randomUUID()
+      : `${Date.now()}-${Math.random().toString(16).slice(2)}`
+  return `run-${randomId}`
+}
+
+/**
+ * Bridges the framework-agnostic `Conversation` state core to React.
+ *
+ * `Conversation` mutates message objects in place, so this store keeps a cache
+ * of immutable per-message views and invalidates only what actually changed —
+ * a streamed token rebuilds one message object, not the whole thread. State
+ * ownership stays in `Conversation`; this class only owns subscription plumbing
+ * and the fetch lifecycle.
+ */
+export class ConversationStore {
+  private readonly conversation: Conversation
+  private readonly listeners = new Set<() => void>()
+  private readonly views = new Map<Message, Message>()
+  private snapshot: ConversationSnapshot | null = null
+  private abortController: AbortController | null = null
+  private runningMessage: Message | null = null
+  private online = true
+  /** Fires once per new prompt (after the composer has read staged attachments). */
+  onSendStart?: () => void
+
+  constructor(conversation: Conversation) {
+    this.conversation = conversation
+  }
+
+  subscribe = (listener: () => void): (() => void) => {
+    this.listeners.add(listener)
+    return () => {
+      this.listeners.delete(listener)
+    }
+  }
+
+  getSnapshot = (): ConversationSnapshot => {
+    if (!this.snapshot) this.snapshot = this.build()
+    return this.snapshot
+  }
+
+  // -------------------------------------------------------------------------
+  // Read helpers used by panels that need the live source object
+  // -------------------------------------------------------------------------
+
+  getActiveThread(): Thread | null {
+    return this.conversation.getActiveThread()
+  }
+
+  // -------------------------------------------------------------------------
+  // Run lifecycle
+  // -------------------------------------------------------------------------
+
+  async sendPrompt(displayText: string, prompt: string): Promise<void> {
+    if (this.conversation.isRunning()) return
+    const thread = this.conversation.getActiveThread()
+    if (!thread) return
+
+    this.conversation.addUserMessage(thread.id, { content: displayText, prompt })
+    this.onSendStart?.()
+    const assistant = this.conversation.startAssistantRun(thread.id, { runId: createRunId() })
+    this.runningMessage = assistant
+    this.invalidate()
+    await this.executeRun(thread, assistant, prompt)
+  }
+
+  /** Regenerates the answer that follows `parentId` (the preceding user turn). */
+  async regenerate(parentId: string | null): Promise<void> {
+    if (this.conversation.isRunning()) return
+    const thread = this.conversation.getActiveThread()
+    if (!thread) return
+
+    const anchor = parentId
+      ? thread.messages.find((message) => message.id === parentId)
+      : [...thread.messages].reverse().find((message) => message.role === "user")
+    if (!anchor) return
+
+    const prompt = anchor.prompt || anchor.content
+    if (!prompt.trim()) return
+
+    this.conversation.truncateMessages(thread.id, anchor.id, false)
+    const assistant = this.conversation.startAssistantRun(thread.id, { runId: createRunId() })
+    this.runningMessage = assistant
+    this.invalidate()
+    await this.executeRun(thread, assistant, prompt)
+  }
+
+  async editMessage(userMessageId: string, displayText: string, prompt: string): Promise<void> {
+    if (this.conversation.isRunning()) return
+    const thread = this.conversation.getActiveThread()
+    if (!thread) return
+    if (!thread.messages.some((message) => message.id === userMessageId)) return
+
+    this.conversation.truncateMessages(thread.id, userMessageId, true)
+    this.conversation.addUserMessage(thread.id, { content: displayText, prompt })
+    const assistant = this.conversation.startAssistantRun(thread.id, { runId: createRunId() })
+    this.runningMessage = assistant
+    this.invalidate()
+    await this.executeRun(thread, assistant, prompt)
+  }
+
+  cancel(): void {
+    this.abortController?.abort()
+  }
+
+  private async executeRun(thread: Thread, assistant: Message, prompt: string): Promise<void> {
+    const controller = new AbortController()
+    this.abortController = controller
+    this.conversation.startRun()
+    this.invalidate()
+
+    try {
+      await streamChat(
+        {
+          message: prompt,
+          runId: assistant.runId ?? "",
+          sessionId: thread.id,
+          // Ticket 08 (KB-04): a selection narrows the chat's knowledge scope;
+          // empty = the server's default base. The server validates every id.
+          ...(knowledgeStore.getSnapshot().selectedIds.length > 0
+            ? { knowledgeBaseIds: knowledgeStore.getSnapshot().selectedIds }
+            : {}),
+        },
+        (data) => {
+          // Merge policy belongs to Conversation; this store only re-renders.
+          this.conversation.processSseEvent(assistant, data)
+          this.invalidate(assistant)
+        },
+        controller.signal,
+      )
+      // Stream finished cleanly; Conversation decides the terminal status.
+      this.conversation.finalizeStreamRun(assistant)
+      this.online = true
+    } catch (error) {
+      if (error instanceof DOMException && error.name === "AbortError") {
+        this.conversation.finalizeAbortedRun(assistant)
+      } else {
+        this.conversation.finalizeConnectionError(assistant)
+        this.online = false
+        // Ticket 08 (KB-04): a refused knowledge selection (archived/unknown
+        // base) leaves the persisted selection stale — the archived base no
+        // longer renders as a row to uncheck, so refresh immediately to drop
+        // it and let the user reselect.
+        void knowledgeStore.refresh()
+      }
+      this.invalidate(assistant)
+    } finally {
+      this.conversation.completeRun()
+      this.abortController = null
+      if (assistant.status === "running") this.conversation.finalizeRun(assistant, "complete")
+      thread.updatedAt = new Date().toISOString()
+      this.conversation.save()
+      this.runningMessage = null
+      this.invalidate(assistant)
+    }
+  }
+
+  /** Replays server-side trace history for runs persisted before a reload. */
+  async restoreTraceHistories(): Promise<void> {
+    const runs: Message[] = []
+    for (const thread of this.conversation.listThreads()) {
+      for (const message of thread.messages) {
+        if (message.role === "assistant" && message.runId) runs.push(message)
+      }
+    }
+
+    await Promise.all(
+      runs.map(async (message) => {
+        try {
+          const history = await fetchRunHistory(message.runId as string)
+          this.conversation.applyRunHistory(message, history)
+          this.invalidate(message)
+        } catch {
+          // Keep the last locally persisted projection when history is unavailable.
+        }
+      }),
+    )
+  }
+
+  // -------------------------------------------------------------------------
+  // Thread management
+  // -------------------------------------------------------------------------
+
+  newThread(): void {
+    if (this.conversation.isRunning()) this.cancel()
+    const current = this.conversation.getActiveThread()
+    if (current && current.messages.length === 0) return
+    this.conversation.createThread()
+    this.invalidate()
+  }
+
+  switchThread(threadId: string): void {
+    this.conversation.setActiveThread(threadId)
+    this.invalidate()
+  }
+
+  deleteThread(threadId: string): void {
+    this.conversation.deleteThread(threadId)
+    this.invalidate()
+  }
+
+  renameThread(threadId: string, title: string): void {
+    this.conversation.renameThread(threadId, title)
+    this.invalidate()
+  }
+
+  toggleSidebar(): void {
+    this.conversation.setSidebarCollapsed(!this.conversation.getSidebarCollapsed())
+    this.invalidate()
+  }
+
+  // -------------------------------------------------------------------------
+  // Snapshot plumbing
+  // -------------------------------------------------------------------------
+
+  private build(): ConversationSnapshot {
+    const thread = this.conversation.getActiveThread()
+    const source = thread?.messages ?? []
+
+    return {
+      threads: this.conversation
+        .listThreads()
+        .filter((item) => item.messages.length > 0)
+        .sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt))
+        .map((item) => ({ id: item.id, title: item.title, updatedAt: item.updatedAt })),
+      activeThreadId: thread?.id ?? "",
+      activeThreadTitle: thread?.title ?? "新对话",
+      messages: source.map((message) => this.viewOf(message)),
+      isRunning: this.conversation.isRunning(),
+      runningMessageId: this.runningMessage?.id ?? null,
+      sidebarCollapsed: this.conversation.getSidebarCollapsed(),
+      online: this.online,
+    }
+  }
+
+  private viewOf(source: Message): Message {
+    const cached = this.views.get(source)
+    if (cached) return cached
+    const view: Message = {
+      ...source,
+      traceEvents: [...source.traceEvents],
+      references: [...source.references],
+    }
+    this.views.set(source, view)
+    return view
+  }
+
+  private invalidate(message?: Message): void {
+    if (message) this.views.delete(message)
+    this.snapshot = null
+    for (const listener of this.listeners) listener()
+  }
+}
+
+export function createConversationStore(): ConversationStore {
+  return new ConversationStore(
+    new ConversationImpl({ storage: new LocalStorageConversationStorage() }),
+  )
+}

@@ -9,6 +9,7 @@ import type { DB } from "../ingestion/tracking/db"
 import { SqliteKnowledgeBaseRepo } from "../knowledge/knowledge_base_repo"
 import {
   InvalidKnowledgeBaseScopeError,
+  KnowledgeBaseArchivedError,
   KnowledgeBaseNotFoundError,
   KnowledgeBaseServiceImpl,
 } from "../knowledge/knowledge_base_service"
@@ -133,6 +134,11 @@ function resolveRequestKnowledgeBaseId(
   } catch (error) {
     if (error instanceof KnowledgeBaseNotFoundError) {
       return { ok: false, status: 404, body: { error: "knowledge base not found" } }
+    }
+    if (error instanceof KnowledgeBaseArchivedError) {
+      // Ticket 08 (KB-04): archived bases stop joining new retrieval — an
+      // import naming one is a state conflict (restore first), never a 500.
+      return { ok: false, status: 409, body: { error: "knowledge base is archived" } }
     }
     if (error instanceof InvalidKnowledgeBaseScopeError) {
       return { ok: false, status: 400, body: { error: error.message } }

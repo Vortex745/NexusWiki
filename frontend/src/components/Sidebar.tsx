@@ -1,10 +1,12 @@
 import { ThreadListItemPrimitive, ThreadListPrimitive } from "@assistant-ui/react"
-import { Brain, Database, FlaskConical, MessageCircle, Moon, Plus, Sun, Trash2 } from "lucide"
+import { BookOpen, Brain, Check, Database, FlaskConical, MessageCircle, Moon, Plus, Sun, Trash2 } from "lucide"
+import { useEffect } from "react"
 import type { IconProps } from "./ui/Icon"
 
 import { useConversation } from "../conversation/useConversation"
 import { cn } from "../lib/cn"
 import { useAppShell } from "../runtime/AppShellContext"
+import { knowledgeStore, useKnowledgeBases } from "../runtime/knowledgeStore"
 import { useMemoryApi } from "../runtime/MemoryContext"
 import { useSignedInSession } from "../runtime/SessionContext"
 import { StatusPopover } from "./StatusPopover"
@@ -57,6 +59,89 @@ function SidebarButton({
   )
 }
 
+/**
+ * Ticket 08 (KB-04): the workspace knowledge-base selector. Browsing is for
+ * every signed-in member; the list shows ACTIVE bases only (archived ones are
+ * the admin dialog's concern). An empty selection means the server default —
+ * a selection can only ever NARROW the chat's knowledge scope, and the server
+ * validates every id against the session's tenant regardless.
+ */
+function KnowledgeSelector() {
+  const { status, activeKnowledgeBases: bases, selectedIds, error } = useKnowledgeBases()
+  const { openKnowledge } = useAppShell()
+  const scopes = useSignedInSession()?.scopes ?? []
+  const canAdmin = scopes.includes("admin")
+
+  return (
+    <div className="mt-4">
+      <div className="flex items-center justify-between px-1 text-[11px] font-semibold uppercase tracking-wider text-muted/70">
+        <span>知识库</span>
+        {canAdmin ? (
+          <button
+            type="button"
+            onClick={openKnowledge}
+            title="管理知识库"
+            className="cursor-pointer rounded p-0.5 text-muted/70 transition-colors hover:text-ink"
+          >
+            <Icon icon={BookOpen} className="size-3.5" />
+          </button>
+        ) : null}
+      </div>
+      {status === "loading" || (status === "idle" && bases.length === 0) ? (
+        <p className="px-3 py-2 text-xs text-muted/70">正在加载知识库…</p>
+      ) : status === "error" ? (
+        <div className="px-3 py-2">
+          <p className="text-xs text-red-600 dark:text-red-400">知识库读取失败：{error}</p>
+          <button
+            type="button"
+            onClick={() => void knowledgeStore.refresh()}
+            className="mt-1 cursor-pointer text-xs font-medium text-brand hover:underline"
+          >
+            重试
+          </button>
+        </div>
+      ) : bases.length === 0 ? (
+        <p className="px-3 py-2 text-xs text-muted/70">暂无可用知识库</p>
+      ) : (
+        <ul className="mt-1 flex flex-col gap-0.5">
+          {bases.map((base) => {
+            const selected = selectedIds.includes(base.id)
+            return (
+              <li key={base.id}>
+                <button
+                  type="button"
+                  onClick={() => knowledgeStore.toggleSelected(base.id)}
+                  title={selected ? "取消选择（回到默认知识库）" : "选入新对话的检索范围"}
+                  aria-pressed={selected}
+                  className={cn(
+                    "flex h-8.5 w-full cursor-pointer items-center gap-2 rounded-lg px-3 text-left text-xs transition-[colors,transform] duration-150 ease-out hover:bg-surface-subtle active:scale-[0.98]",
+                    selected ? "text-ink" : "text-muted",
+                  )}
+                >
+                  <span
+                    className={cn(
+                      "grid size-4 flex-none place-items-center rounded border transition-colors",
+                      selected ? "border-brand bg-brand text-white" : "border-line bg-transparent",
+                    )}
+                  >
+                    {selected ? <Icon icon={Check} className="size-3" /> : null}
+                  </span>
+                  <span className="truncate">{base.name}</span>
+                </button>
+              </li>
+            )
+          })}
+        </ul>
+      )}
+      <p className="px-3 pt-1 text-[10px] leading-relaxed text-muted/60">
+        {selectedIds.length > 0
+          ? `新对话将检索选中的 ${selectedIds.length} 个知识库`
+          : "未选择时检索默认知识库"}
+      </p>
+    </div>
+  )
+}
+
 interface SidebarProps {
   open: boolean
   collapsed: boolean
@@ -74,6 +159,11 @@ export function Sidebar({ open, collapsed, isDark, onToggleTheme, onCloseMobile 
   const scopes = useSignedInSession()?.scopes ?? []
   const canIngest = scopes.includes("ingest")
   const canAdmin = scopes.includes("admin")
+
+  // Ticket 08 (KB-04): load the knowledge-base list once per sign-in.
+  useEffect(() => {
+    knowledgeStore.ensureLoaded()
+  }, [])
 
   return (
     <>
@@ -135,6 +225,9 @@ export function Sidebar({ open, collapsed, isDark, onToggleTheme, onCloseMobile 
               onClick={onToggleTheme}
             />
           </div>
+
+          {/* Ticket 08 (KB-04): workspace knowledge-base selector */}
+          <KnowledgeSelector />
 
           {/* Recent chats */}
           <div className="mt-4 flex items-center justify-between px-1 text-[11px] font-semibold uppercase tracking-wider text-muted/70">

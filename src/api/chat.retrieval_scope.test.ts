@@ -378,3 +378,26 @@ test("Ticket 05: createApp passes the injected resolver through to the chat rout
     scope.db.close()
   }
 })
+
+test("Ticket 08: an archived knowledge base selection is refused with 409 before any run", async () => {
+  const scope = openScope()
+  scope.service.ensureDefault("demo")
+  const created = scope.service.create("demo", "Policies")
+  scope.service.archive(created.id, "demo")
+  const built = buildRouter({ resolver: scope.resolver, accessContext: contextFor("demo") })
+  const { server, port } = await listen(built.app)
+  try {
+    const res = await postChat(port, {
+      message: "hi",
+      stream: false,
+      knowledgeBaseIds: [created.id],
+    })
+
+    assert.equal(res.status, 409, "archived is a state conflict, not a missing row")
+    assert.equal(built.runs.length, 0, "a refused selection must not start a run")
+  } finally {
+    server.close()
+    built.db.close()
+    scope.db.close()
+  }
+})

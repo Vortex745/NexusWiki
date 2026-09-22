@@ -7,6 +7,7 @@ import { singleTenantAccessContext, type AccessContext } from "../access/context
 import type { SqliteSessionBinder } from "../access/session_binder"
 import {
   InvalidKnowledgeBaseScopeError,
+  KnowledgeBaseArchivedError,
   KnowledgeBaseNotFoundError,
 } from "../knowledge/knowledge_base_service"
 import type { RetrievalScopeResolver } from "../retrieval/scope"
@@ -128,6 +129,13 @@ export function createChatRouter(
       } catch (error) {
         if (error instanceof KnowledgeBaseNotFoundError) {
           res.status(404).json({ error: "knowledge base not found" })
+          return
+        }
+        if (error instanceof KnowledgeBaseArchivedError) {
+          // Ticket 08 (KB-04): archived bases remain inspectable but stop
+          // joining NEW retrieval — the selection is a state conflict, not a
+          // missing row, so the client can restore or reselect.
+          res.status(409).json({ error: "knowledge base is archived" })
           return
         }
         if (error instanceof InvalidKnowledgeBaseScopeError) {

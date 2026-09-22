@@ -32,9 +32,13 @@ import {
   createRetrievalScopeResolver,
   type RetrievalScopeResolver,
 } from "../retrieval/scope"
-import { KnowledgeBaseServiceImpl } from "../knowledge/knowledge_base_service"
+import {
+  KnowledgeBaseServiceImpl,
+  type KnowledgeBaseService,
+} from "../knowledge/knowledge_base_service"
 import { SqliteKnowledgeBaseRepo } from "../knowledge/knowledge_base_repo"
 import { knowledgeBaseEmbeddingProfile } from "../types/knowledge_base"
+import { createKnowledgeBaseRouter } from "./knowledge_bases"
 
 export function createApp(options: {
   db?: DB
@@ -70,6 +74,14 @@ export function createApp(options: {
    * widened to an unfiltered read.
    */
   retrievalScopeResolver?: RetrievalScopeResolver
+  /**
+   * Ticket 08 (KB-04): the knowledge-base service behind the workspace routes.
+   * startServer always wires the production one — the SAME instance the
+   * retrieval-scope resolver uses, so a base an admin just archived is refused
+   * by the very next chat selection. Bare createApp() mounts build a local one
+   * from the tenant database when omitted.
+   */
+  knowledgeBaseService?: KnowledgeBaseService
   eventsSource: AnswerEventsSource
   // Optional runtime surfaces for the /api/status endpoint.
   // When omitted (e.g. tests), the status route is not mounted.
@@ -129,6 +141,10 @@ export function createApp(options: {
   // binder. Ingestion uses its separate identity gate and trusted ACL propagation.
   if (options.accessMiddleware) {
     app.use("/api/chat", options.accessMiddleware)
+    // Ticket 08 (KB-04): the same chat-scope identity gate guards the
+    // knowledge-base workspace — browsing is for every authenticated member,
+    // and the admin commands re-check the admin scope in-handler.
+    app.use("/api/knowledge-bases", options.accessMiddleware)
   }
   app.use(
     "/api",
@@ -138,6 +154,23 @@ export function createApp(options: {
       options.sessionBinder,
       options.retrievalScopeResolver
     )
+  )
+  // Ticket 08 (KB-04): the knowledge-base workspace routes. The service is the
+  // one the caller injected (startServer shares it with the retrieval-scope
+  // resolver), or a local one over the tenant database for bare mounts.
+  app.use(
+    "/api",
+    createKnowledgeBaseRouter({
+      service:
+        options.knowledgeBaseService ??
+        new KnowledgeBaseServiceImpl(
+          new SqliteKnowledgeBaseRepo(db),
+          knowledgeBaseEmbeddingProfile(
+            options.config?.embeddingModel ?? "unspecified",
+            options.config?.embeddingDimensions ?? 0
+          )
+        ),
+    })
   )
   if (options.managementAccessMiddleware) {
     app.use("/api/handoffs", options.managementAccessMiddleware)
@@ -263,6 +296,13 @@ export async function startServer(
         })
       : undefined
   const sessionBinder = new SqliteSessionBinder(processRuntime.db)
+  // Ticket 08 (KB-04): ONE production knowledge-base service shared by the
+  // retrieval-scope resolver and the workspace routes, so a base an admin just
+  // archived is refused by the very next chat selection.
+  const knowledgeBaseService = new KnowledgeBaseServiceImpl(
+    new SqliteKnowledgeBaseRepo(processRuntime.db),
+    knowledgeBaseEmbeddingProfile(config.embeddingModel, config.embeddingDimensions)
+  )
   // Ticket 05 (KB-03A): the production retrieval-scope resolver. The knowledge
   // selection a request may carry is intersected here with the AccessContext
   // the request's identity produced — the transport never filters storage
@@ -270,12 +310,7 @@ export async function startServer(
   // request therefore runs inside a server-computed knowledge scope; a request
   // without the field resolves to its tenant's default knowledge base, and an
   // unknown or cross-tenant id is refused (404) before any run starts.
-  const retrievalScopeResolver = createRetrievalScopeResolver(
-    new KnowledgeBaseServiceImpl(
-      new SqliteKnowledgeBaseRepo(processRuntime.db),
-      knowledgeBaseEmbeddingProfile(config.embeddingModel, config.embeddingDimensions)
-    )
-  )
+  const retrievalScopeResolver = createRetrievalScopeResolver(knowledgeBaseService)
   // Ticket 04: the evaluation service shares the production clients but owns
   // its per-task isolated scopes, in-memory task registry, and the dedicated
   // reranker built from RERANK_* config (the same adapter normal chat uses).
@@ -317,6 +352,7 @@ export async function startServer(
     ...(options.demoAuth ? { demoAuth: options.demoAuth } : {}),
     sessionBinder,
     retrievalScopeResolver,
+    knowledgeBaseService,
     eventsSource,
     processRuntime,
     config,

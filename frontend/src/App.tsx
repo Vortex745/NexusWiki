@@ -5,6 +5,7 @@ import { LoginScreen } from "./components/LoginScreen"
 import { EvaluationDialog } from "./components/panels/EvaluationDialog"
 import { ImportDialog } from "./components/panels/ImportDialog"
 import { InsightDialog } from "./components/panels/InsightDialog"
+import { KnowledgeDialog } from "./components/panels/KnowledgeDialog"
 import { MemoryDialog } from "./components/panels/MemoryDialog"
 import type { Attachment } from "./components/thread/Thread"
 import { Toast, type ToastMessage } from "./components/Toast"
@@ -77,6 +78,7 @@ function AppRoot() {
   const [memoryOpen, setMemoryOpen] = useState(false)
   const [importOpen, setImportOpen] = useState(false)
   const [evaluationOpen, setEvaluationOpen] = useState(false)
+  const [knowledgeOpen, setKnowledgeOpen] = useState(false)
   const [insight, setInsight] = useState<{ open: boolean; messageId: string | null }>({
     open: false,
     messageId: null,
@@ -91,10 +93,11 @@ function AppRoot() {
   const openMemory = useCallback(() => setMemoryOpen(true), [])
   const openImport = useCallback(() => setImportOpen(true), [])
   const openEvaluation = useCallback(() => setEvaluationOpen(true), [])
+  const openKnowledge = useCallback(() => setKnowledgeOpen(true), [])
 
   const shellActions = useMemo<AppShellActions>(
-    () => ({ openInsight, openMemory, openImport, openEvaluation, showToast }),
-    [openInsight, openMemory, openImport, openEvaluation, showToast],
+    () => ({ openInsight, openMemory, openImport, openEvaluation, openKnowledge, showToast }),
+    [openInsight, openMemory, openImport, openEvaluation, openKnowledge, showToast],
   )
 
   // Staged attachments are consumed the moment a prompt actually goes out.
@@ -170,6 +173,7 @@ function AppRoot() {
           <MemoryDialog open={memoryOpen} onClose={() => setMemoryOpen(false)} />
           <ImportDialog open={importOpen} onClose={() => setImportOpen(false)} />
           <EvaluationDialog open={evaluationOpen} onClose={() => setEvaluationOpen(false)} />
+          <KnowledgeDialog open={knowledgeOpen} onClose={() => setKnowledgeOpen(false)} />
           <InsightDialog
             open={insight.open}
             messageId={insight.messageId}

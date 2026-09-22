@@ -144,16 +144,20 @@ test("archive and activate change status only — no row, file or table is lost"
   const db = openDb(dbPath)
   try {
     const service = serviceFor(db)
-    const kb = service.ensureDefault("demo")
+    // Ticket 08 (KB-04): the DEFAULT knowledge base can no longer be archived
+    // (every omitted selection resolves to it), so the lifecycle subject is a
+    // created base.
+    service.ensureDefault("demo")
+    const kb = service.create("demo", "Policies")
 
     const archived = service.archive(kb.id, "demo")
     assert.equal(archived?.status, "archived")
     assert.equal(service.getById(kb.id, "demo")?.status, "archived")
-    assert.equal(service.list("demo").length, 1)
+    assert.equal(service.list("demo").length, 2)
 
     // Nothing was removed: the row, the database file and the workspace file
     // all survive archiving.
-    assert.equal(countRows(db, "knowledge_bases"), 1)
+    assert.equal(countRows(db, "knowledge_bases"), 2)
     assert.equal(fs.existsSync(dbPath), true)
     assert.equal(fs.existsSync(asset), true)
 

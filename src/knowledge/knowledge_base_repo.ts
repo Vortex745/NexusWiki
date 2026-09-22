@@ -43,6 +43,13 @@ export interface KnowledgeBaseRepo {
     status: KnowledgeBaseStatus,
     updatedAt: string
   ): boolean
+
+  /**
+   * Ticket 08 (KB-04): rename a knowledge base, scoped by tenant. Returns
+   * false when no row matched (unknown id or another tenant's base → 404).
+   * Name is the ONLY thing changed besides updated_at.
+   */
+  setName(id: string, tenantId: string, name: string, updatedAt: string): boolean
 }
 
 interface StoredKnowledgeBase {
@@ -120,6 +127,14 @@ export class SqliteKnowledgeBaseRepo implements KnowledgeBaseRepo {
       `UPDATE knowledge_bases SET status = ?, updated_at = ?
        WHERE id = ? AND tenant_id = ?`
     ).run(status, updatedAt, id, tenantId)
+    return result.changes > 0
+  }
+
+  setName(id: string, tenantId: string, name: string, updatedAt: string): boolean {
+    const result = this.db.prepare(
+      `UPDATE knowledge_bases SET name = ?, updated_at = ?
+       WHERE id = ? AND tenant_id = ?`
+    ).run(name, updatedAt, id, tenantId)
     return result.changes > 0
   }
 }
