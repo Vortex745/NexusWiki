@@ -5,6 +5,7 @@
  *   POST /api/evaluations           validate + register a task, return at once
  *   GET  /api/evaluations           list the caller's tasks in this process
  *   GET  /api/evaluations/:id       task detail (owned tasks only)
+ *   POST /api/evaluations/:id/cancel  ticket 25: cancel a running task
  *
  * The API only validates input, checks identity/scope, and submits/queries.
  * Every long-running step lives in the service (spec "API 只做输入校验、身份
@@ -25,6 +26,7 @@ import {
   type EvaluationService,
 } from "../evaluation/service"
 import { EvalDatasetValidationError } from "../evaluation/dataset"
+import { EVAL_TASK_TERMINAL_STAGES } from "../evaluation/contracts"
 
 function resolveContext(res: Response): AccessContext {
   return (res.locals.accessContext as AccessContext | undefined) ?? singleTenantAccessContext()
@@ -107,6 +109,39 @@ export function createEvaluationsRouter(service: EvaluationService): Router {
       return
     }
     res.json(detail)
+  })
+
+  /**
+   * Ticket 25 (EVAL-01A): cancel a running task. 404 for an unknown or
+   * foreign id (same answer as GET), 409 when the task already reached a
+   * terminal stage (its result is settled and a cancel may not rewrite it),
+   * and 202 with the current state otherwise — the client keeps polling and
+   * sees the one terminal state the run converges to.
+   */
+  router.post("/evaluations/:id/cancel", (req: Request, res: Response) => {
+    const ctx = resolveContext(res)
+    if (!requireAdmin(ctx, res)) return
+    const before = service.getTask(String(req.params.id), {
+      tenantId: ctx.tenantId,
+      subjectId: ctx.subjectId,
+    })
+    if (!before) {
+      res.status(404).json({ error: "evaluation task not found in this process" })
+      return
+    }
+    if (EVAL_TASK_TERMINAL_STAGES.includes(before.stage)) {
+      res.status(409).json({ error: "evaluation task already finished", stage: before.stage })
+      return
+    }
+    const detail = service.cancelTask(String(req.params.id), {
+      tenantId: ctx.tenantId,
+      subjectId: ctx.subjectId,
+    })
+    if (!detail) {
+      res.status(404).json({ error: "evaluation task not found in this process" })
+      return
+    }
+    res.status(202).json(detail)
   })
 
   return router

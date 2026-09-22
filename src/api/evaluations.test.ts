@@ -74,6 +74,8 @@ interface FakeScopeOptions {
   disposeReport?: EvalDisposeReport
   /** Ticket 14: make cleanup take time (or outlast a shutdown budget). */
   disposeDelayMs?: number
+  /** Ticket 25: make preparation take time, so a cancel can land inside it. */
+  prepareDelayMs?: number
   noObservation?: boolean
   caseThrows?: string
   /**
@@ -142,6 +144,9 @@ class FakeScope implements IsolatedEvalResources {
 
   async prepare(corpus: EvalCorpusPassage[]): Promise<void> {
     this.corpus.push(...corpus)
+    if (this.options.prepareDelayMs) {
+      await new Promise((resolve) => setTimeout(resolve, this.options.prepareDelayMs))
+    }
     if (this.options.prepareFails) {
       this.state = "disposed"
       throw new EvalPrepareError(this.options.prepareFails, {
@@ -359,6 +364,8 @@ async function buildHarness(
     taskTtlMs?: number
     caseTimeoutMs?: number
     taskTimeoutMs?: number
+    /** Ticket 25: bound on the cleanup phase. */
+    cleanupTimeoutMs?: number
     /** Injectable clock so TTL eviction can be tested without waiting. */
     now?: () => Date
     /** Ticket 11: model ids a task may override. */
@@ -1965,6 +1972,100 @@ test("a request cannot make the server read an arbitrary path", async () => {
       ["refund-policy", "shipping-policy", "warranty-policy", "invoice-policy"],
       "the built-in corpus was ingested, not a file"
     )
+  } finally {
+    await harness.close()
+  }
+})
+
+// ---------------------------------------------------------------------------
+// Ticket 25 (EVAL-01A) — bounded lifecycle, cancellation and honest cleanup
+// ---------------------------------------------------------------------------
+
+test("cancelling a task during preparation converges to one terminal state", async () => {
+  const harness = await buildHarness({ prepareDelayMs: 250 })
+  try {
+    const created = await createTask(harness.port, { datasetId: "refund-single-case" })
+    const id = created.body.id as string
+    await waitUntil(() => harness.scopes.length === 1)
+    // The cancel lands while preparation is still running (no case started).
+    const cancelled = await api(harness.port, `/api/evaluations/${id}/cancel`, { method: "POST" })
+    assert.equal(cancelled.status, 202)
+    assert.equal(cancelled.body.stage, "preparing")
+
+    const detail = await pollTerminal(harness.port, id)
+    assert.equal(detail.stage, "failed", "a cancelled run is a failed run, not a stuck one")
+    assert.match(String(detail.error), /cancel/i, "and it says why")
+    assert.equal(harness.scopes[0].maxInFlight, 0, "no case was started after the cancel")
+    assert.equal(harness.scopes[0].disposeCalls, 1, "cleanup still ran exactly once")
+
+    // One terminal state: a second read cannot show anything else, and a late
+    // cancel is refused instead of rewriting a settled result.
+    const reread = await api(harness.port, `/api/evaluations/${id}`)
+    assert.equal(reread.body.stage, "failed")
+    const late = await api(harness.port, `/api/evaluations/${id}/cancel`, { method: "POST" })
+    assert.equal(late.status, 409)
+  } finally {
+    await harness.close()
+  }
+})
+
+test("cleanup is bounded: a release that cannot finish in time is a reported failure", async () => {
+  const harness = await buildHarness({ disposeDelayMs: 600 }, { cleanupTimeoutMs: 60 })
+  try {
+    const started = Date.now()
+    const created = await createTask(harness.port, { datasetId: "refund-single-case" })
+    const detail = await pollTerminal(harness.port, created.body.id as string)
+    const elapsed = Date.now() - started
+
+    assert.equal(
+      detail.stage,
+      "completed_with_errors",
+      "a run that could not release its scope never reads as an unqualified success"
+    )
+    const cleanup = detail.cleanup as Record<string, unknown>
+    assert.equal(cleanup.esIndex, "failed")
+    assert.match(String(cleanup.esError), /did not finish within 60ms/)
+    assert.equal(cleanup.dbClosed, false)
+    assert.ok(elapsed < 500, `the task converged at its deadline, not after the stuck release (${elapsed}ms)`)
+  } finally {
+    await harness.close()
+  }
+})
+
+test("a cancelled task keeps its reason and cannot be reported as a clean success", async () => {
+  // Cleanup itself fails for this run: the cancel reason must survive it.
+  const harness = await buildHarness(
+    { delayByCaseMs: { "refund-eta": 2_000 }, disposeReport: { esIndex: "failed", esError: "es://user:sup3rsecret@es.test refused", graphProvenance: "cleaned", dbClosed: true } },
+  )
+  try {
+    const created = await createTask(harness.port, { datasetId: "refund-single-case" })
+    const id = created.body.id as string
+    await waitUntil(() => harness.scopes[0]?.preparedCaseOptions.length === 1)
+    await api(harness.port, `/api/evaluations/${id}/cancel`, { method: "POST" })
+
+    const detail = await pollTerminal(harness.port, id)
+    assert.equal(detail.stage, "failed", "the original failure is not overwritten by cleanup")
+    assert.match(String(detail.error), /cancel/i)
+    const cleanup = detail.cleanup as Record<string, unknown>
+    assert.equal(cleanup.esIndex, "failed")
+    assert.match(String(cleanup.esError), /\*\*\*@es\.test/, "cleanup credentials stay redacted")
+    assert.equal(JSON.stringify(detail).includes("sup3rsecret"), false, "no detail leaks the secret")
+  } finally {
+    await harness.close()
+  }
+})
+
+test("case-level failures are redacted like every other exposed error", async () => {
+  const harness = await buildHarness({
+    throwByCase: { "refund-eta": "provider es://user:sup3rsecret@es.test is unreachable" },
+  })
+  try {
+    const created = await createTask(harness.port, { datasetId: "refund-single-case" })
+    const detail = await pollTerminal(harness.port, created.body.id as string)
+    const cases = detail.cases as Array<Record<string, unknown>>
+    assert.equal(cases[0].outcome, "failed")
+    assert.match(String(cases[0].error), /\*\*\*@es\.test/)
+    assert.equal(JSON.stringify(detail).includes("sup3rsecret"), false)
   } finally {
     await harness.close()
   }

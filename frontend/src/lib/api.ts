@@ -290,6 +290,18 @@ export async function fetchEvaluationTask(id: string): Promise<EvaluationTaskDet
   return (await response.json()) as EvaluationTaskDetail
 }
 
+/**
+ * Ticket 25 (EVAL-01A): cancel a running task. 404 → the task is gone from
+ * this process; 409 → it already finished and its result stands.
+ */
+export async function cancelEvaluationTask(id: string): Promise<EvaluationTaskDetail> {
+  const response = await apiFetch(`/evaluations/${encodeURIComponent(id)}/cancel`, { method: "POST" })
+  if (response.status === 404) throw new Error("任务不在当前服务进程中")
+  if (response.status === 409) throw new Error("任务已经结束，结果不会被取消改写")
+  if (!response.ok) throw new Error(`取消失败 (${response.status})`)
+  return (await response.json()) as EvaluationTaskDetail
+}
+
 export async function fetchRunHistory(runId: string): Promise<RunHistory> {
   const response = await apiFetch(`/chat/runs/${encodeURIComponent(runId)}`)
   if (!response.ok) throw new Error(`HTTP ${response.status}`)

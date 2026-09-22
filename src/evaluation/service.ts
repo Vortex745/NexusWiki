@@ -87,6 +87,13 @@ export const DEFAULT_MAX_CASES_PER_TASK = 20
 export const DEFAULT_CASE_CONCURRENCY = 2
 export const DEFAULT_TASK_TIMEOUT_MS = 10 * 60_000
 export const DEFAULT_CASE_TIMEOUT_MS = 3 * 60_000
+/**
+ * Ticket 25 (EVAL-01A): one task's CLEANUP (release) phase is bounded too.
+ * Preparation and cases share the task deadline; cleanup gets this budget on
+ * top, so a task's whole lifetime is `taskTimeoutMs + cleanupTimeoutMs` and no
+ * phase of it can hang the page forever.
+ */
+export const DEFAULT_CLEANUP_TIMEOUT_MS = 60_000
 
 /** Invalid request/dataset — maps to HTTP 400. */
 export class EvaluationRequestError extends Error {
@@ -235,6 +242,8 @@ export interface EvaluationServiceOptions {
   caseConcurrency?: number
   taskTimeoutMs?: number
   caseTimeoutMs?: number
+  /** Ticket 25: bound on the cleanup (release) phase, after the task deadline. */
+  cleanupTimeoutMs?: number
 }
 
 interface TaskRecord {
@@ -279,6 +288,7 @@ export class EvaluationService {
   private readonly caseConcurrency: number
   private readonly taskTimeoutMs: number
   private readonly caseTimeoutMs: number
+  private readonly cleanupTimeoutMs: number
   private readonly createResources: (
     taskId: string,
     overrides: EvalModelOverrides,
@@ -305,6 +315,7 @@ export class EvaluationService {
     )
     this.taskTimeoutMs = options.taskTimeoutMs ?? DEFAULT_TASK_TIMEOUT_MS
     this.caseTimeoutMs = options.caseTimeoutMs ?? DEFAULT_CASE_TIMEOUT_MS
+    this.cleanupTimeoutMs = options.cleanupTimeoutMs ?? DEFAULT_CLEANUP_TIMEOUT_MS
     this.reranker = options.reranker
     this.allowedChatModels = options.allowedChatModels ?? []
     this.allowedRerankModels = options.allowedRerankModels ?? []
@@ -421,8 +432,11 @@ export class EvaluationService {
     record.run = this.runTask(record, record.controller).catch((error) => {
       // runTask already records failures; this is the last-resort guard so a
       // bug in the runner can never leave an unhandled rejection behind.
+      // Ticket 25: it must never RE-open or overwrite a record that already
+      // reached its terminal state, and whatever it reports is redacted.
+      if (EVAL_TASK_TERMINAL_STAGES.includes(record.stage)) return
       record.stage = "failed"
-      record.error = error instanceof Error ? error.message : String(error)
+      record.error = redactDetail(error instanceof Error ? error.message : String(error))
       record.finishedAt = this.now().toISOString()
     })
 
@@ -442,6 +456,31 @@ export class EvaluationService {
       .filter((record) => this.isOwner(record, owner))
       .sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1))
       .map((record) => this.toSummary(record))
+  }
+
+  /**
+   * Ticket 25 (EVAL-01A): cancel one task on the caller's behalf. The cancel
+   * reaches preparation (no case starts after it), the case loop (the signal
+   * every case already runs on) and cleanup (the run always reaches its one
+   * terminal state). A task that already decided its outcome keeps it — a
+   * cancel can never rewrite a settled result.
+   *
+   * Returns null for an unknown or foreign task (the HTTP layer maps that to
+   * the same 404 an unknown id gets).
+   */
+  cancelTask(
+    id: string,
+    owner: EvaluationOwner,
+    reason = "cancelled by request"
+  ): EvalTaskDetail | null {
+    this.pruneHistory()
+    const record = this.tasks.get(id)
+    if (!record || !this.isOwner(record, owner)) return null
+    if (!EVAL_TASK_TERMINAL_STAGES.includes(record.stage) && record.stage !== "cleaning") {
+      record.cancelReason = reason
+      record.controller.abort()
+    }
+    return this.toDetail(record)
   }
 
   /** Test/verification helper: wait until a task reaches a terminal stage. */
@@ -497,6 +536,15 @@ export class EvaluationService {
       // own outcome (or had settled it) keeps its own, honest reason.
       if (record.cancelReason && !record.error) {
         record.error = "cancelled by service shutdown"
+      }
+      // Ticket 25: when the budget ran out, a record can still be sitting in
+      // a non-terminal stage (typically `cleaning`). The process is going
+      // away, so it is reported as a bounded, honest failure — never left in
+      // a stage no client can ever leave.
+      if (!EVAL_TASK_TERMINAL_STAGES.includes(record.stage)) {
+        record.stage = "failed"
+        record.error = record.error ?? `cancelled by service shutdown (cleanup did not settle within ${budget}ms)`
+        record.finishedAt = record.finishedAt ?? this.now().toISOString()
       }
     }
 
@@ -645,6 +693,10 @@ export class EvaluationService {
     record.stage = "preparing"
     record.startedAt = this.now().toISOString()
 
+    // Ticket 25 (EVAL-01A): ONE deadline for the whole run — preparation and
+    // the case loop share it, and it stays armed while cleanup runs, so the
+    // task can never outlive `taskTimeoutMs + cleanupTimeoutMs`.
+    const deadlineAt = Date.now() + this.taskTimeoutMs
     const taskTimer = setTimeout(() => taskController.abort(), this.taskTimeoutMs)
     let resources: IsolatedEvalResources | undefined
     let resourcesDisposed = false
@@ -673,10 +725,23 @@ export class EvaluationService {
         throw error
       }
 
+      // Ticket 25: a cancellation that arrived DURING preparation must not
+      // start a single case. The preparation itself has its own bounded
+      // deadline inside the scope; this check is the boundary that turns the
+      // cancel into the run's one terminal state.
+      if (taskController.signal.aborted) {
+        throw new Error(record.cancelReason ?? "evaluation task was cancelled during preparation")
+      }
+
       record.stage = "running"
       const entry = await resources.createAnswerEntry()
       await this.runCases(record, entry, resources, taskController.signal)
 
+      // Ticket 25: a cancelled run says so at the TASK level too — without
+      // this the cancelled cases would only carry their own abort messages.
+      if (taskController.signal.aborted && record.cancelReason && !record.error) {
+        record.error = record.cancelReason
+      }
       record.stage = this.terminalStageFor(record.cases)
     } catch (error) {
       const detail = error instanceof Error ? error.message : String(error)
@@ -687,15 +752,22 @@ export class EvaluationService {
       )
       record.stage = "failed"
     } finally {
-      clearTimeout(taskTimer)
       // The run outcome is decided first; cleanup runs afterwards and never
       // overwrites it (spec "清理结果单独记录，不能覆盖原始失败原因").
       const outcomeStage = record.stage
       if (resources && !resourcesDisposed) {
         // Ticket 14: the cleaning stage is observable while dispose runs.
         record.stage = "cleaning"
-        record.cleanup = await this.disposeQuietly(resources)
+        // Ticket 25: cleanup is bounded — the wait may extend the task's total
+        // lifetime by at most `cleanupTimeoutMs` (and never more than what is
+        // left of `deadlineAt + cleanupTimeoutMs`).
+        const cleanupBudgetMs = Math.min(
+          this.cleanupTimeoutMs,
+          Math.max(0, deadlineAt + this.cleanupTimeoutMs - Date.now())
+        )
+        record.cleanup = await this.disposeQuietly(resources, cleanupBudgetMs)
       }
+      clearTimeout(taskTimer)
       // Ticket 14: a run that could not release everything must not read as an
       // unqualified success. The original outcome still wins (a failed run
       // stays failed, its cleanup error stays visible alongside it), but a
@@ -709,10 +781,30 @@ export class EvaluationService {
   }
 
   private async disposeQuietly(
-    resources: IsolatedEvalResources
+    resources: IsolatedEvalResources,
+    budgetMs: number
   ): Promise<EvalCleanupReport> {
+    let timer: NodeJS.Timeout | undefined
     try {
-      return redactCleanupReport(await resources.dispose())
+      const released = await Promise.race([
+        resources.dispose().then((report) => ({ released: true as const, report })),
+        new Promise<{ released: false; report: null }>((resolve) => {
+          timer = setTimeout(() => resolve({ released: false, report: null }), budgetMs)
+        }),
+      ])
+      if (!released.released) {
+        // Ticket 25: an unbounded release would hang the page. A timeout is a
+        // cleanup FAILURE with evidence, never a silent success.
+        const message = `cleanup did not finish within ${budgetMs}ms`
+        return {
+          esIndex: "failed",
+          esError: message,
+          graphProvenance: "failed",
+          graphError: message,
+          dbClosed: false,
+        }
+      }
+      return redactCleanupReport(released.report)
     } catch (error) {
       // A cleanup that throws is itself a cleanup failure — report it as such
       // rather than pretending the scope was released.
@@ -724,6 +816,8 @@ export class EvaluationService {
         graphError: message,
         dbClosed: false,
       }
+    } finally {
+      if (timer) clearTimeout(timer)
     }
   }
 
@@ -815,7 +909,9 @@ export class EvaluationService {
         if (event.type === "done") done = event.result
       }
     } catch (error) {
-      failure = error instanceof Error ? error.message : String(error)
+      // Ticket 25: a provider error can quote a connection URI — every case
+      // failure is redacted before it is stored or returned.
+      failure = redactDetail(error instanceof Error ? error.message : String(error))
       if (caseSignal.aborted && !taskSignal.aborted) {
         failure = `case exceeded its ${this.caseTimeoutMs}ms budget: ${failure}`
       }
@@ -992,7 +1088,8 @@ function failedCase(caseDef: EvalDatasetCase, error: string): EvalCaseResult {
     referenceAnswer: caseDef.referenceAnswer,
     outcome: "failed",
     answer: "",
-    error,
+    // Ticket 25: the same redaction rule as every other exposed error.
+    error: redactDetail(error),
     durationMs: 0,
     metrics: notApplicableCaseMetrics(),
     retrievedPassageIds: [],

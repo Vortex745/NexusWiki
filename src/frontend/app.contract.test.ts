@@ -125,6 +125,14 @@ test("edit and regenerate name the branch they replace, on the same run id", () 
   assert.equal(calls.length, 2, "only edit and regenerate name a replaced branch")
 })
 
+test("a running evaluation can be cancelled and keeps polling to its terminal state", () => {
+  const dialog = read("frontend/src/components/panels/EvaluationDialog.tsx")
+  assert.match(api, /cancelEvaluationTask/)
+  assert.match(dialog, /cancelEvaluationTask\(id\)/, "the panel calls the cancel route")
+  assert.match(dialog, /取消本次评测/, "and offers the action while a task runs")
+  assert.match(dialog, /startPolling\(id\)/, "cancelling keeps the poll alive for the terminal state")
+})
+
 test("attachments are server-owned session resources, not prompt text", () => {
   const references = read("frontend/src/components/thread/References.tsx")
   const attachmentsApi = read("frontend/src/lib/api.ts")

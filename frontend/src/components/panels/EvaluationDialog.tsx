@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react"
 import {
   createEvaluationTask,
   EvaluationRequestError,
+  cancelEvaluationTask,
   fetchEvaluationDatasets,
   fetchEvaluationTask,
   listEvaluationTasks,
@@ -212,14 +213,23 @@ export function EvaluationDialog({ open, onClose }: { open: boolean; onClose: ()
   const [chatModel, setChatModel] = useState("")
   const [rerankModel, setRerankModel] = useState("")
   const [submitting, setSubmitting] = useState(false)
+  // Ticket 25 (EVAL-01A): a running task can be cancelled; the panel keeps
+  // polling and shows the one terminal state the run converges to.
+  const [cancelling, setCancelling] = useState(false)
   const [task, setTask] = useState<EvaluationTaskDetail | null>(null)
   const [taskMissing, setTaskMissing] = useState(false)
   // Ticket 12: in-process history. `pollTokenRef` invalidates responses of a
   // task the user has already switched away from, so an old poll can never
   // backfill the panel with stale results.
   const [history, setHistory] = useState<EvaluationTaskSummary[]>([])
+  const [historyLoading, setHistoryLoading] = useState(false)
+  const [historyError, setHistoryError] = useState<string | null>(null)
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null)
   const pollTokenRef = useRef(0)
+  const historyTokenRef = useRef(0)
+  const selectedTaskRef = useRef<string | null>(null)
+  const openRef = useRef(open)
+  openRef.current = open
 
   useEffect(() => {
     const dialog = dialogRef.current
@@ -229,6 +239,7 @@ export function EvaluationDialog({ open, onClose }: { open: boolean; onClose: ()
   }, [open])
 
   const stopPolling = useCallback(() => {
+    pollTokenRef.current += 1
     if (pollTimer.current !== null) {
       window.clearInterval(pollTimer.current)
       pollTimer.current = null
@@ -237,40 +248,49 @@ export function EvaluationDialog({ open, onClose }: { open: boolean; onClose: ()
 
   /** Ticket 12: the retained records of THIS process (empty after a restart). */
   const refreshHistory = useCallback(async () => {
+    const token = ++historyTokenRef.current
+    setHistoryLoading(true)
+    setHistoryError(null)
     try {
-      setHistory(await listEvaluationTasks())
-    } catch {
-      // 历史列表读取失败不影响当前任务的展示与轮询。
+      const records = await listEvaluationTasks()
+      if (historyTokenRef.current === token) setHistory(records)
+    } catch (error) {
+      if (historyTokenRef.current === token) {
+        setHistoryError(`读取记录列表失败：${error instanceof Error ? error.message : String(error)}`)
+      }
+    } finally {
+      if (historyTokenRef.current === token) setHistoryLoading(false)
     }
   }, [])
 
   // Load the built-in samples and the retained records each time it opens.
   useEffect(() => {
     if (!open) return
+    let active = true
     setLoadError(null)
     void refreshHistory()
     fetchEvaluationDatasets()
       .then((payload) => {
+        if (!active) return
         setDatasets(payload)
         setSelectedId((current) => current ?? payload.datasets[0]?.id ?? null)
       })
       .catch((error: unknown) => {
+        if (!active) return
         setLoadError(error instanceof Error ? error.message : String(error))
       })
+    return () => { active = false; historyTokenRef.current += 1 }
   }, [open, refreshHistory])
-
-  useEffect(
-    () => () => {
-      stopPolling()
-    },
-    [stopPolling],
-  )
 
   const startPolling = useCallback(
     (taskId: string) => {
       stopPolling()
+      if (!openRef.current) return
       const token = (pollTokenRef.current += 1)
+      let inFlight = false
       pollTimer.current = window.setInterval(() => {
+        if (inFlight) return
+        inFlight = true
         void (async () => {
           try {
             const detail = await fetchEvaluationTask(taskId)
@@ -291,6 +311,8 @@ export function EvaluationDialog({ open, onClose }: { open: boolean; onClose: ()
             }
           } catch {
             // 单次轮询失败不中断任务，下一次轮询会重试。
+          } finally {
+            inFlight = false
           }
         })()
       }, EVALUATION_POLL_MS)
@@ -304,6 +326,8 @@ export function EvaluationDialog({ open, onClose }: { open: boolean; onClose: ()
       stopPolling()
       const token = (pollTokenRef.current += 1)
       setSelectedTaskId(taskId)
+      selectedTaskRef.current = taskId
+      setTask(null)
       setTaskMissing(false)
       setUploadIssues([])
       setLoadError(null)
@@ -313,17 +337,26 @@ export function EvaluationDialog({ open, onClose }: { open: boolean; onClose: ()
         if (detail === null) {
           setTask(null)
           setTaskMissing(true)
+          void refreshHistory()
           return
         }
         setTask(detail)
         if (!TERMINAL_STAGES.has(detail.stage)) startPolling(taskId)
       } catch (error) {
+        if (pollTokenRef.current !== token) return
         setTask(null)
         setLoadError(`读取记录失败：${error instanceof Error ? error.message : String(error)}`)
       }
     },
-    [startPolling, stopPolling],
+    [refreshHistory, startPolling, stopPolling],
   )
+
+  // Closing only detaches this view; the server continues its task. Reopen
+  // reloads the selected record, including an eviction or restart while closed.
+  useEffect(() => {
+    if (open && selectedTaskRef.current) void selectTask(selectedTaskRef.current)
+    return stopPolling
+  }, [open, selectTask, stopPolling])
 
   const handleRun = async () => {
     if (submitting) return
@@ -360,6 +393,7 @@ export function EvaluationDialog({ open, onClose }: { open: boolean; onClose: ()
         cleanup: null,
       })
       setSelectedTaskId(summary.id)
+      selectedTaskRef.current = summary.id
       void refreshHistory()
       startPolling(summary.id)
     } catch (error) {
@@ -370,6 +404,22 @@ export function EvaluationDialog({ open, onClose }: { open: boolean; onClose: ()
       setLoadError(`提交失败：${message}`)
     } finally {
       setSubmitting(false)
+    }
+  }
+
+  const handleCancel = async () => {
+    const id = selectedTaskRef.current
+    if (!id || cancelling) return
+    setCancelling(true)
+    try {
+      await cancelEvaluationTask(id)
+      // Polling keeps running: the task now converges to its single terminal
+      // state (the cancel reason stays visible next to it).
+      startPolling(id)
+    } catch (error) {
+      setLoadError(error instanceof Error ? error.message : String(error))
+    } finally {
+      setCancelling(false)
     }
   }
 
@@ -577,6 +627,18 @@ export function EvaluationDialog({ open, onClose }: { open: boolean; onClose: ()
           {running ? "评测进行中…" : submitting ? "提交中…" : mode === "upload" ? "运行上传数据集" : "运行评测"}
         </button>
 
+        {/* Ticket 25: cancellation reaches preparation, cases and cleanup. */}
+        {running ? (
+          <button
+            type="button"
+            disabled={cancelling}
+            onClick={() => void handleCancel()}
+            className="mt-2 inline-flex h-8 w-full flex-none cursor-pointer items-center justify-center rounded-lg border border-line bg-surface px-4 text-xs text-muted transition-colors hover:bg-surface-subtle hover:text-ink disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            {cancelling ? "正在取消…" : "取消本次评测"}
+          </button>
+        ) : null}
+
         {/* 本进程保留的评测记录（票 12） */}
         <div className="mt-4 flex flex-col gap-1.5">
           <p className="text-[11px] font-semibold text-ink">
@@ -585,7 +647,11 @@ export function EvaluationDialog({ open, onClose }: { open: boolean; onClose: ()
               仅保存在当前服务进程内；重启后不可查询，超出保留上限或过期的完成记录会被清理
             </span>
           </p>
-          {history.length === 0 ? (
+          {historyLoading ? (
+            <p className="text-[11px] text-muted/50" role="status">正在读取评测记录…</p>
+          ) : historyError ? (
+            <p className="text-[11px] text-red-600" role="alert">{historyError}</p>
+          ) : history.length === 0 ? (
             <p className="text-[11px] text-muted/50">本进程暂无评测记录。</p>
           ) : (
             <ul className="flex flex-col gap-1">
