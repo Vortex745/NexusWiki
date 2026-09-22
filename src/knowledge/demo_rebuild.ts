@@ -61,6 +61,11 @@ export const DEMO_REBUILD_SQLITE_TABLES = [
   // non-validated history turns are user data.
   "conversation_directories",
   "conversation_history_turns",
+  // Ticket 22 (ATT-01): temporary session attachments and their chunk text
+  // belong to the conversations they were uploaded into — a rebuild clears
+  // them with the rest of the session state.
+  "session_attachments",
+  "session_attachment_chunks",
 ] as const
 
 /**
