@@ -429,7 +429,7 @@ export function createSimpleKnowledgeMastraRunner(
       throw abortError("GATE 0 (before route)")
     }
 
-    const { signal, accessContext, sessionId, runId } = input
+    const { signal, accessContext, sessionId, runId, retrievalScope } = input
     const tenantId = resolveTenantId ? resolveTenantId(accessContext) : "default"
     const preparedRoute = input.preparedRoute
 
@@ -563,7 +563,14 @@ export function createSimpleKnowledgeMastraRunner(
 
     retrievalAttempted = true
     const outcome = await abortable(
-      searcher.search(query, { ...perQueryOptions, accessContext, signal }),
+      searcher.search(query, {
+        ...perQueryOptions,
+        accessContext,
+        // Ticket 05 (KB-03A): carry the server-computed knowledge scope into
+        // the retrieval channels.
+        ...(retrievalScope ? { retrievalScope } : {}),
+        signal,
+      }),
       signal
     )
     outcome.unavailableChannels.forEach((channel) => unavailableChannels.add(channel))
@@ -865,7 +872,13 @@ export function createSimpleKnowledgeMastraRunner(
       const correctionOrderings: RetrievalOrdering[] = []
       for (const gapQuery of gapQueries) {
         const correctionOutcome = await abortable(
-          searcher.search(gapQuery, { accessContext, signal }),
+          searcher.search(gapQuery, {
+            accessContext,
+            // Ticket 05 (KB-03A): a correction gap query stays inside the run's
+            // server-computed knowledge scope — a retry never widens the read.
+            ...(retrievalScope ? { retrievalScope } : {}),
+            signal,
+          }),
           signal
         )
         correctionOutcome.unavailableChannels.forEach((channel) =>

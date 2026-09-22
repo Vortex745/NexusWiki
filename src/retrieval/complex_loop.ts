@@ -2,6 +2,7 @@ import type OpenAI from "openai"
 
 import type { RetrievalResult } from "../types"
 import type { AccessContext } from "../access/context"
+import type { RetrievalScope } from "../types/retrieval_scope"
 import type { Searcher, SearchOptions, RetrievalChannel } from "./search/interface"
 import {
   RETRIEVAL_TOOLS,
@@ -196,6 +197,9 @@ export interface ComplexLoopInput {
   query: string
   coverageCriteria?: string[]
   accessContext?: AccessContext
+  /** Ticket 05 (KB-03A): server-computed knowledge scope, forwarded to every
+   * `searcher.search()` the loop issues. Omitted when the run carries none. */
+  retrievalScope?: RetrievalScope
   signal?: AbortSignal
   /**
    * Ticket 09 (spec §13 correction-round reuse): remaining iteration budget
@@ -526,6 +530,9 @@ export async function runComplexLoop(
       const searchOptions: SearchOptions = {
         ...toolToSearchOptions({ tool, args }),
         ...(input.accessContext ? { accessContext: input.accessContext } : {}),
+        // Ticket 05 (KB-03A): every loop iteration stays inside the run's
+        // server-computed knowledge scope.
+        ...(input.retrievalScope ? { retrievalScope: input.retrievalScope } : {}),
       }
       outcome = await deps.searcher.search({ text: args.query }, searchOptions)
     } catch (err) {

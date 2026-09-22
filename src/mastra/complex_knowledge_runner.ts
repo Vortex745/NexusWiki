@@ -473,7 +473,7 @@ export function createComplexKnowledgeMastraRunner(
       throw abortError("GATE 0 (before route)")
     }
 
-    const { signal, accessContext, sessionId, runId } = input
+    const { signal, accessContext, sessionId, runId, retrievalScope } = input
     const tenantId = resolveTenantId ? resolveTenantId(accessContext) : "default"
     const preparedRoute = input.preparedRoute
 
@@ -639,6 +639,9 @@ export function createComplexKnowledgeMastraRunner(
             {
               query: contextualizedQuery,
               ...(accessContext ? { accessContext } : {}),
+              // Ticket 05 (KB-03A): the initial complex retrieval stays inside
+              // the run's server-computed knowledge scope.
+              ...(retrievalScope ? { retrievalScope } : {}),
               signal,
             }
           ),
@@ -783,6 +786,9 @@ export function createComplexKnowledgeMastraRunner(
           searcher.search(rewrittenQueries[i], {
             ...complexOptions[i],
             accessContext,
+            // Ticket 05 (KB-03A): every decomposed sub-query shares the run's
+            // server-computed knowledge scope.
+            ...(retrievalScope ? { retrievalScope } : {}),
             signal,
           }),
           signal
@@ -1178,6 +1184,10 @@ export function createComplexKnowledgeMastraRunner(
                 {
                   query: gapQuery.text,
                   ...(accessContext ? { accessContext } : {}),
+                  // Ticket 05 (KB-03A): the correction loop's tool searches
+                  // stay inside the run's server-computed knowledge scope —
+                  // same contract as the initial loop above.
+                  ...(retrievalScope ? { retrievalScope } : {}),
                   signal,
                   remainingIterations: sharedRemainingIterations,
                   remainingToolCalls: sharedRemainingToolCalls,
@@ -1232,7 +1242,13 @@ export function createComplexKnowledgeMastraRunner(
             correctionLoopResult.stopReason !== "evidence-sufficient"
           if (needsDeterministicFallback) {
             const fallbackOutcome = await abortable(
-              searcher.search(gapQuery, { accessContext, signal }),
+              searcher.search(gapQuery, {
+                accessContext,
+                // Ticket 05 (KB-03A): the deterministic fallback stays inside
+                // the run's server-computed knowledge scope.
+                ...(retrievalScope ? { retrievalScope } : {}),
+                signal,
+              }),
               signal
             )
             fallbackOutcome.unavailableChannels.forEach((ch) =>
@@ -1259,7 +1275,13 @@ export function createComplexKnowledgeMastraRunner(
           // T11 correction retrieval + legacy L1580-L1648.
           // ---------------------------------------------------------------
           const correctionOutcome = await abortable(
-            searcher.search(gapQuery, { accessContext, signal }),
+            searcher.search(gapQuery, {
+              accessContext,
+              // Ticket 05 (KB-03A): a legacy correction search stays inside
+              // the run's server-computed knowledge scope.
+              ...(retrievalScope ? { retrievalScope } : {}),
+              signal,
+            }),
             signal
           )
           correctionOutcome.unavailableChannels.forEach((ch) =>

@@ -1,6 +1,7 @@
 import type OpenAI from "openai"
 import type { AccessContext } from "../access/context"
 import type { AgentMessage, AnswerRunEvent } from "../types"
+import type { RetrievalScope } from "../types/retrieval_scope"
 
 export interface AnswerModel {
   stream(messages: AgentMessage[], signal?: AbortSignal): AsyncIterable<string>
@@ -22,6 +23,13 @@ export interface AnswerRunOptions {
   caseId?: string
   signal?: AbortSignal
   accessContext?: AccessContext
+  /**
+   * Ticket 05 (KB-03A): the server-computed knowledge scope of this run. Set
+   * by the transport after it resolved the request's knowledge selection
+   * against the caller's identity; omitted by callers that carry no knowledge
+   * scope (isolated evaluation runs, release probes).
+   */
+  retrievalScope?: RetrievalScope
 }
 
 export class OpenAIAnswerModel implements AnswerModel {

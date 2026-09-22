@@ -49,6 +49,7 @@ import type {
 import type { AnswerRunOptions, AnswerRunObserver } from "../answer/generation"
 import type { AccessContext } from "../access/context"
 import { singleTenantAccessContext } from "../access/context"
+import type { RetrievalScope } from "../types/retrieval_scope"
 import {
   createRunContext,
   hasRunResourceBudgetFailure,
@@ -116,6 +117,10 @@ export interface MastraRunnerInput {
   sessionId: string
   signal: AbortSignal
   accessContext: AccessContext
+  /** Ticket 05 (KB-03A): server-computed knowledge scope, forwarded verbatim
+   * from `AnswerRunOptions.retrievalScope`. Omitted when the run carries no
+   * knowledge scope — the retrieval channels then keep their unfiltered reads. */
+  retrievalScope?: RetrievalScope
   /** Route preparation produced once by the dispatch runner. Standalone
    * route runners may omit it and perform their own ownership check. */
   preparedRoute?: PreparedMastraRoute
@@ -468,6 +473,12 @@ export function createMastraChatEventAdapter(
           sessionId,
           signal: ctxSignal,
           accessContext,
+          // Ticket 05 (KB-03A): the transport already resolved the request's
+          // knowledge selection against the caller's identity — forward the
+          // server-computed scope, never the raw request field.
+          ...(runOptions?.retrievalScope
+            ? { retrievalScope: runOptions.retrievalScope }
+            : {}),
           onAnswerDelta,
         })
 

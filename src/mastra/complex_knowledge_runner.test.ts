@@ -537,6 +537,179 @@ test("T12 #2a loop path: searcher.search receives accessContext", async () => {
   )
 })
 
+test("Ticket 05: every complex sub-query shares the run's knowledge scope", async () => {
+  const retrievalScope = { knowledgeBaseIds: ["kb-policies"] }
+  const subQueries: Query[] = [{ text: "sub-query-1" }, { text: "sub-query-2" }]
+  const planner = makeFakePlanner({ queries: subQueries })
+  const searcher = makeFakeSearcher({
+    status: "ok",
+    results: [makeRetrievalResult()],
+    unavailableChannels: [],
+  })
+  const evidence = buildEvidence([makeRetrievalResult()])
+  const runner = createComplexKnowledgeMastraRunner({
+    router: makeFakeRouter("complex"),
+    createSearcher: () => searcher,
+    assembler: makeFakeAssembler(),
+    validator: makeFakeValidator({ passed: true, hallucination: false, completeness: true }),
+    replanner: makeFakeRePlanner([]),
+    streamAnswerDraft: makeScriptedDraftStream([buildCitedAnswer(evidence)]),
+    planner,
+  })
+
+  await runner(makeRunnerInput({ retrievalScope }))
+
+  assert.ok(searcher.calls.length >= 2, "the decomposed sub-queries must each retrieve")
+  for (const call of searcher.calls) {
+    assert.deepEqual(
+      call.options?.retrievalScope,
+      retrievalScope,
+      "a decomposed sub-query must not widen the run's knowledge scope (Ticket 05, KB-03A)"
+    )
+  }
+})
+
+test("Ticket 05: the deterministic fallback search shares the run's knowledge scope", async () => {
+  const retrievalScope = { knowledgeBaseIds: ["kb-policies"] }
+  const initialResult = makeRetrievalResult({ chunk: { id: "c-init", documentId: "d-init", content: "initial", childrenIds: [], metadata: {} } })
+  const fallbackResult = makeRetrievalResult({ chunk: { id: "c-fb", documentId: "d-fb", content: "fallback", childrenIds: [], metadata: {} } })
+  const searcher = makeFakeSearcher([
+    // call 0: initial loop tool call; call 1: deterministic fallback on the gap query
+    { status: "ok", results: [initialResult], unavailableChannels: [] },
+    { status: "ok", results: [fallbackResult], unavailableChannels: [] },
+  ])
+  // Correction loop stops on iteration budget with 0 results → the runner's
+  // deterministic `searcher.search(gapQuery)` fallback fires.
+  const controller = makeFakeComplexLoopController([
+    { sufficient: false, tool: "semantic_lexical_hybrid", args: { query: "initial-q" } },
+    { sufficient: true },
+    { sufficient: false, tool: "semantic_lexical_hybrid", args: { query: "initial-q" } },
+    { sufficient: false, tool: "semantic_lexical_hybrid", args: { query: "initial-q" } },
+    { sufficient: false, tool: "semantic_lexical_hybrid", args: { query: "initial-q" } },
+  ])
+  const evidence = buildEvidence([initialResult, fallbackResult])
+  const runner = createComplexKnowledgeMastraRunner({
+    router: makeFakeRouter("complex"),
+    createSearcher: () => searcher,
+    assembler: makeFakeAssembler(),
+    validator: makeFakeValidator([
+      { passed: false, hallucination: false, completeness: false },
+      { passed: true, hallucination: false, completeness: true },
+    ]),
+    replanner: makeFakeRePlanner([[{ text: "gap-query" }]]),
+    streamAnswerDraft: makeScriptedDraftStream([
+      buildCitedAnswer(buildEvidence([initialResult])),
+      buildCitedAnswer(evidence),
+    ]),
+    complexLoopController: controller,
+  })
+
+  const output = await runner(makeRunnerInput({ retrievalScope }))
+
+  assert.equal(output.status, "completed", "deterministic fallback must yield new evidence → completed")
+  assert.ok(searcher.calls.length >= 2, "deterministic fallback must call searcher.search")
+  for (const call of searcher.calls) {
+    assert.deepEqual(
+      call.options?.retrievalScope,
+      retrievalScope,
+      "the deterministic fallback must not escape the run's knowledge scope (Ticket 05, KB-03A)"
+    )
+  }
+})
+
+test("Ticket 05: legacy correction searches share the run's knowledge scope", async () => {
+  const retrievalScope = { knowledgeBaseIds: ["kb-policies"] }
+  const initialResult = makeRetrievalResult({ chunk: { id: "c-init", documentId: "d-init", content: "initial", childrenIds: [], metadata: {} } })
+  const correctionResult = makeRetrievalResult({ chunk: { id: "c-corr", documentId: "d-corr", content: "correction", childrenIds: [], metadata: {} } })
+  // No complexLoopController wired → Path B: legacy planner.decompose flow
+  // with a single searcher.search per gap query.
+  // calls: [0] initial sub-query retrieval, [1] correction gap query.
+  const searcher = makeFakeSearcher([
+    { status: "ok", results: [initialResult], unavailableChannels: [] },
+    { status: "ok", results: [correctionResult], unavailableChannels: [] },
+  ])
+  const evidence = buildEvidence([initialResult, correctionResult])
+  const runner = createComplexKnowledgeMastraRunner({
+    router: makeFakeRouter("complex"),
+    createSearcher: () => searcher,
+    assembler: makeFakeAssembler(),
+    validator: makeFakeValidator([
+      { passed: false, hallucination: false, completeness: false },
+      { passed: true, hallucination: false, completeness: true },
+    ]),
+    replanner: makeFakeRePlanner([[{ text: "gap-query" }]]),
+    streamAnswerDraft: makeScriptedDraftStream([
+      buildCitedAnswer(buildEvidence([initialResult])),
+      buildCitedAnswer(evidence),
+    ]),
+    planner: makeFakePlanner({ queries: [{ text: "initial-query" }] }),
+  })
+
+  const output = await runner(makeRunnerInput({ retrievalScope }))
+
+  assert.equal(output.status, "completed", "path-B correction + regeneration + pass → completed")
+  assert.ok(searcher.calls.length >= 2, "the correction gap query must retrieve")
+  for (const call of searcher.calls) {
+    assert.deepEqual(
+      call.options?.retrievalScope,
+      retrievalScope,
+      "a legacy correction search must not escape the run's knowledge scope (Ticket 05, KB-03A)"
+    )
+  }
+})
+
+test("Ticket 05: correction-loop tool searches share the run's knowledge scope", async () => {
+  const retrievalScope = { knowledgeBaseIds: ["kb-policies"] }
+  // Path A (complexLoopController wired — the production shape): the
+  // correction round reuses runComplexLoop, so its tool searches must inherit
+  // the run's scope too, not only the initial loop's.
+  const searcher = makeFakeSearcher([
+    // call 0: initial loop tool call
+    { status: "ok", results: [makeRetrievalResult({ chunk: { id: "c-init", documentId: "d-init", content: "initial", childrenIds: [], metadata: {} } })], unavailableChannels: [] },
+    // call 1: correction loop tool call (different query to avoid dedup)
+    { status: "ok", results: [makeRetrievalResult({ chunk: { id: "c-corr", documentId: "d-corr", content: "correction", childrenIds: [], metadata: {} } })], unavailableChannels: [] },
+  ])
+  const controller = makeFakeComplexLoopController([
+    // Initial run: 1 tool call then sufficient
+    { sufficient: false, tool: "semantic_lexical_hybrid", args: { query: "initial-query" } },
+    { sufficient: true },
+    // Correction round: 1 tool call then sufficient
+    { sufficient: false, tool: "semantic_lexical_hybrid", args: { query: "correction-query" } },
+    { sufficient: true },
+  ])
+  const evidence = buildEvidence([
+    makeRetrievalResult({ chunk: { id: "c-init", documentId: "d-init", content: "initial", childrenIds: [], metadata: {} } }),
+    makeRetrievalResult({ chunk: { id: "c-corr", documentId: "d-corr", content: "correction", childrenIds: [], metadata: {} } }),
+  ])
+  const runner = createComplexKnowledgeMastraRunner({
+    router: makeFakeRouter("complex"),
+    createSearcher: () => searcher,
+    assembler: makeFakeAssembler(),
+    validator: makeFakeValidator([
+      { passed: false, hallucination: false, completeness: false },
+      { passed: true, hallucination: false, completeness: true },
+    ]),
+    replanner: makeFakeRePlanner([[{ text: "gap-query-1" }]]),
+    streamAnswerDraft: makeScriptedDraftStream([
+      buildCitedAnswer(buildEvidence([makeRetrievalResult({ chunk: { id: "c-init", documentId: "d-init", content: "initial", childrenIds: [], metadata: {} } })])),
+      buildCitedAnswer(evidence),
+    ]),
+    complexLoopController: controller,
+  })
+
+  const output = await runner(makeRunnerInput({ retrievalScope }))
+
+  assert.equal(output.status, "completed", "correction round must converge to completed")
+  assert.ok(searcher.calls.length >= 2, "both the initial and the correction tool search must run")
+  for (const call of searcher.calls) {
+    assert.deepEqual(
+      call.options?.retrievalScope,
+      retrievalScope,
+      "a correction-loop tool search must not escape the run's knowledge scope (Ticket 05, KB-03A)"
+    )
+  }
+})
+
 test("T12 #2b planner path: searcher.search receives accessContext", async () => {
   const accessContext = makeAccessContext("tenant-planner")
   const subQueries: Query[] = [{ text: "sub-query-1" }]

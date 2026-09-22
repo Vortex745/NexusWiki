@@ -1,5 +1,6 @@
 import type { Query, RetrievalResult } from "../../types"
 import type { AccessContext } from "../../access/context"
+import type { RetrievalScope } from "../../types/retrieval_scope"
 
 export type RetrievalChannel = RetrievalResult["source"]
 
@@ -13,6 +14,18 @@ export interface SearchOptions {
    * undefined as "no ACL filter" and rely on the active-version filter only.
    */
   accessContext?: AccessContext
+  /**
+   * Ticket 05 (KB-03A): the knowledge-base scope of this retrieval request,
+   * computed by the server from the request's knowledge selection and the
+   * caller's identity (`createRetrievalScopeResolver`). Channels that enforce
+   * it filter their reads by `knowledgeBaseId`.
+   *
+   * Undefined means "this caller carries no knowledge scope" — legacy paths
+   * (release probes, isolated evaluation runs, bare Searcher tests) keep their
+   * unfiltered reads. `{ knowledgeBaseIds: [] }` is the explicit "no knowledge
+   * context": it must yield no evidence, never everything.
+   */
+  retrievalScope?: RetrievalScope
   /**
    * Ticket 06: Select an allowed subset of retrieval channels to execute.
    * Undefined/omitted → execute all four channels (backward compat with

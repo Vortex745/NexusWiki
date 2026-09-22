@@ -2047,3 +2047,228 @@ test("P7.2 regression: hung Neo4j session.run rejects promptly on abort and clos
     "graphSearch must reject promptly after abort, not hang until driver default timeout")
   assert.ok(sessionClosed, "session.close() must still run (finally block) after abort")
 })
+
+/**
+ * Ticket 05 (KB-03A) — vector and BM25 retrieval run inside a server-computed
+ * knowledge scope.
+ *
+ * Acceptance criteria exercised here:
+ *   1. Two knowledge bases holding contradictory documents never cross on
+ *      either channel.
+ *   2. A missing scope resolves to the authorized default, an explicit empty
+ *      scope is "no knowledge context", an invalid scope fails loudly.
+ *   3. The client cannot widen its scope with raw storage filters.
+ *   4. Simple retrieval keeps using the existing Searcher.
+ */
+
+/** Finds the `knowledgeBaseId` terms clause anywhere in a request body. */
+function scopedKnowledgeBaseIds(value: unknown): string[] | undefined {
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      const found = scopedKnowledgeBaseIds(item)
+      if (found) return found
+    }
+    return undefined
+  }
+  if (value && typeof value === "object") {
+    const record = value as Record<string, unknown>
+    const terms = record.terms as Record<string, unknown> | undefined
+    if (terms && Array.isArray(terms.knowledgeBaseId)) {
+      return terms.knowledgeBaseId as string[]
+    }
+    for (const nested of Object.values(record)) {
+      const found = scopedKnowledgeBaseIds(nested)
+      if (found) return found
+    }
+  }
+  return undefined
+}
+
+/**
+ * Elasticsearch stand-in that actually honours the emitted knowledge-base
+ * clause, so a scoped query can only ever see its own knowledge base.
+ */
+function scopedEs(chunks: Array<{ id: string; knowledgeBaseId: string }>) {
+  const requests: Array<Record<string, unknown>> = []
+  const es = {
+    async search(request: Record<string, unknown>) {
+      requests.push(request)
+      const ids =
+        scopedKnowledgeBaseIds(request.knn) ?? scopedKnowledgeBaseIds(request.query)
+      const visible = ids
+        ? chunks.filter((chunk) => ids.includes(chunk.knowledgeBaseId))
+        : chunks
+      return {
+        hits: {
+          hits: visible.map((chunk) => ({
+            _source: {
+              id: chunk.id,
+              documentId: `doc-${chunk.knowledgeBaseId}`,
+              content: chunk.id,
+              childrenIds: [],
+              metadata: {
+                source: "test",
+                knowledgeBaseId: chunk.knowledgeBaseId,
+              },
+            },
+            _score: 1,
+          })),
+        },
+      }
+    },
+  } as unknown as Client
+  return { requests, es }
+}
+
+test("Ticket 05: vectorSearch scopes to the knowledge-base ids", async () => {
+  const { requests, es } = mockEs()
+  const runtime = makeRuntime(es, mockEmbedding())
+
+  await runtime.vectorSearch({ text: "query" }, 5, undefined, undefined, {
+    knowledgeBaseIds: ["kb-a", "kb-b"],
+  })
+
+  assert.deepEqual(scopedKnowledgeBaseIds(requests[0].knn), ["kb-a", "kb-b"])
+})
+
+test("Ticket 05: bm25Search scopes to the knowledge-base ids", async () => {
+  const { requests, es } = mockEs()
+  const runtime = makeRuntime(es, mockEmbedding())
+
+  await runtime.bm25Search({ text: "query" }, 5, undefined, {
+    knowledgeBaseIds: ["kb-a"],
+  })
+
+  assert.deepEqual(scopedKnowledgeBaseIds(requests[0].query), ["kb-a"])
+})
+
+test("Ticket 05: an unscoped channel emits no knowledge-base clause (backward compat)", async () => {
+  const { requests, es } = mockEs()
+  const runtime = makeRuntime(es, mockEmbedding())
+
+  await runtime.vectorSearch({ text: "query" }, 5)
+  await runtime.bm25Search({ text: "query" }, 5)
+
+  assert.equal(scopedKnowledgeBaseIds(requests[0].knn), undefined)
+  assert.equal(scopedKnowledgeBaseIds(requests[1].query), undefined)
+})
+
+test("Ticket 05: an explicit empty scope returns no evidence without any query or embedding", async () => {
+  const { requests, es } = mockEs()
+  let embeddingCalls = 0
+  const embeddingClient = {
+    embeddings: {
+      create: async () => {
+        embeddingCalls += 1
+        return { data: [{ embedding: [0.1] }] }
+      },
+    },
+  } as unknown as OpenAI
+  const runtime = makeRuntime(es, embeddingClient)
+
+  const empty = { knowledgeBaseIds: [] }
+  assert.deepEqual(await runtime.vectorSearch({ text: "query" }, 5, undefined, undefined, empty), [])
+  assert.deepEqual(await runtime.bm25Search({ text: "query" }, 5, undefined, empty), [])
+
+  assert.equal(requests.length, 0, "an empty scope must not reach Elasticsearch")
+  assert.equal(embeddingCalls, 0, "an empty scope must not spend an embedding call")
+
+  // The same guarantee holds through the Searcher entry point.
+  const searcher = new SearcherImpl(runtime)
+  const outcome = await searcher.search(
+    { text: "query" },
+    { retrievalScope: empty, channels: ["vector", "bm25"] }
+  )
+  assert.deepEqual(outcome.results, [])
+  assert.equal(requests.length, 0)
+  assert.equal(embeddingCalls, 0)
+})
+
+test("Ticket 05: an empty scope dispatches no channel at all, all four requested", async () => {
+  const dispatched: string[] = []
+  const searcher = new SearcherImpl(operations({
+    vectorSearch: async () => { dispatched.push("vector"); return [] },
+    bm25Search: async () => { dispatched.push("bm25"); return [] },
+    graphSearch: async () => { dispatched.push("graph"); return [] },
+    pageIndexSearch: async () => { dispatched.push("pageIndex"); return [] },
+  }))
+
+  const outcome = await searcher.search(
+    { text: "query" },
+    { retrievalScope: { knowledgeBaseIds: [] } }
+  )
+
+  assert.deepEqual(
+    dispatched,
+    [],
+    "no channel may be dispatched on an explicit empty scope — graph and PageIndex only gain their own filter in Ticket 06"
+  )
+  assert.equal(outcome.status, "insufficient")
+  assert.deepEqual(outcome.results, [])
+  assert.deepEqual(
+    outcome.unavailableChannels,
+    [],
+    "no channel failed — none was asked to run"
+  )
+})
+
+test("Ticket 05: SearcherImpl.search forwards the retrieval scope to both channels", async () => {
+  const seen: Array<{ channel: string; scope: unknown }> = []
+  const searcher = new SearcherImpl(operations({
+    vectorSearch: async (_query, _topK, _hypothesis, _accessContext, scope) => {
+      seen.push({ channel: "vector", scope })
+      return []
+    },
+    bm25Search: async (_query, _topK, _accessContext, scope) => {
+      seen.push({ channel: "bm25", scope })
+      return []
+    },
+  }))
+
+  await searcher.search(
+    { text: "query" },
+    { retrievalScope: { knowledgeBaseIds: ["kb-a"] }, channels: ["vector", "bm25"] }
+  )
+
+  assert.deepEqual(seen, [
+    { channel: "vector", scope: { knowledgeBaseIds: ["kb-a"] } },
+    { channel: "bm25", scope: { knowledgeBaseIds: ["kb-a"] } },
+  ])
+})
+
+test("Ticket 05: contradictory documents in two knowledge bases never cross", async () => {
+  const { es } = scopedEs([
+    { id: "kb-a-refund", knowledgeBaseId: "kb-a" },
+    { id: "kb-b-refund", knowledgeBaseId: "kb-b" },
+  ])
+  const searcher = new SearcherImpl(makeRuntime(es, mockEmbedding()))
+
+  const scopedToA = await searcher.search(
+    { text: "退款期限" },
+    { retrievalScope: { knowledgeBaseIds: ["kb-a"] }, channels: ["vector", "bm25"] }
+  )
+  const scopedToB = await searcher.search(
+    { text: "退款期限" },
+    { retrievalScope: { knowledgeBaseIds: ["kb-b"] }, channels: ["vector", "bm25"] }
+  )
+
+  assert.deepEqual(
+    [...new Set(scopedToA.results.map(({ chunk }) => chunk.id))],
+    ["kb-a-refund"]
+  )
+  assert.deepEqual(
+    [...new Set(scopedToB.results.map(({ chunk }) => chunk.id))],
+    ["kb-b-refund"]
+  )
+
+  // A caller that supplies no scope at all still reads the whole index: the
+  // scope is what narrows a request, never what widens it.
+  const unscoped = await searcher.search(
+    { text: "退款期限" },
+    { channels: ["vector", "bm25"] }
+  )
+  assert.deepEqual(
+    [...new Set(unscoped.results.map(({ chunk }) => chunk.id))].sort(),
+    ["kb-a-refund", "kb-b-refund"]
+  )
+})

@@ -460,6 +460,96 @@ test("T11 #1 accessContext propagated to searcher.search", async () => {
   )
 })
 
+test("Ticket 05: the run's server-computed knowledge scope reaches searcher.search", async () => {
+  const retrievalScope = { knowledgeBaseIds: ["kb-policies"] }
+  const searcher = makeFakeSearcher({
+    status: "ok",
+    results: [makeRetrievalResult()],
+    unavailableChannels: [],
+  })
+  const evidence = buildEvidence([makeRetrievalResult()])
+  const runner = createSimpleKnowledgeMastraRunner({
+    router: makeFakeRouter("simple"),
+    createSearcher: () => searcher,
+    assembler: makeFakeAssembler(),
+    validator: makeFakeValidator({ passed: true, hallucination: false, completeness: true }),
+    replanner: makeFakeRePlanner([]),
+    streamAnswerDraft: makeScriptedDraftStream([buildCitedAnswer(evidence)]),
+  })
+
+  await runner(makeRunnerInput({ retrievalScope }))
+
+  assert.deepEqual(
+    searcher.calls[0].options?.retrievalScope,
+    retrievalScope,
+    "retrievalScope must be forwarded verbatim (Ticket 05, KB-03A)"
+  )
+})
+
+test("Ticket 05: a run without a knowledge scope leaves searcher.search unscoped", async () => {
+  const searcher = makeFakeSearcher({
+    status: "ok",
+    results: [makeRetrievalResult()],
+    unavailableChannels: [],
+  })
+  const evidence = buildEvidence([makeRetrievalResult()])
+  const runner = createSimpleKnowledgeMastraRunner({
+    router: makeFakeRouter("simple"),
+    createSearcher: () => searcher,
+    assembler: makeFakeAssembler(),
+    validator: makeFakeValidator({ passed: true, hallucination: false, completeness: true }),
+    replanner: makeFakeRePlanner([]),
+    streamAnswerDraft: makeScriptedDraftStream([buildCitedAnswer(evidence)]),
+  })
+
+  await runner(makeRunnerInput())
+
+  assert.equal(
+    searcher.calls[0].options?.retrievalScope,
+    undefined,
+    "a scope-less run must not invent one (backward compat)"
+  )
+})
+
+test("Ticket 05: correction retrieval shares the run's knowledge scope", async () => {
+  const retrievalScope = { knowledgeBaseIds: ["kb-policies"] }
+  const result1 = makeRetrievalResult({ chunk: { id: "c1", documentId: "d1", content: "content1", childrenIds: [], metadata: {} } })
+  const result2 = makeRetrievalResult({ chunk: { id: "c2", documentId: "d2", content: "content2", childrenIds: [], metadata: {} } })
+  const evidence1 = buildEvidence([result1])
+  const evidence2 = buildEvidence([result1, result2])
+  // call 0 (initial): [result1]; call 1 (correction gap query): [result2]
+  const searcher = makeFakeSearcher([
+    { status: "ok", results: [result1], unavailableChannels: [] },
+    { status: "ok", results: [result2], unavailableChannels: [] },
+  ])
+  const runner = createSimpleKnowledgeMastraRunner({
+    router: makeFakeRouter("simple"),
+    createSearcher: () => searcher,
+    assembler: makeFakeAssembler(),
+    validator: makeFakeValidator([
+      { passed: false, hallucination: false, completeness: false, missingGap: "gap1" },
+      { passed: true, hallucination: false, completeness: true },
+    ]),
+    replanner: makeFakeRePlanner([{ text: "gap query 1" }]),
+    streamAnswerDraft: makeScriptedDraftStream([
+      buildCitedAnswer(evidence1),
+      buildCitedAnswer(evidence2),
+    ]),
+  })
+
+  const output = await runner(makeRunnerInput({ retrievalScope }))
+
+  assert.equal(output.status, "completed", "correction + regeneration + pass → completed")
+  assert.ok(searcher.calls.length >= 2, "correction retrieval must run")
+  for (const call of searcher.calls) {
+    assert.deepEqual(
+      call.options?.retrievalScope,
+      retrievalScope,
+      "a correction gap query must not escape the run's knowledge scope (Ticket 05, KB-03A)"
+    )
+  }
+})
+
 test("T11 #2 stable Evidence + bounded Context: evidence built + context assembled", async () => {
   const result1 = makeRetrievalResult({ chunk: { id: "c1", documentId: "d1", content: "content1", childrenIds: [], metadata: {} } })
   const result2 = makeRetrievalResult({ chunk: { id: "c2", documentId: "d2", content: "content2", childrenIds: [], metadata: {} }, source: "bm25" })

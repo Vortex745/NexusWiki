@@ -7,6 +7,7 @@ import type { PageIndexRepository } from "../../ingestion/tracking/page_index_re
 import type { ActiveVersionRepository } from "../../ingestion/tracking/active_version_repo"
 import type { AccessContext } from "../../access/context"
 import type { Query, RetrievalResult, Chunk } from "../../types"
+import type { RetrievalScope } from "../../types/retrieval_scope"
 import type {
   Reranker,
   RetrievalChannel,
@@ -122,6 +123,33 @@ function accessContextFilter(ac?: AccessContext): Array<Record<string, unknown>>
 }
 
 /**
+ * Ticket 05 (KB-03A): the knowledge-base dimension of a chunk filter.
+ *
+ * - No scope → no clause. A caller that carries no knowledge scope (legacy
+ *   release probes, isolated evaluation runs) keeps its previous behavior.
+ * - Scope with ids → one `terms` clause on the `knowledgeBaseId` keyword that
+ *   ingestion stamps on every chunk (spec §8.1 L239).
+ * - Scope with zero ids → also no clause HERE, because
+ *   {@link hasNoKnowledgeContext} already made the channel return no evidence
+ *   before any query was built. An empty scope must never degrade into an
+ *   unfiltered read.
+ */
+function knowledgeBaseFilter(scope?: RetrievalScope): Array<Record<string, unknown>> {
+  if (!scope || scope.knowledgeBaseIds.length === 0) return []
+  return [{ terms: { knowledgeBaseId: [...scope.knowledgeBaseIds] } }]
+}
+
+/**
+ * Ticket 05 (KB-03A, spec §8.1 L242): an explicit empty scope is "no knowledge
+ * context" — a legal answer that means "search nothing", never "search
+ * everything". Channels that enforce scope return zero evidence immediately,
+ * before any embedding or search call is issued.
+ */
+function hasNoKnowledgeContext(scope?: RetrievalScope): boolean {
+  return scope !== undefined && scope.knowledgeBaseIds.length === 0
+}
+
+/**
  * Ticket 07 P3: Filter PageIndex nodes (or any node-shaped object) by Access
  * Context in the application layer, before linked Chunk IDs are extracted.
  * This enforces spec §6 "PageIndex lookup filters before linked Chunk IDs
@@ -180,8 +208,8 @@ function filterProvenanceByAccessContext<P extends { tenantId?: string; allowedG
 }
 
 export interface SearchOperations {
-  vectorSearch(query: Query, topK: number, hypothesis?: string, accessContext?: AccessContext, signal?: AbortSignal): Promise<RetrievalResult[]>
-  bm25Search(query: Query, topK: number, accessContext?: AccessContext, signal?: AbortSignal): Promise<RetrievalResult[]>
+  vectorSearch(query: Query, topK: number, hypothesis?: string, accessContext?: AccessContext, retrievalScope?: RetrievalScope, signal?: AbortSignal): Promise<RetrievalResult[]>
+  bm25Search(query: Query, topK: number, accessContext?: AccessContext, retrievalScope?: RetrievalScope, signal?: AbortSignal): Promise<RetrievalResult[]>
   graphSearch(query: Query, topK: number, seeds?: string[], accessContext?: AccessContext, signal?: AbortSignal): Promise<RetrievalResult[]>
   pageIndexSearch(query: Query, topK: number, accessContext?: AccessContext, signal?: AbortSignal): Promise<RetrievalResult[]>
   rerank(query: string, results: RetrievalResult[], signal?: AbortSignal): Promise<RetrievalResult[]>
@@ -228,7 +256,11 @@ export class RuntimeSearchOperations implements SearchOperations {
     return docIds.length > 0 ? [{ terms: { documentId: docIds } }] : []
   }
 
-  async vectorSearch(query: Query, topK: number, hypothesis?: string, accessContext?: AccessContext, signal?: AbortSignal): Promise<RetrievalResult[]> {
+  async vectorSearch(query: Query, topK: number, hypothesis?: string, accessContext?: AccessContext, retrievalScope?: RetrievalScope, signal?: AbortSignal): Promise<RetrievalResult[]> {
+    // Ticket 05 (KB-03A): an explicit empty scope means "no knowledge
+    // context" — answer with no evidence, and do not even spend an embedding
+    // call on it.
+    if (hasNoKnowledgeContext(retrievalScope)) return []
     const embedInput = hypothesis && hypothesis.trim() ? hypothesis : query.text
     const emb = await this.dependencies.embeddingClient.embeddings.create(
       {
@@ -241,6 +273,7 @@ export class RuntimeSearchOperations implements SearchOperations {
       childFilter(),
       ...this.activeTermsFilter(),
       ...accessContextFilter(accessContext),
+      ...knowledgeBaseFilter(retrievalScope),
     ]
     const res = await this.dependencies.es.search({
       index: this.indexName,
@@ -263,7 +296,9 @@ export class RuntimeSearchOperations implements SearchOperations {
     }))
   }
 
-  async bm25Search(query: Query, topK: number, accessContext?: AccessContext, signal?: AbortSignal): Promise<RetrievalResult[]> {
+  async bm25Search(query: Query, topK: number, accessContext?: AccessContext, retrievalScope?: RetrievalScope, signal?: AbortSignal): Promise<RetrievalResult[]> {
+    // Ticket 05 (KB-03A): empty scope = no knowledge context, no query.
+    if (hasNoKnowledgeContext(retrievalScope)) return []
     const res = await this.dependencies.es.search({
       index: this.indexName,
       query: {
@@ -273,6 +308,7 @@ export class RuntimeSearchOperations implements SearchOperations {
             childFilter(),
             ...this.activeTermsFilter(),
             ...accessContextFilter(accessContext),
+            ...knowledgeBaseFilter(retrievalScope),
           ],
         },
       },
@@ -594,6 +630,9 @@ export class SearcherImpl implements Searcher {
     const hypothesis = options?.hypothesis
     const graphSeeds = options?.graphSeeds
     const accessContext = options?.accessContext
+    // Ticket 05 (KB-03A): the server-computed knowledge scope. Vector and BM25
+    // enforce it here; graph and PageIndex follow in Ticket 06.
+    const retrievalScope = options?.retrievalScope
     // P7.2: honor cancellation at retrieval stage boundaries. When the
     // signal is already aborted at entry, reject immediately — no ES/Neo4j
     // queries are issued. Mid-run aborts are checked after allSettled and
@@ -611,17 +650,35 @@ export class SearcherImpl implements Searcher {
     const unselectedChannels = ALL_RETRIEVAL_CHANNELS.filter(
       (ch) => !selectedSet.has(ch)
     )
+    // Ticket 05 (KB-03A): an explicit empty scope means "no knowledge context",
+    // and that promise belongs to the whole search, not to two of its four
+    // channels. Graph and PageIndex receive their own knowledge filter in
+    // Ticket 06, so dispatching them here would answer from knowledge the
+    // caller explicitly excluded. Nothing is queried at all; the outcome is the
+    // same honest "insufficient" a caller gets when every channel fails, and
+    // the existing Answer path turns it into an honest refusal. This guard is
+    // what makes the empty-scope contract fail-closed rather than best-effort.
+    if (hasNoKnowledgeContext(retrievalScope)) {
+      return {
+        status: "insufficient",
+        results: [],
+        // No channel failed — none ran. Reporting them as unavailable would
+        // blame the channels for a scope decision the caller made.
+        unavailableChannels: [],
+        ...(unselectedChannels.length > 0 ? { unselectedChannels } : {}),
+      }
+    }
     const allChannelRunners: Array<{
       name: RetrievalChannel
       run: () => Promise<RetrievalResult[]>
     }> = [
       {
         name: "vector",
-        run: () => this.operations.vectorSearch(query, CHANNEL_TOP_K, hypothesis, accessContext, signal),
+        run: () => this.operations.vectorSearch(query, CHANNEL_TOP_K, hypothesis, accessContext, retrievalScope, signal),
       },
       {
         name: "bm25",
-        run: () => this.operations.bm25Search(query, CHANNEL_TOP_K, accessContext, signal),
+        run: () => this.operations.bm25Search(query, CHANNEL_TOP_K, accessContext, retrievalScope, signal),
       },
       {
         name: "graph",

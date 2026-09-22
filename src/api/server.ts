@@ -28,6 +28,13 @@ import { createEvaluationsRouter } from "./evaluations"
 import { createSessionRouter, type DemoAuthOptions } from "./session"
 import { EvaluationService } from "../evaluation/service"
 import { createDedicatedReranker } from "../retrieval/search/dedicated_reranker"
+import {
+  createRetrievalScopeResolver,
+  type RetrievalScopeResolver,
+} from "../retrieval/scope"
+import { KnowledgeBaseServiceImpl } from "../knowledge/knowledge_base_service"
+import { SqliteKnowledgeBaseRepo } from "../knowledge/knowledge_base_repo"
+import { knowledgeBaseEmbeddingProfile } from "../types/knowledge_base"
 
 export function createApp(options: {
   db?: DB
@@ -54,6 +61,15 @@ export function createApp(options: {
    */
   demoAuth?: DemoAuthOptions
   sessionBinder?: SqliteSessionBinder
+  /**
+   * Ticket 05 (KB-03A): the server-side retrieval-scope resolver. startServer
+   * always wires the production one (KnowledgeBaseServiceImpl + the tenant
+   * database), so every production chat request runs inside a server-computed
+   * knowledge scope. It is absent in bare createApp() mounts only: a request
+   * that carries `knowledgeBaseIds` is then rejected rather than silently
+   * widened to an unfiltered read.
+   */
+  retrievalScopeResolver?: RetrievalScopeResolver
   eventsSource: AnswerEventsSource
   // Optional runtime surfaces for the /api/status endpoint.
   // When omitted (e.g. tests), the status route is not mounted.
@@ -114,7 +130,15 @@ export function createApp(options: {
   if (options.accessMiddleware) {
     app.use("/api/chat", options.accessMiddleware)
   }
-  app.use("/api", createChatRouter(traceRepository, options.eventsSource, options.sessionBinder))
+  app.use(
+    "/api",
+    createChatRouter(
+      traceRepository,
+      options.eventsSource,
+      options.sessionBinder,
+      options.retrievalScopeResolver
+    )
+  )
   if (options.managementAccessMiddleware) {
     app.use("/api/handoffs", options.managementAccessMiddleware)
     app.use("/api/sources", options.managementAccessMiddleware)
@@ -239,6 +263,19 @@ export async function startServer(
         })
       : undefined
   const sessionBinder = new SqliteSessionBinder(processRuntime.db)
+  // Ticket 05 (KB-03A): the production retrieval-scope resolver. The knowledge
+  // selection a request may carry is intersected here with the AccessContext
+  // the request's identity produced — the transport never filters storage
+  // itself and the client never supplies a raw storage filter. Every chat
+  // request therefore runs inside a server-computed knowledge scope; a request
+  // without the field resolves to its tenant's default knowledge base, and an
+  // unknown or cross-tenant id is refused (404) before any run starts.
+  const retrievalScopeResolver = createRetrievalScopeResolver(
+    new KnowledgeBaseServiceImpl(
+      new SqliteKnowledgeBaseRepo(processRuntime.db),
+      knowledgeBaseEmbeddingProfile(config.embeddingModel, config.embeddingDimensions)
+    )
+  )
   // Ticket 04: the evaluation service shares the production clients but owns
   // its per-task isolated scopes, in-memory task registry, and the dedicated
   // reranker built from RERANK_* config (the same adapter normal chat uses).
@@ -279,6 +316,7 @@ export async function startServer(
     ...(managementAccessMiddleware ? { managementAccessMiddleware } : {}),
     ...(options.demoAuth ? { demoAuth: options.demoAuth } : {}),
     sessionBinder,
+    retrievalScopeResolver,
     eventsSource,
     processRuntime,
     config,

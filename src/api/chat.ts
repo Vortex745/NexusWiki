@@ -5,6 +5,12 @@ import { AnswerTraceRepository } from "../answer/trace_repository"
 import type { AnswerRunEvent } from "../types"
 import { singleTenantAccessContext, type AccessContext } from "../access/context"
 import type { SqliteSessionBinder } from "../access/session_binder"
+import {
+  InvalidKnowledgeBaseScopeError,
+  KnowledgeBaseNotFoundError,
+} from "../knowledge/knowledge_base_service"
+import type { RetrievalScopeResolver } from "../retrieval/scope"
+import type { RetrievalScope } from "../types/retrieval_scope"
 
 interface ChatRequest {
   message: string
@@ -14,6 +20,13 @@ interface ChatRequest {
   sessionId?: string
   /** Legacy field; ignored — the deployment-configured model is always used. */
   model?: string
+  /**
+   * Ticket 05 (KB-03A): the caller's knowledge SELECTION — which knowledge
+   * bases to search. It is never a storage filter: the server intersects it
+   * with the caller's identity and forwards only the result. Absent → the
+   * caller's authorized default knowledge base; `[]` → no knowledge context.
+   */
+  knowledgeBaseIds?: unknown
 }
 
 function streamPayload(event: AnswerRunEvent, sessionId: string) {
@@ -52,6 +65,14 @@ export function createChatRouter(
   traceRepository: AnswerTraceRepository,
   eventsSource: AnswerEventsSource,
   sessionBinder?: SqliteSessionBinder,
+  /**
+   * Ticket 05 (KB-03A): the server-side retrieval-scope resolver. The
+   * composition root wires it so every chat request runs inside a
+   * server-computed knowledge scope. Absent in bare router mounts (transport
+   * tests): a request that carries `knowledgeBaseIds` is then rejected rather
+   * than silently widened to an unfiltered read.
+   */
+  retrievalScopeResolver?: RetrievalScopeResolver,
 ): Router {
   const router = Router()
 
@@ -70,6 +91,7 @@ export function createChatRouter(
       stream: requestedStream,
       runId: requestedRunId,
       sessionId: requestedSessionId,
+      knowledgeBaseIds: requestedKnowledgeBaseIds,
     } = req.body as ChatRequest
     // Default to streaming so legacy callers and the in-app UI get instant
     // token-by-token output without an opt-in field. Explicit false is honored
@@ -88,6 +110,41 @@ export function createChatRouter(
       ? requestedRunId
       : uuid()
 
+    const accessContext: AccessContext =
+      (res.locals.accessContext as AccessContext | undefined) ?? singleTenantAccessContext()
+
+    // Ticket 05 (KB-03A): resolve the caller's knowledge selection into a
+    // server-computed RetrievalScope BEFORE any side effect — no session
+    // binding and no Answer run on a rejected scope. A missing field selects
+    // the caller's authorized DEFAULT knowledge base (never "all knowledge
+    // bases"); an explicit `[]` is "no knowledge context"; a malformed
+    // selection is a 400 and an unknown or cross-tenant id a 404. The client
+    // cannot widen its scope, because the only input it supplies is a set of
+    // ids that must already belong to its own tenant.
+    let retrievalScope: RetrievalScope | undefined
+    if (retrievalScopeResolver) {
+      try {
+        retrievalScope = retrievalScopeResolver(accessContext, requestedKnowledgeBaseIds)
+      } catch (error) {
+        if (error instanceof KnowledgeBaseNotFoundError) {
+          res.status(404).json({ error: "knowledge base not found" })
+          return
+        }
+        if (error instanceof InvalidKnowledgeBaseScopeError) {
+          res.status(400).json({ error: error.message })
+          return
+        }
+        throw error
+      }
+    } else if (requestedKnowledgeBaseIds !== undefined) {
+      // No resolver wired: the server cannot honour a knowledge selection, and
+      // ignoring it would answer from knowledge the caller did not ask for.
+      res.status(400).json({
+        error: "knowledge-base scope is not supported by this deployment",
+      })
+      return
+    }
+
     // The legacy `model` field is accepted but ignored — the deployment-
     // configured model (cfg.openaiChatModel) is always used. Trace and export
     // metadata name that configured model, not a per-request override.
@@ -96,6 +153,7 @@ export function createChatRouter(
       sessionId,
       signal: undefined,
       accessContext: undefined,
+      ...(retrievalScope ? { retrievalScope } : {}),
     }
 
     // Ticket 05 follow-up wiring: bind sessionId → (tenantId, subjectId)
@@ -113,8 +171,6 @@ export function createChatRouter(
     // AccessContext, so this wiring is a behavior no-op there; it activates
     // under enforced mode where res.locals.accessContext carries the real
     // tenant/subject/groups resolved by the IdentityAdapter.
-    const accessContext: AccessContext =
-      (res.locals.accessContext as AccessContext | undefined) ?? singleTenantAccessContext()
     if (sessionBinder) {
       const bindResult = sessionBinder.bindOrCheck(
         sessionId,
