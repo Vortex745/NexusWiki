@@ -150,6 +150,34 @@ function hasNoKnowledgeContext(scope?: RetrievalScope): boolean {
 }
 
 /**
+ * Ticket 06 (KB-03B): the knowledge-base dimension of an application-layer
+ * filter over KB-tagged records — graph relation provenance and PageIndex
+ * nodes. Graph entities are shared across knowledge bases, so the relation
+ * records beneath them are what carries ownership; each one must be
+ * authorized on its own or a shared entity would leak another knowledge
+ * base's relations and supporting documents.
+ *
+ * - No scope → no filtering. A caller that carries no knowledge scope
+ *   (legacy release probes, isolated evaluation runs) keeps its previous
+ *   behavior.
+ * - Scope present → a record survives only when it is tagged with a
+ *   knowledgeBaseId inside the scope. An untagged record cannot be
+ *   authorized, so it is dropped (fail-closed) — mirroring the ES `terms`
+ *   clause, which can never match a document whose knowledgeBaseId field is
+ *   missing.
+ */
+function filterByKnowledgeBase<T extends { knowledgeBaseId?: string }>(
+  items: T[],
+  scope?: RetrievalScope
+): T[] {
+  if (!scope) return items
+  const allowed = new Set(scope.knowledgeBaseIds)
+  return items.filter((item) =>
+    item.knowledgeBaseId !== undefined && allowed.has(item.knowledgeBaseId)
+  )
+}
+
+/**
  * Ticket 07 P3: Filter PageIndex nodes (or any node-shaped object) by Access
  * Context in the application layer, before linked Chunk IDs are extracted.
  * This enforces spec §6 "PageIndex lookup filters before linked Chunk IDs
@@ -210,8 +238,8 @@ function filterProvenanceByAccessContext<P extends { tenantId?: string; allowedG
 export interface SearchOperations {
   vectorSearch(query: Query, topK: number, hypothesis?: string, accessContext?: AccessContext, retrievalScope?: RetrievalScope, signal?: AbortSignal): Promise<RetrievalResult[]>
   bm25Search(query: Query, topK: number, accessContext?: AccessContext, retrievalScope?: RetrievalScope, signal?: AbortSignal): Promise<RetrievalResult[]>
-  graphSearch(query: Query, topK: number, seeds?: string[], accessContext?: AccessContext, signal?: AbortSignal): Promise<RetrievalResult[]>
-  pageIndexSearch(query: Query, topK: number, accessContext?: AccessContext, signal?: AbortSignal): Promise<RetrievalResult[]>
+  graphSearch(query: Query, topK: number, seeds?: string[], accessContext?: AccessContext, retrievalScope?: RetrievalScope, signal?: AbortSignal): Promise<RetrievalResult[]>
+  pageIndexSearch(query: Query, topK: number, accessContext?: AccessContext, retrievalScope?: RetrievalScope, signal?: AbortSignal): Promise<RetrievalResult[]>
   rerank(query: string, results: RetrievalResult[], signal?: AbortSignal): Promise<RetrievalResult[]>
   loadParents(identities: Array<{ documentId: string; id: string }>, accessContext?: AccessContext, signal?: AbortSignal): Promise<Chunk[]>
 }
@@ -323,7 +351,10 @@ export class RuntimeSearchOperations implements SearchOperations {
     }))
   }
 
-  async graphSearch(query: Query, topK: number, seeds?: string[], accessContext?: AccessContext, signal?: AbortSignal): Promise<RetrievalResult[]> {
+  async graphSearch(query: Query, topK: number, seeds?: string[], accessContext?: AccessContext, retrievalScope?: RetrievalScope, signal?: AbortSignal): Promise<RetrievalResult[]> {
+    // Ticket 06 (KB-03B): an explicit empty scope means "no knowledge
+    // context" — no Neo4j session, no ES query, no evidence.
+    if (hasNoKnowledgeContext(retrievalScope)) return []
     // createDriver() lazily initializes the singleton (idempotent) so a fresh
     // server process can serve graph queries without a prior ingestion run.
     const driver = this.dependencies.graphDriver ?? createDriver()
@@ -389,9 +420,12 @@ export class RuntimeSearchOperations implements SearchOperations {
           const weight = typeof rawWeight === "number" && Number.isFinite(rawWeight)
             ? Math.max(0, Math.min(1, rawWeight))
             : 0.5
-          const provenance = filterProvenanceByAccessContext(
-            parseGraphProvenance(rawProvenance),
-            accessContext
+          const provenance = filterByKnowledgeBase(
+            filterProvenanceByAccessContext(
+              parseGraphProvenance(rawProvenance),
+              accessContext
+            ),
+            retrievalScope
           )
           return values.flatMap((value) => {
             if (typeof value !== "string") return []
@@ -439,7 +473,10 @@ export class RuntimeSearchOperations implements SearchOperations {
               ],
             },
           })),
-          filter: [childFilter(), ...this.activeTermsFilter(), ...accessContextFilter(accessContext)],
+          // Ticket 06 (KB-03B): hydration re-checks the knowledge scope so a
+          // candidate is Evidence only after it resolves to a chunk the scope
+          // still owns.
+          filter: [childFilter(), ...this.activeTermsFilter(), ...accessContextFilter(accessContext), ...knowledgeBaseFilter(retrievalScope)],
               },
             }
           : {
@@ -447,7 +484,9 @@ export class RuntimeSearchOperations implements SearchOperations {
                 must: [{ multi_match: { query: names.join(" "), fields: ["content"] } }],
                 // P2.2: fallback path mirrors primary path ACL + active-version
                 // filters (closes GRAPH_RETRIEVAL_FALLBACK_BYPASS).
-                filter: [childFilter(), ...this.activeTermsFilter(), ...accessContextFilter(accessContext)],
+                // Ticket 06 (KB-03B): fallback hydration carries the knowledge
+                // scope too.
+                filter: [childFilter(), ...this.activeTermsFilter(), ...accessContextFilter(accessContext), ...knowledgeBaseFilter(retrievalScope)],
               },
             },
         size: topK,
@@ -482,11 +521,17 @@ export class RuntimeSearchOperations implements SearchOperations {
     }
   }
 
-  async pageIndexSearch(query: Query, topK: number, accessContext?: AccessContext, signal?: AbortSignal): Promise<RetrievalResult[]> {
+  async pageIndexSearch(query: Query, topK: number, accessContext?: AccessContext, retrievalScope?: RetrievalScope, signal?: AbortSignal): Promise<RetrievalResult[]> {
+    // Ticket 06 (KB-03B): an explicit empty scope means "no knowledge
+    // context" — no node lookup, no ES query.
+    if (hasNoKnowledgeContext(retrievalScope)) return []
     const repo = this.dependencies.pageIndexRepo
     if (!repo) throw new Error("pageIndex repository unavailable")
     const allNodes = repo.searchNodes(query.text, PAGE_INDEX_NODE_LIMIT)
-    const nodes = filterNodesByAccessContext(allNodes, accessContext)
+    const nodes = filterByKnowledgeBase(
+      filterNodesByAccessContext(allNodes, accessContext),
+      retrievalScope
+    )
     if (nodes.length === 0) return []
     const seen = new Set<string>()
     const unique = nodes.flatMap((node) =>
@@ -515,6 +560,8 @@ export class RuntimeSearchOperations implements SearchOperations {
             childFilter(),
             ...this.activeTermsFilter(),
             ...accessContextFilter(accessContext),
+            // Ticket 06 (KB-03B): chunk hydration re-checks the knowledge scope.
+            ...knowledgeBaseFilter(retrievalScope),
           ],
         },
       },
@@ -613,7 +660,15 @@ function parseGraphProvenance(values: unknown): NonNullable<
       if (!item) continue
       const key = `${item.documentId}\0${item.chunkId}`
       const existing = provenance.get(key)
-      if (!existing || (existing.tenantId === undefined && item.tenantId !== undefined)) {
+      // Ticket 06 (KB-03B): the same chunk can appear once untagged and once
+      // tagged when a re-ingestion appends to the same relation (store.ts
+      // MERGE dedups by the JSON string only). The most-tagged record must
+      // win — a 4-element entry outranking a 6-element one would make an
+      // in-scope chunk unselectable under an explicit knowledge scope.
+      const tagRank = (entry: { tenantId?: string; knowledgeBaseId?: string }) =>
+        (entry.tenantId !== undefined ? 1 : 0) +
+        (entry.knowledgeBaseId !== undefined ? 1 : 0)
+      if (!existing || tagRank(item) > tagRank(existing)) {
         provenance.set(key, item)
       }
     } catch {
@@ -682,11 +737,11 @@ export class SearcherImpl implements Searcher {
       },
       {
         name: "graph",
-        run: () => this.operations.graphSearch(query, CHANNEL_TOP_K, graphSeeds, accessContext, signal),
+        run: () => this.operations.graphSearch(query, CHANNEL_TOP_K, graphSeeds, accessContext, retrievalScope, signal),
       },
       {
         name: "pageIndex",
-        run: () => this.operations.pageIndexSearch(query, CHANNEL_TOP_K, accessContext, signal),
+        run: () => this.operations.pageIndexSearch(query, CHANNEL_TOP_K, accessContext, retrievalScope, signal),
       },
     ]
     const channelRunners = allChannelRunners.filter(({ name }) => selectedSet.has(name))

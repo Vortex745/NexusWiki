@@ -818,6 +818,7 @@ function makePageIndexRepo(nodes: Array<{
   linkedChunkIds: string[]
   tenantId?: string
   allowedGroups?: string[]
+  knowledgeBaseId?: string
 }>) {
   return {
     searchNodes: () => nodes,
@@ -2037,6 +2038,7 @@ test("P7.2 regression: hung Neo4j session.run rejects promptly on abort and clos
       5,
       undefined,
       undefined,
+      undefined,
       controller.signal
     ),
     (err: unknown) => err instanceof Error && err.name === "AbortError",
@@ -2272,3 +2274,356 @@ test("Ticket 05: contradictory documents in two knowledge bases never cross", as
     ["kb-a-refund", "kb-b-refund"]
   )
 })
+
+/**
+ * Ticket 06 (KB-03B) — graph and PageIndex retrieval honor the same
+ * server-computed knowledge scope as vector/BM25.
+ *
+ * Acceptance criteria exercised here:
+ *   1. Graph and PageIndex results contain only evidence owned by an
+ *      authorized selected knowledge base.
+ *   2. A shared entity cannot reveal another knowledge base's relations or
+ *      supporting documents.
+ *   3. Graph candidate hydration preserves scope when resolving evidence
+ *      back to chunks.
+ *   4. Existing retrieval ordering and fusion behavior remain unchanged
+ *      apart from filtering (existing fusion tests stay green untouched).
+ */
+
+/** 6-element provenance writer format (see store.ts): doc, chunk, tenant, groups, weight, kb. */
+function kbProvenance(
+  documentId: string,
+  chunkId: string,
+  knowledgeBaseId: string,
+  tenantId = "tenant-a"
+): string {
+  return JSON.stringify([documentId, chunkId, tenantId, [], 0.8, knowledgeBaseId])
+}
+
+test("Ticket 06: a shared entity does not reveal another knowledge base's relations or documents", async () => {
+  // Two relations hang off the same entity match. One is supported by a
+  // chunk owned by kb-a, the other ONLY by a chunk owned by kb-b.
+  const graphDriver = makeGraphDriver([
+    {
+      values: ["refund->customer:APPLIES_TO"],
+      weight: 0.8,
+      provenance: [kbProvenance("doc-kb-a", "chunk-a", "kb-a")],
+    },
+    {
+      values: ["refund->competitor:MENTIONS"],
+      weight: 0.7,
+      provenance: [kbProvenance("doc-kb-b", "chunk-b", "kb-b")],
+    },
+  ])
+  const { requests, es } = scopedEs([
+    { id: "chunk-a", knowledgeBaseId: "kb-a" },
+    { id: "chunk-b", knowledgeBaseId: "kb-b" },
+  ])
+  const runtime = new RuntimeSearchOperations({
+    es,
+    chatClient: {} as OpenAI,
+    embeddingClient: {} as OpenAI,
+    chatModel: "chat",
+    embeddingModel: "embedding",
+    graphDriver: graphDriver as never,
+  })
+
+  const scoped = await runtime.graphSearch(
+    { text: "refund" },
+    5,
+    undefined,
+    undefined,
+    { knowledgeBaseIds: ["kb-a"] }
+  )
+
+  const hydrated = JSON.stringify(requests)
+  assert.ok(
+    hydrated.includes("chunk-a"),
+    "the in-scope provenance chunk must be hydrated"
+  )
+  assert.ok(
+    !hydrated.includes("chunk-b") && !hydrated.includes("doc-kb-b"),
+    `another knowledge base's supporting document must never be named: ${hydrated}`
+  )
+  assert.equal(scoped.length, 1, "exactly the in-scope chunk returns as evidence")
+  assert.deepEqual(
+    scoped.flatMap(({ wikilinks }) => wikilinks.map(({ relation }) => relation)),
+    ["APPLIES_TO"],
+    "the relation supported only by another knowledge base must not surface"
+  )
+})
+
+test("Ticket 06: graphSearch scoped recheck carries the knowledge-base clause and drops unowned provenance", async () => {
+  const graphDriver = makeGraphDriver([{
+    values: ["refund->customer:APPLIES_TO"],
+    weight: 0.8,
+    provenance: [
+      kbProvenance("doc-in-scope", "chunk-in", "kb-a"),
+      kbProvenance("doc-cross-kb", "chunk-cross", "kb-b"),
+      // Legacy 4-element provenance has no knowledge-base tag: under a scope
+      // it cannot be authorized, so it is dropped before the recheck.
+      JSON.stringify(["doc-legacy", "chunk-legacy", "tenant-a", []]),
+    ],
+  }])
+  const { requests, es } = mockEs()
+  const runtime = new RuntimeSearchOperations({
+    es,
+    chatClient: {} as OpenAI,
+    embeddingClient: {} as OpenAI,
+    chatModel: "chat",
+    embeddingModel: "embedding",
+    graphDriver: graphDriver as never,
+  })
+
+  await runtime.graphSearch({ text: "refund" }, 5, undefined, undefined, {
+    knowledgeBaseIds: ["kb-a"],
+  })
+
+  const queryStr = JSON.stringify(requests[0].query)
+  assert.ok(
+    queryStr.includes('"documentId":"doc-in-scope"'),
+    `in-scope provenance must be hydrated: ${queryStr}`
+  )
+  assert.ok(
+    !queryStr.includes('"documentId":"doc-cross-kb"'),
+    `cross-KB provenance must be dropped before the recheck: ${queryStr}`
+  )
+  assert.ok(
+    !queryStr.includes('"documentId":"doc-legacy"'),
+    `legacy untagged provenance must be dropped under an explicit scope: ${queryStr}`
+  )
+  assert.ok(
+    queryStr.includes('"terms":{"knowledgeBaseId":["kb-a"]}'),
+    `the hydration query must carry the scope as defense in depth: ${queryStr}`
+  )
+})
+
+test("Ticket 06: graphSearch name-fallback hydration carries the knowledge-base clause", async () => {
+  // Entity names but no relation provenance → the multi_match fallback path.
+  const graphDriver = makeGraphDriver([])
+  const { requests, es } = mockEs()
+  const runtime = new RuntimeSearchOperations({
+    es,
+    chatClient: {} as OpenAI,
+    embeddingClient: {} as OpenAI,
+    chatModel: "chat",
+    embeddingModel: "embedding",
+    graphDriver: graphDriver as never,
+  })
+
+  await runtime.graphSearch({ text: "refund" }, 5, undefined, undefined, {
+    knowledgeBaseIds: ["kb-a"],
+  })
+
+  const filter = (requests[0].query as { bool: { filter: unknown[] } }).bool.filter
+  assert.deepEqual(
+    filter.find((clause) => JSON.stringify(clause).includes("knowledgeBaseId")),
+    { terms: { knowledgeBaseId: ["kb-a"] } },
+    "the fallback path must filter candidate chunks by the same scope"
+  )
+})
+
+test("Ticket 06: graphSearch without a scope keeps reading every knowledge base (backward compat)", async () => {
+  const graphDriver = makeGraphDriver([{
+    values: ["refund->customer:APPLIES_TO"],
+    weight: 0.8,
+    provenance: [
+      kbProvenance("doc-a", "chunk-a", "kb-a"),
+      kbProvenance("doc-b", "chunk-b", "kb-b"),
+    ],
+  }])
+  const { requests, es } = mockEs()
+  const runtime = new RuntimeSearchOperations({
+    es,
+    chatClient: {} as OpenAI,
+    embeddingClient: {} as OpenAI,
+    chatModel: "chat",
+    embeddingModel: "embedding",
+    graphDriver: graphDriver as never,
+  })
+
+  await runtime.graphSearch({ text: "refund" }, 5)
+
+  const queryStr = JSON.stringify(requests[0].query)
+  assert.ok(queryStr.includes('"documentId":"doc-a"'))
+  assert.ok(queryStr.includes('"documentId":"doc-b"'))
+  assert.ok(
+    !queryStr.includes("knowledgeBaseId"),
+    "an unscoped legacy caller must emit no knowledge-base clause"
+  )
+})
+
+test("Ticket 06: a re-ingested chunk's tagged provenance outranks its legacy entry", async () => {
+  const graphDriver = makeGraphDriver([{
+    values: ["refund->customer:APPLIES_TO"],
+    weight: 0.8,
+    provenance: [
+      // The same chunk appended by a pre-KB-02A writer and by the current
+      // writer (store.ts MERGE dedups by the JSON string only).
+      JSON.stringify(["doc-a", "chunk-a", "tenant-a", []]),
+      kbProvenance("doc-a", "chunk-a", "kb-a"),
+    ],
+  }])
+  const { requests, es } = mockEs()
+  const runtime = new RuntimeSearchOperations({
+    es,
+    chatClient: {} as OpenAI,
+    embeddingClient: {} as OpenAI,
+    chatModel: "chat",
+    embeddingModel: "embedding",
+    graphDriver: graphDriver as never,
+  })
+
+  await runtime.graphSearch({ text: "refund" }, 5, undefined, undefined, {
+    knowledgeBaseIds: ["kb-a"],
+  })
+
+  assert.ok(
+    JSON.stringify(requests[0].query).includes('"documentId":"doc-a"'),
+    "the tagged entry must win the dedup so the in-scope chunk stays selectable"
+  )
+})
+
+test("Ticket 06: graphSearch with an explicit empty scope queries nothing", async () => {
+  let neo4jTouched = false
+  const graphDriver = {
+    session() {
+      neo4jTouched = true
+      throw new Error("graph must not be queried on an empty scope")
+    },
+  }
+  const { requests, es } = mockEs()
+  const runtime = new RuntimeSearchOperations({
+    es,
+    chatClient: {} as OpenAI,
+    embeddingClient: {} as OpenAI,
+    chatModel: "chat",
+    embeddingModel: "embedding",
+    graphDriver: graphDriver as never,
+  })
+
+  const results = await runtime.graphSearch(
+    { text: "refund" },
+    5,
+    undefined,
+    undefined,
+    { knowledgeBaseIds: [] }
+  )
+
+  assert.deepEqual(results, [])
+  assert.equal(neo4jTouched, false, "no Neo4j session may be opened")
+  assert.equal(requests.length, 0, "no Elasticsearch query may be issued")
+})
+
+test("Ticket 06: pageIndexSearch filters nodes by knowledge base and carries the clause into hydration", async () => {
+  const pageIndexRepo = makePageIndexRepo([
+    { documentId: "doc-in", linkedChunkIds: ["chunk-in"], knowledgeBaseId: "kb-a" },
+    { documentId: "doc-out", linkedChunkIds: ["chunk-out"], knowledgeBaseId: "kb-b" },
+    // A legacy node without a knowledge-base tag is not selectable under an
+    // explicit scope (the writer tags every node since KB-02A).
+    { documentId: "doc-legacy", linkedChunkIds: ["chunk-legacy"] },
+  ])
+  const { requests, es } = mockEs()
+  const runtime = new RuntimeSearchOperations({
+    es,
+    chatClient: {} as OpenAI,
+    embeddingClient: mockEmbedding(),
+    chatModel: "chat",
+    embeddingModel: "embedding",
+    pageIndexRepo,
+  })
+
+  await runtime.pageIndexSearch({ text: "query" }, 5, undefined, {
+    knowledgeBaseIds: ["kb-a"],
+  })
+
+  const queryStr = JSON.stringify(requests[0].query)
+  assert.ok(
+    queryStr.includes('"documentId":"doc-in"'),
+    `in-scope node must be looked up: ${queryStr}`
+  )
+  assert.ok(
+    !queryStr.includes('"documentId":"doc-out"'),
+    `another knowledge base's node must be excluded: ${queryStr}`
+  )
+  assert.ok(
+    !queryStr.includes('"documentId":"doc-legacy"'),
+    `an untagged node must be excluded under an explicit scope: ${queryStr}`
+  )
+  assert.ok(
+    queryStr.includes('"terms":{"knowledgeBaseId":["kb-a"]}'),
+    `the chunk hydration must re-check the scope: ${queryStr}`
+  )
+})
+
+test("Ticket 06: pageIndexSearch without a scope keeps reading every knowledge base (backward compat)", async () => {
+  const pageIndexRepo = makePageIndexRepo([
+    { documentId: "doc-a", linkedChunkIds: ["chunk-a"], knowledgeBaseId: "kb-a" },
+    { documentId: "doc-b", linkedChunkIds: ["chunk-b"], knowledgeBaseId: "kb-b" },
+  ])
+  const { requests, es } = mockEs()
+  const runtime = new RuntimeSearchOperations({
+    es,
+    chatClient: {} as OpenAI,
+    embeddingClient: mockEmbedding(),
+    chatModel: "chat",
+    embeddingModel: "embedding",
+    pageIndexRepo,
+  })
+
+  await runtime.pageIndexSearch({ text: "query" }, 5)
+
+  const queryStr = JSON.stringify(requests[0].query)
+  assert.ok(queryStr.includes('"documentId":"doc-a"'))
+  assert.ok(queryStr.includes('"documentId":"doc-b"'))
+  assert.ok(!queryStr.includes("knowledgeBaseId"))
+})
+
+test("Ticket 06: pageIndexSearch with an explicit empty scope queries nothing", async () => {
+  const { requests, es } = mockEs()
+  const runtime = new RuntimeSearchOperations({
+    es,
+    chatClient: {} as OpenAI,
+    embeddingClient: mockEmbedding(),
+    chatModel: "chat",
+    embeddingModel: "embedding",
+    pageIndexRepo: makePageIndexRepo([
+      { documentId: "doc-a", linkedChunkIds: ["chunk-a"], knowledgeBaseId: "kb-a" },
+    ]),
+  })
+
+  const results = await runtime.pageIndexSearch(
+    { text: "query" },
+    5,
+    undefined,
+    { knowledgeBaseIds: [] }
+  )
+
+  assert.deepEqual(results, [])
+  assert.equal(requests.length, 0)
+})
+
+test("Ticket 06: SearcherImpl.search forwards the retrieval scope to graph and PageIndex channels", async () => {
+  const seen: Array<{ channel: string; scope: unknown }> = []
+  const searcher = new SearcherImpl(operations({
+    graphSearch: async (_query, _topK, _seeds, _ac, scope) => {
+      seen.push({ channel: "graph", scope })
+      return []
+    },
+    pageIndexSearch: async (_query, _topK, _ac, scope) => {
+      seen.push({ channel: "pageIndex", scope })
+      return []
+    },
+  }))
+
+  await searcher.search(
+    { text: "query" },
+    { retrievalScope: { knowledgeBaseIds: ["kb-a"] }, channels: ["graph", "pageIndex"] }
+  )
+
+  assert.deepEqual(seen, [
+    { channel: "graph", scope: { knowledgeBaseIds: ["kb-a"] } },
+    { channel: "pageIndex", scope: { knowledgeBaseIds: ["kb-a"] } },
+  ])
+})
+
