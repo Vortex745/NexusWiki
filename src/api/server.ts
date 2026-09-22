@@ -14,6 +14,7 @@ import ingestRouter, { rawIngestRouter } from "./ingest"
 import { createHandoffRouter } from "./handoff"
 import { SqliteHandoffStore } from "../answer/handoff_store"
 import { createFeedbackRouter } from "./feedback"
+import { createFeedbackTargetResolver } from "../answer/feedback_target"
 import { SqliteFeedbackStore } from "../answer/feedback_store"
 import { SqliteSessionBinder } from "../access/session_binder"
 import { createAccessMiddleware } from "./access_middleware"
@@ -125,6 +126,15 @@ export function createApp(options: {
   const traceRepository = new AnswerTraceRepository(db)
   const handoffStore = new SqliteHandoffStore(db)
   const feedbackStore = new SqliteFeedbackStore(db)
+  // Ticket 29 (EVAL-02B): feedback is only accepted for a run this caller owns
+  // and that already produced a terminal answer. Ownership is read from the
+  // conversation directory — the run's trace is the only owner of its session.
+  const sessionDirectories = new SqliteConversationHistoryStore(db)
+  const feedbackTargetResolver = createFeedbackTargetResolver({
+    getRun: (runId) => traceRepository.getRun(runId),
+    ownsSession: (sessionId, tenantId, subjectId) =>
+      sessionDirectories.getSessionLock(sessionId, tenantId, subjectId) !== null,
+  })
   // Ticket 11 P5: Source governance wiring — DocumentRepo + TaskRepo are
   // shared with the ingestion pipeline (DocumentRepo.activate is reused by
   // CandidateReviewStore; TaskRepo is reused by RetirementService for
@@ -260,6 +270,9 @@ export function createApp(options: {
     // management surface; the handler keeps its own admin check.
     app.use("/api/evaluations", options.managementAccessMiddleware)
     app.use("/api/evaluation-datasets", options.managementAccessMiddleware)
+    // Ticket 29 (EVAL-02B): the feedback review surface is identity-scoped; the
+    // handler enforces review-or-admin (a reader must not browse it).
+    app.use("/api/feedback", options.managementAccessMiddleware)
     // Ticket 01: reading your own identity needs identity but no particular
     // scope — a reader must be able to learn its navigation from the server.
     app.use("/api/session", options.managementAccessMiddleware)
@@ -321,7 +334,10 @@ export function createApp(options: {
   // /chat/runs/:runId/handoff. No 404 cross-tenant case for PUT (upsert creates
   // if not exists; UNIQUE includes tenant_id+subject_id so each tenant gets its
   // own row). 400 for invalid rating or reason code (InvalidFeedbackReasonCodeError).
-  app.use("/api", createFeedbackRouter(feedbackStore))
+  // Ticket 29: /api/feedback (list/detail/review) is a reviewer surface and
+  // authenticates through the identity-only management middleware in enforced
+  // mode; the handler keeps its own review-or-admin check.
+  app.use("/api", createFeedbackRouter(feedbackStore, { targetResolver: feedbackTargetResolver }))
   // Ticket 11 P5: mount the Source governance HTTP API (spec §11 L1580-1583).
   // Three endpoints:
   //   POST /api/ingest/:docId/review       (review scope — L1580)

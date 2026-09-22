@@ -337,6 +337,30 @@ test("the evaluation dialog is operable by keyboard and collapses on a narrow la
   assert.match(dialog, /max-md:px-4/, "content padding follows the narrow screen")
 })
 
+test("an answer carries a feedback submission and reviewers can filter the store", () => {
+  const thread = read("frontend/src/components/thread/Thread.tsx")
+  const feedbackDialog = read("frontend/src/components/panels/FeedbackDialog.tsx")
+  const sidebar = read("frontend/src/components/Sidebar.tsx")
+
+  // Submission: the answered message id travels with its run, and a negative
+  // rating picks one of the supported reason codes.
+  assert.match(thread, /submitAnswerFeedback\(runId, \{/, "the rating is submitted for the message's run")
+  assert.match(thread, /messageId,/, "the answered message id is part of the submission")
+  assert.match(thread, /const runId = custom\?\.runId/, "only an answered run can be rated")
+  assert.match(thread, /FEEDBACK_REASON_CODES\.map/, "the reason codes come from the shared list")
+  assert.match(thread, /aria-label="反馈原因"/, "the reason picker is announced")
+
+  // Review: status + provenance filters and state transitions.
+  assert.match(feedbackDialog, /fetchFeedbackList\(/, "the reviewer list is read from the API")
+  assert.match(feedbackDialog, /updateFeedbackStatus\(/, "state changes go through the API")
+  assert.match(feedbackDialog, /runFilter/, "the run (provenance) is filterable")
+  assert.match(feedbackDialog, /STATUS_LABELS/, "the supported statuses are labelled")
+  assert.match(feedbackDialog, /record\.messageId/, "the detail shows the message/run provenance")
+  assert.match(feedbackDialog, /max-md:h-dvh/, "the panel reflows on a narrow screen")
+  assert.match(sidebar, /反馈审阅/, "the review surface has a first-class entry")
+  assert.match(read("frontend/src/App.tsx"), /<FeedbackDialog\b/, "the app mounts the review panel")
+})
+
 test("the evaluation dialog exports reports and compares two immutable configurations", () => {
   const dialog = read("frontend/src/components/panels/EvaluationDialog.tsx")
   assert.match(dialog, /exportEvaluationTask\(/, "a settled report can be carried away")

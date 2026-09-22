@@ -18,12 +18,20 @@ import {
   RefreshCw,
   SendHorizontal,
   Square,
+  ThumbsDown,
+  ThumbsUp,
   X,
 } from "lucide"
-import { useMemo, useRef, useSyncExternalStore, type CSSProperties } from "react"
+import { useMemo, useRef, useState, useSyncExternalStore, type CSSProperties } from "react"
 
 import { conversationStore } from "../../conversation/useConversation"
 import { cn } from "../../lib/cn"
+import {
+  FEEDBACK_REASON_CODES,
+  submitAnswerFeedback,
+  type FeedbackRating,
+  type FeedbackReasonCode,
+} from "../../lib/api"
 import { INSIGHT_PATH_STEPS, SUGGESTIONS, traceEventLabel } from "../../lib/constants"
 import { useAppShell } from "../../runtime/AppShellContext"
 import { useMemoryApi } from "../../runtime/MemoryContext"
@@ -448,11 +456,35 @@ function AssistantText({
 }
 
 function AssistantMessage() {
-  const { openInsight } = useAppShell()
+  const { openInsight, showToast } = useAppShell()
   const messageId = useAuiState((s) => s.message.id)
   const custom = useAuiState((s) => s.message.metadata?.custom as MessageCustom | undefined)
   const references = custom?.references ?? []
   const { detailsRef, highlightedId, focusReference } = useReferenceHighlight()
+  // 票 29：反馈按钮只在有 run 的完成回答上出现；提交的是"这一条消息 + 这次运行"。
+  const runId = custom?.runId ?? null
+  const [feedback, setFeedback] = useState<FeedbackRating | null>(null)
+  const [reasonPickerOpen, setReasonPickerOpen] = useState(false)
+  const [submittingFeedback, setSubmittingFeedback] = useState(false)
+
+  const submitFeedback = async (rating: FeedbackRating, reasonCode?: FeedbackReasonCode) => {
+    if (!runId || submittingFeedback) return
+    setSubmittingFeedback(true)
+    try {
+      await submitAnswerFeedback(runId, {
+        messageId,
+        rating,
+        ...(rating === "down" ? { reasonCode: reasonCode ?? "other" } : {}),
+      })
+      setFeedback(rating)
+      setReasonPickerOpen(false)
+      showToast("已收到反馈，谢谢")
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : "反馈提交失败")
+    } finally {
+      setSubmittingFeedback(false)
+    }
+  }
 
   const parts = useMemo(
     () => ({
@@ -501,7 +533,54 @@ function AssistantMessage() {
         >
           <Icon icon={BarChart3} className="size-3.5" />
         </TooltipIconButton>
+        {runId ? (
+          <>
+            <TooltipIconButton
+              tooltip={feedback === "up" ? "已标记有帮助" : "有帮助"}
+              className="size-6"
+              disabled={submittingFeedback}
+              onClick={() => void submitFeedback("up")}
+            >
+              <Icon
+                icon={ThumbsUp}
+                className={cn("size-3.5", feedback === "up" && "text-brand")}
+              />
+            </TooltipIconButton>
+            <TooltipIconButton
+              tooltip={reasonPickerOpen ? "选择需要改进的原因" : "需要改进"}
+              className="size-6"
+              disabled={submittingFeedback}
+              aria-expanded={reasonPickerOpen}
+              onClick={() => setReasonPickerOpen((current) => !current)}
+            >
+              <Icon
+                icon={ThumbsDown}
+                className={cn("size-3.5", feedback === "down" && "text-red-600")}
+              />
+            </TooltipIconButton>
+          </>
+        ) : null}
       </ActionBarPrimitive.Root>
+
+      {/* 票 29：负面反馈带一个原因码（服务端支持的闭集），提交后可被审阅。 */}
+      {reasonPickerOpen ? (
+        <span
+          role="group"
+          aria-label="反馈原因"
+          className="absolute right-0 bottom-8 z-10 flex flex-wrap items-center gap-1 rounded-md border border-line bg-surface p-1 shadow-card"
+        >
+          {FEEDBACK_REASON_CODES.map(([code, label]) => (
+            <button
+              key={code}
+              type="button"
+              onClick={() => void submitFeedback("down", code)}
+              className="cursor-pointer rounded px-1.5 py-0.5 text-[10px] text-muted transition-colors hover:bg-surface-subtle hover:text-ink focus-visible:outline-2 focus-visible:outline-brand"
+            >
+              {label}
+            </button>
+          ))}
+        </span>
+      ) : null}
 
       <BranchPicker className="col-start-2 row-start-2 -ml-2 mr-2" />
     </MessagePrimitive.Root>

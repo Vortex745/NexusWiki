@@ -16,6 +16,8 @@ export interface AppShellActions {
   openSettings: () => void
   /** Ticket 18 (AST-01A): the assistant workspace (admin). */
   openAssistants: () => void
+  /** Ticket 29 (EVAL-02B): the answer-feedback review surface (review/admin). */
+  openFeedback: () => void
   /** Ticket 13 (DOC-02): the exact document version behind a citation/row. */
   openDocument: (target: DocumentViewTarget) => void
   showToast: (message: string) => void
@@ -31,6 +33,7 @@ const AppShellContext = createContext<AppShellActions>({
   openKnowledge: noop,
   openSettings: noop,
   openAssistants: noop,
+  openFeedback: noop,
   openDocument: noop,
   showToast: noop,
 })

@@ -4,6 +4,7 @@ import type {
   Feedback,
   FeedbackRating,
   FeedbackReasonCode,
+  FeedbackStatus,
 } from "../types/answer"
 
 /**
@@ -43,11 +44,39 @@ export interface FeedbackUpsertInput {
   runId: string
   tenantId: string
   subjectId: string
+  /** Ticket 29: the browser-owned message this rating belongs to. */
+  messageId: string
+  /** Ticket 29: derived from the run's trace by the API layer. */
+  sessionId: string
   rating: FeedbackRating
   reasonCode: FeedbackReasonCode | null
   comment: string | null
   evidenceIds: string[]
 }
+
+/** Ticket 29: the supported filters of the review list. */
+export interface FeedbackReviewFilter {
+  status?: FeedbackStatus
+  rating?: FeedbackRating
+  subjectId?: string
+  runId?: string
+}
+
+/** Ticket 29: the supported review states, validated before any SQL runs. */
+export const FEEDBACK_STATUSES: readonly FeedbackStatus[] = [
+  "open",
+  "reviewed",
+  "dismissed",
+]
+
+/** Thrown for an unsupported status (→ HTTP 400). */
+export class InvalidFeedbackStatusError extends Error {
+  constructor(readonly status: unknown) {
+    super(`Unsupported feedback status: ${String(status)}`)
+    this.name = "InvalidFeedbackStatusError"
+  }
+}
+
 
 export interface FeedbackStore {
   /**
@@ -81,6 +110,25 @@ export interface FeedbackStore {
     tenantId: string,
     options?: { subjectId?: string; rating?: FeedbackRating }
   ): Feedback[]
+
+  /**
+   * Ticket 29: one record by id, tenant-scoped. Cross-tenant (or unknown) ids
+   * return null → the HTTP layer answers the same 404 either way.
+   */
+  getById(tenantId: string, id: string): Feedback | null
+
+  /**
+   * Ticket 29: the review list for a tenant, filtered by the supported status
+   * and provenance fields (rating, subject, run). Always tenant-scoped.
+   */
+  listForReview(tenantId: string, filter?: FeedbackReviewFilter): Feedback[]
+
+  /**
+   * Ticket 29: move one record to another review state. Returns null when the
+   * id is unknown or belongs to another tenant; throws
+   * InvalidFeedbackStatusError for an unsupported status.
+   */
+  review(tenantId: string, id: string, status: unknown): Feedback | null
 }
 
 /**
@@ -141,6 +189,9 @@ interface StoredFeedback {
   reason_code: FeedbackReasonCode | null
   comment: string | null
   evidence_ids: string // JSON array string
+  message_id: string
+  session_id: string
+  status: FeedbackStatus
   created_at: string
   updated_at: string
 }
@@ -151,10 +202,13 @@ function rowToFeedback(row: StoredFeedback): Feedback {
     runId: row.run_id,
     tenantId: row.tenant_id,
     subjectId: row.subject_id,
+    messageId: row.message_id,
+    sessionId: row.session_id,
     rating: row.rating,
     reasonCode: row.reason_code,
     comment: row.comment,
     evidenceIds: JSON.parse(row.evidence_ids),
+    status: row.status,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   }
@@ -182,13 +236,19 @@ export class SqliteFeedbackStore implements FeedbackStore {
       .prepare(
         `INSERT INTO feedback (
           id, run_id, tenant_id, subject_id, rating, reason_code,
-          comment, evidence_ids, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          comment, evidence_ids, message_id, session_id, status,
+          created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', ?, ?)
         ON CONFLICT(tenant_id, subject_id, run_id) DO UPDATE SET
           rating = excluded.rating,
           reason_code = excluded.reason_code,
           comment = excluded.comment,
           evidence_ids = excluded.evidence_ids,
+          message_id = excluded.message_id,
+          session_id = excluded.session_id,
+          -- Ticket 29: a new rating re-opens the record, so a review can never
+          -- stand for feedback the subject has since replaced.
+          status = 'open',
           updated_at = excluded.updated_at`
       )
       .run(
@@ -200,6 +260,8 @@ export class SqliteFeedbackStore implements FeedbackStore {
         input.reasonCode,
         input.comment,
         evidenceIdsJson,
+        input.messageId,
+        input.sessionId,
         now,
         now
       )
@@ -254,5 +316,55 @@ export class SqliteFeedbackStore implements FeedbackStore {
       )
       .all(...params) as StoredFeedback[]
     return rows.map(rowToFeedback)
+  }
+
+  getById(tenantId: string, id: string): Feedback | null {
+    const row = this.db
+      .prepare(`SELECT * FROM feedback WHERE id = ? AND tenant_id = ?`)
+      .get(id, tenantId) as StoredFeedback | undefined
+    return row ? rowToFeedback(row) : null
+  }
+
+  listForReview(tenantId: string, filter: FeedbackReviewFilter = {}): Feedback[] {
+    const conditions: string[] = ["tenant_id = ?"]
+    const params: string[] = [tenantId]
+    if (filter.status) {
+      conditions.push("status = ?")
+      params.push(filter.status)
+    }
+    if (filter.rating) {
+      conditions.push("rating = ?")
+      params.push(filter.rating)
+    }
+    if (filter.subjectId) {
+      conditions.push("subject_id = ?")
+      params.push(filter.subjectId)
+    }
+    if (filter.runId) {
+      conditions.push("run_id = ?")
+      params.push(filter.runId)
+    }
+    const rows = this.db
+      .prepare(
+        `SELECT * FROM feedback WHERE ${conditions.join(" AND ")}
+         ORDER BY updated_at DESC, id ASC`
+      )
+      .all(...params) as StoredFeedback[]
+    return rows.map(rowToFeedback)
+  }
+
+  review(tenantId: string, id: string, status: unknown): Feedback | null {
+    if (typeof status !== "string" || !FEEDBACK_STATUSES.includes(status as FeedbackStatus)) {
+      throw new InvalidFeedbackStatusError(status)
+    }
+    // Tenant scope is part of the WHERE clause, so a cross-tenant id can never
+    // be moved — the caller gets the same null an unknown id gets.
+    const updated = this.db
+      .prepare(
+        `UPDATE feedback SET status = ?, updated_at = ? WHERE id = ? AND tenant_id = ?`
+      )
+      .run(status, this.now().toISOString(), id, tenantId)
+    if (updated.changes === 0) return null
+    return this.getById(tenantId, id)
   }
 }

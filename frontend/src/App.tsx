@@ -5,6 +5,7 @@ import { LoginScreen } from "./components/LoginScreen"
 import { AssistantsDialog } from "./components/panels/AssistantsDialog"
 import { DocumentViewerDialog, type DocumentViewTarget } from "./components/panels/DocumentViewerDialog"
 import { EvaluationDialog } from "./components/panels/EvaluationDialog"
+import { FeedbackDialog } from "./components/panels/FeedbackDialog"
 import { ImportDialog } from "./components/panels/ImportDialog"
 import { InsightDialog } from "./components/panels/InsightDialog"
 import { KnowledgeDialog } from "./components/panels/KnowledgeDialog"
@@ -102,6 +103,7 @@ function AppRoot() {
   const [knowledgeOpen, setKnowledgeOpen] = useState(false)
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [assistantsOpen, setAssistantsOpen] = useState(false)
+  const [feedbackOpen, setFeedbackOpen] = useState(false)
   const [documentView, setDocumentView] = useState<{ open: boolean; target: DocumentViewTarget | null }>({
     open: false,
     target: null,
@@ -123,14 +125,15 @@ function AppRoot() {
   const openKnowledge = useCallback(() => setKnowledgeOpen(true), [])
   const openSettings = useCallback(() => setSettingsOpen(true), [])
   const openAssistants = useCallback(() => setAssistantsOpen(true), [])
+  const openFeedback = useCallback(() => setFeedbackOpen(true), [])
   const openDocument = useCallback(
     (target: DocumentViewTarget) => setDocumentView({ open: true, target }),
     [],
   )
 
   const shellActions = useMemo<AppShellActions>(
-    () => ({ openInsight, openMemory, openImport, openEvaluation, openKnowledge, openSettings, openAssistants, openDocument, showToast }),
-    [openInsight, openMemory, openImport, openEvaluation, openKnowledge, openSettings, openAssistants, openDocument, showToast],
+    () => ({ openInsight, openMemory, openImport, openEvaluation, openKnowledge, openSettings, openAssistants, openFeedback, openDocument, showToast }),
+    [openInsight, openMemory, openImport, openEvaluation, openKnowledge, openSettings, openAssistants, openFeedback, openDocument, showToast],
   )
 
   // Replay server-side trace history for runs persisted before this page load.
@@ -264,6 +267,7 @@ function AppRoot() {
           <KnowledgeDialog open={knowledgeOpen} onClose={() => setKnowledgeOpen(false)} />
           <SettingsDialog open={settingsOpen} onClose={() => setSettingsOpen(false)} />
           <AssistantsDialog open={assistantsOpen} onClose={() => setAssistantsOpen(false)} />
+          <FeedbackDialog open={feedbackOpen} onClose={() => setFeedbackOpen(false)} />
           <DocumentViewerDialog
             open={documentView.open}
             target={documentView.target}

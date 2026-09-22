@@ -190,6 +190,11 @@ const SCHEMA = [
     reason_code TEXT,
     comment TEXT,
     evidence_ids TEXT NOT NULL DEFAULT '[]',
+    -- Ticket 29 (EVAL-02B): answer/run provenance + review state. message_id is
+    -- the browser-owned message id, session_id is derived from the run's trace.
+    message_id TEXT NOT NULL DEFAULT '',
+    session_id TEXT NOT NULL DEFAULT '',
+    status TEXT NOT NULL DEFAULT 'open' CHECK(status IN ('open', 'reviewed', 'dismissed')),
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
     UNIQUE(tenant_id, subject_id, run_id)
@@ -571,6 +576,18 @@ export function openDb(dbPath?: string): DB {
     db.exec("ALTER TABLE conversation_directories ADD COLUMN assistant_version INTEGER")
     db.exec("ALTER TABLE conversation_directories ADD COLUMN knowledge_base_ids TEXT")
   }
+  // Ticket 29 (EVAL-02B): existing databases get the answer/run provenance and
+  // review-state columns. The index is created HERE (not in SCHEMA) because an
+  // old table only has the column after this ALTER ran.
+  const feedbackColumns = db.pragma("table_info(feedback)") as Array<{ name: string }>
+  if (feedbackColumns.length > 0 && !feedbackColumns.some(({ name }) => name === "message_id")) {
+    db.exec("ALTER TABLE feedback ADD COLUMN message_id TEXT NOT NULL DEFAULT ''")
+    db.exec("ALTER TABLE feedback ADD COLUMN session_id TEXT NOT NULL DEFAULT ''")
+    db.exec("ALTER TABLE feedback ADD COLUMN status TEXT NOT NULL DEFAULT 'open'")
+  }
+  db.exec(
+    "CREATE INDEX IF NOT EXISTS idx_feedback_tenant_status ON feedback(tenant_id, status, updated_at)"
+  )
   db.exec(
     "CREATE INDEX IF NOT EXISTS idx_task_claimable ON task_pending_ops(status, next_attempt_at, id)"
   )

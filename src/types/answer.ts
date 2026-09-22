@@ -520,15 +520,34 @@ export type FeedbackReasonCode =
  * optional bounded comment, referenced Evidence IDs and timestamps.
  * Spec §8 L1548: One current Feedback record per (tenant, subject, run ID).
  */
+/**
+ * Ticket 29 (EVAL-02B): the review state of one Feedback record. A reader can
+ * only create or update its own record — and a resubmission re-opens it, so a
+ * settled review can never be silently overwritten by a new rating. Moving the
+ * state forward is a reviewer/admin action.
+ */
+export type FeedbackStatus = "open" | "reviewed" | "dismissed"
+
 export interface Feedback {
   id: string
   runId: string
   tenantId: string
   subjectId: string
+  /**
+   * Ticket 29: the message this feedback belongs to. The id is owned by the
+   * browser (the server never mints message ids), so it is validated for shape
+   * and bounded in length, and stored so a reviewer can join feedback → run →
+   * message. It can never be used to reach another subject's data: the run
+   * itself must belong to the caller.
+   */
+  messageId: string
+  /** Ticket 29: derived server-side from the run's trace (never from the body). */
+  sessionId: string
   rating: FeedbackRating
   reasonCode: FeedbackReasonCode | null
   comment: string | null
   evidenceIds: string[]
+  status: FeedbackStatus
   createdAt: string
   updatedAt: string
 }

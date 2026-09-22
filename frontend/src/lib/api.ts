@@ -445,6 +445,117 @@ export async function createEvaluationComparisonExample(
   }
 }
 
+// ---------------------------------------------------------------------------
+// Ticket 29 (EVAL-02B): answer feedback — submit your own, review as admin
+// ---------------------------------------------------------------------------
+
+export type FeedbackRating = "up" | "down"
+export type FeedbackStatus = "open" | "reviewed" | "dismissed"
+export type FeedbackReasonCode =
+  | "wrong_answer"
+  | "wrong_citation"
+  | "incomplete"
+  | "stale_knowledge"
+  | "unwanted_handoff"
+  | "other"
+
+/** The reason codes the server accepts, in display order. */
+export const FEEDBACK_REASON_CODES: ReadonlyArray<[FeedbackReasonCode, string]> = [
+  ["wrong_answer", "答案错误"],
+  ["wrong_citation", "引用错误"],
+  ["incomplete", "不完整"],
+  ["stale_knowledge", "知识过时"],
+  ["unwanted_handoff", "不该转人工"],
+  ["other", "其他"],
+]
+
+export interface FeedbackPayload {
+  id: string
+  runId: string
+  tenantId: string
+  subjectId: string
+  /** The answered message this rating belongs to. */
+  messageId: string
+  /** The session of the answered run (server-derived). */
+  sessionId: string
+  rating: FeedbackRating
+  reasonCode: FeedbackReasonCode | null
+  comment: string | null
+  evidenceIds: string[]
+  status: FeedbackStatus
+  createdAt: string
+  updatedAt: string
+}
+
+export interface FeedbackSubmission {
+  messageId: string
+  rating: FeedbackRating
+  reasonCode?: FeedbackReasonCode | null
+  comment?: string
+  evidenceIds?: string[]
+}
+
+export interface FeedbackFilter {
+  status?: FeedbackStatus
+  rating?: FeedbackRating
+  subjectId?: string
+  runId?: string
+}
+
+/**
+ * Submit (or replace) the caller's rating of one answered run. The run must
+ * belong to the caller and must have completed: a foreign run answers 404 and
+ * an unfinished one 409.
+ */
+export async function submitAnswerFeedback(
+  runId: string,
+  input: FeedbackSubmission
+): Promise<FeedbackPayload> {
+  const response = await apiFetch(`/chat/runs/${encodeURIComponent(runId)}/feedback`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  })
+  if (response.status === 404) throw new Error("这条回答已不可提交反馈（不在当前服务进程中）")
+  if (response.status === 409) throw new Error("这条回答还没有结束，稍后再提交反馈")
+  if (!response.ok) {
+    const body = (await response.json().catch(() => ({}))) as { error?: string; issues?: unknown }
+    const issues = Array.isArray(body.issues) ? body.issues.map((issue) => String(issue)) : []
+    throw new Error(issues.length > 0 ? `${body.error ?? "提交失败"}：${issues.join("；")}` : (body.error ?? `提交失败 (${response.status})`))
+  }
+  return (await response.json()) as FeedbackPayload
+}
+
+/** Reviewer list (review/admin scope) — tenant-scoped, filtered server-side. */
+export async function fetchFeedbackList(filter: FeedbackFilter = {}): Promise<FeedbackPayload[]> {
+  const params = new URLSearchParams()
+  if (filter.status) params.set("status", filter.status)
+  if (filter.rating) params.set("rating", filter.rating)
+  if (filter.subjectId) params.set("subjectId", filter.subjectId)
+  if (filter.runId) params.set("runId", filter.runId)
+  const query = params.toString()
+  const response = await apiFetch(`/feedback${query ? `?${query}` : ""}`)
+  if (response.status === 403) throw new Error("需要审核或管理员权限")
+  if (!response.ok) throw new Error(`反馈列表读取失败 (${response.status})`)
+  const body = (await response.json()) as { feedback?: FeedbackPayload[] }
+  return Array.isArray(body.feedback) ? body.feedback : []
+}
+
+export async function updateFeedbackStatus(
+  id: string,
+  status: FeedbackStatus
+): Promise<FeedbackPayload> {
+  const response = await apiFetch(`/feedback/${encodeURIComponent(id)}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ status }),
+  })
+  if (response.status === 403) throw new Error("需要审核或管理员权限")
+  if (response.status === 404) throw new Error("反馈不在当前租户中")
+  if (!response.ok) throw new Error(`反馈状态更新失败 (${response.status})`)
+  return (await response.json()) as FeedbackPayload
+}
+
 export async function fetchRunHistory(runId: string): Promise<RunHistory> {
   const response = await apiFetch(`/chat/runs/${encodeURIComponent(runId)}`)
   if (!response.ok) throw new Error(`HTTP ${response.status}`)
