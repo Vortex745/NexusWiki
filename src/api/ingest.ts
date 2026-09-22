@@ -70,7 +70,17 @@ function trustedSourceIdentity(
   return {
     ...sourceIdentity,
     tenantId: accessContext.tenantId,
-    allowedGroups: [...accessContext.groups],
+    // Ticket 10 (KB-05B): an import by a caller holding the admin scope is
+    // TENANT-WIDE. The administrator curates knowledge for the whole tenant —
+    // stamping their own groups onto the content made every import
+    // admin-private and left reader accounts with no evidence at all (found
+    // by the KB-05B live acceptance). Group-restricted knowledge is an
+    // assistant-level concern (the approved plan gives assistants an
+    // allowedGroups field), never a side effect of who happened to run the
+    // import; non-admin importers keep their own groups.
+    allowedGroups: accessContext.scopes.includes("admin")
+      ? []
+      : [...accessContext.groups],
   }
 }
 

@@ -28,6 +28,16 @@ const tenantAccessMiddleware: RequestHandler = (_req, res, next) => {
   next()
 }
 
+const adminAccessMiddleware: RequestHandler = (_req, res, next) => {
+  res.locals.accessContext = {
+    tenantId: "tenant-a",
+    subjectId: "tenant-admin",
+    groups: ["tenant-admins"],
+    scopes: ["chat", "ingest", "review", "admin"],
+  }
+  next()
+}
+
 /** 合成 resolver：将 public.test 解析为公网 IP，绕过 SSRF 策略的 IP 校验。 */
 const PUBLIC_TEST_RESOLVER: HostResolver = async (hostname) => {
   if (hostname === "public.test" || hostname === "error.test") {
@@ -79,6 +89,38 @@ test("raw file ingestion accepts bounded bytes and file metadata before JSON par
     ).get(document!.sourceId) as { tenant_id: string; allowed_groups: string }
     assert.equal(source.tenant_id, "tenant-a")
     assert.deepEqual(JSON.parse(source.allowed_groups), ["support"])
+  } finally {
+    await new Promise<void>((resolve, reject) => {
+      server.close((error) => error ? reject(error) : resolve())
+    })
+    closeDb()
+    rmSync(directory, { recursive: true, force: true })
+  }
+})
+
+test("an admin-scope import is tenant-wide instead of admin-private (KB-05B)", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "kefu-rag-api-admin-import-"))
+  process.env.OPENAI_API_KEY = process.env.OPENAI_API_KEY || "test-key"
+  process.env.SQLITE_PATH = join(directory, "ingestion.db")
+  const server = createApp({ eventsSource, ingestAccessMiddleware: adminAccessMiddleware }).listen(0)
+
+  try {
+    await new Promise<void>((resolve) => server.once("listening", resolve))
+    const address = server.address()
+    assert.ok(address && typeof address === "object")
+    const response = await fetch(`http://127.0.0.1:${address.port}/api/ingest`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ title: "Policy", content: "Tenant-wide import" }),
+    })
+    assert.equal(response.status, 200)
+    const submitted = await response.json() as { docId: string }
+    const document = new DocumentRepo(openDb()).get(submitted.docId)
+    assert.equal(document?.tenantId, "tenant-a")
+    // The admin curates knowledge for the WHOLE tenant: empty allowedGroups
+    // means every same-tenant caller passes the group filter, reader accounts
+    // included. Stamping ["tenant-admins"] here left readers with no evidence.
+    assert.deepEqual(document?.allowedGroups, [])
   } finally {
     await new Promise<void>((resolve, reject) => {
       server.close((error) => error ? reject(error) : resolve())
