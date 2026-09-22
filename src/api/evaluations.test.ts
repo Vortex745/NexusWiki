@@ -13,6 +13,10 @@ import type {
 } from "../evaluation/isolated_resources"
 import { EvalPrepareError } from "../evaluation/isolated_resources"
 import { cleanupIncomplete } from "../evaluation/contracts"
+import {
+  EVAL_EXPORT_FORMAT_VERSION,
+  EVAL_EXPORT_METRIC_KEYS,
+} from "../evaluation/report_export"
 import type { EvalModelOverrides } from "../evaluation/service"
 import type { Reranker } from "../retrieval/search/interface"
 import type { AppConfig } from "../config"
@@ -2254,6 +2258,351 @@ test("allowed overrides are visible on that task's cases and never on the shared
     assert.equal(failedCase.modelProfile, undefined, "no terminal result means no model snapshot")
     assert.equal(Object.keys(failedCase.metrics as object).length, 12)
     assert.deepEqual(Object.values(failedCase.metrics as Record<string, null>), new Array(12).fill(null))
+  } finally {
+    await harness.close()
+  }
+})
+
+// ---------------------------------------------------------------------------
+// Ticket 28 (EVAL-02A) — report export and immutable assistant comparison
+// ---------------------------------------------------------------------------
+
+test("an evaluation task runs an immutable assistant snapshot, rerank binding included", async () => {
+  const harness = await buildHarness(
+    {
+      modelProfile: {
+        chatModel: "test-chat-model",
+        rerankModel: "served-rerank",
+        embeddingProfile: "test-embedding-model:3",
+      },
+    },
+    { reranker: { model: "served-rerank", rerank: async (_query, results) => results } }
+  )
+  try {
+    const datasets = await api(harness.port, "/api/evaluation-datasets")
+    const comparisonAssistants = datasets.body.comparisonAssistants as Array<
+      Record<string, unknown>
+    >
+    assert.deepEqual(
+      comparisonAssistants.map((snapshot) => snapshot.assistantId),
+      ["builtin-rerank-on", "builtin-rerank-off"],
+      "the built-in example is a Rerank enabled/disabled pair"
+    )
+    assert.equal(comparisonAssistants[0].rerankModelProfileId, "rerank")
+    assert.equal(comparisonAssistants[1].rerankModelProfileId, null)
+    assert.notEqual(
+      comparisonAssistants[0].configDigest,
+      comparisonAssistants[1].configDigest,
+      "two different configurations have two different digests"
+    )
+
+    const on = await createTask(harness.port, {
+      datasetId: "refund-single-case",
+      assistantId: "builtin-rerank-on",
+    })
+    assert.equal(on.status, 202)
+    const onDetail = await pollTerminal(harness.port, on.body.id as string)
+    assert.deepEqual((onDetail.config as Record<string, unknown>).assistant, comparisonAssistants[0])
+    assert.equal((onDetail.config as Record<string, unknown>).rerankSource, "dedicated_rerank")
+    assert.equal(harness.scopes[0].taskReranker?.model, "served-rerank")
+
+    const off = await createTask(harness.port, {
+      datasetId: "refund-single-case",
+      assistantId: "builtin-rerank-off",
+    })
+    const offDetail = await pollTerminal(harness.port, off.body.id as string)
+    const offConfig = offDetail.config as Record<string, unknown>
+    assert.equal(offConfig.rerankSource, "not_configured")
+    assert.equal(offConfig.rerankModel, null)
+    assert.equal(
+      harness.scopes[1].taskReranker,
+      undefined,
+      "a snapshot that pins no reranker removes it for that task"
+    )
+    assert.equal(
+      harness.scopes[0].taskReranker?.model,
+      "served-rerank",
+      "…and only for that task — the other run keeps its adapter"
+    )
+
+    // Conflicting instructions, unknown ids, wrong versions and malformed
+    // versions are all refused before a scope exists.
+    const conflict = await createTask(harness.port, {
+      datasetId: "refund-single-case",
+      assistantId: "builtin-rerank-off",
+      rerankModel: "alt-rerank",
+    })
+    assert.equal(conflict.status, 400)
+    assert.deepEqual(conflict.body.issues, ["rerankModel"])
+    assert.equal(
+      (await createTask(harness.port, { datasetId: "refund-single-case", assistantId: "nope" })).status,
+      404
+    )
+    assert.equal(
+      (
+        await createTask(harness.port, {
+          datasetId: "refund-single-case",
+          assistantId: "builtin-rerank-on",
+          assistantVersion: 7,
+        })
+      ).status,
+      404
+    )
+    assert.equal(
+      (
+        await createTask(harness.port, {
+          datasetId: "refund-single-case",
+          assistantId: "builtin-rerank-on",
+          assistantVersion: "v1",
+        })
+      ).status,
+      400
+    )
+    assert.equal(harness.scopes.length, 2, "none of the refused requests built a scope")
+  } finally {
+    await harness.close()
+  }
+})
+
+test("a settled report exports actual outputs, metrics, snapshots and status without credentials", async () => {
+  const harness = await buildHarness({ throwByCase: { "u-ship": "provider refused" } })
+  try {
+    const created = await createTask(harness.port, { dataset: UPLOAD_DATASET })
+    const id = created.body.id as string
+    await pollTerminal(harness.port, id)
+
+    const jsonResponse = await fetch(
+      `http://127.0.0.1:${harness.port}/api/evaluations/${id}/export?format=json`
+    )
+    assert.equal(jsonResponse.status, 200)
+    assert.match(jsonResponse.headers.get("content-type") ?? "", /application\/json/)
+    assert.match(jsonResponse.headers.get("content-disposition") ?? "", /^attachment;/)
+    const json = JSON.parse(await jsonResponse.text()) as {
+      formatVersion: number
+      exportedAt: string
+      task: Record<string, any>
+    }
+    assert.equal(json.formatVersion, EVAL_EXPORT_FORMAT_VERSION)
+    assert.ok(json.exportedAt)
+    assert.equal(json.task.stage, "completed_with_errors")
+    assert.equal(
+      json.task.dataset.contentDigest,
+      (created.body.dataset as Record<string, unknown>).contentDigest
+    )
+    assert.equal(json.task.cases[0].answer, FAKE_REPLY, "the actual output is exported verbatim")
+    assert.equal(json.task.cases[1].outcome, "failed")
+    assert.equal(json.task.cases[1].metrics.precision, null, "not applicable stays null")
+    assert.equal(typeof json.task.config.chatModel, "string")
+    assert.equal(typeof json.task.config.rerankSource, "string")
+    assert.equal(typeof json.task.metrics.version, "string")
+    assert.equal(JSON.stringify(json).includes("rerank-key"), false, "no credential is exported")
+    assert.equal(JSON.stringify(json).includes("password"), false)
+
+    const csvResponse = await fetch(
+      `http://127.0.0.1:${harness.port}/api/evaluations/${id}/export?format=csv`
+    )
+    assert.equal(csvResponse.status, 200)
+    assert.match(csvResponse.headers.get("content-type") ?? "", /text\/csv/)
+    const text = await csvResponse.text()
+    const rows = text.trimEnd().split("\r\n")
+    assert.equal(rows.length, 3, "a header plus one row per case")
+    const header = rows[0].split(",")
+    for (const column of [
+      "task_id",
+      "case_id",
+      "answer",
+      "reference_answer",
+      "ordering_source",
+      "chat_model",
+      "rerank_source",
+      "assistant_digest",
+      ...EVAL_EXPORT_METRIC_KEYS,
+    ]) {
+      assert.ok(header.includes(column), `the CSV header names ${column}`)
+    }
+    const caseIdIndex = header.indexOf("case_id")
+    assert.ok(caseIdIndex >= 0)
+    const byCase = new Map(
+      rows.slice(1).map((row) => [row.split(",")[caseIdIndex], row] as const)
+    )
+    assert.match(byCase.get("u-refund") ?? "", /answered/)
+    assert.match(byCase.get("u-ship") ?? "", /provider refused/)
+    assert.equal(text.includes("rerank-key"), false)
+
+    const badFormat = await fetch(
+      `http://127.0.0.1:${harness.port}/api/evaluations/${id}/export?format=xml`
+    )
+    assert.equal(badFormat.status, 400)
+    const unknown = await fetch(
+      `http://127.0.0.1:${harness.port}/api/evaluations/does-not-exist/export`
+    )
+    assert.equal(unknown.status, 404)
+  } finally {
+    await harness.close()
+  }
+})
+
+test("a running task cannot be exported yet: the report would be partial", async () => {
+  const harness = await buildHarness({ delayByCaseMs: { "refund-eta": 3_000 } })
+  try {
+    const created = await createTask(harness.port, { datasetId: "refund-single-case" })
+    const id = created.body.id as string
+    await waitUntil(() => harness.scopes[0]?.preparedCaseOptions.length === 1)
+    const refused = await fetch(
+      `http://127.0.0.1:${harness.port}/api/evaluations/${id}/export?format=json`
+    )
+    assert.equal(refused.status, 409)
+    const body = (await refused.json()) as Record<string, unknown>
+    assert.match(String(body.error), /settled/)
+    assert.equal(String(body.taskId), id)
+  } finally {
+    await harness.close()
+  }
+})
+
+test("two configurations are compared on the same dataset, including rerank on/off", async () => {
+  const harness = await buildHarness(
+    {
+      modelProfile: {
+        chatModel: "test-chat-model",
+        rerankModel: "served-rerank",
+        embeddingProfile: "test-embedding-model:3",
+      },
+    },
+    { reranker: { model: "served-rerank", rerank: async (_query, results) => results } }
+  )
+  try {
+    const example = await api(harness.port, "/api/evaluations/comparison-example", {
+      method: "POST",
+      body: JSON.stringify({}),
+    })
+    assert.equal(example.status, 202)
+    const leftId = (example.body.left as Record<string, unknown>).id as string
+    const rightId = (example.body.right as Record<string, unknown>).id as string
+    assert.equal(example.body.datasetId, "refund-batch-3")
+    assert.notEqual(leftId, rightId)
+
+    await Promise.all([
+      pollTerminal(harness.port, leftId),
+      pollTerminal(harness.port, rightId),
+    ])
+    const compared = await api(harness.port, "/api/evaluations/compare", {
+      method: "POST",
+      body: JSON.stringify({ leftTaskId: leftId, rightTaskId: rightId }),
+    })
+    assert.equal(compared.status, 200)
+    const comparison = compared.body as Record<string, any>
+    assert.equal(comparison.rerankComparison, true, "only the rerank binding differs")
+    assert.equal(comparison.left.assistant.rerankModelProfileId, "rerank")
+    assert.equal(comparison.right.assistant.rerankModelProfileId, null)
+    assert.equal(comparison.left.config.rerankSource, "dedicated_rerank")
+    assert.equal(comparison.right.config.rerankSource, "not_configured")
+    const leftDetail = await api(harness.port, `/api/evaluations/${leftId}`)
+    assert.equal(
+      comparison.dataset.contentDigest,
+      (leftDetail.body.dataset as Record<string, unknown>).contentDigest
+    )
+    assert.equal(comparison.cases.length, 3, "both sides run the same dataset's cases")
+    assert.deepEqual(
+      comparison.cases.map((item: Record<string, any>) => item.caseId),
+      ["refund-eta", "shipping-eta", "warranty-scope"]
+    )
+
+    // Each task keeps its own isolated scope: the comparison never shares one.
+    assert.notEqual(harness.scopes[0].esIndex, harness.scopes[1].esIndex)
+    assert.equal(harness.scopes[0].taskId, leftId)
+    assert.equal(harness.scopes[1].taskId, rightId)
+
+    const metrics = comparison.metrics as Record<string, Record<string, number | null>>
+    for (const [key, value] of Object.entries(metrics)) {
+      assert.ok("left" in value && "right" in value && "delta" in value, `${key} carries both sides`)
+      if (value.left !== null && value.right !== null) {
+        assert.equal(
+          value.delta,
+          Number((value.right - value.left).toFixed(6)),
+          `${key} reports the real delta`
+        )
+      }
+    }
+    assert.equal(metrics.precision.delta, 0, "identical runs differ by nothing")
+
+    // Two different datasets are not comparable.
+    const other = await createTask(harness.port, { datasetId: "refund-single-case" })
+    await pollTerminal(harness.port, other.body.id as string)
+    const mismatched = await api(harness.port, "/api/evaluations/compare", {
+      method: "POST",
+      body: JSON.stringify({ leftTaskId: leftId, rightTaskId: other.body.id }),
+    })
+    assert.equal(mismatched.status, 409)
+    assert.ok(mismatched.body.leftDigest)
+    assert.ok(mismatched.body.rightDigest)
+
+    const unknown = await api(harness.port, "/api/evaluations/compare", {
+      method: "POST",
+      body: JSON.stringify({ leftTaskId: leftId, rightTaskId: "missing" }),
+    })
+    assert.equal(unknown.status, 404)
+    const malformed = await api(harness.port, "/api/evaluations/compare", {
+      method: "POST",
+      body: JSON.stringify({ leftTaskId: leftId }),
+    })
+    assert.equal(malformed.status, 400)
+  } finally {
+    await harness.close()
+  }
+})
+
+test("two configurations cannot be compared before both settle", async () => {
+  const harness = await buildHarness(
+    {
+      delayByCaseMs: {
+        "refund-eta": 1_000,
+        "refund-window": 1_000,
+        "refund-method": 1_000,
+      },
+    },
+    { reranker: { model: "served-rerank", rerank: async (_query, results) => results } }
+  )
+  try {
+    const example = await api(harness.port, "/api/evaluations/comparison-example", {
+      method: "POST",
+      body: JSON.stringify({}),
+    })
+    const leftId = (example.body.left as Record<string, unknown>).id as string
+    const rightId = (example.body.right as Record<string, unknown>).id as string
+
+    const tooEarly = await api(harness.port, "/api/evaluations/compare", {
+      method: "POST",
+      body: JSON.stringify({ leftTaskId: leftId, rightTaskId: rightId }),
+    })
+    assert.equal(tooEarly.status, 409)
+    assert.match(String(tooEarly.body.error), /settle/)
+    assert.ok(tooEarly.body.stage, "the conflict names the stage that is not done yet")
+
+    await Promise.all([
+      pollTerminal(harness.port, leftId, {}, 20_000),
+      pollTerminal(harness.port, rightId, {}, 20_000),
+    ])
+    const settled = await api(harness.port, "/api/evaluations/compare", {
+      method: "POST",
+      body: JSON.stringify({ leftTaskId: leftId, rightTaskId: rightId }),
+    })
+    assert.equal(settled.status, 200)
+  } finally {
+    await harness.close()
+  }
+})
+
+test("the built-in rerank example is refused when the server has no dedicated reranker", async () => {
+  const harness = await buildHarness()
+  try {
+    const refused = await api(harness.port, "/api/evaluations/comparison-example", {
+      method: "POST",
+      body: JSON.stringify({}),
+    })
+    assert.equal(refused.status, 400)
+    assert.match(String(refused.body.error), /dedicated reranker/)
+    assert.equal(harness.scopes.length, 0, "nothing was created for a comparison that cannot differ")
   } finally {
     await harness.close()
   }

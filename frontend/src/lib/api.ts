@@ -154,7 +154,20 @@ export interface EvaluationDatasetsPayload {
   defaults: { chatModel: string; rerankModel: string | null; embeddingModel: string }
   /** Ticket 11: ids a task may pick instead of the server default. */
   allowedModels: { chat: string[]; rerank: string[] }
+  /** Ticket 28: the built-in Rerank on/off pair and the sample it runs on. */
+  comparisonAssistants?: EvaluationAssistantSnapshot[]
+  comparisonDatasetId?: string
   maxCasesPerTask: number
+}
+
+/** Ticket 28: the immutable assistant configuration a task ran with. */
+export interface EvaluationAssistantSnapshot {
+  assistantId: string
+  version: number
+  name: string
+  configDigest: string
+  systemPrompt: string
+  rerankModelProfileId: string | null
 }
 
 export type EvaluationTaskStage =
@@ -192,6 +205,8 @@ export interface EvaluationCaseResult {
    */
   ordering?: { source: "dedicated_rerank" | "fused"; reason?: string }
   runId?: string
+  /** Ticket 27/28: the frozen model snapshot this case ran with. */
+  modelProfile?: { chatModel: string; rerankModel: string | null; embeddingProfile: string }
   durationMs: number
   metrics: Record<string, number | null>
   retrievedPassageIds: string[]
@@ -221,7 +236,14 @@ export interface EvaluationTaskSummary {
 }
 
 export interface EvaluationTaskDetail extends EvaluationTaskSummary {
-  config: { chatModel: string; rerankModel: string | null; embeddingModel: string; rerankSource: string }
+  config: {
+    chatModel: string
+    rerankModel: string | null
+    embeddingModel: string
+    rerankSource: string
+    /** Ticket 28: present when the task named an assistant configuration. */
+    assistant?: EvaluationAssistantSnapshot
+  }
   cases: EvaluationCaseResult[]
   metrics: {
     version: string
@@ -247,6 +269,8 @@ export async function fetchEvaluationDatasets(): Promise<EvaluationDatasetsPaylo
 export type EvaluationTaskInput = ({ datasetId: string } | { dataset: unknown }) & {
   chatModel?: string
   rerankModel?: string
+  /** Ticket 28: run an immutable assistant configuration (built-in id or stored). */
+  assistantId?: string
 }
 
 /**
@@ -317,6 +341,108 @@ export async function cancelEvaluationTask(id: string): Promise<EvaluationTaskDe
   if (response.status === 409) throw new EvaluationCancelError("任务已经结束，结果不会被取消改写", 409)
   if (!response.ok) throw new EvaluationCancelError(`取消失败 (${response.status})`, response.status)
   return (await response.json()) as EvaluationTaskDetail
+}
+
+// ---------------------------------------------------------------------------
+// Ticket 28 (EVAL-02A): report export and comparison of two configurations
+// ---------------------------------------------------------------------------
+
+export interface EvaluationComparisonSide {
+  taskId: string
+  stage: EvaluationTaskStage
+  assistant?: EvaluationAssistantSnapshot
+  config: EvaluationTaskDetail["config"]
+  metrics: EvaluationTaskDetail["metrics"]
+}
+
+export interface EvaluationComparisonCase {
+  caseId: string
+  question: string
+  left: {
+    outcome: "answered" | "failed"
+    answer: string
+    ordering?: { source: string; reason?: string }
+    metrics: Record<string, number | null>
+  }
+  right: EvaluationComparisonCase["left"]
+}
+
+export interface EvaluationComparison {
+  formatVersion: number
+  dataset: { name: string; version: string; contentDigest: string }
+  left: EvaluationComparisonSide
+  right: EvaluationComparisonSide
+  metrics: Record<string, { left: number | null; right: number | null; delta: number | null }>
+  cases: EvaluationComparisonCase[]
+  /** True when the two configurations differ only in the rerank binding. */
+  rerankComparison: boolean
+}
+
+/**
+ * Ticket 28: a settled report as JSON or CSV. The server sends it as an
+ * attachment with both an ASCII and a UTF-8 filename; the latter wins.
+ */
+export async function exportEvaluationTask(
+  id: string,
+  format: "json" | "csv"
+): Promise<{ filename: string; text: string }> {
+  const response = await apiFetch(`/evaluations/${encodeURIComponent(id)}/export?format=${format}`)
+  if (response.status === 404) throw new Error("任务不在当前服务进程中")
+  if (response.status === 409) throw new Error("任务尚未结束，报告还不完整")
+  if (!response.ok) throw new Error(`导出失败 (${response.status})`)
+  const disposition = response.headers.get("Content-Disposition") ?? ""
+  const utf8 = /filename\*=UTF-8''([^;]+)/i.exec(disposition)?.[1]
+  const fallback = /filename="([^"]+)"/i.exec(disposition)?.[1]
+  return {
+    filename: utf8 ? decodeURIComponent(utf8) : (fallback ?? `evaluation-${id.slice(0, 8)}.${format}`),
+    text: await response.text(),
+  }
+}
+
+/** Ticket 28: compare two settled tasks that ran the same dataset. */
+export async function compareEvaluationTasks(
+  leftTaskId: string,
+  rightTaskId: string
+): Promise<EvaluationComparison> {
+  const response = await apiFetch("/evaluations/compare", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ leftTaskId, rightTaskId }),
+  })
+  if (response.status === 404) throw new Error("参与对比的任务不在当前服务进程中")
+  if (!response.ok) {
+    const body = (await response.json().catch(() => ({}))) as { error?: string }
+    throw new EvaluationRequestError(body.error || `对比失败 (${response.status})`, [], response.status)
+  }
+  return (await response.json()) as EvaluationComparison
+}
+
+/**
+ * Ticket 28: run the built-in Rerank enabled/disabled example — two tasks over
+ * one dataset, differing only in the immutable rerank binding.
+ */
+export async function createEvaluationComparisonExample(
+  datasetId?: string
+): Promise<{ datasetId: string; left: EvaluationTaskSummary; right: EvaluationTaskSummary }> {
+  const response = await apiFetch("/evaluations/comparison-example", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(datasetId ? { datasetId } : {}),
+  })
+  if (!response.ok) {
+    const body = (await response.json().catch(() => ({}))) as { error?: string; issues?: unknown }
+    const issues = Array.isArray(body.issues) ? body.issues.map((issue) => String(issue)) : []
+    throw new EvaluationRequestError(
+      body.error || `内置对照任务创建失败 (${response.status})`,
+      issues,
+      response.status
+    )
+  }
+  return (await response.json()) as {
+    datasetId: string
+    left: EvaluationTaskSummary
+    right: EvaluationTaskSummary
+  }
 }
 
 export async function fetchRunHistory(runId: string): Promise<RunHistory> {

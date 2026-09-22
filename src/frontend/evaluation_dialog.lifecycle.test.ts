@@ -54,6 +54,7 @@ function harness() {
       constructor(message: string, readonly status: number) { super(message); this.name = "EvaluationCancelError" }
     },
     fetchEvaluationDatasets: async () => ({ datasets: [], defaults: {}, allowedModels: { chat: [], rerank: [] } }),
+    fetchAssistants: async () => [],
     listEvaluationTasks: async () => { if (historyError) throw new Error("history offline"); return [summary("task-a"), summary("task-b")] },
     fetchEvaluationTask(id: string) { const response = deferred<any>(); requests.push({ id, response }); return response.promise },
     async cancelEvaluationTask(id: string) {

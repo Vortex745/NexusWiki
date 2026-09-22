@@ -134,12 +134,94 @@ export interface EvalTaskDatasetRef {
   passageCount: number
 }
 
+/**
+ * Ticket 28 (EVAL-02A): an IMMUTABLE assistant configuration snapshot — either
+ * a stored assistant version or one of the built-in comparison configurations.
+ *
+ * Only the execution-relevant subset travels here: the leading system prompt
+ * and the rerank binding. Knowledge-base bindings are deliberately excluded —
+ * an evaluation's corpus is its dataset, and re-resolving a tenant knowledge
+ * base inside an isolated eval scope would silently narrow the run to nothing.
+ * `configDigest` covers exactly those execution fields, so two snapshots with
+ * the same digest always ran under the same configuration.
+ */
+export interface EvalAssistantSnapshot {
+  assistantId: string
+  version: number
+  name: string
+  configDigest: string
+  /** "" = no leading prompt (the built-in comparison pair has none). */
+  systemPrompt: string
+  /** `null` = this configuration runs WITHOUT the dedicated reranker. */
+  rerankModelProfileId: "rerank" | null
+}
+
 /** Redacted configuration snapshot — never contains credentials. */
 export interface EvalTaskConfigSnapshot {
   chatModel: string
   rerankModel: string | null
   embeddingModel: string
   rerankSource: "dedicated_rerank" | "not_configured"
+  /** Ticket 28: the assistant snapshot this task ran with, when it named one. */
+  assistant?: EvalAssistantSnapshot
+}
+
+/** Export formats a settled task can be carried away in (ticket 28). */
+export type EvalExportFormat = "json" | "csv"
+
+export interface EvalTaskExport {
+  format: EvalExportFormat
+  filename: string
+  contentType: string
+  body: string
+}
+
+/** One metric of a comparison: both sides plus the delta (right − left). */
+export interface EvalComparisonMetric {
+  left: number | null
+  right: number | null
+  delta: number | null
+}
+
+export interface EvalComparisonCase {
+  caseId: string
+  question: string
+  left: {
+    outcome: EvalCaseResult["outcome"]
+    answer: string
+    ordering?: FinalContextOrdering
+    metrics: Record<string, number | null>
+  }
+  right: {
+    outcome: EvalCaseResult["outcome"]
+    answer: string
+    ordering?: FinalContextOrdering
+    metrics: Record<string, number | null>
+  }
+}
+
+export interface EvalComparisonSide {
+  taskId: string
+  stage: EvalTaskStage
+  assistant?: EvalAssistantSnapshot
+  config: EvalTaskConfigSnapshot
+  metrics: EvalMetricsSummary
+}
+
+/**
+ * Ticket 28: two immutable configurations compared on the SAME dataset. The
+ * comparison is only defined when both tasks ran the same content digest —
+ * anything else would compare two different questions.
+ */
+export interface EvalComparison {
+  formatVersion: number
+  dataset: { name: string; version: string; contentDigest: string }
+  left: EvalComparisonSide
+  right: EvalComparisonSide
+  metrics: Record<string, EvalComparisonMetric>
+  cases: EvalComparisonCase[]
+  /** True when the two snapshots differ ONLY in the rerank binding. */
+  rerankComparison: boolean
 }
 
 export interface EvalTaskSummary {

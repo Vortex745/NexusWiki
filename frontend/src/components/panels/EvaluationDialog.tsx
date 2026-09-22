@@ -2,14 +2,20 @@ import { FlaskConical, X } from "lucide"
 import { useCallback, useEffect, useRef, useState } from "react"
 
 import {
+  compareEvaluationTasks,
+  createEvaluationComparisonExample,
   createEvaluationTask,
   EvaluationCancelError,
   EvaluationRequestError,
   cancelEvaluationTask,
+  exportEvaluationTask,
+  fetchAssistants,
   fetchEvaluationDatasets,
   fetchEvaluationTask,
   listEvaluationTasks,
+  type AssistantPayload,
   type EvaluationCaseResult,
+  type EvaluationComparison,
   type EvaluationDatasetsPayload,
   type EvaluationTaskDetail,
   type EvaluationTaskStage,
@@ -188,6 +194,108 @@ function CleanupLine({ detail }: { detail: EvaluationTaskDetail }) {
   )
 }
 
+/**
+ * 票 28：两个助手配置的并排对比。左侧为基准、右侧为对照，差值 = 右 − 左；
+ * 只有两侧都有效值时才有差值，缺失值（不适用）绝不折算成 0。
+ */
+function ComparisonView({ comparison }: { comparison: EvaluationComparison }) {
+  const sides: Array<[string, EvaluationComparison["left"]]> = [
+    ["左", comparison.left],
+    ["右", comparison.right],
+  ]
+  return (
+    <div className="rounded-lg border border-line bg-surface-subtle/40 px-3 py-2.5">
+      <p className="text-[11px] font-semibold text-ink">
+        配置对比
+        {comparison.rerankComparison ? (
+          <span className="ml-2 rounded-full bg-brand-subtle px-2 py-0.5 text-[10px] text-brand">
+            内置示例：Rerank 开 / 关
+          </span>
+        ) : null}
+      </p>
+      <p className="mt-1 font-mono text-[10px] text-muted/50">
+        数据集 {comparison.dataset.name} v{comparison.dataset.version} · 摘要{" "}
+        {comparison.dataset.contentDigest.slice(0, 12)}（两侧一致才可对比）
+      </p>
+      <dl className="mt-2 grid grid-cols-2 gap-x-4 gap-y-1 text-[11px] max-md:grid-cols-1">
+        {sides.map(([label, side]) => (
+          <div key={label} className="flex flex-col gap-0.5">
+            <dt className="font-semibold text-ink">
+              {label}：{side.assistant ? `${side.assistant.name} v${side.assistant.version}` : "未指定助手"}
+            </dt>
+            <dd className="font-mono text-[10px] text-muted/60">
+              Chat {side.config.chatModel} · Rerank {side.config.rerankModel ?? "未配置"}（
+              {side.config.rerankSource}）
+            </dd>
+            <dd className="font-mono text-[10px] text-muted/50">
+              配置摘要 {side.assistant ? side.assistant.configDigest.slice(0, 12) : "—"} · 记录{" "}
+              {side.taskId.slice(0, 8)}
+            </dd>
+          </div>
+        ))}
+      </dl>
+      <dl className="mt-2 grid grid-cols-2 gap-x-4 gap-y-1 text-[11px] max-md:grid-cols-1">
+        {CASE_METRICS.map(([key, label]) => {
+          const metric = comparison.metrics[key]
+          const delta = metric?.delta ?? null
+          return (
+            <div key={key} className="flex items-baseline justify-between gap-2">
+              <dt className="text-muted/70">{label}</dt>
+              <dd className="font-mono text-ink">
+                {formatScore(metric?.left ?? null)} → {formatScore(metric?.right ?? null)}
+                <span
+                  className={cn(
+                    "ml-1.5",
+                    delta === null
+                      ? "text-muted/50"
+                      : delta > 0
+                        ? "text-green-700 dark:text-green-400"
+                        : delta < 0
+                          ? "text-red-600"
+                          : "text-muted/50",
+                  )}
+                >
+                  {delta === null ? "差值不适用" : `Δ ${delta > 0 ? "+" : ""}${delta.toFixed(3)}`}
+                </span>
+              </dd>
+            </div>
+          )
+        })}
+      </dl>
+      <details className="mt-2 rounded-md border border-line bg-surface px-2.5 py-2">
+        <summary className="cursor-pointer text-[11px] text-muted/70">
+          逐题并排（{comparison.cases.length} 题）
+        </summary>
+        <ol className="mt-1.5 space-y-2">
+          {comparison.cases.map((item) => (
+            <li key={item.caseId} className="rounded-md bg-surface-subtle/40 px-2.5 py-2">
+              <p className="truncate text-[11px] font-medium text-ink" title={item.question}>
+                {item.question}
+              </p>
+              {([["左", item.left], ["右", item.right]] as const).map(([label, side]) => (
+                <div key={label} className="mt-1">
+                  <p className="font-mono text-[10px] text-muted/50">
+                    {label} · {side.outcome === "answered" ? "已回答" : "失败"}
+                    {side.ordering
+                      ? ` · ${side.ordering.source === "dedicated_rerank" ? "专用重排" : "原始顺序（未重排）"}`
+                      : ""}
+                  </p>
+                  <p className="mt-0.5 text-[11px] leading-relaxed text-ink">
+                    {side.answer || "（无回答）"}
+                  </p>
+                </div>
+              ))}
+            </li>
+          ))}
+        </ol>
+      </details>
+      <p className="mt-1.5 text-[10px] text-muted/50">
+        BLEU 与 ROUGE 仍是文本相似度诊断（不是正确率）；分数取自各自本次实际回复。
+      </p>
+    </div>
+  )
+}
+
 /** Client-side JSON parse only — the server stays the authoritative validator. */
 function parseUpload(text: string): { ok: true; value: unknown } | { ok: false; error: string } {
   const trimmed = text.trim()
@@ -213,6 +321,16 @@ export function EvaluationDialog({ open, onClose }: { open: boolean; onClose: ()
   // 票 11：可选模型覆盖（只填 id；留空＝沿用服务配置）
   const [chatModel, setChatModel] = useState("")
   const [rerankModel, setRerankModel] = useState("")
+  // 票 28：可选助手配置（工作区助手或内置对照），只提交 id。
+  const [assistants, setAssistants] = useState<AssistantPayload[]>([])
+  const [assistantId, setAssistantId] = useState("")
+  const [exporting, setExporting] = useState<"json" | "csv" | null>(null)
+  const [comparison, setComparison] = useState<EvaluationComparison | null>(null)
+  const [comparisonError, setComparisonError] = useState<string | null>(null)
+  const [comparisonHint, setComparisonHint] = useState<string | null>(null)
+  const [compareLeft, setCompareLeft] = useState("")
+  const [compareRight, setCompareRight] = useState("")
+  const [comparing, setComparing] = useState(false)
   const [submitting, setSubmitting] = useState(false)
   // Ticket 25 (EVAL-01A): a running task can be cancelled; the panel keeps
   // polling and shows the one terminal state the run converges to.
@@ -279,6 +397,14 @@ export function EvaluationDialog({ open, onClose }: { open: boolean; onClose: ()
       .catch((error: unknown) => {
         if (!active) return
         setLoadError(error instanceof Error ? error.message : String(error))
+      })
+    // 票 28：助手列表只用于选择；执行配置由服务端从版本解析。
+    fetchAssistants()
+      .then((list) => {
+        if (active) setAssistants(list)
+      })
+      .catch(() => {
+        /* 助手列表不可用不影响评测：保持"服务默认"。 */
       })
     return () => { active = false; historyTokenRef.current += 1 }
   }, [open, refreshHistory])
@@ -379,6 +505,8 @@ export function EvaluationDialog({ open, onClose }: { open: boolean; onClose: ()
       const models = {
         ...(chatModel.trim() ? { chatModel: chatModel.trim() } : {}),
         ...(rerankModel.trim() ? { rerankModel: rerankModel.trim() } : {}),
+        // 票 28：助手只提交 id，服务端把它解析为不可变版本快照。
+        ...(assistantId ? { assistantId } : {}),
       }
       const summary = await createEvaluationTask(
         mode === "upload"
@@ -430,6 +558,65 @@ export function EvaluationDialog({ open, onClose }: { open: boolean; onClose: ()
       }
     } finally {
       setCancelling(false)
+    }
+  }
+
+  /** 票 28：把已结束的报告带出进程（服务端已负责鉴权与状态判定）。 */
+  const handleExport = async (format: "json" | "csv") => {
+    const id = selectedTaskRef.current
+    if (!id || exporting) return
+    setExporting(format)
+    setLoadError(null)
+    try {
+      const file = await exportEvaluationTask(id, format)
+      const blob = new Blob([file.text], {
+        type: format === "csv" ? "text/csv;charset=utf-8" : "application/json;charset=utf-8",
+      })
+      const url = URL.createObjectURL(blob)
+      const link = document.createElement("a")
+      link.href = url
+      link.download = file.filename
+      link.click()
+      URL.revokeObjectURL(url)
+    } catch (error) {
+      setLoadError(`导出失败：${error instanceof Error ? error.message : String(error)}`)
+    } finally {
+      setExporting(null)
+    }
+  }
+
+  const handleCompare = async () => {
+    if (!compareLeft || !compareRight || comparing) return
+    setComparing(true)
+    setComparison(null)
+    setComparisonError(null)
+    try {
+      setComparison(await compareEvaluationTasks(compareLeft, compareRight))
+    } catch (error) {
+      setComparisonError(error instanceof Error ? error.message : String(error))
+    } finally {
+      setComparing(false)
+    }
+  }
+
+  /** 票 28：内置 Rerank 开/关示例——两条任务同一数据集、只差不可变 rerank 绑定。 */
+  const handleComparisonExample = async () => {
+    if (comparing) return
+    setComparing(true)
+    setComparison(null)
+    setComparisonError(null)
+    try {
+      const created = await createEvaluationComparisonExample(datasets?.comparisonDatasetId)
+      setCompareLeft(created.left.id)
+      setCompareRight(created.right.id)
+      setComparisonHint(
+        `内置对照已启动：Rerank 开（${created.left.id.slice(0, 8)}）与 Rerank 关（${created.right.id.slice(0, 8)}），数据集 ${created.datasetId}。两条都结束后点"对比两个记录"。`
+      )
+      void refreshHistory()
+    } catch (error) {
+      setComparisonError(error instanceof Error ? error.message : String(error))
+    } finally {
+      setComparing(false)
     }
   }
 
@@ -628,6 +815,47 @@ export function EvaluationDialog({ open, onClose }: { open: boolean; onClose: ()
           </div>
         ) : null}
 
+        {/* 票 28：可选助手配置（工作区助手版本，或内置 Rerank 开/关对照） */}
+        {assistants.length > 0 || (datasets?.comparisonAssistants?.length ?? 0) > 0 ? (
+          <div className="mt-3 flex flex-col gap-1.5 rounded-lg border border-line bg-surface px-3 py-2">
+            <label className="flex items-center justify-between gap-2 text-[11px] text-muted/70">
+              <span>助手配置（可选）</span>
+              <select
+                value={assistantId}
+                onChange={(event) => setAssistantId(event.target.value)}
+                disabled={running}
+                aria-label="选择助手配置"
+                className="w-48 rounded-md border border-line bg-surface px-2 py-1 text-[11px] text-ink outline-none focus:border-brand focus-visible:outline-2 focus-visible:outline-brand"
+              >
+                <option value="">服务默认（无助手）</option>
+                {(datasets?.comparisonAssistants?.length ?? 0) > 0 ? (
+                  <optgroup label="内置对照">
+                    {datasets?.comparisonAssistants?.map((snapshot) => (
+                      <option key={snapshot.assistantId} value={snapshot.assistantId}>
+                        {snapshot.name}
+                      </option>
+                    ))}
+                  </optgroup>
+                ) : null}
+                {assistants.length > 0 ? (
+                  <optgroup label="工作区助手">
+                    {assistants.map((item) => (
+                      <option key={item.id} value={item.id}>
+                        {item.name}
+                        {item.status === "archived" ? "（已归档）" : ""}
+                      </option>
+                    ))}
+                  </optgroup>
+                ) : null}
+              </select>
+            </label>
+            <p className="text-[10px] text-muted/50">
+              以助手的不可变版本运行：提示词与 rerank 绑定来自该版本（知识库绑定不参与——评测语料就是数据集本身）。
+              对比两份配置时请保持数据集、模型与语料一致。
+            </p>
+          </div>
+        ) : null}
+
         <button
           type="button"
           disabled={!canRun || submitting || running}
@@ -693,6 +921,69 @@ export function EvaluationDialog({ open, onClose }: { open: boolean; onClose: ()
           )}
         </div>
 
+        {/* 票 28：两份不可变配置在同一数据集上的并排对比 */}
+        <div className="mt-4 flex flex-col gap-1.5">
+          <p className="text-[11px] font-semibold text-ink">
+            配置对比
+            <span className="ml-2 font-normal text-muted/50">
+              选两条已结束、同一数据集的记录；内置示例用 Rerank 开/关两份配置各跑一遍
+            </span>
+          </p>
+          <div className="flex flex-wrap items-center gap-2">
+            <select
+              value={compareLeft}
+              onChange={(event) => setCompareLeft(event.target.value)}
+              aria-label="对比左侧记录"
+              className="min-w-40 flex-1 cursor-pointer rounded-md border border-line bg-surface px-2 py-1 text-[11px] text-ink outline-none focus:border-brand focus-visible:outline-2 focus-visible:outline-brand"
+            >
+              <option value="">左：选择记录</option>
+              {history.map((item) => (
+                <option key={item.id} value={item.id}>
+                  {item.dataset.name} · {item.id.slice(0, 8)} · {STAGE_LABELS[item.stage]}
+                </option>
+              ))}
+            </select>
+            <select
+              value={compareRight}
+              onChange={(event) => setCompareRight(event.target.value)}
+              aria-label="对比右侧记录"
+              className="min-w-40 flex-1 cursor-pointer rounded-md border border-line bg-surface px-2 py-1 text-[11px] text-ink outline-none focus:border-brand focus-visible:outline-2 focus-visible:outline-brand"
+            >
+              <option value="">右：选择记录</option>
+              {history.map((item) => (
+                <option key={item.id} value={item.id}>
+                  {item.dataset.name} · {item.id.slice(0, 8)} · {STAGE_LABELS[item.stage]}
+                </option>
+              ))}
+            </select>
+            <button
+              type="button"
+              disabled={!compareLeft || !compareRight || comparing}
+              onClick={() => void handleCompare()}
+              className="inline-flex h-7 cursor-pointer items-center rounded-md border border-line bg-surface px-2.5 text-[11px] text-muted transition-colors hover:bg-surface-subtle hover:text-ink focus-visible:outline-2 focus-visible:outline-brand disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {comparing ? "对比中…" : "对比两个记录"}
+            </button>
+            {(datasets?.comparisonAssistants?.length ?? 0) > 0 ? (
+              <button
+                type="button"
+                disabled={comparing}
+                onClick={() => void handleComparisonExample()}
+                className="inline-flex h-7 cursor-pointer items-center rounded-md bg-brand-subtle px-2.5 text-[11px] text-brand transition-colors hover:bg-brand-subtle/70 focus-visible:outline-2 focus-visible:outline-brand disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                运行内置 Rerank 开/关对照
+              </button>
+            ) : null}
+          </div>
+          {comparisonHint ? <p className="text-[11px] text-muted/60">{comparisonHint}</p> : null}
+          {comparisonError ? (
+            <p className="text-[11px] text-red-600" role="alert">
+              {comparisonError}
+            </p>
+          ) : null}
+          {comparison ? <ComparisonView comparison={comparison} /> : null}
+        </div>
+
         {/* 任务进度与结果 */}
         {task ? (
           <div className="mt-4 flex min-h-0 flex-1 flex-col gap-3" aria-live="polite">
@@ -719,6 +1010,38 @@ export function EvaluationDialog({ open, onClose }: { open: boolean; onClose: ()
               Rerank {task.config.rerankModel ?? "未配置"}（{task.config.rerankSource}） · Embedding{" "}
               {task.config.embeddingModel || "…"}
             </p>
+            {task.config.assistant ? (
+              <p className="font-mono text-[10px] text-muted/50">
+                助手 {task.config.assistant.name} v{task.config.assistant.version} · 配置摘要{" "}
+                {task.config.assistant.configDigest.slice(0, 12)} · Rerank 绑定{" "}
+                {task.config.assistant.rerankModelProfileId ?? "已关闭"}
+              </p>
+            ) : null}
+
+            {/* 票 28：已结束的报告可以带出进程（JSON/CSV，不含凭据） */}
+            {TERMINAL_STAGES.has(task.stage) ? (
+              <div className="flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  disabled={exporting !== null}
+                  onClick={() => void handleExport("json")}
+                  className="inline-flex h-7 cursor-pointer items-center rounded-md border border-line bg-surface px-2.5 text-[11px] text-muted transition-colors hover:bg-surface-subtle hover:text-ink focus-visible:outline-2 focus-visible:outline-brand disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {exporting === "json" ? "导出中…" : "导出 JSON"}
+                </button>
+                <button
+                  type="button"
+                  disabled={exporting !== null}
+                  onClick={() => void handleExport("csv")}
+                  className="inline-flex h-7 cursor-pointer items-center rounded-md border border-line bg-surface px-2.5 text-[11px] text-muted transition-colors hover:bg-surface-subtle hover:text-ink focus-visible:outline-2 focus-visible:outline-brand disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {exporting === "csv" ? "导出中…" : "导出 CSV"}
+                </button>
+                <span className="text-[10px] text-muted/50">
+                  含真实输出、指标、配置快照与状态；不含任何凭据。
+                </span>
+              </div>
+            ) : null}
 
             {taskMissing ? (
               <p className="rounded-lg border border-line bg-surface-subtle/40 px-3 py-2.5 text-xs text-muted">

@@ -70,6 +70,7 @@ import {
   createSharedAnswerEntry,
   type SharedAnswerEventsSource,
 } from "../mastra/shared_answer_entry"
+import type { EvalAssistantSnapshot } from "./contracts"
 
 // ---------------------------------------------------------------------------
 // Types
@@ -117,6 +118,19 @@ export interface IsolatedEvalResourceOptions {
    * (Ticket 11) passes its own adapter so the shared default is untouched.
    */
   reranker?: Reranker
+  /**
+   * Ticket 28 (EVAL-02A): the immutable assistant configuration this task runs
+   * with. Its system prompt is applied through the SAME shared entry (leading
+   * system message) and its rerank binding decides whether the scope owns a
+   * dedicated reranker at all.
+   */
+  assistant?: EvalAssistantSnapshot
+  /**
+   * Ticket 28: with an assistant snapshot that pins `rerankModelProfileId:
+   * null`, the scope must NOT fall back to the RERANK_* config adapter —
+   * otherwise "rerank disabled" would silently still rerank.
+   */
+  disableRerank?: boolean
 }
 
 export interface EvalDisposeReport {
@@ -471,16 +485,18 @@ export function createIsolatedEvalResources(
   const prepareTimeoutMs =
     options.prepareTimeoutMs ?? DEFAULT_PREPARE_TIMEOUT_MS
   // Ticket 03: evaluation uses the same dedicated rerank adapter as normal
-  // chat; Ticket 11 can inject a per-task model override.
-  const reranker =
-    options.reranker ??
-    createDedicatedReranker({
-      baseUrl: config.rerankBaseUrl,
-      apiKey: config.rerankApiKey,
-      model: config.rerankModel,
-      timeoutMs: config.rerankTimeoutMs,
-      maxDocumentChars: config.rerankMaxDocumentChars,
-    })
+  // chat; Ticket 11 can inject a per-task model override; Ticket 28 can
+  // disable it entirely for a comparison configuration that pins no reranker.
+  const reranker = options.disableRerank
+    ? undefined
+    : options.reranker ??
+      createDedicatedReranker({
+        baseUrl: config.rerankBaseUrl,
+        apiKey: config.rerankApiKey,
+        model: config.rerankModel,
+        timeoutMs: config.rerankTimeoutMs,
+        maxDocumentChars: config.rerankMaxDocumentChars,
+      })
 
   // One in-memory SQLite owns tracking + sessions + traces for the scope.
   const db: DB = openDb(":memory:")
@@ -810,7 +826,25 @@ export function createIsolatedEvalResources(
     const scopedEventsSource: SharedAnswerEventsSource = (
       message,
       runOptions
-    ) => entry.eventsSource(message, { ...runOptions, accessContext })
+    ) =>
+      entry.eventsSource(message, {
+        ...runOptions,
+        accessContext,
+        // Ticket 28 (EVAL-02A): an evaluation task that named an assistant runs
+        // its immutable snapshot through the SAME shared entry normal chat
+        // uses — the leading prompt comes from here, and the rerank binding has
+        // already decided which operations this scope was built with.
+        ...(options.assistant
+          ? {
+              assistant: {
+                id: options.assistant.assistantId,
+                version: options.assistant.version,
+                systemPrompt: options.assistant.systemPrompt,
+                rerankModelProfileId: options.assistant.rerankModelProfileId,
+              },
+            }
+          : {}),
+      })
 
     return { eventsSource: scopedEventsSource, accessContext, traceCollector }
   }

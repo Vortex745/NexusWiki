@@ -337,6 +337,24 @@ test("the evaluation dialog is operable by keyboard and collapses on a narrow la
   assert.match(dialog, /max-md:px-4/, "content padding follows the narrow screen")
 })
 
+test("the evaluation dialog exports reports and compares two immutable configurations", () => {
+  const dialog = read("frontend/src/components/panels/EvaluationDialog.tsx")
+  assert.match(dialog, /exportEvaluationTask\(/, "a settled report can be carried away")
+  assert.match(dialog, /导出 JSON/, "the JSON export is offered")
+  assert.match(dialog, /导出 CSV/, "the CSV export is offered")
+  assert.match(dialog, /不含任何凭据/, "the copy states that no credential is exported")
+  assert.match(dialog, /compareEvaluationTasks\(/, "two records can be compared side by side")
+  assert.match(dialog, /createEvaluationComparisonExample\(/, "the built-in rerank example can be run")
+  assert.match(dialog, /内置 Rerank 开\/关对照/, "the example says which configurations it compares")
+  assert.match(dialog, /assistantId/, "a run can name an assistant configuration")
+  assert.match(
+    dialog,
+    /side\.assistant\.configDigest\.slice\(0, 12\)/,
+    "the compared configuration digest is shown"
+  )
+  assert.match(dialog, /差值不适用/, "a missing delta is never rendered as zero")
+})
+
 test("a refused cancel or a stopping service is reported as a state, not a failure", () => {
   const dialog = read("frontend/src/components/panels/EvaluationDialog.tsx")
   assert.match(

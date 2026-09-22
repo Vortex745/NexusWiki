@@ -26,6 +26,8 @@ import { RetirementServiceImpl } from "../knowledge/retirement"
 import { createSourceGovernanceRouter } from "./source_governance"
 import { createStatusRouter } from "./status"
 import { createEvaluationsRouter } from "./evaluations"
+import type { AccessContext } from "../access/context"
+import { evalAssistantConfigDigest } from "../evaluation/assistant_snapshots"
 import { createSessionRouter, type DemoAuthOptions } from "./session"
 import { EvaluationService } from "../evaluation/service"
 import { createDedicatedReranker } from "../retrieval/search/dedicated_reranker"
@@ -267,7 +269,44 @@ export function createApp(options: {
   // in order to authenticate.
   app.use("/api", createSessionRouter(options.demoAuth ? { demoAuth: options.demoAuth } : {}))
   if (options.evaluationService) {
-    app.use("/api", createEvaluationsRouter(options.evaluationService))
+    app.use(
+      "/api",
+      createEvaluationsRouter(options.evaluationService, {
+        // Ticket 28 (EVAL-02A): a stored assistant version resolves into the
+        // immutable snapshot an evaluation task runs with. It is the SAME
+        // version the chat path runs (prompt + rerank binding, pinned by
+        // version), and the digest covers exactly those execution fields.
+        ...(options.assistants
+          ? {
+              resolveAssistant: (
+                context: AccessContext,
+                assistantId: string,
+                version: unknown
+              ) => {
+                const service = options.assistants!
+                const assistant = service.get(assistantId, context.tenantId)
+                if (!assistant) return null
+                if (assistant.status === "archived") return "archived"
+                const wanted =
+                  typeof version === "number" ? version : assistant.currentVersion
+                const stored = service.getVersion(assistantId, context.tenantId, wanted)
+                if (!stored) return null
+                return {
+                  assistantId,
+                  version: stored.version,
+                  name: assistant.name,
+                  configDigest: evalAssistantConfigDigest({
+                    systemPrompt: stored.config.systemPrompt,
+                    rerankModelProfileId: stored.config.rerankModelProfileId,
+                  }),
+                  systemPrompt: stored.config.systemPrompt,
+                  rerankModelProfileId: stored.config.rerankModelProfileId,
+                }
+              },
+            }
+          : {}),
+      })
+    )
   }
   // Ticket 09 P5: mount the Handoff HTTP API (spec §8 L1549-1552).
   // POST /chat/runs/:runId/handoff is covered by the /api/chat access middleware

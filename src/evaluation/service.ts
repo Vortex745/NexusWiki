@@ -57,15 +57,31 @@ import { EVAL_TEXT_RULE_VERSION } from "./text_rules"
 import {
   EVAL_TASK_TERMINAL_STAGES,
   cleanupIncomplete,
+  type EvalAssistantSnapshot,
   type EvalCaseResult,
   type EvalCleanupReport,
+  type EvalComparison,
+  type EvalComparisonCase,
+  type EvalComparisonMetric,
+  type EvalExportFormat,
   type EvalMetricsSummary,
   type EvalRankedCandidate,
   type EvalTaskConfigSnapshot,
   type EvalTaskDetail,
+  type EvalTaskExport,
   type EvalTaskStage,
   type EvalTaskSummary,
 } from "./contracts"
+import {
+  EVAL_BUILTIN_ASSISTANTS,
+  normalizeEvalAssistantSnapshot,
+} from "./assistant_snapshots"
+import {
+  evalExportContentType,
+  evalExportFilename,
+  exportTaskCsv,
+  exportTaskJson,
+} from "./report_export"
 
 export const DEFAULT_MAX_RETAINED_TASKS = 20
 /**
@@ -126,6 +142,24 @@ export class EvaluationShuttingDownError extends Error {
   }
 }
 
+/**
+ * Ticket 28 (EVAL-02A): the built-in comparison example runs on this sample —
+ * three cases over a fixed corpus, so the Rerank on/off pair is one click.
+ */
+export const DEFAULT_COMPARISON_DATASET_ID = "refund-batch-3"
+
+/**
+ * Ticket 28: the comparison's premise is not met — a task is not settled, has
+ * not settled every case, or the two tasks ran different datasets. Maps to
+ * HTTP 409: the request is valid, the state is not comparable yet.
+ */
+export class EvaluationComparisonConflictError extends Error {
+  constructor(message: string, readonly detail: Record<string, unknown> = {}) {
+    super(message)
+    this.name = "EvaluationComparisonConflictError"
+  }
+}
+
 /** Ticket 14: bounded budget for releasing the scopes of a stopped service. */
 export const DEFAULT_SHUTDOWN_TIMEOUT_MS = 15_000
 
@@ -161,6 +195,14 @@ export interface CreateEvaluationTaskInput {
    */
   chatModel?: unknown
   rerankModel?: unknown
+  /**
+   * Ticket 28 (EVAL-02A): the immutable assistant configuration this run should
+   * use. The HTTP layer resolves a request's assistant id (a built-in
+   * comparison id or a stored assistant version) into this snapshot; the
+   * service re-validates its shape, so nothing from a request reaches a run
+   * unchecked.
+   */
+  assistant?: unknown
 }
 
 /** Per-task model overrides that survived validation. */
@@ -209,7 +251,8 @@ export interface EvaluationServiceOptions {
   createResources?: (
     taskId: string,
     overrides: EvalModelOverrides,
-    reranker?: Reranker
+    reranker: Reranker | undefined,
+    assistant: EvalAssistantSnapshot | undefined
   ) => IsolatedEvalResources
   /** Dedicated reranker (ticket 03). Default: none configured. */
   reranker?: Reranker
@@ -265,6 +308,8 @@ interface TaskRecord {
   error?: string
   /** Ticket 11: validated per-task model overrides (snapshot input). */
   modelOverrides: EvalModelOverrides
+  /** Ticket 28: the immutable assistant snapshot this task runs with. */
+  assistant?: EvalAssistantSnapshot
   /** Ticket 11: the reranker this task actually runs with. */
   reranker?: Reranker
   config: EvalTaskConfigSnapshot
@@ -300,7 +345,8 @@ export class EvaluationService {
   private readonly createResources: (
     taskId: string,
     overrides: EvalModelOverrides,
-    reranker?: Reranker
+    reranker: Reranker | undefined,
+    assistant: EvalAssistantSnapshot | undefined
   ) => IsolatedEvalResources
   private readonly reranker?: Reranker
   private readonly allowedChatModels: readonly string[]
@@ -334,7 +380,8 @@ export class EvaluationService {
       ((
         taskId: string,
         overrides: EvalModelOverrides,
-        taskReranker?: Reranker
+        taskReranker: Reranker | undefined,
+        taskAssistant: EvalAssistantSnapshot | undefined
       ) => {
         // Ticket 11: a task's model override is applied to a COPY of the shared
         // config — the singleton normal chat reads is never mutated, so a run
@@ -347,6 +394,10 @@ export class EvaluationService {
           config: taskConfig,
           clients: options.clients,
           ...(taskReranker ? { reranker: taskReranker } : {}),
+          // Ticket 28: an assistant that pins no reranker must not fall back to
+          // the RERANK_* adapter inside the scope.
+          ...(taskAssistant ? { assistant: taskAssistant } : {}),
+          ...(taskAssistant?.rerankModelProfileId === null ? { disableRerank: true } : {}),
         })
       })
   }
@@ -357,6 +408,9 @@ export class EvaluationService {
     defaults: { chatModel: string; rerankModel: string | null; embeddingModel: string }
     /** Ticket 11: ids a task may pick instead of the server default. */
     allowedModels: { chat: string[]; rerank: string[] }
+    /** Ticket 28: the built-in Rerank on/off comparison pair. */
+    comparisonAssistants: EvalAssistantSnapshot[]
+    comparisonDatasetId: string
     maxCasesPerTask: number
   } {
     return {
@@ -370,6 +424,8 @@ export class EvaluationService {
         chat: [...this.allowedChatModels],
         rerank: [...this.allowedRerankModels],
       },
+      comparisonAssistants: EVAL_BUILTIN_ASSISTANTS.map((snapshot) => ({ ...snapshot })),
+      comparisonDatasetId: DEFAULT_COMPARISON_DATASET_ID,
       maxCasesPerTask: this.maxCasesPerTask,
     }
   }
@@ -385,9 +441,21 @@ export class EvaluationService {
     // Ticket 11: validate the requested models BEFORE anything exists — an
     // unlisted id never reaches a scope, an index or a paid provider call.
     const modelOverrides = this.resolveModelOverrides(input)
-    const taskReranker = modelOverrides.rerankModel
+    // Ticket 28: the assistant snapshot is the request's other execution input.
+    const assistant = this.resolveAssistantSnapshot(input)
+    if (assistant?.rerankModelProfileId === null && modelOverrides.rerankModel) {
+      // Two contradictory instructions: a configuration that pins no reranker
+      // cannot also name one for this run.
+      throw new EvaluationRequestError(
+        `assistant ${assistant.assistantId} v${assistant.version} pins no dedicated reranker; drop the rerankModel override`,
+        ["rerankModel"]
+      )
+    }
+    const requestedReranker = modelOverrides.rerankModel
       ? this.createReranker?.(modelOverrides.rerankModel)
       : this.reranker
+    // Ticket 28: "rerank disabled" is decided by the immutable snapshot alone.
+    const taskReranker = assistant?.rerankModelProfileId === null ? undefined : requestedReranker
     if (dataset.cases.length > this.maxCasesPerTask) {
       throw new EvaluationRequestError(
         `this dataset has ${dataset.cases.length} cases but one task runs at most ${this.maxCasesPerTask} (bounded concurrency of ${this.caseConcurrency}); split the dataset into several tasks`,
@@ -425,12 +493,14 @@ export class EvaluationService {
       cases: [],
       cleanup: null,
       modelOverrides,
+      ...(assistant ? { assistant } : {}),
       ...(taskReranker ? { reranker: taskReranker } : {}),
       // Ticket 14: shutdown aborts this run through here.
       controller: new AbortController(),
       // Snapshot at start: later global config changes cannot re-interpret a
-      // task that already ran (ticket 11).
-      config: this.configSnapshot(modelOverrides, taskReranker),
+      // task that already ran (ticket 11) and an immutable assistant version
+      // keeps its identity in the record (ticket 28).
+      config: this.configSnapshot(modelOverrides, taskReranker, assistant),
     }
     this.tasks.set(record.id, record)
 
@@ -490,6 +560,188 @@ export class EvaluationService {
       record.controller.abort()
     }
     return this.toDetail(record)
+  }
+
+  /**
+   * Ticket 28 (EVAL-02A): carry a settled report away. `null` means the task is
+   * unknown or belongs to someone else (the HTTP layer maps that to 404); a
+   * task that has not settled has no final report yet (409), and an unknown
+   * format is a bad request (400).
+   */
+  exportTask(
+    id: string,
+    owner: EvaluationOwner,
+    format: unknown
+  ): EvalTaskExport | null {
+    this.pruneHistory()
+    const record = this.tasks.get(id)
+    if (!record || !this.isOwner(record, owner)) return null
+    if (format !== "json" && format !== "csv") {
+      throw new EvaluationRequestError('format must be "json" or "csv"', ["format"])
+    }
+    if (!EVAL_TASK_TERMINAL_STAGES.includes(record.stage)) {
+      throw new EvaluationComparisonConflictError(
+        "only a settled task can be exported",
+        { taskId: record.id, stage: record.stage }
+      )
+    }
+    const detail = this.toDetail(record)
+    return {
+      format,
+      filename: evalExportFilename(detail, format),
+      contentType: evalExportContentType(format),
+      body:
+        format === "csv"
+          ? exportTaskCsv(detail)
+          : exportTaskJson(detail, this.now().toISOString()),
+    }
+  }
+
+  /**
+   * Ticket 28 (EVAL-02A): compare two settled tasks that ran the SAME dataset
+   * (equal content digest) — the premise of "two immutable assistant snapshots
+   * on the same isolated dataset". Each side keeps its own configuration
+   * snapshot, so the reported difference is attributable to the configurations
+   * rather than to the data. Returns null for an unknown or foreign task.
+   */
+  compareTasks(
+    leftId: string,
+    rightId: string,
+    owner: EvaluationOwner
+  ): EvalComparison | null {
+    this.pruneHistory()
+    const left = this.tasks.get(leftId)
+    const right = this.tasks.get(rightId)
+    if (!left || !this.isOwner(left, owner) || !right || !this.isOwner(right, owner)) {
+      return null
+    }
+    for (const record of [left, right]) {
+      if (!EVAL_TASK_TERMINAL_STAGES.includes(record.stage)) {
+        throw new EvaluationComparisonConflictError(
+          "both tasks must settle before they can be compared",
+          { taskId: record.id, stage: record.stage }
+        )
+      }
+      if (record.cases.filter(Boolean).length !== record.dataset.cases.length) {
+        throw new EvaluationComparisonConflictError(
+          "a comparison needs every case of the dataset to have settled",
+          { taskId: record.id, settled: record.cases.filter(Boolean).length, total: record.dataset.cases.length }
+        )
+      }
+    }
+    if (left.contentDigest !== right.contentDigest) {
+      throw new EvaluationComparisonConflictError(
+        "the two tasks ran different datasets; compare two runs of the same dataset",
+        { leftDigest: left.contentDigest, rightDigest: right.contentDigest }
+      )
+    }
+
+    const leftCases = new Map(left.cases.filter(Boolean).map((item) => [item.caseId, item]))
+    const rightCases = new Map(right.cases.filter(Boolean).map((item) => [item.caseId, item]))
+    const cases: EvalComparisonCase[] = left.dataset.cases.map((definition) => {
+      const leftCase = leftCases.get(definition.caseId)!
+      const rightCase = rightCases.get(definition.caseId)!
+      return {
+        caseId: definition.caseId,
+        question: definition.question,
+        left: {
+          outcome: leftCase.outcome,
+          answer: leftCase.answer,
+          ...(leftCase.ordering ? { ordering: leftCase.ordering } : {}),
+          metrics: leftCase.metrics,
+        },
+        right: {
+          outcome: rightCase.outcome,
+          answer: rightCase.answer,
+          ...(rightCase.ordering ? { ordering: rightCase.ordering } : {}),
+          metrics: rightCase.metrics,
+        },
+      }
+    })
+
+    const leftMetrics = summarizeMetrics(left.cases)
+    const rightMetrics = summarizeMetrics(right.cases)
+    const metricKeys = new Set([
+      ...Object.keys(leftMetrics.metrics),
+      ...Object.keys(rightMetrics.metrics),
+    ])
+    const metrics: Record<string, EvalComparisonMetric> = {}
+    for (const key of [...metricKeys].sort()) {
+      const leftValue = leftMetrics.metrics[key]?.value ?? null
+      const rightValue = rightMetrics.metrics[key]?.value ?? null
+      metrics[key] = {
+        left: leftValue,
+        right: rightValue,
+        delta:
+          leftValue !== null && rightValue !== null
+            ? Number((rightValue - leftValue).toFixed(6))
+            : null,
+      }
+    }
+
+    return {
+      formatVersion: 1,
+      dataset: {
+        name: left.dataset.name,
+        version: left.dataset.version,
+        contentDigest: left.contentDigest,
+      },
+      left: {
+        taskId: left.id,
+        stage: left.stage,
+        ...(left.assistant ? { assistant: { ...left.assistant } } : {}),
+        config: left.config,
+        metrics: leftMetrics,
+      },
+      right: {
+        taskId: right.id,
+        stage: right.stage,
+        ...(right.assistant ? { assistant: { ...right.assistant } } : {}),
+        config: right.config,
+        metrics: rightMetrics,
+      },
+      metrics,
+      cases,
+      rerankComparison: isRerankComparison(left, right),
+    }
+  }
+
+  /**
+   * Ticket 28: the built-in Rerank enabled/disabled example — two tasks over
+   * one dataset, differing ONLY in the immutable rerank binding. Refused up
+   * front when this server has no dedicated reranker at all: an "on/off"
+   * comparison where both sides cannot rerank would be a lie.
+   */
+  createComparisonExample(
+    owner: EvaluationOwner,
+    input: { datasetId?: unknown } = {}
+  ): { datasetId: string; left: EvalTaskSummary; right: EvalTaskSummary } {
+    if (!this.reranker && !this.createReranker) {
+      throw new EvaluationRequestError(
+        "the built-in Rerank on/off example needs a configured dedicated reranker (RERANK_*) on this server",
+        ["rerankModel"]
+      )
+    }
+    const requested =
+      input.datasetId === undefined || input.datasetId === null || input.datasetId === ""
+        ? DEFAULT_COMPARISON_DATASET_ID
+        : input.datasetId
+    const { datasetId } = this.resolveDataset({ datasetId: requested })
+    if (!datasetId) {
+      throw new EvaluationRequestError(
+        "the comparison example runs a built-in sample dataset",
+        ["datasetId"]
+      )
+    }
+    const on = this.createTask(
+      { datasetId, assistant: EVAL_BUILTIN_ASSISTANTS[0] },
+      owner
+    )
+    const off = this.createTask(
+      { datasetId, assistant: EVAL_BUILTIN_ASSISTANTS[1] },
+      owner
+    )
+    return { datasetId, left: on, right: off }
   }
 
   /** Test/verification helper: wait until a task reaches a terminal stage. */
@@ -583,13 +835,30 @@ export class EvaluationService {
 
   private configSnapshot(
     overrides: EvalModelOverrides,
-    reranker?: Reranker
+    reranker: Reranker | undefined,
+    assistant?: EvalAssistantSnapshot
   ): EvalTaskConfigSnapshot {
     return {
       chatModel: overrides.chatModel ?? this.options.config.openaiChatModel,
       rerankModel: reranker?.model ?? null,
       embeddingModel: this.options.config.embeddingModel,
       rerankSource: reranker ? "dedicated_rerank" : "not_configured",
+      ...(assistant ? { assistant: { ...assistant } } : {}),
+    }
+  }
+
+  /** Ticket 28: re-validate the resolved snapshot the HTTP layer handed over. */
+  private resolveAssistantSnapshot(
+    input: CreateEvaluationTaskInput
+  ): EvalAssistantSnapshot | undefined {
+    if (input.assistant === undefined || input.assistant === null) return undefined
+    try {
+      return normalizeEvalAssistantSnapshot(input.assistant)
+    } catch (error) {
+      throw new EvaluationRequestError(
+        error instanceof Error ? error.message : String(error),
+        ["assistant"]
+      )
     }
   }
 
@@ -716,7 +985,8 @@ export class EvaluationService {
       resources = this.createResources(
         record.id,
         record.modelOverrides,
-        record.reranker
+        record.reranker,
+        record.assistant
       )
       try {
         await resources.prepare(
@@ -1222,6 +1492,23 @@ function collectFinalContext(
     ...(ordering ? { ordering } : {}),
     ...(round !== undefined ? { round } : {}),
   }
+}
+
+/**
+ * Ticket 28: true when the two runs differ ONLY in the immutable rerank
+ * binding (same prompt, same chat model) — the built-in example pair, and the
+ * only case where a reported difference is attributable to the dedicated
+ * reranker alone.
+ */
+function isRerankComparison(left: TaskRecord, right: TaskRecord): boolean {
+  const a = left.assistant
+  const b = right.assistant
+  if (!a || !b) return false
+  return (
+    a.systemPrompt === b.systemPrompt &&
+    a.rerankModelProfileId !== b.rerankModelProfileId &&
+    left.config.chatModel === right.config.chatModel
+  )
 }
 
 /**
