@@ -10,6 +10,7 @@ import { knowledgeStore, useKnowledgeBases } from "../runtime/knowledgeStore"
 import { useMemoryApi } from "../runtime/MemoryContext"
 import { useSignedInSession } from "../runtime/SessionContext"
 import { DocumentsDialog } from "./panels/DocumentsDialog"
+import { LaboratoryDialog } from "./panels/LaboratoryDialog"
 import { StatusPopover } from "./StatusPopover"
 import { Icon } from "./ui/Icon"
 
@@ -75,6 +76,9 @@ function KnowledgeSelector() {
   // Ticket 11 (DOC-01A): browsing a base's document catalog is for every
   // signed-in member — the server applies the tenant/group/kb scoping.
   const [browsingDocs, setBrowsingDocs] = useState<{ id: string; name: string } | null>(null)
+  // Ticket 15 (RET-02): the retrieval laboratory is for every signed-in
+  // member — it runs the same read-only debug endpoint their chat scope backs.
+  const [laboratoryOpen, setLaboratoryOpen] = useState(false)
 
   return (
     <div className="mt-4">
@@ -150,11 +154,19 @@ function KnowledgeSelector() {
           ? `新对话将检索选中的 ${selectedIds.length} 个知识库`
           : "未选择时检索默认知识库"}
       </p>
+      {/* Ticket 15 (RET-02): the retrieval laboratory entry — same knowledge
+          scope as new conversations. */}
+      <SidebarButton
+        icon={FlaskConical}
+        label="检索实验室"
+        onClick={() => setLaboratoryOpen(true)}
+      />
       <DocumentsDialog
         open={browsingDocs !== null}
         knowledgeBase={browsingDocs}
         onClose={() => setBrowsingDocs(null)}
       />
+      <LaboratoryDialog open={laboratoryOpen} onClose={() => setLaboratoryOpen(false)} />
     </div>
   )
 }

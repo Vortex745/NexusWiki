@@ -690,3 +690,78 @@ export async function fetchDocumentChunk(docId: string, chunkId: string): Promis
   }
   return (await response.json()) as DocumentChunkPayload
 }
+
+// ---------------------------------------------------------------------------
+// Retrieval laboratory (ticket 15 RET-02) — read-only debug runs
+// ---------------------------------------------------------------------------
+
+export interface LabCandidatePayload {
+  rank: number
+  chunkId: string
+  documentId: string
+  title: string
+  excerpt: string
+  score: number | null
+}
+
+export interface LabStagePayload {
+  channel: string
+  ok: boolean
+  error?: string
+  elapsedMs: number
+  candidates: LabCandidatePayload[]
+}
+
+export interface LabRunPayload {
+  status: "ok" | "degraded" | "insufficient"
+  ordering: { source: "dedicated_rerank" | "fused"; reason?: string } | null
+  unavailableChannels: string[]
+  unselectedChannels?: string[]
+  degradationReasons?: string[]
+  debug: {
+    channels: LabStagePayload[]
+    fused: {
+      elapsedMs: number
+      rawCandidateCount: number
+      distinctCount: number
+      candidates: LabCandidatePayload[]
+    }
+    rerank?: {
+      applied: boolean
+      reason?: string
+      elapsedMs: number
+      candidates?: LabCandidatePayload[]
+    }
+    totalMs: number
+  } | null
+}
+
+/** A client-side timeout is its own distinct state (criterion 2). */
+export class LabTimeoutError extends Error {
+  constructor() {
+    super("检索请求超时，请稍后重试或缩小范围")
+    this.name = "LabTimeoutError"
+  }
+}
+
+const LAB_TIMEOUT_MS = 45_000
+
+export async function runRetrievalDebug(
+  query: string,
+  channels: string[],
+): Promise<LabRunPayload> {
+  const response = await apiFetch("/retrieval-debug", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ query, channels }),
+    signal: AbortSignal.timeout(LAB_TIMEOUT_MS),
+  }).catch((error: unknown) => {
+    if (error instanceof DOMException && error.name === "TimeoutError") throw new LabTimeoutError()
+    throw error
+  })
+  if (!response.ok) {
+    const body = (await response.json().catch(() => ({}))) as { error?: string }
+    throw new DocumentOperationError(body.error || `检索调试失败 (${response.status})`, response.status)
+  }
+  return (await response.json()) as LabRunPayload
+}
