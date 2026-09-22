@@ -304,6 +304,40 @@ test("edit and regenerate drop the replaced run, later memory and the derived su
   }
 })
 
+test("the shared entry receives frozen identity, knowledge and assistant snapshots", async () => {
+  const harness = buildHarness()
+  const { base, close } = await listen(harness.app)
+  try {
+    const kb = harness.knowledgeBases.create("t1", "库A")
+    const assistant = harness.assistants.create("t1", "admin", {
+      name: "政策助手",
+      config: config({ systemPrompt: "第一版", knowledgeBaseIds: [kb.id] }),
+    })
+    const response = await chat(base, {
+      sessionId: "sess-frozen",
+      assistantId: assistant.id,
+      knowledgeBaseIds: [kb.id],
+    })
+    assert.equal(response.status, 200)
+    const options = harness.captured.at(-1)
+    assert.ok(options)
+    // Nothing beneath the entry may widen or swap this run's authority.
+    assert.equal(Object.isFrozen(options.assistant), true, "assistant snapshot is frozen")
+    assert.equal(Object.isFrozen(options.retrievalScope), true, "knowledge scope is frozen")
+    assert.equal(Object.isFrozen(options.retrievalScope?.knowledgeBaseIds), true)
+    assert.equal(Object.isFrozen(options.accessContext), true, "identity is frozen")
+    assert.equal(Object.isFrozen(options.accessContext?.groups), true)
+    assert.equal(Object.isFrozen(options.accessContext?.scopes), true)
+    // The frozen values are the resolved ones, not placeholders.
+    assert.deepEqual(options.retrievalScope?.knowledgeBaseIds, [kb.id])
+    assert.equal(options.assistant?.version, 1)
+    assert.equal(options.accessContext?.tenantId, "t1")
+    assert.equal(options.accessContext?.subjectId, "u1")
+  } finally {
+    await close()
+  }
+})
+
 test("a legacy request locks the default assistant without scanning the workspace", async () => {
   const harness = buildHarness()
   let listCalls = 0

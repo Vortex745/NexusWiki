@@ -436,6 +436,28 @@ export function createChatRouter(
       }
     }
 
+    // Ticket 23 (CORE-01A): the shared answer entry receives IMMUTABLE
+    // snapshots — identity, knowledge scope and assistant are frozen here, at
+    // the transport, so no layer beneath the entry can widen, swap or mutate
+    // the run's authority mid-flight. (The model snapshot is frozen by the
+    // entry itself, once per composition.)
+    const runSnapshot: AnswerRunOptions = Object.freeze({
+      ...runOptions,
+      ...(runOptions.retrievalScope
+        ? {
+            retrievalScope: Object.freeze({
+              knowledgeBaseIds: Object.freeze([...runOptions.retrievalScope.knowledgeBaseIds]),
+            }),
+          }
+        : {}),
+      ...(runOptions.assistant ? { assistant: Object.freeze({ ...runOptions.assistant }) } : {}),
+    })
+    const runIdentity: AccessContext = Object.freeze({
+      ...accessContext,
+      groups: Object.freeze([...accessContext.groups]),
+      scopes: Object.freeze([...accessContext.scopes]),
+    }) as AccessContext
+
     if (stream) {
       res.setHeader("Content-Type", "text/event-stream")
       res.setHeader("Cache-Control", "no-cache")
@@ -455,9 +477,9 @@ export function createChatRouter(
         // The injected source guarantees a terminal event on every path.
         // HTTP only encodes events to SSE.
         for await (const event of eventsSource(message, {
-          ...runOptions,
+          ...runSnapshot,
           signal: abortController.signal,
-          accessContext,
+          accessContext: runIdentity,
         })) {
           if (event.type === "done") streamTerminal = event
           if (clientGone.value || res.writableEnded) break
@@ -483,9 +505,9 @@ export function createChatRouter(
       try {
         let terminal: Extract<AnswerRunEvent, { type: "done" }> | undefined
         for await (const event of eventsSource(message, {
-          ...runOptions,
+          ...runSnapshot,
           signal: abortController.signal,
-          accessContext,
+          accessContext: runIdentity,
         })) {
           events.push(event)
           if (event.type === "done") terminal = event
