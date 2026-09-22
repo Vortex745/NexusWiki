@@ -121,6 +121,10 @@ export interface MastraRunnerInput {
    * from `AnswerRunOptions.retrievalScope`. Omitted when the run carries no
    * knowledge scope — the retrieval channels then keep their unfiltered reads. */
   retrievalScope?: RetrievalScope
+  /** Ticket 19 (AST-01B): the transport-resolved assistant version snapshot
+   * (prompt + rerank binding), forwarded verbatim — runners never read raw
+   * request fields for the assistant overlay. */
+  assistant?: import("../assistants/assistant_service").AssistantRunSnapshot
   /** Route preparation produced once by the dispatch runner. Standalone
    * route runners may omit it and perform their own ownership check. */
   preparedRoute?: PreparedMastraRoute
@@ -479,6 +483,8 @@ export function createMastraChatEventAdapter(
           ...(runOptions?.retrievalScope
             ? { retrievalScope: runOptions.retrievalScope }
             : {}),
+          // Ticket 19 (AST-01B): the server-resolved assistant snapshot.
+          ...(runOptions?.assistant ? { assistant: runOptions.assistant } : {}),
           onAnswerDelta,
         })
 

@@ -307,6 +307,12 @@ export interface ChatRequestBody {
    * the client can narrow the scope but never widen it.
    */
   knowledgeBaseIds?: string[]
+  /**
+   * Ticket 19 (AST-01B): which assistant to run. The id is the only input —
+   * prompt, scope, rerank binding and tool policy are resolved server-side
+   * from the stored immutable version. Omitted → the legacy default path.
+   */
+  assistantId?: string
 }
 
 /**

@@ -1,6 +1,7 @@
 import type OpenAI from "openai"
 import type { AccessContext } from "../access/context"
 import type { AgentMessage, AnswerRunEvent } from "../types"
+import type { AssistantRunSnapshot } from "../assistants/assistant_service"
 import type { RetrievalScope } from "../types/retrieval_scope"
 
 export interface AnswerModel {
@@ -30,6 +31,13 @@ export interface AnswerRunOptions {
    * scope (isolated evaluation runs, release probes).
    */
   retrievalScope?: RetrievalScope
+  /**
+   * Ticket 19 (AST-01B): the server-resolved assistant snapshot — an
+   * IMMUTABLE version snapshot (prompt + rerank binding), never raw request
+   * fields. The transport resolves it from stored assistant versions; a run
+   * cannot enlarge its scope or enable tools beyond this snapshot.
+   */
+  assistant?: AssistantRunSnapshot
 }
 
 export class OpenAIAnswerModel implements AnswerModel {

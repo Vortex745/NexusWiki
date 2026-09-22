@@ -6,6 +6,7 @@ import type { IconProps } from "./ui/Icon"
 import { useConversation } from "../conversation/useConversation"
 import { cn } from "../lib/cn"
 import { useAppShell } from "../runtime/AppShellContext"
+import { assistantStore, useAssistants } from "../runtime/assistantStore"
 import { knowledgeStore, useKnowledgeBases } from "../runtime/knowledgeStore"
 import { useMemoryApi } from "../runtime/MemoryContext"
 import { useSignedInSession } from "../runtime/SessionContext"
@@ -179,6 +180,85 @@ interface SidebarProps {
   onCloseMobile: () => void
 }
 
+/**
+ * Ticket 19 (AST-01B): the assistant selector. One assistant runs each new
+ * chat; the server resolves prompt/scope/tool/rerank from its stored version.
+ * Empty selection = the legacy default path. The list shows the server-side
+ * group-visible assistants for this session's role.
+ */
+function AssistantSelector() {
+  const { status, assistants, selectedId, error } = useAssistants()
+  useEffect(() => {
+    assistantStore.ensureLoaded()
+  }, [])
+  return (
+    <div className="mt-4">
+      <div className="flex items-center justify-between px-1 text-[11px] font-semibold uppercase tracking-wider text-muted/70">
+        <span>助手</span>
+      </div>
+      {status === "loading" || (status === "idle" && assistants.length === 0) ? (
+        <p className="px-3 py-2 text-xs text-muted/70">正在加载助手…</p>
+      ) : status === "error" ? (
+        <p className="px-3 py-2 text-xs text-red-600 dark:text-red-400">助手读取失败</p>
+      ) : (
+        <ul className="mt-1 flex flex-col gap-0.5">
+          <li>
+            <button
+              type="button"
+              onClick={() => assistantStore.select(null)}
+              title="使用默认助手（不加任何额外设定）"
+              aria-pressed={selectedId === null}
+              className={cn(
+                "flex h-8.5 w-full cursor-pointer items-center gap-2 rounded-lg px-3 text-left text-xs transition-[colors,transform] duration-150 ease-out hover:bg-surface-subtle active:scale-[0.98]",
+                selectedId === null ? "text-ink" : "text-muted",
+              )}
+            >
+              <span
+                className={cn(
+                  "grid size-4 flex-none place-items-center rounded-full border transition-colors",
+                  selectedId === null ? "border-brand" : "border-line bg-transparent",
+                )}
+              >
+                {selectedId === null ? <span className="size-2 rounded-full bg-brand" /> : null}
+              </span>
+              <span className="truncate">默认助手</span>
+            </button>
+          </li>
+          {assistants
+            .filter((assistant) => assistant.status === "active")
+            .map((assistant) => {
+              const selected = selectedId === assistant.id
+              return (
+                <li key={assistant.id}>
+                  <button
+                    type="button"
+                    onClick={() => assistantStore.select(assistant.id)}
+                    title={`新对话将由「${assistant.name}」接答`}
+                    aria-pressed={selected}
+                    className={cn(
+                      "flex h-8.5 w-full cursor-pointer items-center gap-2 rounded-lg px-3 text-left text-xs transition-[colors,transform] duration-150 ease-out hover:bg-surface-subtle active:scale-[0.98]",
+                      selected ? "text-ink" : "text-muted",
+                    )}
+                  >
+                    <span
+                      className={cn(
+                        "grid size-4 flex-none place-items-center rounded-full border transition-colors",
+                        selected ? "border-brand" : "border-line bg-transparent",
+                      )}
+                    >
+                      {selected ? <span className="size-2 rounded-full bg-brand" /> : null}
+                    </span>
+                    <span className="truncate">{assistant.name}</span>
+                  </button>
+                </li>
+              )
+            })}
+        </ul>
+      )}
+    </div>
+  )
+}
+
 export function Sidebar({ open, collapsed, isDark, onToggleTheme, onCloseMobile }: SidebarProps) {
   const { openImport, openMemory, openEvaluation, openSettings, openAssistants } = useAppShell()
   const { memories } = useMemoryApi()
@@ -263,6 +343,9 @@ export function Sidebar({ open, collapsed, isDark, onToggleTheme, onCloseMobile 
 
           {/* Ticket 08 (KB-04): workspace knowledge-base selector */}
           <KnowledgeSelector />
+
+          {/* Ticket 19 (AST-01B): the assistant selector for new chats */}
+          <AssistantSelector />
 
           {/* Recent chats */}
           <div className="mt-4 flex items-center justify-between px-1 text-[11px] font-semibold uppercase tracking-wider text-muted/70">

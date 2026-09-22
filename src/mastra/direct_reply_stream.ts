@@ -20,9 +20,9 @@
  * surfaces as an AbortError from the async iterable (T09 #4 checkpoint 2).
  */
 
-import OpenAI from "openai"
-import type { DirectReplyStream } from "./direct_ambiguous_runner"
+import { type DirectReplyStream } from "./direct_ambiguous_runner"
 import { SYSTEM_PROMPT } from "./system_prompt"
+import { createOpenAIClient } from "../clients"
 import { createRunBudgetedOpenAIClient } from "../runtime/openai_budget_client"
 
 // Extract the identity description from the first line of SYSTEM_PROMPT
@@ -68,27 +68,33 @@ export async function createDirectReplyStream(
   const { model, apiKey, baseURL, timeout, maxRetries, instructions } = options
   const systemInstructions = instructions ?? DIRECT_REPLY_INSTRUCTIONS
 
-  const client = createRunBudgetedOpenAIClient(new OpenAI({
+  const client = createRunBudgetedOpenAIClient(createOpenAIClient({
     apiKey,
-    ...(baseURL ? { baseURL } : {}),
-    ...(timeout !== undefined ? { timeout } : {}),
-    ...(maxRetries !== undefined ? { maxRetries } : {}),
+    baseURL,
+    timeout,
+    maxRetries,
   }))
 
   // Return the DirectReplyStream. Each call streams the model's reply tokens
   // for the supplied message; the AbortSignal is forwarded so mid-stream
-  // cancellation propagates as an AbortError (T09 #4 checkpoint 2).
+  // cancellation propagates as an AbortError (T09 #4 checkpoint 2). An
+  // assistant prompt (ticket 19) is prepended BEFORE the platform identity.
   return async function* directReplyStream(
     message: string,
-    signal: AbortSignal
+    signal: AbortSignal,
+    options?: { systemPrompt?: string }
   ): AsyncIterable<string> {
+    const messages: Array<{ role: "system" | "user"; content: string }> = [
+      ...(options?.systemPrompt
+        ? [{ role: "system" as const, content: options.systemPrompt }]
+        : []),
+      { role: "system", content: systemInstructions },
+      { role: "user", content: message },
+    ]
     const stream = await client.chat.completions.create(
       {
         model,
-        messages: [
-          { role: "system", content: systemInstructions },
-          { role: "user", content: message },
-        ],
+        messages,
         stream: true,
       },
       { signal }

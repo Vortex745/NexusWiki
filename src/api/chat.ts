@@ -5,6 +5,13 @@ import { AnswerTraceRepository } from "../answer/trace_repository"
 import type { AnswerRunEvent } from "../types"
 import { singleTenantAccessContext, type AccessContext } from "../access/context"
 import type { SqliteSessionBinder } from "../access/session_binder"
+import {
+  AssistantArchivedError,
+  AssistantNotFoundError,
+  defaultAssistantId,
+  type AssistantRunSnapshot,
+  type AssistantService,
+} from "../assistants/assistant_service"
 import type { RetrievalScopeResolver } from "../retrieval/scope"
 import type { RetrievalScope } from "../types/retrieval_scope"
 import { resolveScopeOrRespond } from "./scope_http"
@@ -24,6 +31,13 @@ interface ChatRequest {
    * caller's authorized default knowledge base; `[]` → no knowledge context.
    */
   knowledgeBaseIds?: unknown
+  /**
+   * Ticket 19 (AST-01B): which assistant to run. The id is the ONLY input —
+   * prompt, knowledge binding, rerank binding and tool policy all come from
+   * the server-stored immutable version, so a request can never enlarge the
+   * assistant's scope through raw parameters. Absent → legacy behavior.
+   */
+  assistantId?: unknown
 }
 
 function streamPayload(event: AnswerRunEvent, sessionId: string) {
@@ -70,6 +84,12 @@ export function createChatRouter(
    * than silently widened to an unfiltered read.
    */
   retrievalScopeResolver?: RetrievalScopeResolver,
+  /**
+   * Ticket 19 (AST-01B): the assistant workspace service. When wired, a
+   * request may name an `assistantId`; the overlay (prompt/scope/tool/rerank)
+   * is resolved server-side from the stored immutable version.
+   */
+  assistants?: AssistantService,
 ): Router {
   const router = Router()
 
@@ -89,6 +109,7 @@ export function createChatRouter(
       runId: requestedRunId,
       sessionId: requestedSessionId,
       knowledgeBaseIds: requestedKnowledgeBaseIds,
+      assistantId: requestedAssistantId,
     } = req.body as ChatRequest
     // Default to streaming so legacy callers and the in-app UI get instant
     // token-by-token output without an opt-in field. Explicit false is honored
@@ -134,6 +155,60 @@ export function createChatRouter(
       return
     }
 
+    // Ticket 19 (AST-01B): resolve the assistant overlay SERVER-side. The
+    // request supplies only an id — the prompt, knowledge binding, rerank
+    // binding and tool policy come from the stored immutable version, so raw
+    // parameters can never enlarge the assistant's scope or enable tools.
+    let assistantSnapshot: AssistantRunSnapshot | undefined
+    if (assistants && requestedAssistantId !== undefined && requestedAssistantId !== null) {
+      if (typeof requestedAssistantId !== "string" || requestedAssistantId.trim().length === 0) {
+        res.status(400).json({ error: "assistantId must be a non-empty string" })
+        return
+      }
+      const assistantId = requestedAssistantId.trim()
+      const assistant =
+        assistantId === defaultAssistantId(accessContext.tenantId)
+          ? assistants.ensureDefault(accessContext.tenantId)
+          : assistants.get(assistantId, accessContext.tenantId)
+      // Unknown, cross-tenant and group-invisible are the same 404.
+      if (!assistant || !assistants.visibleTo(assistant, accessContext)) {
+        res.status(404).json({ error: "assistant not found" })
+        return
+      }
+      if (assistant.status === "archived") {
+        res.status(409).json({ error: "assistant is archived" })
+        return
+      }
+      // The deterministic default assistant IS the legacy path: its config is
+      // the overlay-free shape, so naming it (or omitting the field entirely)
+      // preserves existing chat behavior without a second execution engine.
+      if (assistantId !== defaultAssistantId(accessContext.tenantId)) {
+        const config = assistant.version.config
+        assistantSnapshot = {
+          id: assistant.id,
+          version: assistant.version.version,
+          systemPrompt: config.systemPrompt,
+          rerankModelProfileId: config.rerankModelProfileId,
+        }
+        // Bound scope: the effective knowledge scope is the INTERSECTION of
+        // the request-resolved scope and the assistant's binding. An empty
+        // binding means "no knowledge context"; toolPolicy "none" forbids
+        // retrieval entirely (retrieval is the only tool chat exposes).
+        const boundIds = config.knowledgeBaseIds
+        const retrievalAllowed = config.toolPolicy !== "none"
+        const effectiveIds = !retrievalAllowed
+          ? []
+          : boundIds.length === 0
+            ? null // no assistant constraint — the request-resolved scope stands
+            : (retrievalScope?.knowledgeBaseIds ?? []).filter((id) => boundIds.includes(id))
+        if (effectiveIds !== null && retrievalScope) {
+          retrievalScope = { ...retrievalScope, knowledgeBaseIds: effectiveIds }
+        } else if (effectiveIds !== null && !retrievalScope) {
+          retrievalScope = { knowledgeBaseIds: effectiveIds }
+        }
+      }
+    }
+
     // The legacy `model` field is accepted but ignored — the deployment-
     // configured model (cfg.openaiChatModel) is always used. Trace and export
     // metadata name that configured model, not a per-request override.
@@ -143,6 +218,7 @@ export function createChatRouter(
       signal: undefined,
       accessContext: undefined,
       ...(retrievalScope ? { retrievalScope } : {}),
+      ...(assistantSnapshot ? { assistant: assistantSnapshot } : {}),
     }
 
     // Ticket 05 follow-up wiring: bind sessionId → (tenantId, subjectId)

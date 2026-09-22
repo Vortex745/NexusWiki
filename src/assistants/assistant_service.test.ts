@@ -247,18 +247,17 @@ test("reader visibility follows allowed groups; admins and zero-group viewers se
   const technicalReader: AccessContext = { tenantId: "t1", subjectId: "r1", groups: ["technical"], scopes: ["chat"] }
   const policyReader: AccessContext = { tenantId: "t1", subjectId: "r2", groups: ["policy"], scopes: ["chat"] }
 
-  assert.equal(service.listForViewer("t1", admin).length, 2)
-  assert.equal(service.listForViewer("t1", zeroGroupReader).length, 2)
-  assert.deepEqual(
-    service.listForViewer("t1", technicalReader).map((a) => a.name),
-    ["全员", "技术专属"]
-  )
-  assert.deepEqual(
-    service.listForViewer("t1", policyReader).map((a) => a.name),
-    ["全员"]
-  )
-  // Cross-tenant rows never appear.
-  assert.equal(service.listForViewer("other-tenant", admin).length, 0)
+  // listForViewer lazily seeds the deterministic default assistant, which is
+  // group-free and therefore visible to every viewer.
+  const namesFor = (ctx: AccessContext) =>
+    service.listForViewer(ctx.tenantId, ctx).map((a) => a.name)
+  assert.equal(service.listForViewer("t1", admin).length, 3)
+  assert.equal(service.listForViewer("t1", zeroGroupReader).length, 3)
+  // List order is created_at ASC — the default assistant is seeded last.
+  assert.deepEqual(namesFor(technicalReader), ["全员", "技术专属", "默认助手"])
+  assert.deepEqual(namesFor(policyReader), ["全员", "默认助手"])
+  // Cross-tenant rows never appear (and get their own default there).
+  assert.deepEqual(namesFor({ tenantId: "other-tenant", subjectId: "x", groups: [], scopes: ["admin"] }), ["默认助手"])
 })
 
 test("HTTP: admin commands, reader payload omits config, visibility is a 404", async () => {
@@ -311,9 +310,12 @@ test("HTTP: admin commands, reader payload omits config, visibility is a 404", a
 
     const readerList = await fetch(`${reader.base}/api/assistants`)
     const readerBody = (await readerList.json()) as { assistants: Array<Record<string, unknown>> }
-    assert.equal(readerBody.assistants.length, 1, "group-visible row for the policy reader")
-    assert.equal("config" in readerBody.assistants[0], false, "reader payload omits the config")
-    assert.equal("allowedGroups" in readerBody.assistants[0], false)
+    // The lazily-seeded default assistant + the policy-visible one.
+    assert.equal(readerBody.assistants.length, 2)
+    const listed = readerBody.assistants.find((a) => a.id === id)
+    assert.ok(listed, "group-visible row for the policy reader")
+    assert.equal("config" in listed, false, "reader payload omits the config")
+    assert.equal("allowedGroups" in listed, false)
 
     const readerVersion = await fetch(`${reader.base}/api/assistants/${id}/versions/1`)
     const versionBody = (await readerVersion.json()) as { version: Record<string, unknown> }

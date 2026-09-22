@@ -68,6 +68,7 @@ import type { AgentMessage, AnswerRunEvent } from "../types"
 import type { AnswerModelProfileSnapshot } from "../types/answer"
 import { knowledgeBaseEmbeddingProfile } from "../types/knowledge_base"
 import { createMastraChatEventAdapter } from "./chat_event_adapter"
+import type { AssistantRunSnapshot } from "../assistants/assistant_service"
 import {
   createDirectAmbiguousMastraRunner,
   type DirectReplyStream,
@@ -206,16 +207,36 @@ export async function createSharedAnswerEntry(
       timeoutMs: cfg.rerankTimeoutMs,
       maxDocumentChars: cfg.rerankMaxDocumentChars,
     })
+  const pageIndexRepo = new PageIndexRepository(db)
+  const activeVersionRepo = new ActiveVersionRepository(db)
   const searchOperations =
     options.searchOperations ??
     new RuntimeSearchOperations({
       es: elasticsearch,
       embeddingClient,
       embeddingModel: cfg.embeddingModel,
-      pageIndexRepo: new PageIndexRepository(db),
-      activeVersionRepo: new ActiveVersionRepository(db),
+      pageIndexRepo,
+      activeVersionRepo,
       ...(reranker ? { reranker } : {}),
     })
+  // Ticket 19 (AST-01B): the rerank-free variant — an assistant whose
+  // immutable snapshot pins `rerankModelProfileId: null` runs WITHOUT the
+  // dedicated reranker (fused order + explicit reason), never with it. Only
+  // derivable when this entry built its own operations; injected operations
+  // (evaluation scopes) never carry assistant overlays.
+  const searchOperationsWithoutRerank = options.searchOperations
+    ? undefined
+    : new RuntimeSearchOperations({
+        es: elasticsearch,
+        embeddingClient,
+        embeddingModel: cfg.embeddingModel,
+        pageIndexRepo,
+        activeVersionRepo,
+      })
+  const searcherOperationsFor = (assistant?: AssistantRunSnapshot) =>
+    assistant?.rerankModelProfileId === null && searchOperationsWithoutRerank
+      ? searchOperationsWithoutRerank
+      : searchOperations
   const handoffStore = options.handoffStore ?? new SqliteHandoffStore(db)
   const resolveTenantId = (accessContext: AccessContext) =>
     accessContext.tenantId
@@ -251,7 +272,7 @@ export async function createSharedAnswerEntry(
   const contextualizer = new ContextualizerImpl(chatClient, cfg.openaiChatModel)
   const simpleRunner = createSimpleKnowledgeMastraRunner({
     router,
-    createSearcher: () => new SearcherImpl(searchOperations),
+    createSearcher: (assistant) => new SearcherImpl(searcherOperationsFor(assistant)),
     assembler: new ContextAssemblerImpl(),
     validator: new ValidatorImpl(chatClient, cfg.openaiChatModel),
     replanner: new RePlannerImpl(),
@@ -275,7 +296,7 @@ export async function createSharedAnswerEntry(
   const planner = new PlannerImpl(chatClient, cfg.openaiChatModel)
   const complexRunner = createComplexKnowledgeMastraRunner({
     router,
-    createSearcher: () => new SearcherImpl(searchOperations),
+    createSearcher: (assistant) => new SearcherImpl(searcherOperationsFor(assistant)),
     assembler: new ContextAssemblerImpl(),
     validator: new ValidatorImpl(chatClient, cfg.openaiChatModel),
     replanner: new RePlannerImpl(),

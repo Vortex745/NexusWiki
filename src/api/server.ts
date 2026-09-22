@@ -179,7 +179,10 @@ export function createApp(options: {
       traceRepository,
       options.eventsSource,
       options.sessionBinder,
-      options.retrievalScopeResolver
+      options.retrievalScopeResolver,
+      // Ticket 19 (AST-01B): the chat transport resolves the assistant overlay
+      // (prompt / bound scope / rerank binding) server-side per run.
+      options.assistants
     )
   )
   // Ticket 14 (RET-01): the read-only retrieval-debug run. Built from the

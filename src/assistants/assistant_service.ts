@@ -72,6 +72,25 @@ const DESCRIPTION_MAX = 2_000
 const SYSTEM_PROMPT_MAX = 8_000
 const KB_BINDING_MAX = 20
 
+const DEFAULT_ASSISTANT_ID_PREFIX = "assistant-default-"
+
+/**
+ * The deterministic id of a tenant's default assistant (mirrors
+ * {@link defaultKnowledgeBaseId}). A chat request that names no assistant —
+ * or names this one — runs the legacy overlay-free path.
+ */
+export function defaultAssistantId(tenantId: string): string {
+  return `${DEFAULT_ASSISTANT_ID_PREFIX}${tenantId}`
+}
+
+/** The immutable per-run snapshot the transport hands to the shared entry. */
+export interface AssistantRunSnapshot {
+  id: string
+  version: number
+  systemPrompt: string
+  rerankModelProfileId: "rerank" | null
+}
+
 export class InvalidAssistantCommandError extends Error {
   constructor(message: string) {
     super(message)
@@ -288,10 +307,55 @@ export class AssistantService {
   }
 
   /**
+   * Ticket 19 (AST-01B): seed the tenant's deterministic default assistant
+   * (INSERT OR IGNORE, same idempotency pattern as the default knowledge
+   * base). Its config is the overlay-free legacy shape — empty prompt, no KB
+   * binding, no rerank pin — and a run that names it takes the legacy path.
+   */
+  ensureDefault(tenantId: string): AssistantWithVersion {
+    const id = defaultAssistantId(tenantId)
+    const existing = this.get(id, tenantId)
+    if (existing) return existing
+    const timestamp = this.now().toISOString()
+    const seed = this.db.transaction(() => {
+      this.db
+        .prepare(
+          `INSERT OR IGNORE INTO assistants (
+            id, tenant_id, name, description, status, allowed_groups,
+            current_version, created_at, updated_at
+          ) VALUES (?, ?, '默认助手', '', 'active', '[]', 1, ?, ?)`
+        )
+        .run(id, tenantId, timestamp, timestamp)
+      this.db
+        .prepare(
+          `INSERT OR IGNORE INTO assistant_versions (assistant_id, version, config, created_at, created_by)
+           VALUES (?, 1, ?, ?, 'system')`
+        )
+        .run(
+          id,
+          JSON.stringify({
+            systemPrompt: "",
+            knowledgeBaseIds: [],
+            chatModelProfileId: "chat",
+            rerankModelProfileId: null,
+            toolPolicy: "read_only_retrieval",
+            memoryEnabled: false,
+          } satisfies AssistantVersionConfig),
+          timestamp
+        )
+    })
+    seed()
+    return this.get(id, tenantId) as AssistantWithVersion
+  }
+
+  /**
    * Group-visibility filtered list (graph_acl semantics): only callers
    * carrying groups are restricted; zero-group viewers and admins see all.
+   * The default assistant is seeded lazily on first list so a workspace can
+   * always offer the legacy choice.
    */
   listForViewer(tenantId: string, context: AccessContext): Assistant[] {
+    this.ensureDefault(tenantId)
     const rows = this.db
       .prepare(`SELECT * FROM assistants WHERE tenant_id = ? ORDER BY created_at ASC`)
       .all(tenantId) as AssistantRow[]

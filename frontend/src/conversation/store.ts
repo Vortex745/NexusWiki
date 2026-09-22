@@ -3,6 +3,7 @@ import { ConversationImpl, LocalStorageConversationStorage } from "@core/convers
 
 import { fetchRunHistory, streamChat } from "../lib/api"
 import { knowledgeStore } from "../runtime/knowledgeStore"
+import { assistantStore } from "../runtime/assistantStore"
 
 export interface ThreadSummary {
   id: string
@@ -147,6 +148,11 @@ export class ConversationStore {
           // empty = the server's default base. The server validates every id.
           ...(knowledgeStore.getSnapshot().selectedIds.length > 0
             ? { knowledgeBaseIds: knowledgeStore.getSnapshot().selectedIds }
+            : {}),
+          // Ticket 19 (AST-01B): the selected assistant, if any — the server
+          // resolves prompt/scope/tool/rerank from its stored version.
+          ...(assistantStore.getSnapshot().selectedId
+            ? { assistantId: assistantStore.getSnapshot().selectedId as string }
             : {}),
         },
         (data) => {

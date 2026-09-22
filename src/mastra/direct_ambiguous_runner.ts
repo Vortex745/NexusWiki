@@ -80,7 +80,10 @@ export class RouteNotSupportedError extends Error {
  */
 export type DirectReplyStream = (
   message: string,
-  signal: AbortSignal
+  signal: AbortSignal,
+  /** Ticket 19 (AST-01B): the assistant's own prompt, prepended as a leading
+   * system message when present (the snapshot is transport-resolved). */
+  options?: { systemPrompt?: string }
 ) => AsyncIterable<string>
 
 /**
@@ -127,13 +130,11 @@ export interface DirectAmbiguousMastraRunnerDeps {
 }
 
 /**
- * Clarification reply for the ambiguous route. Matches the legacy reply in
- * `src/answer/generation.ts:659` exactly so terminal behavior is preserved
- * (T09 #2: "Ambiguous requests produce the same clarification state,
- * persistence, expiry, and terminal behavior as the legacy path").
+ * Clarification reply for the ambiguous route. Terminal behavior (clarification
+ * state, persistence, expiry — T09 #2) is unchanged by the wording; the copy is
+ * user-facing so it stays in Chinese per the product language policy.
  */
-const AMBIGUOUS_CLARIFICATION_REPLY =
-  "I need more context to answer. Could you please provide more details?"
+const AMBIGUOUS_CLARIFICATION_REPLY = "仅凭当前信息我还无法作答，请您补充更多问题细节。"
 
 function checkAbort(signal: AbortSignal, checkpoint: string): void {
   if (!signal.aborted) return
@@ -309,8 +310,13 @@ export function createDirectAmbiguousMastraRunner(
       : effectiveMessage
 
     const tokens: string[] = []
-    for await (const token of streamDirectReply(promptMessage, input.signal)) {
+    for await (const token of streamDirectReply(promptMessage, input.signal, {
+      ...(input.assistant?.systemPrompt ? { systemPrompt: input.assistant.systemPrompt } : {}),
+    })) {
       tokens.push(token)
+      // Direct route has no critic gate before publication (T09 §13) — push
+      // each token to the transport live so the answer streams in real time.
+      input.onAnswerDelta?.(token)
     }
     const reply = tokens.join("")
 

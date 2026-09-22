@@ -195,7 +195,9 @@ export interface ComplexKnowledgeMastraRunnerDeps {
   /** Legacy Router — called once per run to get the route decision (GATE 0). */
   router: Router
   /** Factory for the authorized Searcher (called once per run, may be called again for correction retrieval). */
-  createSearcher: () => Searcher
+  /** Ticket 19: the assistant snapshot decides which searcher variant runs
+   *  (e.g. a `rerankModelProfileId: null` binding runs without the reranker). */
+  createSearcher: (assistant?: import("../assistants/assistant_service").AssistantRunSnapshot) => Searcher
   /** Legacy ContextAssembler — builds bounded Context from selected RetrievalResults. */
   assembler: ContextAssembler
   /** Legacy Validator (Critic) — checks answer coverage against context. */
@@ -473,7 +475,7 @@ export function createComplexKnowledgeMastraRunner(
       throw abortError("GATE 0 (before route)")
     }
 
-    const { signal, accessContext, sessionId, runId, retrievalScope } = input
+    const { signal, accessContext, sessionId, runId, retrievalScope, assistant } = input
     const tenantId = resolveTenantId ? resolveTenantId(accessContext) : "default"
     const preparedRoute = input.preparedRoute
 
@@ -565,7 +567,7 @@ export function createComplexKnowledgeMastraRunner(
     // -------------------------------------------------------------------------
     // GATE 1: retrieval (dual-path — complex loop OR planner.decompose).
     // -------------------------------------------------------------------------
-    const searcher = createSearcher()
+    const searcher = createSearcher(assistant)
     const unavailableChannels = new Set<RetrievalResult["source"]>()
     let retrievalAttempted = false
     let retrievalAvailable = false
@@ -994,6 +996,11 @@ export function createComplexKnowledgeMastraRunner(
     // GATE 3: answer draft (LLM stream). Mirrors T11.
     // -------------------------------------------------------------------------
     const initialMessages: AgentMessage[] = [
+      // Ticket 19 (AST-01B): the assistant's own prompt leads, ahead of the
+      // platform instructions — it is part of the immutable version snapshot.
+      ...(assistant?.systemPrompt
+        ? [{ role: "system" as const, content: assistant.systemPrompt }]
+        : []),
       { role: "system", content: SYSTEM_PROMPT },
       { role: "user", content: `${context}\n\n用户问题：${effectiveMessage}` },
     ]
@@ -1402,6 +1409,9 @@ export function createComplexKnowledgeMastraRunner(
 
       // Regenerate draft from the rebuilt context.
       const regenMessages: AgentMessage[] = [
+        ...(assistant?.systemPrompt
+          ? [{ role: "system" as const, content: assistant.systemPrompt }]
+          : []),
         { role: "system", content: SYSTEM_PROMPT },
         { role: "user", content: `${context}\n\n用户问题：${effectiveMessage}` },
       ]
