@@ -556,6 +556,163 @@ export async function updateFeedbackStatus(
   return (await response.json()) as FeedbackPayload
 }
 
+// ---------------------------------------------------------------------------
+// Ticket 30 (FAQ-01A): versioned FAQ entries inside one knowledge base
+// ---------------------------------------------------------------------------
+
+export type FaqEntryStatus = "active" | "disabled"
+
+export interface FaqSourcePayload {
+  title: string
+  uri: string | null
+}
+
+export interface FaqEntryVersionPayload {
+  version: number
+  question: string
+  normalizedQuestion: string
+  variants: string[]
+  answer: string
+  source: FaqSourcePayload | null
+  createdBy: string
+  createdAt: string
+}
+
+export interface FaqEntryPayload {
+  id: string
+  tenantId: string
+  knowledgeBaseId: string
+  status: FaqEntryStatus
+  currentVersion: number
+  createdAt: string
+  updatedAt: string
+  version: FaqEntryVersionPayload
+}
+
+export interface FaqCommandBody {
+  question?: string
+  answer?: string
+  variants?: string[]
+  source?: FaqSourcePayload | null
+}
+
+export interface FaqImportResultPayload {
+  imported: number
+  versioned: number
+  skipped: number
+  issues: string[]
+}
+
+/** A rejected FAQ command: 400 with per-field issues, 409 with the conflict. */
+export class FaqCommandError extends Error {
+  constructor(
+    message: string,
+    readonly issues: string[] = [],
+    readonly status = 0,
+    readonly conflict: Record<string, unknown> | null = null
+  ) {
+    super(message)
+    this.name = "FaqCommandError"
+  }
+}
+
+async function faqCommand(
+  knowledgeBaseId: string,
+  path: string,
+  method: string,
+  body?: unknown
+): Promise<Record<string, any>> {
+  const response = await apiFetch(
+    `/knowledge-bases/${encodeURIComponent(knowledgeBaseId)}/faqs${path}`,
+    {
+      method,
+      headers: { "Content-Type": "application/json" },
+      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+    }
+  )
+  if (!response.ok) {
+    const payload = (await response.json().catch(() => ({}))) as {
+      error?: string
+      issues?: unknown
+      conflict?: Record<string, unknown>
+    }
+    const issues = Array.isArray(payload.issues) ? payload.issues.map((issue) => String(issue)) : []
+    throw new FaqCommandError(
+      payload.error ?? `FAQ 操作失败 (${response.status})`,
+      issues,
+      response.status,
+      payload.conflict ?? null
+    )
+  }
+  return (await response.json()) as Record<string, any>
+}
+
+/** Entries of one knowledge base — DISABLED entries are listed too. */
+export async function fetchFaqEntries(
+  knowledgeBaseId: string,
+  status?: FaqEntryStatus
+): Promise<FaqEntryPayload[]> {
+  const payload = await faqCommand(
+    knowledgeBaseId,
+    status ? `?status=${status}` : "",
+    "GET"
+  )
+  return Array.isArray(payload.entries) ? (payload.entries as FaqEntryPayload[]) : []
+}
+
+export async function createFaqEntry(
+  knowledgeBaseId: string,
+  body: FaqCommandBody
+): Promise<FaqEntryPayload> {
+  const payload = await faqCommand(knowledgeBaseId, "", "POST", body)
+  return payload.entry as FaqEntryPayload
+}
+
+/** An edit adds an immutable version; omitted fields keep their value. */
+export async function editFaqEntry(
+  knowledgeBaseId: string,
+  id: string,
+  body: FaqCommandBody
+): Promise<FaqEntryPayload> {
+  const payload = await faqCommand(knowledgeBaseId, `/${encodeURIComponent(id)}`, "PATCH", body)
+  return payload.entry as FaqEntryPayload
+}
+
+export async function setFaqEntryStatus(
+  knowledgeBaseId: string,
+  id: string,
+  status: FaqEntryStatus
+): Promise<FaqEntryPayload> {
+  const payload = await faqCommand(
+    knowledgeBaseId,
+    `/${encodeURIComponent(id)}/${status === "active" ? "activate" : "disable"}`,
+    "POST"
+  )
+  return payload.entry as FaqEntryPayload
+}
+
+export async function fetchFaqEntryVersions(
+  knowledgeBaseId: string,
+  id: string
+): Promise<FaqEntryVersionPayload[]> {
+  const payload = await faqCommand(
+    knowledgeBaseId,
+    `/${encodeURIComponent(id)}/versions`,
+    "GET"
+  )
+  return Array.isArray(payload.versions) ? (payload.versions as FaqEntryVersionPayload[]) : []
+}
+
+/** Row-precise import: valid rows are applied, rejected rows are reported. */
+export async function importFaqEntries(
+  knowledgeBaseId: string,
+  format: "json" | "csv",
+  content: string
+): Promise<FaqImportResultPayload> {
+  const payload = await faqCommand(knowledgeBaseId, "/import", "POST", { format, content })
+  return payload.result as FaqImportResultPayload
+}
+
 export async function fetchRunHistory(runId: string): Promise<RunHistory> {
   const response = await apiFetch(`/chat/runs/${encodeURIComponent(runId)}`)
   if (!response.ok) throw new Error(`HTTP ${response.status}`)

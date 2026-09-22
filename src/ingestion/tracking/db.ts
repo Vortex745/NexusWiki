@@ -277,6 +277,35 @@ const SCHEMA = [
     created_by TEXT NOT NULL,
     PRIMARY KEY (assistant_id, version)
   )`,
+  // Ticket 30 (FAQ-01A): versioned FAQ entries. Metadata (status + the current
+  // version pointer) lives in faq_entries; everything a run executes against
+  // lives in immutable faq_entry_versions rows — an edit INSERTs, nothing ever
+  // UPDATEs or DELETEs a version, so an old version can be cited forever.
+  `CREATE TABLE IF NOT EXISTS faq_entries (
+    id TEXT PRIMARY KEY,
+    tenant_id TEXT NOT NULL,
+    knowledge_base_id TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active', 'disabled')),
+    current_version INTEGER NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_faq_entries_kb
+    ON faq_entries(knowledge_base_id, status)`,
+  `CREATE TABLE IF NOT EXISTS faq_entry_versions (
+    faq_entry_id TEXT NOT NULL,
+    version INTEGER NOT NULL,
+    question TEXT NOT NULL,
+    normalized_question TEXT NOT NULL,
+    variants TEXT NOT NULL DEFAULT '[]',
+    answer TEXT NOT NULL,
+    source TEXT,
+    created_by TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    PRIMARY KEY (faq_entry_id, version)
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_faq_entry_versions_normalized
+    ON faq_entry_versions(normalized_question)`,
   // Ticket 20 (CONV-01A): server-owned conversation directories. The id is
   // the thread/session id the browser already generates; ownership is the
   // (tenant_id, subject_id) pair, so the directory is user-isolated. `title`

@@ -66,6 +66,10 @@ export const DEMO_REBUILD_SQLITE_TABLES = [
   // them with the rest of the session state.
   "session_attachments",
   "session_attachment_chunks",
+  // Ticket 30 (FAQ-01A): standard answers and their immutable versions are
+  // workspace state of one knowledge base — a rebuild clears both.
+  "faq_entries",
+  "faq_entry_versions",
 ] as const
 
 /**

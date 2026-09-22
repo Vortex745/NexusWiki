@@ -48,6 +48,9 @@ import { createRetrievalDebugRouter } from "./retrieval_debug"
 import { createModelProfilesRouter } from "./model_profiles"
 import { createAssistantsRouter } from "./assistants"
 import { createConversationsRouter } from "./conversations"
+import { createFaqEntriesRouter } from "./faq_entries"
+import { FaqEntryServiceImpl } from "../faq/faq_entry_service"
+import { SqliteFaqEntryRepo } from "../faq/faq_entry_repo"
 import { createAttachmentsRouter } from "./attachments"
 import { SqliteConversationHistoryStore } from "../answer/conversation_history_store"
 import {
@@ -263,6 +266,19 @@ export function createApp(options: {
         : {}),
     })
   )
+  // Ticket 30 (FAQ-01A): the FAQ management surface. Mounted only when the
+  // server wires a knowledge-base resolver — the SAME resolver the chat path
+  // uses, so an unknown knowledge base is a 404 and an archived one a 409
+  // before any entry is read or written.
+  if (options.retrievalScopeResolver) {
+    app.use(
+      "/api",
+      createFaqEntriesRouter({
+        faqEntries: new FaqEntryServiceImpl({ repo: new SqliteFaqEntryRepo(db) }),
+        scopeResolver: options.retrievalScopeResolver,
+      })
+    )
+  }
   if (options.managementAccessMiddleware) {
     app.use("/api/handoffs", options.managementAccessMiddleware)
     app.use("/api/sources", options.managementAccessMiddleware)
