@@ -254,9 +254,22 @@ export type EvaluationTaskInput = ({ datasetId: string } | { dataset: unknown })
  * messages so the page can point at the offending entry (ticket 05).
  */
 export class EvaluationRequestError extends Error {
-  constructor(message: string, readonly issues: string[] = []) {
+  constructor(message: string, readonly issues: string[] = [], readonly status = 0) {
     super(message)
     this.name = "EvaluationRequestError"
+  }
+}
+
+/**
+ * Ticket 26 (EVAL-01B1): a cancel can be refused for a STATE reason — 404 when
+ * the record is gone from this process, 409 when the task already settled (a
+ * cancel never rewrites a result). The status is kept so the page can refresh
+ * the settled record instead of showing a failure for a normal outcome.
+ */
+export class EvaluationCancelError extends Error {
+  constructor(message: string, readonly status: number) {
+    super(message)
+    this.name = "EvaluationCancelError"
   }
 }
 
@@ -269,7 +282,11 @@ export async function createEvaluationTask(input: EvaluationTaskInput): Promise<
   if (!response.ok) {
     const body = (await response.json().catch(() => ({}))) as { error?: string; issues?: unknown }
     const issues = Array.isArray(body.issues) ? body.issues.map((issue) => String(issue)) : []
-    throw new EvaluationRequestError(body.error || `评测任务提交失败 (${response.status})`, issues)
+    throw new EvaluationRequestError(
+      body.error || `评测任务提交失败 (${response.status})`,
+      issues,
+      response.status
+    )
   }
   return (await response.json()) as EvaluationTaskSummary
 }
@@ -296,9 +313,9 @@ export async function fetchEvaluationTask(id: string): Promise<EvaluationTaskDet
  */
 export async function cancelEvaluationTask(id: string): Promise<EvaluationTaskDetail> {
   const response = await apiFetch(`/evaluations/${encodeURIComponent(id)}/cancel`, { method: "POST" })
-  if (response.status === 404) throw new Error("任务不在当前服务进程中")
-  if (response.status === 409) throw new Error("任务已经结束，结果不会被取消改写")
-  if (!response.ok) throw new Error(`取消失败 (${response.status})`)
+  if (response.status === 404) throw new EvaluationCancelError("任务不在当前服务进程中", 404)
+  if (response.status === 409) throw new EvaluationCancelError("任务已经结束，结果不会被取消改写", 409)
+  if (!response.ok) throw new EvaluationCancelError(`取消失败 (${response.status})`, response.status)
   return (await response.json()) as EvaluationTaskDetail
 }
 

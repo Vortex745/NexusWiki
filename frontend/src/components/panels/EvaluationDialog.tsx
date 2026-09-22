@@ -3,6 +3,7 @@ import { useCallback, useEffect, useRef, useState } from "react"
 
 import {
   createEvaluationTask,
+  EvaluationCancelError,
   EvaluationRequestError,
   cancelEvaluationTask,
   fetchEvaluationDatasets,
@@ -401,7 +402,10 @@ export function EvaluationDialog({ open, onClose }: { open: boolean; onClose: ()
         setUploadIssues(error.issues.length > 0 ? error.issues : [error.message])
       }
       const message = error instanceof Error ? error.message : String(error)
-      setLoadError(`提交失败：${message}`)
+      // 票 26：503＝服务正在关闭（本进程不再接受新任务），这与"提交被拒绝"不同，
+      // 页面直接把原因说清楚，重启后再运行即可。
+      const shuttingDown = error instanceof EvaluationRequestError && error.status === 503
+      setLoadError(shuttingDown ? `评测服务正在关闭，本次未提交：${message}` : `提交失败：${message}`)
     } finally {
       setSubmitting(false)
     }
@@ -417,7 +421,13 @@ export function EvaluationDialog({ open, onClose }: { open: boolean; onClose: ()
       // state (the cancel reason stays visible next to it).
       startPolling(id)
     } catch (error) {
-      setLoadError(error instanceof Error ? error.message : String(error))
+      // 票 26：409 不是错误，而是"任务已经到达终态、取消不改写它"——直接刷新并展示
+      // 那个唯一的终态；404 同理只说明记录不在本进程。只有真正的传输失败才报错。
+      if (error instanceof EvaluationCancelError && (error.status === 409 || error.status === 404)) {
+        void selectTask(id)
+      } else {
+        setLoadError(error instanceof Error ? error.message : String(error))
+      }
     } finally {
       setCancelling(false)
     }
@@ -463,7 +473,7 @@ export function EvaluationDialog({ open, onClose }: { open: boolean; onClose: ()
           onClick={onClose}
           aria-label="关闭评测"
           title="关闭"
-          className="grid size-7 flex-none cursor-pointer place-items-center rounded-md text-muted/70 transition-colors hover:bg-surface-subtle hover:text-ink"
+          className="grid size-7 flex-none cursor-pointer place-items-center rounded-md text-muted/70 transition-colors hover:bg-surface-subtle hover:text-ink focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand"
         >
           <Icon icon={X} className="size-3.5" />
         </button>
@@ -486,7 +496,7 @@ export function EvaluationDialog({ open, onClose }: { open: boolean; onClose: ()
               }}
               disabled={running}
               className={cn(
-                "flex-1 cursor-pointer rounded-md px-3 py-1.5 text-xs font-medium transition-colors disabled:cursor-not-allowed",
+                "flex-1 cursor-pointer rounded-md px-3 py-1.5 text-xs font-medium transition-colors disabled:cursor-not-allowed focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand",
                 mode === value ? "bg-surface text-ink shadow-sm" : "text-muted/70 hover:text-ink",
               )}
             >
@@ -622,7 +632,7 @@ export function EvaluationDialog({ open, onClose }: { open: boolean; onClose: ()
           type="button"
           disabled={!canRun || submitting || running}
           onClick={() => void handleRun()}
-          className="mt-4 inline-flex h-9 w-full flex-none cursor-pointer items-center justify-center gap-2 rounded-lg bg-neutral-900 px-4 text-xs font-medium text-white shadow-sm transition-all hover:bg-neutral-800 active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-50 disabled:active:scale-100 dark:bg-neutral-200 dark:text-neutral-900 dark:hover:bg-white"
+          className="mt-4 inline-flex h-9 w-full flex-none cursor-pointer items-center justify-center gap-2 rounded-lg bg-neutral-900 px-4 text-xs font-medium text-white shadow-sm transition-all hover:bg-neutral-800 active:scale-[0.98] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand disabled:cursor-not-allowed disabled:opacity-50 disabled:active:scale-100 dark:bg-neutral-200 dark:text-neutral-900 dark:hover:bg-white"
         >
           {running ? "评测进行中…" : submitting ? "提交中…" : mode === "upload" ? "运行上传数据集" : "运行评测"}
         </button>
@@ -633,7 +643,7 @@ export function EvaluationDialog({ open, onClose }: { open: boolean; onClose: ()
             type="button"
             disabled={cancelling}
             onClick={() => void handleCancel()}
-            className="mt-2 inline-flex h-8 w-full flex-none cursor-pointer items-center justify-center rounded-lg border border-line bg-surface px-4 text-xs text-muted transition-colors hover:bg-surface-subtle hover:text-ink disabled:cursor-not-allowed disabled:opacity-50"
+            className="mt-2 inline-flex h-8 w-full flex-none cursor-pointer items-center justify-center rounded-lg border border-line bg-surface px-4 text-xs text-muted transition-colors hover:bg-surface-subtle hover:text-ink focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand disabled:cursor-not-allowed disabled:opacity-50"
           >
             {cancelling ? "正在取消…" : "取消本次评测"}
           </button>
@@ -661,7 +671,7 @@ export function EvaluationDialog({ open, onClose }: { open: boolean; onClose: ()
                     type="button"
                     onClick={() => void selectTask(item.id)}
                     className={cn(
-                      "flex w-full cursor-pointer items-center justify-between gap-2 rounded-md border px-2.5 py-1.5 text-left text-[11px] transition-colors",
+                      "flex w-full cursor-pointer items-center justify-between gap-2 rounded-md border px-2.5 py-1.5 text-left text-[11px] transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand",
                       item.id === selectedTaskId
                         ? "border-brand bg-brand-subtle/40"
                         : "border-line hover:bg-surface-subtle",
@@ -749,7 +759,7 @@ export function EvaluationDialog({ open, onClose }: { open: boolean; onClose: ()
                   </p>
                 ) : null}
                 {item.error ? <p className="mt-2 text-[11px] text-red-600">{item.error}</p> : null}
-                <dl className="mt-2 grid grid-cols-3 gap-x-3 gap-y-1 text-[11px] text-muted/70">
+                <dl className="mt-2 grid grid-cols-3 gap-x-3 gap-y-1 text-[11px] text-muted/70 max-md:grid-cols-2">
                   {CASE_METRICS.map(([key, label]) => (
                     <div key={key} className="flex justify-between gap-2">
                       <dt>{label}</dt>
@@ -824,7 +834,7 @@ export function EvaluationDialog({ open, onClose }: { open: boolean; onClose: ()
                     {task.metrics.version}
                   </span>
                 </p>
-                <dl className="mt-1.5 grid grid-cols-2 gap-x-4 gap-y-1 text-[11px]">
+                <dl className="mt-1.5 grid grid-cols-2 gap-x-4 gap-y-1 text-[11px] max-md:grid-cols-1">
                   {CASE_METRICS.map(([key, label]) => {
                     const summary = task.metrics.metrics[key]
                     return (

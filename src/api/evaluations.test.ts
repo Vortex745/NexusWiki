@@ -12,6 +12,7 @@ import type {
   IsolatedEvalResources,
 } from "../evaluation/isolated_resources"
 import { EvalPrepareError } from "../evaluation/isolated_resources"
+import { cleanupIncomplete } from "../evaluation/contracts"
 import type { EvalModelOverrides } from "../evaluation/service"
 import type { Reranker } from "../retrieval/search/interface"
 import type { AppConfig } from "../config"
@@ -2066,6 +2067,142 @@ test("case-level failures are redacted like every other exposed error", async ()
     assert.equal(cases[0].outcome, "failed")
     assert.match(String(cases[0].error), /\*\*\*@es\.test/)
     assert.equal(JSON.stringify(detail).includes("sup3rsecret"), false)
+  } finally {
+    await harness.close()
+  }
+})
+
+// ---------------------------------------------------------------------------
+// Ticket 26 (EVAL-01B1) — batch / upload / failure convergence, shutdown and
+// restart acceptance. Every criterion is asserted on the public HTTP surface.
+// ---------------------------------------------------------------------------
+
+/** The inline-upload shape a browser sends after reading a local JSON file. */
+const UPLOAD_DATASET = {
+  schemaVersion: 1,
+  name: "上传数据集",
+  version: "1.0.0",
+  corpus: [
+    { passageId: "p-refund", content: "退款在 3 个工作日内到账。" },
+    { passageId: "p-ship", content: "发货后 48 小时内送达。" },
+  ],
+  cases: [
+    {
+      caseId: "u-refund",
+      question: "退款多久到账？",
+      referenceAnswer: "3 个工作日。",
+      relevantPassageIds: ["p-refund"],
+    },
+    {
+      caseId: "u-ship",
+      question: "多久送达？",
+      referenceAnswer: "48 小时。",
+      relevantPassageIds: ["p-ship"],
+    },
+  ],
+}
+
+test("batch, upload and partial-failure runs each settle on exactly one terminal state", async () => {
+  const harness = await buildHarness({ throwByCase: { "u-ship": "provider refused" } })
+  try {
+    // 批量内置样例：全部成功 → completed。
+    const batch = await createTask(harness.port, { datasetId: "refund-batch-3" })
+    const batchDetail = await pollTerminal(harness.port, batch.body.id as string)
+    assert.equal(batchDetail.stage, "completed")
+    assert.deepEqual(batchDetail.counts, { answered: 3, failed: 0, degraded: 0 })
+    assert.deepEqual(batchDetail.progress, { finished: 3, total: 3 })
+
+    // 上传的数据集走同一个校验器与同一批执行路径；一题失败 → completed_with_errors。
+    const upload = await createTask(harness.port, { dataset: UPLOAD_DATASET })
+    assert.equal(upload.status, 202)
+    const id = upload.body.id as string
+    const uploadDetail = await pollTerminal(harness.port, id)
+    assert.equal(uploadDetail.stage, "completed_with_errors")
+    assert.deepEqual(uploadDetail.counts, { answered: 1, failed: 1, degraded: 0 })
+    assert.deepEqual(uploadDetail.progress, { finished: 2, total: 2 })
+    const cases = uploadDetail.cases as Array<Record<string, unknown>>
+    assert.deepEqual(
+      cases.map((item) => item.outcome),
+      ["answered", "failed"],
+      "results stay at their dataset index whatever the completion order was"
+    )
+    assert.match(String(cases[1].error), /provider refused/)
+
+    // 单一终态：重复读取不会看到另一个 stage，finishedAt 也不会被改写。
+    const reread = await api(harness.port, `/api/evaluations/${id}`)
+    assert.equal(reread.body.stage, "completed_with_errors")
+    assert.equal(reread.body.finishedAt, uploadDetail.finishedAt)
+    const late = await api(harness.port, `/api/evaluations/${id}/cancel`, { method: "POST" })
+    assert.equal(late.status, 409, "a settled batch cannot be rewritten by a late cancel")
+  } finally {
+    await harness.close()
+  }
+})
+
+test("a cleanup failure is visible on the settled record and cannot read as full success", async () => {
+  const harness = await buildHarness({
+    disposeReport: {
+      esIndex: "failed",
+      esError: "es://user:sup3rsecret@es.test refused",
+      graphProvenance: "failed",
+      graphError: "neo4j://user:sup3rsecret@neo4j.test refused",
+      dbClosed: false,
+    },
+  })
+  try {
+    const created = await createTask(harness.port, { datasetId: "refund-single-case" })
+    const detail = await pollTerminal(harness.port, created.body.id as string)
+
+    assert.equal(
+      detail.stage,
+      "completed_with_errors",
+      "a run that could not release its scope is never reported as 完成"
+    )
+    assert.equal(detail.error, undefined, "运行本身成功：运行失败与清理失败分开记录")
+    const cleanup = detail.cleanup as Record<string, unknown>
+    assert.equal(cleanupIncomplete(cleanup as never), true, "the leftover scope is explicit")
+    assert.match(String(cleanup.esError), /\*\*\*@es\.test/, "cleanup credentials stay redacted")
+    assert.match(String(cleanup.graphError), /\*\*\*@neo4j\.test/)
+    assert.equal(cleanup.dbClosed, false)
+    assert.equal(JSON.stringify(detail).includes("sup3rsecret"), false)
+  } finally {
+    await harness.close()
+  }
+})
+
+test("shutdown cancels and bounds active work and a restarted process starts empty", async () => {
+  const harness = await buildHarness({
+    delayByCaseMs: { "refund-eta": 5_000 },
+    disposeDelayMs: 30,
+  })
+  try {
+    const created = await createTask(harness.port, { datasetId: "refund-single-case" })
+    const id = created.body.id as string
+    await waitUntil(() => harness.scopes[0]?.preparedCaseOptions.length === 1)
+
+    const started = Date.now()
+    const report = await harness.service.shutdown({ timeoutMs: 5_000 })
+    const elapsed = Date.now() - started
+    assert.deepEqual(report.cancelledTaskIds, [id])
+    assert.equal(report.timedOut, false, "the abort reaches the in-flight case inside the budget")
+    assert.ok(
+      elapsed < 2_000,
+      `shutdown awaited the cancelled run instead of the stuck case (${elapsed}ms)`
+    )
+    assert.equal(harness.scopes[0].disposeCalls, 1, "the stopped run still released its scope")
+    assert.equal(report.releases[0].stage, "failed", "the cancelled run reached a terminal stage")
+    assert.equal(report.releases[0].cleanup?.esIndex, "deleted")
+    assert.equal(harness.scopes[0].getState(), "disposed")
+
+    // 关闭中的服务不再接受新任务；重启后的进程内历史是空的（记录只存在于内存）。
+    const refused = await createTask(harness.port, { datasetId: "refund-single-case" })
+    assert.equal(refused.status, 503)
+
+    await harness.rebuild()
+    const listed = await api(harness.port, "/api/evaluations")
+    assert.deepEqual(listed.body.tasks, [], "重启后没有可查询的记录")
+    const gone = await api(harness.port, `/api/evaluations/${id}`)
+    assert.equal(gone.status, 404, "重启前的任务 id 不再是可读的引用")
   } finally {
     await harness.close()
   }

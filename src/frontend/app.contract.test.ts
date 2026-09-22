@@ -319,6 +319,44 @@ test("the evaluation dialog covers every state and stays usable on small screens
   )
 })
 
+test("the evaluation dialog is operable by keyboard and collapses on a narrow layout", () => {
+  const dialog = read("frontend/src/components/panels/EvaluationDialog.tsx")
+  // Native dialog owns Escape, modality and the focus trap; every action below
+  // is a real <button>/<input>/<textarea>/<label>, so Tab/Enter/Space/arrow keys
+  // come from the platform instead of a hand-rolled keyboard model.
+  assert.match(dialog, /dialog\.showModal\(\)/, "opening uses the platform modal path")
+  assert.match(dialog, /type="radio"/, "the dataset choice is a native radio group")
+  assert.match(dialog, /aria-label="选择数据集 JSON 文件"/, "the file picker is keyboard reachable")
+  assert.match(dialog, /focus-visible:outline-2/, "focus stays visible for keyboard users")
+  assert.equal(/onKeyDown=/.test(dialog), false, "no keyboard model is layered over the platform's")
+  assert.equal(/tabIndex=\{-1\}/.test(dialog), false, "nothing is removed from the tab order")
+  // Narrow layout: full-screen under md, metric grids collapse, padding follows.
+  assert.match(dialog, /max-md:h-dvh/, "the dialog fills the narrow viewport")
+  assert.match(dialog, /max-md:grid-cols-2/, "per-case metrics collapse to two columns")
+  assert.match(dialog, /max-md:grid-cols-1/, "summary metrics collapse to one column")
+  assert.match(dialog, /max-md:px-4/, "content padding follows the narrow screen")
+})
+
+test("a refused cancel or a stopping service is reported as a state, not a failure", () => {
+  const dialog = read("frontend/src/components/panels/EvaluationDialog.tsx")
+  assert.match(
+    dialog,
+    /EvaluationCancelError/,
+    "the page distinguishes a state refusal from a transport failure"
+  )
+  assert.match(dialog, /error\.status === 409/, "409 means the task already reached its terminal state")
+  assert.match(
+    dialog,
+    /void selectTask\(id\)/,
+    "the panel re-reads the settled record instead of leaving a stale running view"
+  )
+  assert.match(
+    dialog,
+    /评测服务正在关闭/,
+    "503 is explained as a stopping service rather than a rejected request"
+  )
+})
+
 test("the evaluation dialog separates cleanup failures from the run outcome", () => {
   const dialog = read("frontend/src/components/panels/EvaluationDialog.tsx")
   assert.match(
