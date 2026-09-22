@@ -217,6 +217,12 @@ export interface EvaluationServiceOptions {
    * dedicated adapter normal chat uses; absent → rerank overrides are refused.
    */
   createReranker?: (model: string) => Reranker | undefined
+  /**
+   * Ticket 16 (MODEL-01A): profile gate — a disabled profile can never be
+   * selected through raw request values, whatever the allowlists contain.
+   * Absent (tests) → no profile gate beyond the allowlists.
+   */
+  modelProfileGate?: { selectable(kind: "chat" | "rerank"): boolean }
   now?: () => Date
   generateId?: () => string
   maxRetainedTasks?: number
@@ -282,6 +288,7 @@ export class EvaluationService {
   private readonly allowedChatModels: readonly string[]
   private readonly allowedRerankModels: readonly string[]
   private readonly createReranker?: (model: string) => Reranker | undefined
+  private readonly modelProfileGate?: { selectable(kind: "chat" | "rerank"): boolean }
   /** Ticket 14: set once shutdown began — no new task is accepted after it. */
   private stopped = false
 
@@ -302,6 +309,7 @@ export class EvaluationService {
     this.allowedChatModels = options.allowedChatModels ?? []
     this.allowedRerankModels = options.allowedRerankModels ?? []
     this.createReranker = options.createReranker
+    this.modelProfileGate = options.modelProfileGate
     this.createResources =
       options.createResources ??
       ((
@@ -550,6 +558,20 @@ export class EvaluationService {
         ["rerankModel"]
       )
     }
+    // Ticket 16 (MODEL-01A): the profile gate runs LAST so a disabled profile
+    // reports the same field-named 400 as any other refused id.
+    if (chatModel && this.modelProfileGate && !this.modelProfileGate.selectable("chat")) {
+      throw new EvaluationRequestError(
+        "chatModel rejected: the chat model profile is disabled on this server",
+        ["chatModel"]
+      )
+    }
+    if (rerankModel && this.modelProfileGate && !this.modelProfileGate.selectable("rerank")) {
+      throw new EvaluationRequestError(
+        "rerankModel rejected: the rerank model profile is disabled on this server",
+        ["rerankModel"]
+      )
+    }
     return { ...(chatModel ? { chatModel } : {}), ...(rerankModel ? { rerankModel } : {}) }
   }
 
@@ -772,8 +794,10 @@ export class EvaluationService {
     const startedAt = Date.now()
     // Per-case session + case correlation: cases never share conversation
     // memory, and every emitted event is attributable to its case.
-    const sessionId = `eval-${record.id}-${caseDef.caseId}`
-    const runId = `eval-${record.id}-${caseDef.caseId}-${this.now().getTime()}`
+    // Dataset ids may contain Unicode or be long; internal ids must satisfy
+    // the shared Answer adapter's ASCII/100-character contract.
+    const sessionId = `eval-${record.id}-${randomUUID()}`
+    const runId = `eval-${record.id}-${randomUUID()}`
     const caseSignal = AbortSignal.any([taskSignal, AbortSignal.timeout(this.caseTimeoutMs)])
 
     let done: AnswerRunResult | undefined
@@ -794,6 +818,19 @@ export class EvaluationService {
       failure = error instanceof Error ? error.message : String(error)
       if (caseSignal.aborted && !taskSignal.aborted) {
         failure = `case exceeded its ${this.caseTimeoutMs}ms budget: ${failure}`
+      }
+    }
+
+    // The shared Answer adapter reports provider errors and cancellation as
+    // terminal events; it does not necessarily throw from the event stream.
+    if (failure === undefined) {
+      if (!done) {
+        failure = "answer stream ended without a terminal result"
+      } else if (done.status === "provider_error" || done.status === "cancelled") {
+        failure = `answer run ended with ${done.status}`
+        if (caseSignal.aborted && !taskSignal.aborted) {
+          failure = `case exceeded its ${this.caseTimeoutMs}ms budget: ${failure}`
+        }
       }
     }
 

@@ -8,6 +8,7 @@ import { ImportDialog } from "./components/panels/ImportDialog"
 import { InsightDialog } from "./components/panels/InsightDialog"
 import { KnowledgeDialog } from "./components/panels/KnowledgeDialog"
 import { MemoryDialog } from "./components/panels/MemoryDialog"
+import { SettingsDialog } from "./components/panels/SettingsDialog"
 import type { Attachment } from "./components/thread/Thread"
 import { Toast, type ToastMessage } from "./components/Toast"
 import { conversationStore } from "./conversation/useConversation"
@@ -80,6 +81,7 @@ function AppRoot() {
   const [importOpen, setImportOpen] = useState(false)
   const [evaluationOpen, setEvaluationOpen] = useState(false)
   const [knowledgeOpen, setKnowledgeOpen] = useState(false)
+  const [settingsOpen, setSettingsOpen] = useState(false)
   const [documentView, setDocumentView] = useState<{ open: boolean; target: DocumentViewTarget | null }>({
     open: false,
     target: null,
@@ -99,14 +101,15 @@ function AppRoot() {
   const openImport = useCallback(() => setImportOpen(true), [])
   const openEvaluation = useCallback(() => setEvaluationOpen(true), [])
   const openKnowledge = useCallback(() => setKnowledgeOpen(true), [])
+  const openSettings = useCallback(() => setSettingsOpen(true), [])
   const openDocument = useCallback(
     (target: DocumentViewTarget) => setDocumentView({ open: true, target }),
     [],
   )
 
   const shellActions = useMemo<AppShellActions>(
-    () => ({ openInsight, openMemory, openImport, openEvaluation, openKnowledge, openDocument, showToast }),
-    [openInsight, openMemory, openImport, openEvaluation, openKnowledge, openDocument, showToast],
+    () => ({ openInsight, openMemory, openImport, openEvaluation, openKnowledge, openSettings, openDocument, showToast }),
+    [openInsight, openMemory, openImport, openEvaluation, openKnowledge, openSettings, openDocument, showToast],
   )
 
   // Staged attachments are consumed the moment a prompt actually goes out.
@@ -183,6 +186,7 @@ function AppRoot() {
           <ImportDialog open={importOpen} onClose={() => setImportOpen(false)} />
           <EvaluationDialog open={evaluationOpen} onClose={() => setEvaluationOpen(false)} />
           <KnowledgeDialog open={knowledgeOpen} onClose={() => setKnowledgeOpen(false)} />
+          <SettingsDialog open={settingsOpen} onClose={() => setSettingsOpen(false)} />
           <DocumentViewerDialog
             open={documentView.open}
             target={documentView.target}

@@ -49,6 +49,9 @@ export const DEMO_REBUILD_SQLITE_TABLES = [
   "handoff_cases",
   "feedback",
   "source_tombstones",
+  // Ticket 16 (MODEL-01A): the profile toggles are workspace state — a rebuild
+  // resets them so the next boot re-seeds from the credential slots.
+  "model_profiles",
 ] as const
 
 /**

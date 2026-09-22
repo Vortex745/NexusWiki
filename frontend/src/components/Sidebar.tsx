@@ -1,5 +1,5 @@
 import { ThreadListItemPrimitive, ThreadListPrimitive } from "@assistant-ui/react"
-import { BookOpen, Brain, Check, Database, FileText, FlaskConical, MessageCircle, Moon, Plus, Sun, Trash2 } from "lucide"
+import { BookOpen, Brain, Check, Database, FileText, FlaskConical, MessageCircle, Moon, Plus, Settings, Sun, Trash2 } from "lucide"
 import { useEffect, useState } from "react"
 import type { IconProps } from "./ui/Icon"
 
@@ -180,7 +180,7 @@ interface SidebarProps {
 }
 
 export function Sidebar({ open, collapsed, isDark, onToggleTheme, onCloseMobile }: SidebarProps) {
-  const { openImport, openMemory, openEvaluation } = useAppShell()
+  const { openImport, openMemory, openEvaluation, openSettings } = useAppShell()
   const { memories } = useMemoryApi()
   const { threads } = useConversation()
   // Ticket 01: navigation mirrors what the server will actually authorize —
@@ -247,6 +247,9 @@ export function Sidebar({ open, collapsed, isDark, onToggleTheme, onCloseMobile 
             {canIngest ? <SidebarButton icon={Database} label="导入文档" onClick={openImport} /> : null}
             {canAdmin ? (
               <SidebarButton icon={FlaskConical} label="运行评测" onClick={openEvaluation} />
+            ) : null}
+            {canAdmin ? (
+              <SidebarButton icon={Settings} label="模型设置" onClick={openSettings} />
             ) : null}
             <SidebarButton
               icon={isDark ? Sun : Moon}

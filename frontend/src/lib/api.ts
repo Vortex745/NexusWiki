@@ -765,3 +765,59 @@ export async function runRetrievalDebug(
   }
   return (await response.json()) as LabRunPayload
 }
+
+// ---------------------------------------------------------------------------
+// Model profiles (ticket 16 MODEL-01A) — administrators only
+// ---------------------------------------------------------------------------
+
+export interface ModelProfilePayload {
+  id: "chat" | "embedding" | "rerank"
+  kind: "chat" | "embedding" | "rerank"
+  model: string
+  baseUrlHost: string
+  dimensions?: number
+  configured: boolean
+  enabled: boolean
+  selectable: boolean
+}
+
+export interface ModelProfileTestResult {
+  ok: boolean
+  latencyMs: number | null
+  error: string | null
+  hint: string | null
+}
+
+export async function fetchModelProfiles(): Promise<ModelProfilePayload[]> {
+  const response = await apiFetch("/models/profiles")
+  if (!response.ok) throw new Error(`模型配置读取失败 (${response.status})`)
+  const body = (await response.json()) as { profiles?: ModelProfilePayload[] }
+  return Array.isArray(body.profiles) ? body.profiles : []
+}
+
+export async function setModelProfileEnabled(
+  id: string,
+  enabled: boolean,
+): Promise<ModelProfilePayload> {
+  const response = await apiFetch(`/models/profiles/${encodeURIComponent(id)}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ enabled }),
+  })
+  if (!response.ok) {
+    const body = (await response.json().catch(() => ({}))) as { error?: string; hint?: string }
+    throw new DocumentOperationError(
+      body.hint ? `${body.error} — ${body.hint}` : body.error || `操作失败 (${response.status})`,
+      response.status,
+    )
+  }
+  return (await response.json()) as { profile: ModelProfilePayload }["profile"]
+}
+
+export async function testModelProfile(id: string): Promise<ModelProfileTestResult> {
+  const response = await apiFetch(`/models/profiles/${encodeURIComponent(id)}/test`, {
+    method: "POST",
+  })
+  if (!response.ok) throw new DocumentOperationError(`测试失败 (${response.status})`, response.status)
+  return (await response.json()) as ModelProfileTestResult
+}

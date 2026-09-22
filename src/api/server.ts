@@ -42,6 +42,8 @@ import { knowledgeBaseEmbeddingProfile } from "../types/knowledge_base"
 import { createKnowledgeBaseRouter } from "./knowledge_bases"
 import { createDocumentsRouter, createEsChunkReader } from "./documents"
 import { createRetrievalDebugRouter } from "./retrieval_debug"
+import { createModelProfilesRouter } from "./model_profiles"
+import { ModelProfileRegistry } from "../models/profiles"
 
 export function createApp(options: {
   db?: DB
@@ -96,6 +98,8 @@ export function createApp(options: {
   // When omitted (e.g. tests), the status route is not mounted.
   processRuntime?: import("../runtime/process_runtime").ProcessRuntime
   config?: import("../config").AppConfig
+  /** Ticket 16 (MODEL-01A): built-in model profiles; omitted → routes not mounted. */
+  modelProfiles?: import("../models/profiles").ModelProfileRegistry
 }) {
   const app = express()
   const db = options.db || openDb()
@@ -270,6 +274,22 @@ export function createApp(options: {
     // deployment-configured model is the only model. The source file
     // (src/api/models.ts) is retained for potential future use.
   }
+  // Ticket 16 (MODEL-01A): the admin model-profile workspace. Mounted whenever
+  // a registry is provided (production wiring); the router itself enforces the
+  // admin scope and only ever exposes non-secret metadata.
+  if (options.modelProfiles && options.config && options.processRuntime) {
+    app.use(
+      "/api",
+      createModelProfilesRouter({
+        registry: options.modelProfiles,
+        config: options.config,
+        clients: {
+          chatClient: options.processRuntime.chatClient,
+          embeddingClient: options.processRuntime.embeddingClient,
+        },
+      })
+    )
+  }
   app.use("/api", ingestRouter)
   return app
 }
@@ -355,6 +375,9 @@ export async function startServer(
   // Ticket 04: the evaluation service shares the production clients but owns
   // its per-task isolated scopes, in-memory task registry, and the dedicated
   // reranker built from RERANK_* config (the same adapter normal chat uses).
+  // Ticket 16 (MODEL-01A): the built-in profile registry seeds its toggle rows
+  // and gates raw model selections (evaluation overrides today).
+  const modelProfiles = new ModelProfileRegistry(processRuntime.db, config)
   const reranker = createDedicatedReranker({
     baseUrl: config.rerankBaseUrl,
     apiKey: config.rerankApiKey,
@@ -383,6 +406,9 @@ export async function startServer(
         timeoutMs: config.rerankTimeoutMs,
         maxDocumentChars: config.rerankMaxDocumentChars,
       }),
+    // Ticket 16 (MODEL-01A): a disabled or unknown profile can never be
+    // selected through raw request values, whatever the allowlists say.
+    modelProfileGate: modelProfiles,
   })
   const app = createApp({
     db: processRuntime.db,
@@ -400,6 +426,7 @@ export async function startServer(
     processRuntime,
     config,
     evaluationService,
+    modelProfiles,
   })
   const server = await new Promise<Server>((resolve) => {
     const s = app.listen(port, () => {
