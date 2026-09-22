@@ -1032,6 +1032,10 @@ export class EvaluationService {
       ...(failure !== undefined ? { error: failure } : {}),
       ...(ordering ? { ordering } : {}),
       ...(round !== undefined ? { finalContextRound: round } : {}),
+      // Ticket 27 (EVAL-01B2): the per-task model snapshot the entry stamped on
+      // this case's terminal event — the override is verifiable per case, and a
+      // case that never reached a terminal result carries none.
+      ...(done?.modelProfile ? { modelProfile: done.modelProfile } : {}),
       runId,
       durationMs: Date.now() - startedAt,
       metrics,

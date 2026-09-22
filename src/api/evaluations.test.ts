@@ -106,6 +106,10 @@ interface FakeScopeOptions {
   omitDone?: boolean
   /** Ticket 13: which generation round produced the observed context. */
   finalContextRound?: number
+  /** Ticket 27: the frozen model snapshot the entry stamps on its done event. */
+  modelProfile?: AnswerRunResult["modelProfile"]
+  /** Ticket 27: per-case override of that snapshot. */
+  modelProfileByCase?: Record<string, AnswerRunResult["modelProfile"]>
 }
 
 class FakeScope implements IsolatedEvalResources {
@@ -231,7 +235,8 @@ class FakeScope implements IsolatedEvalResources {
               runOptions,
               options.reply ?? FAKE_REPLY,
               options.doneStatusByCase?.[runOptions.caseId ?? ""] ??
-                (options.doneStatus ?? "completed") as AnswerRunResult["status"]
+                (options.doneStatus ?? "completed") as AnswerRunResult["status"],
+              options.modelProfileByCase?.[runOptions.caseId ?? ""] ?? options.modelProfile
             ),
           })
           // Keep the unused helper referenced for type clarity.
@@ -318,7 +323,8 @@ function waitFor(ms: number, signal?: AbortSignal): Promise<void> {
 function runResult(
   options: { runId?: string; caseId?: string },
   reply: string,
-  status: string = "completed"
+  status: string = "completed",
+  modelProfile?: AnswerRunResult["modelProfile"]
 ): AnswerRunResult {
   return {
     runId: options.runId ?? "run",
@@ -326,6 +332,7 @@ function runResult(
     reply,
     references: [],
     degradation: { status: "none", unavailableChannels: [] },
+    ...(modelProfile ? { modelProfile } : {}),
   } as AnswerRunResult & { caseId?: string }
 }
 
@@ -2165,6 +2172,88 @@ test("a cleanup failure is visible on the settled record and cannot read as full
     assert.match(String(cleanup.graphError), /\*\*\*@neo4j\.test/)
     assert.equal(cleanup.dbClosed, false)
     assert.equal(JSON.stringify(detail).includes("sup3rsecret"), false)
+  } finally {
+    await harness.close()
+  }
+})
+
+// ---------------------------------------------------------------------------
+// Ticket 27 (EVAL-01B2) — task-scoped overrides, metric provenance, residue
+// ---------------------------------------------------------------------------
+
+test("allowed overrides are visible on that task's cases and never on the shared path", async () => {
+  const scopeOptions: FakeScopeOptions = {}
+  let produced: Reranker | undefined
+  const harness = await buildHarness(scopeOptions, {
+    allowedChatModels: ["override-chat"],
+    allowedRerankModels: ["override-rerank"],
+    createReranker: (model) => {
+      produced = { model, rerank: async () => [] } as unknown as Reranker
+      return produced
+    },
+  })
+  try {
+    const sharedProfile = {
+      chatModel: "test-chat-model",
+      rerankModel: null,
+      embeddingProfile: "test-embedding-model:3",
+    }
+    scopeOptions.modelProfile = sharedProfile
+    const plain = await createTask(harness.port, { datasetId: "refund-single-case" })
+    const plainDetail = await pollTerminal(harness.port, plain.body.id as string)
+    assert.deepEqual(plainDetail.config, {
+      chatModel: "test-chat-model",
+      rerankModel: null,
+      embeddingModel: "test-embedding-model",
+      rerankSource: "not_configured",
+    })
+    assert.deepEqual(
+      (plainDetail.cases as Array<Record<string, unknown>>)[0].modelProfile,
+      sharedProfile,
+      "没有覆盖时逐题快照就是服务自己的配置快照"
+    )
+    assert.equal(produced, undefined, "no override means no second adapter is built")
+
+    const overrideProfile = {
+      chatModel: "override-chat",
+      rerankModel: "override-rerank",
+      embeddingProfile: "test-embedding-model:3",
+    }
+    scopeOptions.modelProfile = overrideProfile
+    const overridden = await createTask(harness.port, {
+      datasetId: "refund-single-case",
+      chatModel: "override-chat",
+      rerankModel: "override-rerank",
+    })
+    const overrideDetail = await pollTerminal(harness.port, overridden.body.id as string)
+    assert.deepEqual(overrideDetail.config, {
+      chatModel: "override-chat",
+      rerankModel: "override-rerank",
+      embeddingModel: "test-embedding-model",
+      rerankSource: "dedicated_rerank",
+    })
+    assert.deepEqual(
+      (overrideDetail.cases as Array<Record<string, unknown>>)[0].modelProfile,
+      overrideProfile,
+      "覆盖只出现在该任务的快照里"
+    )
+    assert.equal(harness.scopes[1].taskReranker, produced, "任务用的是工厂为该 id 建的同一个适配器")
+    assert.deepEqual(harness.scopes[1].taskOverrides, {
+      chatModel: "override-chat",
+      rerankModel: "override-rerank",
+    })
+    assert.equal(CONFIG.openaiChatModel, "test-chat-model", "共享配置没有被改写")
+    assert.equal(CONFIG.rerankModel, "bge-reranker-v2-m3")
+
+    // 失败用例没有终态结果 → 既没有模型快照，也没有把 12 项指标洗成 0。
+    scopeOptions.throwByCase = { "refund-eta": "provider refused" }
+    const failedTask = await createTask(harness.port, { datasetId: "refund-single-case" })
+    const failedDetail = await pollTerminal(harness.port, failedTask.body.id as string)
+    const failedCase = (failedDetail.cases as Array<Record<string, unknown>>)[0]
+    assert.equal(failedCase.outcome, "failed")
+    assert.equal(failedCase.modelProfile, undefined, "no terminal result means no model snapshot")
+    assert.equal(Object.keys(failedCase.metrics as object).length, 12)
+    assert.deepEqual(Object.values(failedCase.metrics as Record<string, null>), new Array(12).fill(null))
   } finally {
     await harness.close()
   }

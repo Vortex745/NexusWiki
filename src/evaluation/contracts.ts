@@ -6,7 +6,11 @@
  * a persistent trace backend (spec "任务、上传数据集和结果只存内存").
  */
 
-import type { AnswerTerminalStatus, FinalContextOrdering } from "../types"
+import type {
+  AnswerModelProfileSnapshot,
+  AnswerTerminalStatus,
+  FinalContextOrdering,
+} from "../types"
 import type { EvalDisposeReport } from "./isolated_resources"
 
 /**
@@ -77,6 +81,14 @@ export interface EvalCaseResult {
    */
   ordering?: FinalContextOrdering
   runId?: string
+  /**
+   * Ticket 27 (EVAL-01B2): the frozen model snapshot the shared Answer entry
+   * stamped on this case's terminal event (ticket 17). It is the per-TASK
+   * snapshot — the config copy plus the task's reranker — so an allowed
+   * override is observable per case and can never be mistaken for the shared
+   * configuration. Absent when the run produced no terminal result.
+   */
+  modelProfile?: AnswerModelProfileSnapshot
   durationMs: number
   /** Per-case metric values; null = not applicable for this case. */
   metrics: Record<string, number | null>
