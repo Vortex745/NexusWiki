@@ -14,6 +14,8 @@ export interface AppShellActions {
   openKnowledge: () => void
   /** Ticket 16 (MODEL-01A): the model-profile settings workspace (admin). */
   openSettings: () => void
+  /** Ticket 18 (AST-01A): the assistant workspace (admin). */
+  openAssistants: () => void
   /** Ticket 13 (DOC-02): the exact document version behind a citation/row. */
   openDocument: (target: DocumentViewTarget) => void
   showToast: (message: string) => void
@@ -28,6 +30,7 @@ const AppShellContext = createContext<AppShellActions>({
   openEvaluation: noop,
   openKnowledge: noop,
   openSettings: noop,
+  openAssistants: noop,
   openDocument: noop,
   showToast: noop,
 })

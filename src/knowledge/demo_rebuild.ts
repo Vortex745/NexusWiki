@@ -52,6 +52,11 @@ export const DEMO_REBUILD_SQLITE_TABLES = [
   // Ticket 16 (MODEL-01A): the profile toggles are workspace state — a rebuild
   // resets them so the next boot re-seeds from the credential slots.
   "model_profiles",
+  // Ticket 18 (AST-01A): assistants and their immutable versions are workspace
+  // state; a rebuild clears both (version rows first via order-independence —
+  // DELETE has no FK constraints here).
+  "assistants",
+  "assistant_versions",
 ] as const
 
 /**

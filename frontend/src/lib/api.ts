@@ -821,3 +821,91 @@ export async function testModelProfile(id: string): Promise<ModelProfileTestResu
   if (!response.ok) throw new DocumentOperationError(`测试失败 (${response.status})`, response.status)
   return (await response.json()) as ModelProfileTestResult
 }
+
+// ---------------------------------------------------------------------------
+// Assistants workspace (ticket 18 AST-01A) — readers see safe metadata only
+// ---------------------------------------------------------------------------
+
+export interface AssistantConfigPayload {
+  systemPrompt: string
+  knowledgeBaseIds: string[]
+  chatModelProfileId: string
+  rerankModelProfileId: string | null
+  toolPolicy: "none" | "read_only_retrieval"
+  memoryEnabled: boolean
+}
+
+export interface AssistantPayload {
+  id: string
+  name: string
+  description: string
+  status: "active" | "archived"
+  currentVersion: number
+  createdAt: string
+  updatedAt: string
+  /** Admin only — readers never receive the execution config. */
+  allowedGroups?: string[]
+  config?: AssistantConfigPayload
+  version?: { version: number; createdAt: string; createdBy: string }
+}
+
+export async function fetchAssistants(): Promise<AssistantPayload[]> {
+  const response = await apiFetch("/assistants")
+  if (!response.ok) throw new Error(`助手列表读取失败 (${response.status})`)
+  const body = (await response.json()) as { assistants?: AssistantPayload[] }
+  return Array.isArray(body.assistants) ? body.assistants : []
+}
+
+export interface AssistantCommandInput {
+  name: string
+  description?: string
+  allowedGroups?: string[]
+  config: AssistantConfigPayload
+}
+
+export async function createAssistant(input: AssistantCommandInput): Promise<AssistantPayload> {
+  const response = await apiFetch("/assistants", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  })
+  if (!response.ok) {
+    const body = (await response.json().catch(() => ({}))) as { error?: string }
+    throw new DocumentOperationError(body.error || `创建失败 (${response.status})`, response.status)
+  }
+  return (await response.json()) as { assistant: AssistantPayload }["assistant"]
+}
+
+export async function editAssistant(
+  id: string,
+  input: Partial<AssistantCommandInput>,
+): Promise<AssistantPayload> {
+  const response = await apiFetch(`/assistants/${encodeURIComponent(id)}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  })
+  if (!response.ok) {
+    const body = (await response.json().catch(() => ({}))) as { error?: string }
+    throw new DocumentOperationError(body.error || `保存失败 (${response.status})`, response.status)
+  }
+  return (await response.json()) as { assistant: AssistantPayload }["assistant"]
+}
+
+export async function archiveAssistant(id: string): Promise<AssistantPayload> {
+  const response = await apiFetch(`/assistants/${encodeURIComponent(id)}/archive`, { method: "POST" })
+  if (!response.ok) {
+    const body = (await response.json().catch(() => ({}))) as { error?: string }
+    throw new DocumentOperationError(body.error || `归档失败 (${response.status})`, response.status)
+  }
+  return (await response.json()) as { assistant: AssistantPayload }["assistant"]
+}
+
+export async function restoreAssistant(id: string): Promise<AssistantPayload> {
+  const response = await apiFetch(`/assistants/${encodeURIComponent(id)}/restore`, { method: "POST" })
+  if (!response.ok) {
+    const body = (await response.json().catch(() => ({}))) as { error?: string }
+    throw new DocumentOperationError(body.error || `恢复失败 (${response.status})`, response.status)
+  }
+  return (await response.json()) as { assistant: AssistantPayload }["assistant"]
+}

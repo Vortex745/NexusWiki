@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from "react"
 
 import { AppShell } from "./components/AppShell"
 import { LoginScreen } from "./components/LoginScreen"
+import { AssistantsDialog } from "./components/panels/AssistantsDialog"
 import { DocumentViewerDialog, type DocumentViewTarget } from "./components/panels/DocumentViewerDialog"
 import { EvaluationDialog } from "./components/panels/EvaluationDialog"
 import { ImportDialog } from "./components/panels/ImportDialog"
@@ -82,6 +83,7 @@ function AppRoot() {
   const [evaluationOpen, setEvaluationOpen] = useState(false)
   const [knowledgeOpen, setKnowledgeOpen] = useState(false)
   const [settingsOpen, setSettingsOpen] = useState(false)
+  const [assistantsOpen, setAssistantsOpen] = useState(false)
   const [documentView, setDocumentView] = useState<{ open: boolean; target: DocumentViewTarget | null }>({
     open: false,
     target: null,
@@ -102,14 +104,15 @@ function AppRoot() {
   const openEvaluation = useCallback(() => setEvaluationOpen(true), [])
   const openKnowledge = useCallback(() => setKnowledgeOpen(true), [])
   const openSettings = useCallback(() => setSettingsOpen(true), [])
+  const openAssistants = useCallback(() => setAssistantsOpen(true), [])
   const openDocument = useCallback(
     (target: DocumentViewTarget) => setDocumentView({ open: true, target }),
     [],
   )
 
   const shellActions = useMemo<AppShellActions>(
-    () => ({ openInsight, openMemory, openImport, openEvaluation, openKnowledge, openSettings, openDocument, showToast }),
-    [openInsight, openMemory, openImport, openEvaluation, openKnowledge, openSettings, openDocument, showToast],
+    () => ({ openInsight, openMemory, openImport, openEvaluation, openKnowledge, openSettings, openAssistants, openDocument, showToast }),
+    [openInsight, openMemory, openImport, openEvaluation, openKnowledge, openSettings, openAssistants, openDocument, showToast],
   )
 
   // Staged attachments are consumed the moment a prompt actually goes out.
@@ -187,6 +190,7 @@ function AppRoot() {
           <EvaluationDialog open={evaluationOpen} onClose={() => setEvaluationOpen(false)} />
           <KnowledgeDialog open={knowledgeOpen} onClose={() => setKnowledgeOpen(false)} />
           <SettingsDialog open={settingsOpen} onClose={() => setSettingsOpen(false)} />
+          <AssistantsDialog open={assistantsOpen} onClose={() => setAssistantsOpen(false)} />
           <DocumentViewerDialog
             open={documentView.open}
             target={documentView.target}

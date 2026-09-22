@@ -247,6 +247,31 @@ const SCHEMA = [
     enabled INTEGER NOT NULL,
     updated_at TEXT NOT NULL
   )`,
+  // Ticket 18 (AST-01A): assistants. Workspace metadata (name/description/
+  // groups/status) lives here; everything that influences execution lives in
+  // assistant_versions. `current_version` is the pointer an edit moves.
+  `CREATE TABLE IF NOT EXISTS assistants (
+    id TEXT PRIMARY KEY,
+    tenant_id TEXT NOT NULL,
+    name TEXT NOT NULL,
+    description TEXT NOT NULL DEFAULT '',
+    status TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active', 'archived')),
+    allowed_groups TEXT NOT NULL DEFAULT '[]',
+    current_version INTEGER NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_assistants_tenant ON assistants(tenant_id, status)`,
+  // Ticket 18: immutable version rows — an edit INSERTs, nothing ever UPDATEs
+  // or DELETEs here, so a conversation can reference an older version forever.
+  `CREATE TABLE IF NOT EXISTS assistant_versions (
+    assistant_id TEXT NOT NULL,
+    version INTEGER NOT NULL,
+    config TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    created_by TEXT NOT NULL,
+    PRIMARY KEY (assistant_id, version)
+  )`,
 ].join(";\n")
 
 let _db: DB | null = null

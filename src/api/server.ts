@@ -43,6 +43,11 @@ import { createKnowledgeBaseRouter } from "./knowledge_bases"
 import { createDocumentsRouter, createEsChunkReader } from "./documents"
 import { createRetrievalDebugRouter } from "./retrieval_debug"
 import { createModelProfilesRouter } from "./model_profiles"
+import { createAssistantsRouter } from "./assistants"
+import {
+  AssistantService,
+  InvalidAssistantCommandError,
+} from "../assistants/assistant_service"
 import { ModelProfileRegistry } from "../models/profiles"
 
 export function createApp(options: {
@@ -100,6 +105,8 @@ export function createApp(options: {
   config?: import("../config").AppConfig
   /** Ticket 16 (MODEL-01A): built-in model profiles; omitted → routes not mounted. */
   modelProfiles?: import("../models/profiles").ModelProfileRegistry
+  /** Ticket 18 (AST-01A): assistant workspace service; omitted → routes not mounted. */
+  assistants?: import("../assistants/assistant_service").AssistantService
 }) {
   const app = express()
   const db = options.db || openDb()
@@ -161,6 +168,10 @@ export function createApp(options: {
     // Ticket 14 (RET-01): the retrieval-debug run is an authorized read —
     // same chat scope, same identity that constrains the channels.
     app.use("/api/retrieval-debug", options.accessMiddleware)
+    // Ticket 18 (AST-01A): the assistant workspace — browsing is for every
+    // authenticated member (group visibility applies), admin commands
+    // re-check the admin scope in-handler.
+    app.use("/api/assistants", options.accessMiddleware)
   }
   app.use(
     "/api",
@@ -290,6 +301,13 @@ export function createApp(options: {
       })
     )
   }
+  // Ticket 18 (AST-01A): the assistant workspace. Bindings are validated
+  // against the SAME knowledge-base service and model-profile registry the
+  // runtime enforces, so a stored assistant can never reference a knowledge
+  // base or profile the server would refuse.
+  if (options.assistants) {
+    app.use("/api", createAssistantsRouter({ service: options.assistants }))
+  }
   app.use("/api", ingestRouter)
   return app
 }
@@ -410,6 +428,17 @@ export async function startServer(
     // selected through raw request values, whatever the allowlists say.
     modelProfileGate: modelProfiles,
   })
+  // Ticket 18 (AST-01A): the assistant workspace shares the production
+  // knowledge-base service and profile registry for binding validation.
+  const assistants = new AssistantService(processRuntime.db, knowledgeBaseService, {
+    assertRerankProfileSelectable: () => {
+      if (!modelProfiles.selectable("rerank")) {
+        throw new InvalidAssistantCommandError(
+          "the rerank model profile is disabled on this server"
+        )
+      }
+    },
+  })
   const app = createApp({
     db: processRuntime.db,
     imageAssetPath: config.imageAssetPath,
@@ -427,6 +456,7 @@ export async function startServer(
     config,
     evaluationService,
     modelProfiles,
+    assistants,
   })
   const server = await new Promise<Server>((resolve) => {
     const s = app.listen(port, () => {
