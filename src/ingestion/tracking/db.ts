@@ -272,6 +272,22 @@ const SCHEMA = [
     created_by TEXT NOT NULL,
     PRIMARY KEY (assistant_id, version)
   )`,
+  // Ticket 20 (CONV-01A): server-owned conversation directories. The id is
+  // the thread/session id the browser already generates; ownership is the
+  // (tenant_id, subject_id) pair, so the directory is user-isolated. `title`
+  // is derived from the first user message; `imported` marks directories that
+  // arrived through the one-time browser import.
+  `CREATE TABLE IF NOT EXISTS conversation_directories (
+    id TEXT PRIMARY KEY,
+    tenant_id TEXT NOT NULL,
+    subject_id TEXT NOT NULL,
+    title TEXT NOT NULL,
+    imported INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_conversation_directories_owner
+    ON conversation_directories(tenant_id, subject_id, updated_at)`,
 ].join(";\n")
 
 let _db: DB | null = null
@@ -379,6 +395,14 @@ export function openDb(dbPath?: string): DB {
   const conversationColumns = db.pragma("table_info(conversation_turns)") as Array<{ name: string }>
   if (!conversationColumns.some(({ name }) => name === "kind")) {
     db.exec("ALTER TABLE conversation_turns ADD COLUMN kind TEXT NOT NULL DEFAULT 'validated'")
+  }
+  // Ticket 20 (CONV-01A): the terminal status of an ASSISTANT turn
+  // (completed / clarification_required / insufficient_evidence / …).
+  // Nullable — user turns and legacy rows have none. This is what keeps
+  // success, refusal, failure and cancellation distinguishable after reload;
+  // it never affects validated memory (kind stays the memory discriminator).
+  if (!conversationColumns.some(({ name }) => name === "terminal_status")) {
+    db.exec("ALTER TABLE conversation_turns ADD COLUMN terminal_status TEXT")
   }
   const legacyDocuments = db.prepare(
     `SELECT doc_id, source, content, status, created_at, updated_at

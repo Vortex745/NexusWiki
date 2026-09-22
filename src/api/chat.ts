@@ -90,6 +90,12 @@ export function createChatRouter(
    * is resolved server-side from the stored immutable version.
    */
   assistants?: AssistantService,
+  /**
+   * Ticket 20 (CONV-01A): the server-owned conversation history. When wired,
+   * the transport appends the user turn (run start) and the assistant turn
+   * (terminal event, with its terminal status) to the caller's directory.
+   */
+  conversationHistory?: import("../answer/conversation_history_store").SqliteConversationHistoryStore,
 ): Router {
   const router = Router()
 
@@ -255,6 +261,48 @@ export function createChatRouter(
       }
     }
 
+    // Ticket 20 (CONV-01A): server-owned history — the directory (title from
+    // the first message) and the user turn are written when the run starts;
+    // the assistant turn is written from the terminal event below. History
+    // failures are logged, never fatal to the chat itself.
+    if (conversationHistory) {
+      try {
+        conversationHistory.ensureDirectory(sessionId, accessContext.tenantId, accessContext.subjectId, message)
+        conversationHistory.appendUserTurn(sessionId, accessContext.tenantId, accessContext.subjectId, message, runId)
+      } catch (err) {
+        console.error("[chat] history write failed:", err)
+      }
+    }
+    const recordTerminal = (
+      terminal: Extract<AnswerRunEvent, { type: "done" }> | undefined,
+      runFailed: boolean
+    ): void => {
+      if (!conversationHistory) return
+      try {
+        if (terminal) {
+          conversationHistory.appendAssistantTurn(
+            sessionId,
+            accessContext.tenantId,
+            accessContext.subjectId,
+            terminal.result.reply,
+            terminal.result.runId,
+            terminal.result.status
+          )
+        } else if (runFailed) {
+          conversationHistory.appendAssistantTurn(
+            sessionId,
+            accessContext.tenantId,
+            accessContext.subjectId,
+            "",
+            runId,
+            "provider_error"
+          )
+        }
+      } catch (err) {
+        console.error("[chat] history write failed:", err)
+      }
+    }
+
     if (stream) {
       res.setHeader("Content-Type", "text/event-stream")
       res.setHeader("Cache-Control", "no-cache")
@@ -268,6 +316,8 @@ export function createChatRouter(
         abortController.abort()
       }
       res.on("close", onClientClose)
+      let streamTerminal: Extract<AnswerRunEvent, { type: "done" }> | undefined
+      let streamFailed = false
       try {
         // The injected source guarantees a terminal event on every path.
         // HTTP only encodes events to SSE.
@@ -276,12 +326,15 @@ export function createChatRouter(
           signal: abortController.signal,
           accessContext,
         })) {
+          if (event.type === "done") streamTerminal = event
           if (clientGone.value || res.writableEnded) break
           res.write(`data: ${JSON.stringify(streamPayload(event, sessionId))}\n\n`)
         }
       } catch (err) {
+        streamFailed = true
         if (!clientGone.value) console.error("[chat] Error:", err)
       }
+      recordTerminal(streamTerminal, streamFailed)
       res.off("close", onClientClose)
       if (!res.writableEnded) res.end()
     } else {
@@ -305,6 +358,7 @@ export function createChatRouter(
           if (event.type === "done") terminal = event
         }
         if (!terminal) throw new Error("Answer run ended without a terminal event")
+        recordTerminal(terminal, false)
         res.json({
           reply: terminal.result.reply,
           sessionId,
@@ -316,6 +370,7 @@ export function createChatRouter(
         })
       } catch (err) {
         if (!clientGone.value) console.error("[chat] Error:", err)
+        recordTerminal(undefined, true)
         if (!clientGone.value && !res.writableEnded) {
           res.status(500).json({
             error: "Internal error",

@@ -76,6 +76,29 @@ export class ConversationStore {
     return this.conversation.getActiveThread()
   }
 
+  /**
+   * Ticket 20 (CONV-01A): snapshot the browser-local threads for the one-time
+   * server import. Local storage is NEVER cleared by this — the server marks
+   * each thread as imported by its id, and a repeated import only skips.
+   */
+  exportThreads(): Array<{
+    id: string
+    title?: string
+    messages: Array<{ role: "user" | "assistant"; content: string }>
+  }> {
+    return this.conversation.listThreads().map((thread) => ({
+      id: thread.id,
+      title: thread.title,
+      messages: thread.messages
+        .filter((message) => message.role === "user" || message.role === "assistant")
+        .map((message) => ({
+          role: message.role as "user" | "assistant",
+          content:
+            typeof message.content === "string" ? message.content : String(message.content ?? ""),
+        })),
+    }))
+  }
+
   // -------------------------------------------------------------------------
   // Run lifecycle
   // -------------------------------------------------------------------------

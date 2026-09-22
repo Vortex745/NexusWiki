@@ -44,6 +44,8 @@ import { createDocumentsRouter, createEsChunkReader } from "./documents"
 import { createRetrievalDebugRouter } from "./retrieval_debug"
 import { createModelProfilesRouter } from "./model_profiles"
 import { createAssistantsRouter } from "./assistants"
+import { createConversationsRouter } from "./conversations"
+import { SqliteConversationHistoryStore } from "../answer/conversation_history_store"
 import {
   AssistantService,
   InvalidAssistantCommandError,
@@ -107,6 +109,8 @@ export function createApp(options: {
   modelProfiles?: import("../models/profiles").ModelProfileRegistry
   /** Ticket 18 (AST-01A): assistant workspace service; omitted → routes not mounted. */
   assistants?: import("../assistants/assistant_service").AssistantService
+  /** Ticket 20 (CONV-01A): server-owned conversation history; omitted → routes not mounted. */
+  conversationHistory?: import("../answer/conversation_history_store").SqliteConversationHistoryStore
 }) {
   const app = express()
   const db = options.db || openDb()
@@ -182,7 +186,10 @@ export function createApp(options: {
       options.retrievalScopeResolver,
       // Ticket 19 (AST-01B): the chat transport resolves the assistant overlay
       // (prompt / bound scope / rerank binding) server-side per run.
-      options.assistants
+      options.assistants,
+      // Ticket 20 (CONV-01A): the transport appends user turns and assistant
+      // terminal turns to the caller's server-owned directory.
+      options.conversationHistory
     )
   )
   // Ticket 14 (RET-01): the read-only retrieval-debug run. Built from the
@@ -310,6 +317,12 @@ export function createApp(options: {
   // base or profile the server would refuse.
   if (options.assistants) {
     app.use("/api", createAssistantsRouter({ service: options.assistants }))
+  }
+  // Ticket 20 (CONV-01A): the user-owned conversation history API (directory
+  // list, per-thread history, one-time browser import). Identity arrives via
+  // the management middleware; ownership is enforced per (tenant, subject).
+  if (options.conversationHistory) {
+    app.use("/api", createConversationsRouter({ history: options.conversationHistory }))
   }
   app.use("/api", ingestRouter)
   return app
@@ -460,6 +473,8 @@ export async function startServer(
     evaluationService,
     modelProfiles,
     assistants,
+    // Ticket 20 (CONV-01A): server-owned conversation directories + history.
+    conversationHistory: new SqliteConversationHistoryStore(processRuntime.db),
   })
   const server = await new Promise<Server>((resolve) => {
     const s = app.listen(port, () => {

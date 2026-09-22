@@ -7,6 +7,8 @@ import { useConversation } from "../conversation/useConversation"
 import { cn } from "../lib/cn"
 import { useAppShell } from "../runtime/AppShellContext"
 import { assistantStore, useAssistants } from "../runtime/assistantStore"
+import { conversationStore } from "../conversation/useConversation"
+import { importConversations } from "../lib/api"
 import { knowledgeStore, useKnowledgeBases } from "../runtime/knowledgeStore"
 import { useMemoryApi } from "../runtime/MemoryContext"
 import { useSignedInSession } from "../runtime/SessionContext"
@@ -259,6 +261,53 @@ function AssistantSelector() {
   )
 }
 
+/**
+ * Ticket 20 (CONV-01A): one-time import of the browser-local threads into the
+ * server-owned directory. Idempotent by thread id (a repeat only skips), and
+ * the browser's local storage is NEVER cleared — the flag only hides the
+ * button, the data stays.
+ */
+function ImportHistoryButton() {
+  const { showToast } = useAppShell()
+  const [importing, setImporting] = useState(false)
+  const [imported, setImported] = useState(() => {
+    try {
+      return window.localStorage.getItem("nexusrag.conversations.imported") === "1"
+    } catch {
+      return false
+    }
+  })
+  if (imported) return null
+  const handleImport = async () => {
+    setImporting(true)
+    try {
+      const result = await importConversations(conversationStore.exportThreads())
+      try {
+        window.localStorage.setItem("nexusrag.conversations.imported", "1")
+      } catch {
+        // Storage unavailable — the button simply reappears next load.
+      }
+      setImported(true)
+      showToast(`已导入 ${result.imported} 个对话${result.skipped > 0 ? `，跳过 ${result.skipped} 个已存在` : ""}`)
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : "导入失败")
+    } finally {
+      setImporting(false)
+    }
+  }
+  return (
+    <button
+      type="button"
+      onClick={() => void handleImport()}
+      disabled={importing}
+      title="把浏览器里的本地对话导入服务器（只上传，不清除本地）"
+      className="cursor-pointer rounded px-1.5 py-0.5 text-[10px] font-medium normal-case tracking-normal text-muted transition-colors hover:bg-surface-subtle hover:text-ink disabled:opacity-50"
+    >
+      {importing ? "导入中…" : "导入历史"}
+    </button>
+  )
+}
+
 export function Sidebar({ open, collapsed, isDark, onToggleTheme, onCloseMobile }: SidebarProps) {
   const { openImport, openMemory, openEvaluation, openSettings, openAssistants } = useAppShell()
   const { memories } = useMemoryApi()
@@ -350,6 +399,7 @@ export function Sidebar({ open, collapsed, isDark, onToggleTheme, onCloseMobile 
           {/* Recent chats */}
           <div className="mt-4 flex items-center justify-between px-1 text-[11px] font-semibold uppercase tracking-wider text-muted/70">
             <span>最近对话</span>
+            {threads.length > 0 ? <ImportHistoryButton /> : null}
           </div>
           <ThreadListPrimitive.Root
             aria-label="历史对话"

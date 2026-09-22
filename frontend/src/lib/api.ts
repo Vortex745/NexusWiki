@@ -915,3 +915,66 @@ export async function restoreAssistant(id: string): Promise<AssistantPayload> {
   }
   return (await response.json()) as { assistant: AssistantPayload }["assistant"]
 }
+
+// ---------------------------------------------------------------------------
+// Server-owned conversation history (ticket 20 CONV-01A)
+// ---------------------------------------------------------------------------
+
+export interface ConversationDirectoryPayload {
+  id: string
+  title: string
+  imported: boolean
+  createdAt: string
+  updatedAt: string
+  messageCount: number
+}
+
+export interface HistoryTurnPayload {
+  role: "user" | "assistant"
+  content: string
+  runId: string
+  terminalStatus: string | null
+  createdAt: string
+}
+
+export async function fetchConversationDirectories(): Promise<ConversationDirectoryPayload[]> {
+  const response = await apiFetch("/conversations")
+  if (!response.ok) throw new Error(`会话目录读取失败 (${response.status})`)
+  const body = (await response.json()) as { directories?: ConversationDirectoryPayload[] }
+  return Array.isArray(body.directories) ? body.directories : []
+}
+
+export async function fetchConversationHistory(
+  id: string,
+): Promise<HistoryTurnPayload[]> {
+  const response = await apiFetch(`/conversations/${encodeURIComponent(id)}`)
+  if (!response.ok) throw new Error(`会话历史读取失败 (${response.status})`)
+  const body = (await response.json()) as { turns?: HistoryTurnPayload[] }
+  return Array.isArray(body.turns) ? body.turns : []
+}
+
+export interface ImportThreadInput {
+  id: string
+  title?: string
+  messages?: Array<{ role: "user" | "assistant"; content: string }>
+}
+
+/**
+ * One-time import of browser-local threads. Idempotent by thread id — a
+ * repeated call only reports the already-imported ones as skipped; browser
+ * local storage is never cleared by the server.
+ */
+export async function importConversations(
+  threads: ImportThreadInput[],
+): Promise<{ imported: number; skipped: number }> {
+  const response = await apiFetch("/conversations/import", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ threads }),
+  })
+  if (!response.ok) {
+    const body = (await response.json().catch(() => ({}))) as { error?: string }
+    throw new DocumentOperationError(body.error || `导入失败 (${response.status})`, response.status)
+  }
+  return (await response.json()) as { imported: number; skipped: number }
+}
