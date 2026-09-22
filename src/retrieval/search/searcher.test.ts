@@ -2627,3 +2627,113 @@ test("Ticket 06: SearcherImpl.search forwards the retrieval scope to graph and P
   ])
 })
 
+/**
+ * Ticket 07 (KB-03C) — parent expansion, corrective retrieval, citation
+ * reads and cache identities preserve the run's RetrievalScope so no
+ * secondary path can reintroduce content filtered from primary retrieval.
+ */
+
+test("Ticket 07: loadParents carries the knowledge-base clause when a scope is provided", async () => {
+  const { requests, es } = mockEs()
+  const runtime = makeRuntime(es, mockEmbedding())
+
+  await runtime.loadParents(
+    [{ documentId: "doc-1", id: "parent-1" }],
+    undefined,
+    { knowledgeBaseIds: ["kb-a"] }
+  )
+
+  const queryStr = JSON.stringify(requests[0].query)
+  assert.ok(
+    queryStr.includes('"terms":{"knowledgeBaseId":["kb-a"]}'),
+    `parent hydration must re-check the knowledge scope: ${queryStr}`
+  )
+})
+
+test("Ticket 07: loadParents never hydrates a parent outside the scope", async () => {
+  // Defense in depth: even if a stale identity slips into the expansion set
+  // (documentId collision, corrupted parent pointer), the ES query can only
+  // return parents the scope still owns.
+  const { es } = scopedEs([
+    { id: "parent-in", knowledgeBaseId: "kb-a" },
+    { id: "parent-out", knowledgeBaseId: "kb-b" },
+  ])
+  const runtime = makeRuntime(es, mockEmbedding())
+
+  const parents = await runtime.loadParents(
+    [
+      { documentId: "doc-kb-a", id: "parent-in" },
+      { documentId: "doc-kb-b", id: "parent-out" },
+    ],
+    undefined,
+    { knowledgeBaseIds: ["kb-a"] }
+  )
+
+  assert.deepEqual(
+    parents.map(({ id }) => id),
+    ["parent-in"],
+    "a parent owned by another knowledge base must not be hydrated"
+  )
+})
+
+test("Ticket 07: loadParents without a scope keeps the legacy query shape", async () => {
+  const { requests, es } = mockEs()
+  const runtime = makeRuntime(es, mockEmbedding())
+
+  await runtime.loadParents([{ documentId: "doc-1", id: "parent-1" }])
+
+  assert.ok(
+    !JSON.stringify(requests[0]).includes("knowledgeBaseId"),
+    "an unscoped legacy caller must emit no knowledge-base clause"
+  )
+})
+
+test("Ticket 07: loadParents with an explicit empty scope returns nothing without a query", async () => {
+  const { requests, es } = mockEs()
+  const runtime = makeRuntime(es, mockEmbedding())
+
+  const parents = await runtime.loadParents(
+    [{ documentId: "doc-1", id: "parent-1" }],
+    undefined,
+    { knowledgeBaseIds: [] }
+  )
+
+  assert.deepEqual(parents, [])
+  assert.equal(requests.length, 0, "an empty scope must not reach Elasticsearch")
+})
+
+test("Ticket 07: SearcherImpl forwards the run's scope object identity into parent expansion", async () => {
+  const retrievalScope = { knowledgeBaseIds: ["kb-a"] } as const
+  const seen: unknown[] = []
+  const searcher = new SearcherImpl(operations({
+    vectorSearch: async () => [{
+      chunk: {
+        id: "child-1",
+        documentId: "doc-1",
+        content: "child",
+        childrenIds: [],
+        parentId: "parent-1",
+        metadata: {},
+      },
+      score: 1,
+      source: "vector" as const,
+      wikilinks: [],
+    }],
+    loadParents: async (_identities, _ac, scope) => {
+      seen.push(scope)
+      return []
+    },
+  }))
+
+  await searcher.search(
+    { text: "query" },
+    { retrievalScope, channels: ["vector"] }
+  )
+
+  assert.equal(
+    seen[0],
+    retrievalScope,
+    "parent expansion must reuse the same locked scope object, never a recomputed copy"
+  )
+})
+

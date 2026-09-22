@@ -241,7 +241,7 @@ export interface SearchOperations {
   graphSearch(query: Query, topK: number, seeds?: string[], accessContext?: AccessContext, retrievalScope?: RetrievalScope, signal?: AbortSignal): Promise<RetrievalResult[]>
   pageIndexSearch(query: Query, topK: number, accessContext?: AccessContext, retrievalScope?: RetrievalScope, signal?: AbortSignal): Promise<RetrievalResult[]>
   rerank(query: string, results: RetrievalResult[], signal?: AbortSignal): Promise<RetrievalResult[]>
-  loadParents(identities: Array<{ documentId: string; id: string }>, accessContext?: AccessContext, signal?: AbortSignal): Promise<Chunk[]>
+  loadParents(identities: Array<{ documentId: string; id: string }>, accessContext?: AccessContext, retrievalScope?: RetrievalScope, signal?: AbortSignal): Promise<Chunk[]>
 }
 
 export interface RuntimeSearchDependencies {
@@ -589,10 +589,22 @@ export class RuntimeSearchOperations implements SearchOperations {
   async loadParents(
     identities: Array<{ documentId: string; id: string }>,
     accessContext?: AccessContext,
+    retrievalScope?: RetrievalScope,
     signal?: AbortSignal
   ): Promise<Chunk[]> {
     if (identities.length === 0) return []
-    const aclFilters = accessContextFilter(accessContext)
+    // Ticket 07 (KB-03C): an explicit empty scope means "no knowledge
+    // context" — parent expansion returns nothing even on a direct call
+    // (the dispatch layer already short-circuits before reaching here).
+    if (hasNoKnowledgeContext(retrievalScope)) return []
+    // Ticket 07 (KB-03C): parent expansion identities derive from already
+    // scope-filtered children, but the ES query re-checks the knowledge scope
+    // (like it re-checks the AccessContext) so a stale or collided identity
+    // can never reintroduce content filtered from primary retrieval.
+    const aclFilters = [
+      ...accessContextFilter(accessContext),
+      ...knowledgeBaseFilter(retrievalScope),
+    ]
     const res = await this.dependencies.es.search({
       index: this.indexName,
       query: {
@@ -822,7 +834,7 @@ export class SearcherImpl implements Searcher {
     let parentExpansionFailed = false
     let parents: Chunk[] = []
     try {
-      parents = await this.operations.loadParents(identities, accessContext, signal)
+      parents = await this.operations.loadParents(identities, accessContext, retrievalScope, signal)
     } catch (error) {
       // P7.2: same boundary as rerank — a mid-parent-load cancellation
       // terminates the run instead of degrading to

@@ -550,6 +550,43 @@ test("Ticket 05: correction retrieval shares the run's knowledge scope", async (
   }
 })
 
+test("Ticket 07: correction retrieval reuses the locked scope object, never a recomputed one", async () => {
+  const retrievalScope = { knowledgeBaseIds: ["kb-policies"] }
+  const result1 = makeRetrievalResult({ chunk: { id: "c1", documentId: "d1", content: "content1", childrenIds: [], metadata: {} } })
+  const result2 = makeRetrievalResult({ chunk: { id: "c2", documentId: "d2", content: "content2", childrenIds: [], metadata: {} } })
+  const evidence1 = buildEvidence([result1])
+  const evidence2 = buildEvidence([result1, result2])
+  const searcher = makeFakeSearcher([
+    { status: "ok", results: [result1], unavailableChannels: [] },
+    { status: "ok", results: [result2], unavailableChannels: [] },
+  ])
+  const runner = createSimpleKnowledgeMastraRunner({
+    router: makeFakeRouter("simple"),
+    createSearcher: () => searcher,
+    assembler: makeFakeAssembler(),
+    validator: makeFakeValidator([
+      { passed: false, hallucination: false, completeness: false, missingGap: "gap1" },
+      { passed: true, hallucination: false, completeness: true },
+    ]),
+    replanner: makeFakeRePlanner([{ text: "gap query 1" }]),
+    streamAnswerDraft: makeScriptedDraftStream([
+      buildCitedAnswer(evidence1),
+      buildCitedAnswer(evidence2),
+    ]),
+  })
+
+  await runner(makeRunnerInput({ retrievalScope }))
+
+  assert.ok(searcher.calls.length >= 2, "correction retrieval must run")
+  for (const call of searcher.calls) {
+    assert.equal(
+      call.options?.retrievalScope,
+      retrievalScope,
+      "every search of the run must reference the ONE scope object resolved at the transport (Ticket 07, KB-03C)"
+    )
+  }
+})
+
 test("T11 #2 stable Evidence + bounded Context: evidence built + context assembled", async () => {
   const result1 = makeRetrievalResult({ chunk: { id: "c1", documentId: "d1", content: "content1", childrenIds: [], metadata: {} } })
   const result2 = makeRetrievalResult({ chunk: { id: "c2", documentId: "d2", content: "content2", childrenIds: [], metadata: {} }, source: "bm25" })
