@@ -65,6 +65,8 @@ import {
 } from "../runtime/run_context"
 import type { AccessContext } from "../access/context"
 import type { AgentMessage, AnswerRunEvent } from "../types"
+import type { AnswerModelProfileSnapshot } from "../types/answer"
+import { knowledgeBaseEmbeddingProfile } from "../types/knowledge_base"
 import { createMastraChatEventAdapter } from "./chat_event_adapter"
 import {
   createDirectAmbiguousMastraRunner,
@@ -321,13 +323,53 @@ export async function createSharedAnswerEntry(
       ? options.resourceBudget
       : resourceBudgetFromConfig(cfg)
 
+  // Ticket 17 (MODEL-01B): resolve this entry's model profile ONCE, from the
+  // config/reranker it was composed with — never from a request, and never by
+  // mutating the shared configuration. Every terminal event this entry emits
+  // carries the same frozen snapshot, so a persisted run trace (and the
+  // references it contains) stays traceable to the exact models that produced
+  // it even when other entries with different profiles run concurrently
+  // (evaluation tasks compose their own entries from per-task config copies).
+  const modelProfile: AnswerModelProfileSnapshot = Object.freeze({
+    chatModel: cfg.openaiChatModel,
+    rerankModel: reranker?.model ?? null,
+    embeddingProfile: knowledgeBaseEmbeddingProfile(
+      cfg.embeddingModel,
+      cfg.embeddingDimensions
+    ),
+  })
+  // The adapter notifies the trace observer with the ORIGINAL event object
+  // BEFORE yielding it, so the persistence path gets its own stamped copy:
+  // wrap whichever hard observer was injected and stamp its done events too.
+  const baseTraceObserver = options.traceObserver ?? answerRuntime.traceRepository
+  const traceObserver: AnswerRunObserver = {
+    onEvent: (event) => {
+      baseTraceObserver.onEvent(
+        event.type === "done"
+          ? { ...event, result: { ...event.result, modelProfile } }
+          : event
+      )
+    },
+  }
+
   const eventsSource = createMastraChatEventAdapter({
     runner,
-    traceObserver: options.traceObserver ?? answerRuntime.traceRepository,
+    traceObserver,
     observers,
     budgetMs,
     resourceBudget,
   })
 
-  return { eventsSource, searchOperations }
+  async function* stampedEventsSource(
+    message: string,
+    runOptions: AnswerRunOptions
+  ): AsyncIterable<AnswerRunEvent> {
+    for await (const event of eventsSource(message, runOptions)) {
+      yield event.type === "done"
+        ? { ...event, result: { ...event.result, modelProfile } }
+        : event
+    }
+  }
+
+  return { eventsSource: stampedEventsSource, searchOperations }
 }

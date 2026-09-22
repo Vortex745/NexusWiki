@@ -118,7 +118,11 @@ function requestSourceIdentity(body: IngestRequestBody): Omit<SourceIdentityInpu
 
 type KnowledgeBaseResolution =
   | { ok: true; knowledgeBaseId: string }
-  | { ok: false; status: number; body: { error: string } }
+  | {
+      ok: false
+      status: number
+      body: { error: string } & Record<string, unknown>
+    }
 
 /**
  * Ticket 11 (DOC-01A): validate the optional catalog metadata an import may
@@ -248,14 +252,41 @@ function resolveRequestKnowledgeBaseId(
   }
   try {
     const cfg = loadConfig()
+    const currentProfile = knowledgeBaseEmbeddingProfile(
+      cfg.embeddingModel,
+      cfg.embeddingDimensions
+    )
     const service = new KnowledgeBaseServiceImpl(
       new SqliteKnowledgeBaseRepo(db),
-      knowledgeBaseEmbeddingProfile(cfg.embeddingModel, cfg.embeddingDimensions)
+      currentProfile
     )
     const { knowledgeBaseIds } = service.resolveScope(accessContext.tenantId, scope)
     const [knowledgeBaseId] = knowledgeBaseIds
     if (!knowledgeBaseId) {
       throw new InvalidKnowledgeBaseScopeError("a knowledge base is required")
+    }
+    // Ticket 17 (MODEL-01B): a knowledge base keeps its creation-time
+    // embedding profile — its vector space cannot be switched in place. When
+    // the server's embedding configuration has changed since the base was
+    // created, new content would embed into a different vector space than the
+    // base's existing chunks, so the import is refused with the two profiles
+    // named (recovery = new knowledge base + re-ingestion).
+    // getById can only return null if resolveScope handed out an id it never
+    // validated (unreachable: explicit ids are existence+tenant checked, the
+    // default is ensureDefault-ed above) — so a null row passes through and
+    // the comparison below is what fails closed on a real profile mismatch.
+    const knowledgeBase = service.getById(knowledgeBaseId, accessContext.tenantId)
+    if (knowledgeBase && knowledgeBase.embeddingProfile !== currentProfile) {
+      return {
+        ok: false,
+        status: 409,
+        body: {
+          error: "knowledge base embedding profile mismatch",
+          knowledgeBaseProfile: knowledgeBase.embeddingProfile,
+          serverProfile: currentProfile,
+          hint: "changing the embedding profile requires a new knowledge base and re-ingestion",
+        },
+      }
     }
     return { ok: true, knowledgeBaseId }
   } catch (error) {

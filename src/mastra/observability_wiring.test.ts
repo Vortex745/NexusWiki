@@ -392,9 +392,10 @@ test("T13 #3: shared answer entry wiring pattern attaches langfuseObserver only 
     "shared_answer_entry.ts must pass observers to createMastraChatEventAdapter",
   );
   // The trace repository stays the hard observer (injectable for eval), never
-  // downgraded into the soft observer fanout.
+  // downgraded into the soft observer fanout. Ticket 17 wraps it with the
+  // model-profile stamping observer, but the base wiring line is unchanged.
   assert.ok(
-    entrySource.includes("traceObserver: options.traceObserver ?? answerRuntime.traceRepository"),
+    entrySource.includes("const baseTraceObserver = options.traceObserver ?? answerRuntime.traceRepository"),
     "shared answer entry must wire local trace persistence as the hard observer",
   );
   assert.equal(

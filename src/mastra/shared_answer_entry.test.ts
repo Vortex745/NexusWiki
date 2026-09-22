@@ -25,6 +25,7 @@ import type OpenAI from "openai"
 import type { Client as ElasticsearchClient } from "@elastic/elasticsearch"
 import type { Driver } from "neo4j-driver"
 import type { AppConfig } from "../config"
+import type { AnswerRuntime } from "../answer/runtime"
 import type { AnswerRunEvent } from "../types"
 import type { AnswerRunObserver } from "../answer/generation"
 import { createAnswerRuntime } from "../answer/runtime"
@@ -306,4 +307,159 @@ test("Ticket 01: shared entry has no HTTP or evaluation dependency (T02 #5)", ()
   assert.equal(/from\s+["']\.\.\/api\//.test(source), false)
   assert.equal(/from\s+["']\.\.\/evaluation\//.test(source), false)
   assert.equal(/from\s+["']\.\.\/index["']/.test(source), false)
+})
+
+// ---------------------------------------------------------------------------
+// Ticket 17 (MODEL-01B) — every terminal event carries an immutable, non-secret
+// model profile snapshot; concurrent entries with different profiles never
+// cross-contaminate each other or mutate the shared configuration.
+// ---------------------------------------------------------------------------
+
+test("Ticket 17: the done terminal carries the composed entry's model profile snapshot", async () => {
+  const answerRuntime = createAnswerRuntime(
+    config,
+    factory(makeFakeChatClient("direct"))
+  )
+  try {
+    // Collect what the PERSISTENCE path receives: the trace observer is
+    // notified with the original object before the transport yield, so this
+    // is the stream that lands in answer_run_events.
+    const persisted: AnswerRunEvent[] = []
+    const entry = await createSharedAnswerEntry({
+      config,
+      answerRuntime,
+      conversationStore: makeFakeConversationStore(),
+      handoffStore: makeFakeHandoffStore(),
+      traceObserver: { onEvent: (e) => persisted.push(e) },
+      streamDirectReply: async function* () {
+        yield "你好"
+      },
+    })
+    const events: AnswerRunEvent[] = []
+    for await (const event of entry.eventsSource("你好", {
+      runId: "run-snapshot-1",
+      sessionId: "sess-snapshot-1",
+    })) {
+      events.push(event)
+    }
+    const done = events.find((e) => e.type === "done")
+    assert.ok(done)
+    assert.deepEqual(done.result.modelProfile, {
+      chatModel: "configured-chat-model",
+      rerankModel: null,
+      embeddingProfile: "configured-embedding-model:3",
+    })
+    // The persisted done event carries the SAME snapshot (criterion 2's
+    // "retain": the run trace stays traceable after reload).
+    const persistedDone = persisted.find((e) => e.type === "done")
+    assert.ok(persistedDone)
+    assert.deepEqual(persistedDone.result.modelProfile, done.result.modelProfile)
+    // Non-secret: no key material anywhere in the persisted event stream.
+    assert.ok(!JSON.stringify(events).includes("chat-key"))
+    assert.ok(!JSON.stringify(events).includes("embedding-key"))
+    assert.ok(!JSON.stringify(events).includes("http://chat.test"))
+    assert.ok(!JSON.stringify(persisted).includes("chat-key"))
+  } finally {
+    await answerRuntime.processRuntime.close()
+  }
+})
+
+test("Ticket 17: an injected reranker names its model in the snapshot", async () => {
+  const answerRuntime = createAnswerRuntime(
+    config,
+    factory(makeFakeChatClient("direct"))
+  )
+  try {
+    const reranker = {
+      model: "custom-rerank-model",
+      rerank: async (_query: string, results: never[]) => results,
+    }
+    const entry = await createSharedAnswerEntry({
+      config,
+      answerRuntime,
+      conversationStore: makeFakeConversationStore(),
+      handoffStore: makeFakeHandoffStore(),
+      traceObserver: { onEvent: () => {} },
+      reranker,
+      streamDirectReply: async function* () {
+        yield "你好"
+      },
+    })
+    const events: AnswerRunEvent[] = []
+    for await (const event of entry.eventsSource("你好", {
+      runId: "run-snapshot-2",
+      sessionId: "sess-snapshot-2",
+    })) {
+      events.push(event)
+    }
+    const done = events.find((e) => e.type === "done")
+    assert.ok(done)
+    assert.equal(done.result.modelProfile?.rerankModel, "custom-rerank-model")
+    assert.equal(done.result.modelProfile?.chatModel, "configured-chat-model")
+  } finally {
+    await answerRuntime.processRuntime.close()
+  }
+})
+
+test("Ticket 17: concurrent entries with different profiles keep immutable, distinct snapshots and never mutate shared config", async () => {
+  const configA: AppConfig = { ...config }
+  const configB: AppConfig = {
+    ...config,
+    openaiChatModel: "other-chat-model",
+    embeddingModel: "other-embedding-model",
+    embeddingDimensions: 7,
+  }
+  const beforeA = JSON.stringify(configA)
+  const beforeB = JSON.stringify(configB)
+  const answerRuntimeA = createAnswerRuntime(
+    configA,
+    factory(makeFakeChatClient("direct"))
+  )
+  const answerRuntimeB = createAnswerRuntime(
+    configB,
+    factory(makeFakeChatClient("direct"))
+  )
+  const makeEntry = async (cfg: AppConfig, runtime: AnswerRuntime, runId: string) => {
+    const entry = await createSharedAnswerEntry({
+      config: cfg,
+      answerRuntime: runtime,
+      conversationStore: makeFakeConversationStore(),
+      handoffStore: makeFakeHandoffStore(),
+      traceObserver: { onEvent: () => {} },
+      streamDirectReply: async function* () {
+        yield "你好"
+      },
+    })
+    const events: AnswerRunEvent[] = []
+    for await (const event of entry.eventsSource("你好", {
+      runId,
+      sessionId: `sess-${runId}`,
+    })) {
+      events.push(event)
+    }
+    return events.find((e) => e.type === "done")?.result.modelProfile
+  }
+  try {
+    const [profileA, profileB] = await Promise.all([
+      makeEntry(configA, answerRuntimeA, "run-snapshot-a"),
+      makeEntry(configB, answerRuntimeB, "run-snapshot-b"),
+    ])
+    assert.deepEqual(profileA, {
+      chatModel: "configured-chat-model",
+      rerankModel: null,
+      embeddingProfile: "configured-embedding-model:3",
+    })
+    assert.deepEqual(profileB, {
+      chatModel: "other-chat-model",
+      rerankModel: null,
+      embeddingProfile: "other-embedding-model:7",
+    })
+    assert.notEqual(profileA?.chatModel, profileB?.chatModel)
+    // The composition never wrote a per-run choice back into any config.
+    assert.equal(JSON.stringify(configA), beforeA)
+    assert.equal(JSON.stringify(configB), beforeB)
+  } finally {
+    await answerRuntimeA.processRuntime.close()
+    await answerRuntimeB.processRuntime.close()
+  }
 })

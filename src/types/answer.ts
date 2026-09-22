@@ -70,6 +70,16 @@ export interface AnswerRunResult {
   references: AnswerReference[]
   degradation: AnswerDegradation
   /**
+   * Ticket 17 (MODEL-01B): the immutable, non-secret model profile snapshot
+   * this run resolved at composition time (chat model id, rerank model id or
+   * null, embedding profile `model:dimensions`). Stamped by the shared Answer
+   * entry on the terminal event, so a persisted run trace and its references
+   * always remain traceable to the exact models that produced them — without
+   * ever carrying a key or a provider URL. Absent on events produced by
+   * callers that predate the field.
+   */
+  modelProfile?: AnswerModelProfileSnapshot
+  /**
    * T12 (spec issue #12 criterion #1): LLM token usage from the rolling-
    * summary step (when a Summarizer is wired and summarization was
    * attempted). Absent when no summarizer is wired, the recent-pair window
@@ -102,6 +112,21 @@ export type AnswerRunStage =
   | "answer"
   | "validation"
   | "done"
+
+/**
+ * Ticket 17 (MODEL-01B): non-secret model identity of one Answer run. Resolved
+ * ONCE per composed entry (never per request) and stamped immutably on the
+ * run's terminal result — a concurrent run with a different profile can never
+ * rewrite another run's snapshot, and the shared configuration is never
+ * mutated to express a per-run choice.
+ */
+export interface AnswerModelProfileSnapshot {
+  chatModel: string
+  /** The dedicated reranker's model id, or null when none is configured. */
+  rerankModel: string | null
+  /** `embeddingModel:dimensions` — the vector space this run's KBs accept. */
+  embeddingProfile: string
+}
 
 export interface AnswerRunEventBase {
   schemaVersion: 1

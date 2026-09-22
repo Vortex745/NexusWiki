@@ -10,6 +10,8 @@ import type { DB } from "../ingestion/tracking/db"
 import { DocumentRepo } from "../ingestion/tracking/doc_repo"
 import { TaskRepo } from "../ingestion/tracking/task_repo"
 import { SqliteKnowledgeBaseRepo } from "../knowledge/knowledge_base_repo"
+import { loadConfig } from "../config"
+import { knowledgeBaseEmbeddingProfile } from "../types/knowledge_base"
 import { _setTestDefaults } from "../ingestion/url_fetcher"
 import type { HostResolver } from "../ingestion/url_policy"
 import type { AnswerEventsSource } from "./chat"
@@ -638,15 +640,18 @@ test("P4.3: sitemap mode marks SSRF-denied pages as ssrf_denied with retryable=f
 // 每个导入必须恰好落在一个已授权知识库上：字段缺省 → 该租户的确定性默认库；
 // 显式 id 必须存在且属于本租户（未知/跨租户 404、空白 400），绝不静默放宽为“所有库”。
 
-/** 直接建库（不走 HTTP），用于给显式 knowledgeBaseId 提供合法目标。 */
+/** 直接建库（不走 HTTP），用于给显式 knowledgeBaseId 提供合法目标。
+ * 票 17 起，导入要求库的 embedding profile 与服务端当前配置一致，
+ * 所以这里的合法目标必须用当前配置派生的 profile。 */
 function seedKnowledgeBase(db: DB, id: string, tenantId: string): void {
+  const cfg = loadConfig()
   new SqliteKnowledgeBaseRepo(db).insertIfAbsent({
     id,
     tenantId,
     name: id,
     description: "",
     status: "active",
-    embeddingProfile: "test-model:2",
+    embeddingProfile: knowledgeBaseEmbeddingProfile(cfg.embeddingModel, cfg.embeddingDimensions),
     createdAt: "2026-01-01T00:00:00.000Z",
     updatedAt: "2026-01-01T00:00:00.000Z",
   })
@@ -787,6 +792,61 @@ test("Ticket 03 KB-02A: file imports read x-knowledge-base-id and fail loudly on
   } finally {
     await new Promise<void>((resolve, reject) => {
       server.close((error) => error ? reject(error) : resolve())
+    })
+    closeDb()
+    rmSync(directory, { recursive: true, force: true })
+  }
+})
+
+test("Ticket 17 MODEL-01B: an import into a knowledge base with a different embedding profile is refused (409)", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "kefu-rag-kb-profile-"))
+  process.env.OPENAI_API_KEY = process.env.OPENAI_API_KEY || "test-key"
+  process.env.SQLITE_PATH = join(directory, "ingestion.db")
+  const db = openDb()
+  const cfg = loadConfig()
+  // 直接种一个带着「创建时 profile」的库 —— 模拟服务端 embedding 配置在
+  // 建库之后被更改过的场景。向量空间不能就地切换，导入必须被拒。
+  new SqliteKnowledgeBaseRepo(db).insertIfAbsent({
+    id: "kb-stale-profile",
+    tenantId: "tenant-a",
+    name: "kb-stale-profile",
+    description: "",
+    status: "active",
+    embeddingProfile: "old-model:2",
+    createdAt: "2026-01-01T00:00:00.000Z",
+    updatedAt: "2026-01-01T00:00:00.000Z",
+  })
+  const server = createApp({ eventsSource, ingestAccessMiddleware: tenantAccessMiddleware }).listen(0)
+  try {
+    await new Promise<void>((resolve) => server.once("listening", resolve))
+    const address = server.address()
+    assert.ok(address && typeof address === "object")
+    const response = await fetch(`http://127.0.0.1:${address.port}/api/ingest/file`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/octet-stream",
+        "x-file-name": "policy.txt",
+        "x-source-id": "C:/knowledge/stale.txt",
+        "x-source-namespace": "local",
+        "x-knowledge-base-id": "kb-stale-profile",
+      },
+      body: Buffer.from("stale profile bytes"),
+    })
+    assert.equal(response.status, 409)
+    const body = (await response.json()) as {
+      knowledgeBaseProfile: string
+      serverProfile: string
+      hint: string
+    }
+    assert.equal(body.knowledgeBaseProfile, "old-model:2")
+    assert.equal(
+      body.serverProfile,
+      knowledgeBaseEmbeddingProfile(cfg.embeddingModel, cfg.embeddingDimensions)
+    )
+    assert.match(body.hint, /new knowledge base/)
+  } finally {
+    await new Promise<void>((resolve, reject) => {
+      server.close((error) => (error ? reject(error) : resolve()))
     })
     closeDb()
     rmSync(directory, { recursive: true, force: true })
