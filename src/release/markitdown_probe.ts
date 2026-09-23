@@ -254,9 +254,12 @@ export const markitdownProbe: ProbeImplementation = async (
     // is real markdown text written to a .md temp file, so `markitdown` parses
     // it as-is. No commandArgs needed — markitdown accepts a file path
     // positional argument produced by MarkItDownParser.runBoundedProcess.
+    // The 20s bound is the PROBE's own budget (python startup dominates and
+    // the full suite runs this concurrently) — production ingestion timeouts
+    // are configured independently.
     const happyParser = new MarkItDownParser({
       command: "markitdown",
-      timeoutMs: 5_000,
+      timeoutMs: 20_000,
       inputLimitBytes: 1_024,
       outputLimitBytes: 10_000,
     })

@@ -37,3 +37,26 @@ console.log('observability
 *.drawio
 *.drawio.png
 /rag-*.png
+*.url
+agentic-rag-runtime-architecture.*
+*.visual-check.*
+
+# Agent session protocol files (kept on disk, untracked)
+AGENTS.md
+HINTS.md
+verify.json
+
+# Runtime data (sqlite db, ragas eval history)
+data/
+
+# Tool state directories and temp artifacts
+.codegraph/
+.omc/
+.tmp/
+__pycache__/
+
+# README.md is NOT ignored — recreating it will be tracked normally
+!README.md
+
+# Ticket 46: generated quality-gate results (copied to .scratch/ticket46-evidence/) 
+release-quality-results.json

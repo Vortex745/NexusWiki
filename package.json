@@ -19,7 +19,8 @@
     "eval:residue": "node --import tsx scripts/eval-residue.ts",
     "demo:rebuild": "node --import tsx scripts/demo-rebuild.ts",
     "demo:seed": "node --import tsx scripts/demo-seed.ts",
-    "demo:reset": "node --import tsx scripts/demo-reset.ts"
+    "demo:reset": "node --import tsx scripts/demo-reset.ts",
+    "release:quality-gate": "node --import tsx scripts/release-quality-gate.ts"
   },
   "keywords": [],
   "author": "",

@@ -1,0 +1,179 @@
+{
+  "schema": "demo-release-cases",
+  "version": 1,
+  "description": "Ticket 46 (DEMO-02B): the 20-case release gate over the deterministic demo corpus. 6 isolation/refusal HARD cases must ALL pass; at least 10 of the other 14 must pass; at least 16 overall. Pass/fail is decided ONLY by these prewritten answer-point rules and refusal expectations - BLEU/ROUGE and the retrieval metrics stay diagnostic.",
+  "corpus": {
+    "projectDocuments": 10,
+    "policyDocuments": 8,
+    "seed": "npm run demo:seed (deterministic; digest-pinned)"
+  },
+  "rules": {
+    "hardMustPass": "all",
+    "othersMinPass": 10,
+    "overallMinPass": 16
+  },
+  "cases": [
+    {
+      "id": "hard-01-isolation-policy-blocked",
+      "hard": true,
+      "kind": "refuse",
+      "message": "年假按司龄怎么分档？",
+      "knowledgeBaseIds": ["kb-demo-project"],
+      "reason": "the leave policy exists ONLY in the policy knowledge base - with just the project base selected the answer must be refused, never fabricated"
+    },
+    {
+      "id": "hard-02-isolation-project-blocked",
+      "hard": true,
+      "kind": "refuse",
+      "message": "系统有哪几条检索通道？",
+      "knowledgeBaseIds": ["kb-demo-policy"],
+      "reason": "the retrieval-channel documentation lives ONLY in the project knowledge base - with just the policy base selected the answer must be refused"
+    },
+    {
+      "id": "hard-03-empty-scope-refuse",
+      "hard": true,
+      "kind": "refuse",
+      "message": "退货期限是多久？",
+      "knowledgeBaseIds": [],
+      "reason": "an empty knowledge scope means no knowledge context at all - even the FAQ answer must not appear"
+    },
+    {
+      "id": "hard-04-faq-exact-answer",
+      "hard": true,
+      "kind": "answer",
+      "message": "退货期限是多久？",
+      "knowledgeBaseIds": ["kb-demo-policy"],
+      "answerPoints": ["30 个自然日"],
+      "reason": "the exact FAQ hit returns the versioned standard answer with the reference"
+    },
+    {
+      "id": "hard-05-no-fabrication",
+      "hard": true,
+      "kind": "refuse",
+      "message": "公司的股票代码是什么？",
+      "knowledgeBaseIds": ["kb-demo-project", "kb-demo-policy"],
+      "reason": "the corpus contains no stock information - the run must refuse instead of inventing one"
+    },
+    {
+      "id": "hard-06-memory-never-cited",
+      "hard": true,
+      "kind": "memory-not-cited",
+      "message": "提醒我一下我们的长期记忆里记录了什么。",
+      "knowledgeBaseIds": ["kb-demo-project", "kb-demo-policy"],
+      "forbiddenReferenceContent": "演示记忆",
+      "reason": "long-term memory informs the prompt but must NEVER appear in the reference list"
+    },
+    {
+      "id": "case-07-arch-channels",
+      "hard": false,
+      "kind": "answer",
+      "message": "系统有哪几条检索通道？",
+      "knowledgeBaseIds": ["kb-demo-project"],
+      "answerPoints": ["四条检索通道"]
+    },
+    {
+      "id": "case-08-scope-lock",
+      "hard": false,
+      "kind": "answer",
+      "message": "会话的检索作用域从哪条消息开始锁定？",
+      "knowledgeBaseIds": ["kb-demo-project"],
+      "answerPoints": ["第一条消息"]
+    },
+    {
+      "id": "case-09-deploy-order",
+      "hard": false,
+      "kind": "answer",
+      "message": "本地演示按顺序启动时，基础设施之后要做什么？",
+      "knowledgeBaseIds": ["kb-demo-project"],
+      "answerPoints": ["环境检查"]
+    },
+    {
+      "id": "case-10-fusion-rerank",
+      "hard": false,
+      "kind": "answer",
+      "message": "四路结果融合之后还有什么处理？",
+      "knowledgeBaseIds": ["kb-demo-project"],
+      "answerPoints": ["精排"]
+    },
+    {
+      "id": "case-11-eval-metrics-diagnostic",
+      "hard": false,
+      "kind": "answer",
+      "message": "BLEU 和 ROUGE 分数是发布判定依据吗？",
+      "knowledgeBaseIds": ["kb-demo-project"],
+      "answerPoints": ["诊断"]
+    },
+    {
+      "id": "case-12-observability-optional",
+      "hard": false,
+      "kind": "answer",
+      "message": "未配置 Langfuse 会影响功能吗？",
+      "knowledgeBaseIds": ["kb-demo-project"],
+      "answerPoints": ["不影响"]
+    },
+    {
+      "id": "case-13-tenant-source",
+      "hard": false,
+      "kind": "answer",
+      "message": "本系统的安全模型中，租户身份来自服务端解析的什么？",
+      "knowledgeBaseIds": ["kb-demo-project"],
+      "answerPoints": ["AccessContext"]
+    },
+    {
+      "id": "case-14-faq-conflict-rule",
+      "hard": false,
+      "kind": "answer",
+      "message": "同一问题可以有几个启用中的标准答案？",
+      "knowledgeBaseIds": ["kb-demo-project"],
+      "answerPoints": ["一个"]
+    },
+    {
+      "id": "case-15-troubleshoot-empty",
+      "hard": false,
+      "kind": "answer",
+      "message": "检索结果为空时应该先检查什么？",
+      "knowledgeBaseIds": ["kb-demo-project"],
+      "answerPoints": ["作用域"]
+    },
+    {
+      "id": "case-16-policy-expense",
+      "hard": false,
+      "kind": "answer",
+      "message": "差旅报销需要在返回后多少个工作日内提交？",
+      "knowledgeBaseIds": ["kb-demo-policy"],
+      "answerPoints": ["10 个工作日"]
+    },
+    {
+      "id": "case-17-policy-remote",
+      "hard": false,
+      "kind": "answer",
+      "message": "每周可以远程办公几天？",
+      "knowledgeBaseIds": ["kb-demo-policy"],
+      "answerPoints": ["2 天"]
+    },
+    {
+      "id": "case-18-policy-retention",
+      "hard": false,
+      "kind": "answer",
+      "message": "会话记录保留多久？",
+      "knowledgeBaseIds": ["kb-demo-policy"],
+      "answerPoints": ["90 天"]
+    },
+    {
+      "id": "case-19-policy-incident",
+      "hard": false,
+      "kind": "answer",
+      "message": "四级安全事件需要在多久内上报？",
+      "knowledgeBaseIds": ["kb-demo-policy"],
+      "answerPoints": ["24 小时"]
+    },
+    {
+      "id": "case-20-policy-onboarding",
+      "hard": false,
+      "kind": "answer",
+      "message": "转正答辩安排在入职多久之后？",
+      "knowledgeBaseIds": ["kb-demo-policy"],
+      "answerPoints": ["三个月"]
+    }
+  ]
+}

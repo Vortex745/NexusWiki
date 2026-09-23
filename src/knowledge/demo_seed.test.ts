@@ -232,11 +232,17 @@ test("the reset preview lists exact targets and writes nothing", async () => {
   assert.equal(preview.executed, false)
   assert.equal(preview.cleanup, undefined)
   // The preview names the exact namespace-owned rows: the documents table
-  // holds 7 rows (6 demo + 1 unrelated) but the listing counts only 6.
+  // holds the demo corpus + 1 unrelated row, but the listing counts only the
+  // demo corpus.
+  const corpusSize = DEMO_PROJECT_DOCUMENTS.length + DEMO_POLICY_DOCUMENTS.length
   const documents = preview.inventory.sqliteTables.find((t) => t.table === "documents")
-  assert.equal(documents?.rows, 6, "only the demo namespace's documents are listed")
+  assert.equal(documents?.rows, corpusSize, "only the demo namespace's documents are listed")
   assert.ok(documents && documents.rows < docsBefore.n, "unrelated rows are not part of the listing")
-  assert.equal(preview.inventory.esIndex.documents, 6, "ES count is scoped to the namespace")
+  assert.equal(
+    preview.inventory.esIndex.documents,
+    corpusSize,
+    "ES count is scoped to the namespace"
+  )
   assert.equal(preview.inventory.neo4jProvenanceOwned, true)
 
   // Nothing was written anywhere.
@@ -327,7 +333,11 @@ test("a confirmed reset refuses when a layer cannot be inventoried", async () =>
   const docs = setup.db
     .prepare(`SELECT COUNT(*) AS n FROM documents WHERE tenant_id = 'demo'`)
     .get() as { n: number }
-  assert.equal(docs.n, 6, "nothing was deleted when the inventory was incomplete")
+  assert.equal(
+    docs.n,
+    DEMO_PROJECT_DOCUMENTS.length + DEMO_POLICY_DOCUMENTS.length,
+    "nothing was deleted when the inventory was incomplete"
+  )
   assert.equal(setup.es.deleteByQueryCalls.length, 0)
 })
 
@@ -347,7 +357,11 @@ test("a repeated seed/reset cycle rebuilds the same namespace and leaves others 
   const demoDocs = setup.db
     .prepare(`SELECT COUNT(*) AS n FROM documents WHERE tenant_id = 'demo'`)
     .get() as { n: number }
-  assert.equal(demoDocs.n, 6)
+  assert.equal(
+    demoDocs.n,
+    DEMO_PROJECT_DOCUMENTS.length + DEMO_POLICY_DOCUMENTS.length,
+    "the cycle rebuilds the whole corpus"
+  )
   // The unrelated tenant survived the whole cycle.
   const otherDocs = setup.db
     .prepare(`SELECT COUNT(*) AS n FROM documents WHERE tenant_id = 'other-tenant'`)
