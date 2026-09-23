@@ -1,5 +1,5 @@
 import { ThreadListItemPrimitive, ThreadListPrimitive } from "@assistant-ui/react"
-import { BookOpen, Bot, Brain, Check, Database, FileText, FlaskConical, HelpCircle, MessageCircle, MessageSquareWarning, Moon, Plus, Settings, Sun, Trash2 } from "lucide"
+import { BookOpen, Bot, Brain, Check, Database, FileText, FlaskConical, HelpCircle, MessageCircle, MessageSquareWarning, Moon, Network, Plus, Settings, Sun, Trash2 } from "lucide"
 import { useEffect, useState } from "react"
 import type { IconProps } from "./ui/Icon"
 
@@ -13,6 +13,7 @@ import { knowledgeStore, useKnowledgeBases } from "../runtime/knowledgeStore"
 import { useMemoryApi } from "../runtime/MemoryContext"
 import { useSignedInSession } from "../runtime/SessionContext"
 import { DocumentsDialog } from "./panels/DocumentsDialog"
+import { GraphBrowseDialog } from "./panels/GraphBrowseDialog"
 import { LaboratoryDialog } from "./panels/LaboratoryDialog"
 import { StatusPopover } from "./StatusPopover"
 import { Icon } from "./ui/Icon"
@@ -79,6 +80,10 @@ function KnowledgeSelector() {
   // Ticket 11 (DOC-01A): browsing a base's document catalog is for every
   // signed-in member — the server applies the tenant/group/kb scoping.
   const [browsingDocs, setBrowsingDocs] = useState<{ id: string; name: string } | null>(null)
+  // Ticket 37 (GRAPH-01): browsing a base's knowledge-scoped graph relations
+  // is for every signed-in member — the server authorizes every relation and
+  // every provenance record.
+  const [browsingGraph, setBrowsingGraph] = useState<{ id: string; name: string } | null>(null)
   // Ticket 15 (RET-02): the retrieval laboratory is for every signed-in
   // member — it runs the same read-only debug endpoint their chat scope backs.
   const [laboratoryOpen, setLaboratoryOpen] = useState(false)
@@ -143,9 +148,17 @@ function KnowledgeSelector() {
                   type="button"
                   onClick={() => setBrowsingDocs({ id: base.id, name: base.name })}
                   title={`浏览「${base.name}」的文档目录`}
-                  className="absolute top-1/2 right-1.5 grid size-6 -translate-y-1/2 cursor-pointer place-items-center rounded-md text-muted/70 opacity-0 transition-[colors,opacity] hover:text-ink group-hover/kb:opacity-100 max-md:opacity-100 focus-visible:opacity-100 focus-visible:outline-2 focus-visible:outline-brand"
+                  className="absolute top-1/2 right-8.5 grid size-6 -translate-y-1/2 cursor-pointer place-items-center rounded-md text-muted/70 opacity-0 transition-[colors,opacity] hover:text-ink group-hover/kb:opacity-100 max-md:opacity-100 focus-visible:opacity-100 focus-visible:outline-2 focus-visible:outline-brand"
                 >
                   <Icon icon={FileText} className="size-3.5" />
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setBrowsingGraph({ id: base.id, name: base.name })}
+                  title={`浏览「${base.name}」的知识图谱`}
+                  className="absolute top-1/2 right-1.5 grid size-6 -translate-y-1/2 cursor-pointer place-items-center rounded-md text-muted/70 opacity-0 transition-[colors,opacity] hover:text-ink group-hover/kb:opacity-100 max-md:opacity-100 focus-visible:opacity-100 focus-visible:outline-2 focus-visible:outline-brand"
+                >
+                  <Icon icon={Network} className="size-3.5" />
                 </button>
               </li>
             )
@@ -168,6 +181,12 @@ function KnowledgeSelector() {
         open={browsingDocs !== null}
         knowledgeBase={browsingDocs}
         onClose={() => setBrowsingDocs(null)}
+      />
+      {/* Ticket 37 (GRAPH-01): the knowledge-scoped graph browse panel. */}
+      <GraphBrowseDialog
+        open={browsingGraph !== null}
+        knowledgeBase={browsingGraph}
+        onClose={() => setBrowsingGraph(null)}
       />
       <LaboratoryDialog open={laboratoryOpen} onClose={() => setLaboratoryOpen(false)} />
     </div>

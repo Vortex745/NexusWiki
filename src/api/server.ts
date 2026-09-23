@@ -44,6 +44,8 @@ import { SqliteKnowledgeBaseRepo } from "../knowledge/knowledge_base_repo"
 import { knowledgeBaseEmbeddingProfile } from "../types/knowledge_base"
 import { createKnowledgeBaseRouter } from "./knowledge_bases"
 import { createDocumentsRouter, createEsChunkReader } from "./documents"
+import { createGraphBrowseRouter } from "./graph_browse"
+import { ActiveVersionRepository } from "../ingestion/tracking/active_version_repo"
 import { createRetrievalDebugRouter } from "./retrieval_debug"
 import { createModelProfilesRouter } from "./model_profiles"
 import { createAssistantsRouter } from "./assistants"
@@ -280,6 +282,24 @@ export function createApp(options: {
       // absent in bare createApp() mounts (tests), where chunk views answer 503.
       ...(options.processRuntime
         ? { chunkReader: createEsChunkReader(options.processRuntime.elasticsearch, "kefu-rag-chunks") }
+        : {}),
+    })
+  )
+  // Ticket 37 (GRAPH-01): the knowledge-scoped graph browse surface. Mounted
+  // under the same chat-scope identity middleware; the KB ownership check and
+  // the provenance authorization happen in-handler through the SAME filter
+  // functions the graph retrieval channel uses. Bare createApp() mounts
+  // (tests) without a process runtime answer 503 — no Neo4j to browse.
+  app.use(
+    "/api",
+    createGraphBrowseRouter({
+      knowledgeBaseService: workspaceKnowledgeBaseService,
+      ...(options.processRuntime
+        ? {
+            neo4jDriver: options.processRuntime.neo4jDriver,
+            es: options.processRuntime.elasticsearch,
+            activeVersionRepo: new ActiveVersionRepository(db),
+          }
         : {}),
     })
   )

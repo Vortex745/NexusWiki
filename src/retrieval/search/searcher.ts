@@ -93,7 +93,7 @@ function raceAbort<T>(
   })
 }
 
-function childFilter() {
+export function childFilter() {
   return {
     bool: {
       minimum_should_match: 1,
@@ -122,7 +122,7 @@ function childFilter() {
  *   for an empty-array keyword field, so `must_not: exists` matches
  *   tenant-wide chunks reliably.
  */
-function accessContextFilter(ac?: AccessContext): Array<Record<string, unknown>> {
+export function accessContextFilter(ac?: AccessContext): Array<Record<string, unknown>> {
   if (!ac) return []
   const filters: Array<Record<string, unknown>> = [
     { term: { tenantId: ac.tenantId } },
@@ -153,7 +153,7 @@ function accessContextFilter(ac?: AccessContext): Array<Record<string, unknown>>
  *   before any query was built. An empty scope must never degrade into an
  *   unfiltered read.
  */
-function knowledgeBaseFilter(scope?: RetrievalScope): Array<Record<string, unknown>> {
+export function knowledgeBaseFilter(scope?: RetrievalScope): Array<Record<string, unknown>> {
   if (!scope || scope.knowledgeBaseIds.length === 0) return []
   return [{ terms: { knowledgeBaseId: [...scope.knowledgeBaseIds] } }]
 }
@@ -185,7 +185,7 @@ function hasNoKnowledgeContext(scope?: RetrievalScope): boolean {
  *   clause, which can never match a document whose knowledgeBaseId field is
  *   missing.
  */
-function filterByKnowledgeBase<T extends { knowledgeBaseId?: string }>(
+export function filterByKnowledgeBase<T extends { knowledgeBaseId?: string }>(
   items: T[],
   scope?: RetrievalScope
 ): T[] {
@@ -239,7 +239,7 @@ function filterNodesByAccessContext<N extends { tenantId?: string; allowedGroups
  *   filterNodesByAccessContext (empty caller groups = tenant-wide;
  *   empty provenance groups = tenant-wide chunk; otherwise intersect).
  */
-function filterProvenanceByAccessContext<P extends { tenantId?: string; allowedGroups?: string[] }>(
+export function filterProvenanceByAccessContext<P extends { tenantId?: string; allowedGroups?: string[] }>(
   provenance: P[],
   ac?: AccessContext
 ): P[] {
@@ -648,7 +648,7 @@ export class RuntimeSearchOperations implements SearchOperations {
   }
 }
 
-function parseGraphProvenance(values: unknown): NonNullable<
+export function parseGraphProvenance(values: unknown): NonNullable<
   RetrievalResult["wikilinks"][number]["provenance"]
 > {
   if (!Array.isArray(values)) return []

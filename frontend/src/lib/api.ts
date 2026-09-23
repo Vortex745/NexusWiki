@@ -1624,3 +1624,83 @@ export async function dismissMemorySuggestion(id: string): Promise<void> {
     throw new Error(body.error || `记忆建议忽略失败 (${response.status})`)
   }
 }
+
+// ---------------------------------------------------------------------------
+// Ticket 37 (GRAPH-01): knowledge-scoped graph browse (read-only)
+// ---------------------------------------------------------------------------
+
+export interface GraphEntityPayload {
+  name: string
+  type: string
+  aliases: string[]
+  relationCount: number
+}
+
+export interface GraphProvenancePayload {
+  documentId: string
+  chunkId: string
+  available: boolean
+  title?: string
+  documentVersion?: number
+}
+
+export interface GraphRelationPayload {
+  sourceName: string
+  targetName: string
+  relation: string
+  weight: number
+  provenance: GraphProvenancePayload[]
+}
+
+export interface GraphEntitiesPayload {
+  entities: GraphEntityPayload[]
+  page: { limit: number; offset: number; truncated: boolean }
+}
+
+export interface GraphRelationsPayload {
+  entity: { name: string; type: string; aliases: string[] }
+  relations: GraphRelationPayload[]
+  page: { limit: number; offset: number; truncated: boolean; outOfScopeRows?: number }
+}
+
+export async function fetchGraphEntities(
+  kbId: string,
+  view: { query?: string; limit?: number; offset?: number } = {},
+): Promise<GraphEntitiesPayload> {
+  const params = new URLSearchParams()
+  if (view.query) params.set("query", view.query)
+  if (view.limit !== undefined) params.set("limit", String(view.limit))
+  if (view.offset !== undefined) params.set("offset", String(view.offset))
+  const response = await apiFetch(
+    `/knowledge-bases/${encodeURIComponent(kbId)}/graph/entities?${params.toString()}`,
+  )
+  if (!response.ok) throw new Error(`图谱实体读取失败 (${response.status})`)
+  const body = (await response.json()) as Partial<GraphEntitiesPayload>
+  return {
+    entities: Array.isArray(body.entities) ? body.entities : [],
+    page: body.page ?? { limit: view.limit ?? 20, offset: view.offset ?? 0, truncated: false },
+  }
+}
+
+export async function fetchGraphRelations(
+  kbId: string,
+  entity: string,
+  view: { limit?: number; offset?: number } = {},
+): Promise<GraphRelationsPayload> {
+  const params = new URLSearchParams({ entity })
+  if (view.limit !== undefined) params.set("limit", String(view.limit))
+  if (view.offset !== undefined) params.set("offset", String(view.offset))
+  const response = await apiFetch(
+    `/knowledge-bases/${encodeURIComponent(kbId)}/graph/relations?${params.toString()}`,
+  )
+  if (!response.ok) {
+    const body = (await response.json().catch(() => ({}))) as { error?: string }
+    throw new Error(body.error || `图谱关系读取失败 (${response.status})`)
+  }
+  const body = (await response.json()) as Partial<GraphRelationsPayload>
+  return {
+    entity: body.entity ?? { name: entity, type: "", aliases: [] },
+    relations: Array.isArray(body.relations) ? body.relations : [],
+    page: body.page ?? { limit: view.limit ?? 20, offset: view.offset ?? 0, truncated: false },
+  }
+}
