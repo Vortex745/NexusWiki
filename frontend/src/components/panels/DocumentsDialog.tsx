@@ -1,9 +1,10 @@
-import { BookOpen, FileText, NotebookPen, X } from "lucide"
+import { BookOpen, FileText, NotebookPen, RefreshCw, X } from "lucide"
 import { useEffect, useRef, useState } from "react"
 
 import { Icon } from "../ui/Icon"
 import { useSignedInSession } from "../../runtime/SessionContext"
 import { useAppShell } from "../../runtime/AppShellContext"
+import { SyncDialog } from "./SyncDialog"
 import { WikiDialog } from "./WikiDialog"
 import {
   cancelDocument,
@@ -255,6 +256,8 @@ export function DocumentsDialog({
   const { showToast, openDocument } = useAppShell()
   // Ticket 38 (WIKI-01): the administrator Wiki surface for this knowledge base.
   const [wikiOpen, setWikiOpen] = useState(false)
+  // Ticket 39 (SYNC-01A): the administrator sync data-source surface.
+  const [syncOpen, setSyncOpen] = useState(false)
 
   const runAction = (action: () => Promise<void>, successText: string) => {
     setBusy(true)
@@ -347,6 +350,17 @@ export function DocumentsDialog({
               Wiki
             </button>
           ) : null}
+          {canAdmin ? (
+            <button
+              type="button"
+              onClick={() => setSyncOpen(true)}
+              title="管理同步数据源"
+              className="inline-flex h-7 cursor-pointer items-center gap-1 rounded-md border border-line px-2 text-xs text-muted transition-colors hover:bg-surface-subtle hover:text-ink"
+            >
+              <Icon icon={RefreshCw} className="size-3.5" />
+              同步
+            </button>
+          ) : null}
           <button
             type="button"
             onClick={onClose}
@@ -363,6 +377,12 @@ export function DocumentsDialog({
         open={wikiOpen}
         knowledgeBase={knowledgeBase}
         onClose={() => setWikiOpen(false)}
+      />
+      {/* Ticket 39 (SYNC-01A): the per-knowledge-base sync data-source panel. */}
+      <SyncDialog
+        open={syncOpen}
+        knowledgeBase={knowledgeBase}
+        onClose={() => setSyncOpen(false)}
       />
 
       {/* Filters */}

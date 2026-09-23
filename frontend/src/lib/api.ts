@@ -1792,3 +1792,102 @@ export async function restoreWikiPage(kbId: string, docId: string): Promise<{ ve
   }
   return (await response.json()) as { version: number }
 }
+
+// ---------------------------------------------------------------------------
+// Ticket 39 (SYNC-01A): URL/sitemap sync data sources (admin, read + operate)
+// ---------------------------------------------------------------------------
+
+export interface SyncDataSourcePayload {
+  id: string
+  knowledgeBaseId: string
+  kind: "url" | "sitemap"
+  uri: string
+  interval: "manual" | "1h" | "6h" | "24h"
+  state: "active" | "paused"
+  title: string
+  lastSyncAt: string | null
+  lastSyncStatus: string | null
+  createdAt: string
+}
+
+export interface SyncRunReportPayload {
+  dataSourceId: string
+  kind: "url" | "sitemap"
+  pages: Array<{
+    uri: string
+    status: "submitted" | "unchanged" | "failed"
+    detail?: string
+    documentId?: string
+    version?: number
+  }>
+  truncated?: boolean
+}
+
+export async function fetchSyncSources(kbId: string): Promise<SyncDataSourcePayload[]> {
+  const response = await apiFetch(`/knowledge-bases/${encodeURIComponent(kbId)}/sync-data-sources`)
+  if (!response.ok) throw new Error(`同步源读取失败 (${response.status})`)
+  const body = (await response.json()) as { sources?: SyncDataSourcePayload[] }
+  return Array.isArray(body.sources) ? body.sources : []
+}
+
+export async function createSyncSource(
+  kbId: string,
+  input: { kind: "url" | "sitemap"; uri: string; interval?: string; title?: string },
+): Promise<SyncDataSourcePayload> {
+  const response = await apiFetch(`/knowledge-bases/${encodeURIComponent(kbId)}/sync-data-sources`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  })
+  const body = (await response.json().catch(() => ({}))) as {
+    source?: SyncDataSourcePayload
+    error?: string
+  }
+  if (!response.ok || !body.source) {
+    throw new Error(body.error || `同步源创建失败 (${response.status})`)
+  }
+  return body.source
+}
+
+export async function updateSyncSource(
+  id: string,
+  patch: { interval?: string; state?: "active" | "paused" },
+): Promise<SyncDataSourcePayload> {
+  const response = await apiFetch(`/sync-data-sources/${encodeURIComponent(id)}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(patch),
+  })
+  const body = (await response.json().catch(() => ({}))) as {
+    source?: SyncDataSourcePayload
+    error?: string
+  }
+  if (!response.ok || !body.source) {
+    throw new Error(body.error || `同步源更新失败 (${response.status})`)
+  }
+  return body.source
+}
+
+export async function deleteSyncSource(id: string): Promise<void> {
+  const response = await apiFetch(`/sync-data-sources/${encodeURIComponent(id)}`, {
+    method: "DELETE",
+  })
+  if (!response.ok) {
+    const body = (await response.json().catch(() => ({}))) as { error?: string }
+    throw new Error(body.error || `同步源删除失败 (${response.status})`)
+  }
+}
+
+export async function runSyncSource(id: string): Promise<SyncRunReportPayload> {
+  const response = await apiFetch(`/sync-data-sources/${encodeURIComponent(id)}/run`, {
+    method: "POST",
+  })
+  const body = (await response.json().catch(() => ({}))) as {
+    report?: SyncRunReportPayload
+    error?: string
+  }
+  if (!response.ok || !body.report) {
+    throw new Error(body.error || `同步执行失败 (${response.status})`)
+  }
+  return body.report
+}

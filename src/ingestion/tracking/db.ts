@@ -410,6 +410,27 @@ const SCHEMA = [
   )`,
   `CREATE INDEX IF NOT EXISTS idx_memory_suggestions_review
     ON memory_suggestions(tenant_id, subject_id, status, created_at)`,
+  // Ticket 39 (SYNC-01A): URL/sitemap data sources owned by the sync module.
+  // One row = one resource (a URL or a sitemap) synced into exactly ONE
+  // knowledge base. `interval` records the operator's cadence choice
+  // (manual = never scheduled; scheduling itself is ticket 40's runs table).
+  // `state` is the operator lifecycle (active rows sync; paused rows do not).
+  `CREATE TABLE IF NOT EXISTS sync_data_sources (
+    id TEXT PRIMARY KEY,
+    tenant_id TEXT NOT NULL,
+    knowledge_base_id TEXT NOT NULL,
+    kind TEXT NOT NULL CHECK(kind IN ('url','sitemap')),
+    uri TEXT NOT NULL,
+    interval TEXT NOT NULL DEFAULT 'manual' CHECK(interval IN ('manual','1h','6h','24h')),
+    state TEXT NOT NULL DEFAULT 'active' CHECK(state IN ('active','paused')),
+    title TEXT NOT NULL DEFAULT '',
+    last_sync_at TEXT,
+    last_sync_status TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_sync_data_sources_kb
+    ON sync_data_sources(tenant_id, knowledge_base_id, state)`,
 ].join(";\n")
 
 let _db: DB | null = null

@@ -46,6 +46,7 @@ import { createKnowledgeBaseRouter } from "./knowledge_bases"
 import { createDocumentsRouter, createEsChunkReader } from "./documents"
 import { createGraphBrowseRouter } from "./graph_browse"
 import { createWikiRouter } from "./wiki"
+import { createSyncDataSourcesRouter } from "./sync_data_sources"
 import { ActiveVersionRepository } from "../ingestion/tracking/active_version_repo"
 import { createRetrievalDebugRouter } from "./retrieval_debug"
 import { createModelProfilesRouter } from "./model_profiles"
@@ -331,6 +332,16 @@ export function createApp(options: {
         ? { chatClient: options.processRuntime.chatClient }
         : {}),
       ...(options.config ? { model: options.config.openaiChatModel } : {}),
+    })
+  )
+  // Ticket 39 (SYNC-01A): the URL/sitemap sync data-source surface. Same
+  // chat-scope identity middleware; admin gate + KB ownership in-handler.
+  // Manual syncs reuse the safe fetchers and the normal ingestion lifecycle.
+  app.use(
+    "/api",
+    createSyncDataSourcesRouter({
+      knowledgeBaseService: workspaceKnowledgeBaseService,
+      db,
     })
   )
   if (options.managementAccessMiddleware) {
