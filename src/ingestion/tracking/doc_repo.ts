@@ -514,6 +514,41 @@ export class DocumentRepo {
       : null
   }
 
+  /**
+   * Ticket 38 (WIKI-01): the version history of one source, newest first,
+   * each row flagged with whether it is the source's active version. The
+   * Wiki revision history and restore path read this.
+   */
+  listVersionsBySource(sourceId: string): Array<{
+    docId: string
+    version: number
+    title: string
+    createdAt: Date
+    active: boolean
+  }> {
+    const rows = this.db.prepare(
+      `SELECT d.doc_id, d.version, d.title, d.created_at,
+              s.active_doc_id = d.doc_id AS active
+       FROM documents d
+       JOIN sources s ON s.source_id = d.source_id
+       WHERE d.source_id = ?
+       ORDER BY d.version DESC`
+    ).all(sourceId) as Array<{
+      doc_id: string
+      version: number
+      title: string
+      created_at: string
+      active: number
+    }>
+    return rows.map((row) => ({
+      docId: row.doc_id,
+      version: row.version,
+      title: row.title,
+      createdAt: new Date(row.created_at),
+      active: row.active === 1,
+    }))
+  }
+
   // Ticket 12 (DOC-01B): "pending" restores a requeued candidate so the
   // worker pipeline and the status surface agree.
   updateStatus(docId: string, status: "pending" | "completed" | "failed" | "cancelled"): void {

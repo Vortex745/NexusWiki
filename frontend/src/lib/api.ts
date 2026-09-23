@@ -1704,3 +1704,91 @@ export async function fetchGraphRelations(
     page: body.page ?? { limit: view.limit ?? 20, offset: view.offset ?? 0, truncated: false },
   }
 }
+
+// ---------------------------------------------------------------------------
+// Ticket 38 (WIKI-01): generate, validate, publish and restore Wiki pages
+// ---------------------------------------------------------------------------
+
+export interface WikiSourceCandidatePayload {
+  documentId: string
+  title: string
+  version: number
+  updatedAt: string
+}
+
+export interface WikiSourceStalenessPayload {
+  documentId: string
+  version: number
+  title: string
+  stale: "missing" | "updated" | "retired" | null
+  currentVersion?: number
+}
+
+export interface WikiPagePayload {
+  documentId: string
+  title: string
+  version: number
+  active: boolean
+  updatedAt: string
+  sources: WikiSourceStalenessPayload[]
+  versions: Array<{ documentId: string; version: number; createdAt: string; active: boolean }>
+}
+
+export interface WikiPublishedPayload {
+  status: "published"
+  documentId: string
+  ingestion: string
+  version: number
+  title: string
+  sources: Array<{ documentId: string; version: number; title: string }>
+}
+
+export async function fetchWikiSources(kbId: string): Promise<WikiSourceCandidatePayload[]> {
+  const response = await apiFetch(`/knowledge-bases/${encodeURIComponent(kbId)}/wiki/sources`)
+  if (!response.ok) throw new Error(`Wiki 来源读取失败 (${response.status})`)
+  const body = (await response.json()) as { sources?: WikiSourceCandidatePayload[] }
+  return Array.isArray(body.sources) ? body.sources : []
+}
+
+export async function fetchWikiPages(kbId: string): Promise<WikiPagePayload[]> {
+  const response = await apiFetch(`/knowledge-bases/${encodeURIComponent(kbId)}/wiki/pages`)
+  if (!response.ok) throw new Error(`Wiki 页面读取失败 (${response.status})`)
+  const body = (await response.json()) as { pages?: WikiPagePayload[] }
+  return Array.isArray(body.pages) ? body.pages : []
+}
+
+export async function generateWikiPage(
+  kbId: string,
+  title: string,
+  documentIds: string[],
+): Promise<WikiPublishedPayload> {
+  const response = await apiFetch(`/knowledge-bases/${encodeURIComponent(kbId)}/wiki/generate`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ title, documentIds }),
+  })
+  const body = (await response.json().catch(() => ({}))) as {
+    status?: string
+    reasons?: string[]
+    error?: string
+  }
+  if (!response.ok) {
+    if (response.status === 422 && Array.isArray(body.reasons)) {
+      throw new Error(`生成结果未通过校验：${body.reasons.join("；")}`)
+    }
+    throw new Error(body.error || `Wiki 生成失败 (${response.status})`)
+  }
+  return body as unknown as WikiPublishedPayload
+}
+
+export async function restoreWikiPage(kbId: string, docId: string): Promise<{ version: number }> {
+  const response = await apiFetch(
+    `/knowledge-bases/${encodeURIComponent(kbId)}/wiki/pages/${encodeURIComponent(docId)}/restore`,
+    { method: "POST" },
+  )
+  if (!response.ok) {
+    const body = (await response.json().catch(() => ({}))) as { error?: string }
+    throw new Error(body.error || `Wiki 页面恢复失败 (${response.status})`)
+  }
+  return (await response.json()) as { version: number }
+}

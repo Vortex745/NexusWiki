@@ -45,6 +45,7 @@ import { knowledgeBaseEmbeddingProfile } from "../types/knowledge_base"
 import { createKnowledgeBaseRouter } from "./knowledge_bases"
 import { createDocumentsRouter, createEsChunkReader } from "./documents"
 import { createGraphBrowseRouter } from "./graph_browse"
+import { createWikiRouter } from "./wiki"
 import { ActiveVersionRepository } from "../ingestion/tracking/active_version_repo"
 import { createRetrievalDebugRouter } from "./retrieval_debug"
 import { createModelProfilesRouter } from "./model_profiles"
@@ -316,6 +317,22 @@ export function createApp(options: {
       })
     )
   }
+  // Ticket 38 (WIKI-01): the administrator Wiki surface (generate → validate →
+  // publish → restore). Same chat-scope identity middleware as the KB prefix;
+  // the admin gate and the KB ownership check happen in-handler. Generation
+  // reuses the process chat client; bare mounts answer 503 for generate but
+  // still serve reads.
+  app.use(
+    "/api",
+    createWikiRouter({
+      knowledgeBaseService: workspaceKnowledgeBaseService,
+      db,
+      ...(options.processRuntime
+        ? { chatClient: options.processRuntime.chatClient }
+        : {}),
+      ...(options.config ? { model: options.config.openaiChatModel } : {}),
+    })
+  )
   if (options.managementAccessMiddleware) {
     app.use("/api/handoffs", options.managementAccessMiddleware)
     app.use("/api/sources", options.managementAccessMiddleware)

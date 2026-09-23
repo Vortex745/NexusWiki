@@ -1,9 +1,10 @@
-import { BookOpen, FileText, X } from "lucide"
+import { BookOpen, FileText, NotebookPen, X } from "lucide"
 import { useEffect, useRef, useState } from "react"
 
 import { Icon } from "../ui/Icon"
 import { useSignedInSession } from "../../runtime/SessionContext"
 import { useAppShell } from "../../runtime/AppShellContext"
+import { WikiDialog } from "./WikiDialog"
 import {
   cancelDocument,
   fetchDocumentStatus,
@@ -252,6 +253,8 @@ export function DocumentsDialog({
   const scopes = useSignedInSession()?.scopes ?? []
   const canAdmin = scopes.includes("admin")
   const { showToast, openDocument } = useAppShell()
+  // Ticket 38 (WIKI-01): the administrator Wiki surface for this knowledge base.
+  const [wikiOpen, setWikiOpen] = useState(false)
 
   const runAction = (action: () => Promise<void>, successText: string) => {
     setBusy(true)
@@ -332,16 +335,35 @@ export function DocumentsDialog({
             文档目录{knowledgeBase ? ` · ${knowledgeBase.name}` : ""}
           </h2>
         </div>
-        <button
-          type="button"
-          onClick={onClose}
-          aria-label="关闭文档目录"
-          title="关闭"
-          className="grid size-7 flex-none cursor-pointer place-items-center rounded-md text-muted/70 transition-colors hover:bg-surface-subtle hover:text-ink"
-        >
-          <Icon icon={X} className="size-4" />
-        </button>
+        <div className="flex flex-none items-center gap-1.5">
+          {canAdmin ? (
+            <button
+              type="button"
+              onClick={() => setWikiOpen(true)}
+              title="生成与管理 Wiki 页面"
+              className="inline-flex h-7 cursor-pointer items-center gap-1 rounded-md border border-line px-2 text-xs text-muted transition-colors hover:bg-surface-subtle hover:text-ink"
+            >
+              <Icon icon={NotebookPen} className="size-3.5" />
+              Wiki
+            </button>
+          ) : null}
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label="关闭文档目录"
+            title="关闭"
+            className="grid size-7 flex-none cursor-pointer place-items-center rounded-md text-muted/70 transition-colors hover:bg-surface-subtle hover:text-ink"
+          >
+            <Icon icon={X} className="size-4" />
+          </button>
+        </div>
       </div>
+      {/* Ticket 38 (WIKI-01): the per-knowledge-base Wiki workshop. */}
+      <WikiDialog
+        open={wikiOpen}
+        knowledgeBase={knowledgeBase}
+        onClose={() => setWikiOpen(false)}
+      />
 
       {/* Filters */}
       <div className="flex flex-none flex-wrap items-center gap-2 border-b border-line px-5 py-3 max-md:px-4">
