@@ -56,6 +56,8 @@ const CONFIG: AppConfig = {
   rerankModel: "bge-reranker-v2-m3",
   rerankTimeoutMs: 5_000,
   rerankMaxDocumentChars: 4_000,
+  // Ticket 35: never spawn the MCP capability server from tests.
+  mcpCapabilitiesEnabled: false,
 }
 
 const VALID_CONFIG = {

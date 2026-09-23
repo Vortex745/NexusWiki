@@ -50,6 +50,8 @@ const BASE_CONFIG: AppConfig = {
   rerankModel: "rerank-x",
   rerankTimeoutMs: 5_000,
   rerankMaxDocumentChars: 4_000,
+  // Ticket 35: never spawn the MCP capability server from tests.
+  mcpCapabilitiesEnabled: false,
 }
 
 function configFor(overrides: Partial<AppConfig> = {}): AppConfig {

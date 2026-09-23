@@ -42,6 +42,7 @@ const config: AppConfig = {
   rerankModel: "bge-reranker-v2-m3",
   rerankTimeoutMs: 30_000,
   rerankMaxDocumentChars: 4_000,
+  mcpCapabilitiesEnabled: false,
 }
 
 function makeFakeFactory(): {

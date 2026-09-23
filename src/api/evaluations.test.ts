@@ -64,6 +64,8 @@ const CONFIG: AppConfig = {
   rerankModel: "bge-reranker-v2-m3",
   rerankTimeoutMs: 5_000,
   rerankMaxDocumentChars: 4_000,
+  // Ticket 35: never spawn the MCP capability server from tests.
+  mcpCapabilitiesEnabled: false,
 }
 
 /** Ranking the fake answering path publishes for every case. */
@@ -2603,6 +2605,31 @@ test("the built-in rerank example is refused when the server has no dedicated re
     assert.equal(refused.status, 400)
     assert.match(String(refused.body.error), /dedicated reranker/)
     assert.equal(harness.scopes.length, 0, "nothing was created for a comparison that cannot differ")
+  } finally {
+    await harness.close()
+  }
+})
+
+test("the built-in rerank example is refused when only the override factory is wired", async () => {
+  // `createReranker` builds a task-scoped adapter for an OVERRIDE id; it says
+  // nothing about whether this server has RERANK_* credentials, so it must not
+  // satisfy the example's guard (the enabled side would not rerank at all).
+  const harness = await buildHarness(
+    {},
+    { createReranker: (model) => ({ model, rerank: async (_query, results) => results }) }
+  )
+  try {
+    const refused = await api(harness.port, "/api/evaluations/comparison-example", {
+      method: "POST",
+      body: JSON.stringify({}),
+    })
+    assert.equal(refused.status, 400)
+    assert.match(String(refused.body.error), /dedicated reranker/)
+    assert.equal(harness.scopes.length, 0)
+    // A regular task still works: only the comparison needs the real adapter.
+    const created = await createTask(harness.port, { datasetId: "refund-single-case" })
+    assert.equal(created.status, 202)
+    await pollTerminal(harness.port, created.body.id as string)
   } finally {
     await harness.close()
   }

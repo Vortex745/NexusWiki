@@ -148,6 +148,18 @@ export interface AnswerRunResult {
     ids: string[]
     count: number
   }
+  /**
+   * Ticket 35 (TOOL-01B): the local MCP capability server's discovery state
+   * for this composition — safe metadata only (no endpoints, no credentials).
+   * Present when a composition wired the bridge; `connected: false` with an
+   * `error` means chat is running WITHOUT MCP tools (never broken by them).
+   */
+  mcp?: {
+    enabled: boolean
+    connected: boolean
+    tools: string[]
+    error?: string
+  }
 }
 
 export type AnswerRunStage =

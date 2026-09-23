@@ -69,6 +69,12 @@ export interface AppConfig {
   /** Max characters of one candidate sent to the reranker. */
   rerankMaxDocumentChars: number
   /**
+   * Ticket 35 (TOOL-01B): the local read-only MCP capability server. Enabled
+   * by default; MCP_CAPABILITIES=0 disables discovery entirely (no child
+   * process, no registry entries — ordinary chat is untouched).
+   */
+  mcpCapabilitiesEnabled: boolean
+  /**
    * Eval refactor Ticket 11: model ids one evaluation task may pick instead of
    * the server default (comma-separated env lists). Empty/absent means the
    * server default is the only choice — a request can then never make the
@@ -269,6 +275,7 @@ export function loadConfig(): AppConfig {
     rerankModel: process.env.RERANK_MODEL || "bge-reranker-v2-m3",
     rerankTimeoutMs: integerEnv("RERANK_TIMEOUT_MS", "positive", 30_000),
     rerankMaxDocumentChars: integerEnv("RERANK_MAX_DOCUMENT_CHARS", "positive", 4_000),
+    mcpCapabilitiesEnabled: process.env.MCP_CAPABILITIES !== "0",
     // Ticket 11: opt-in per-task model overrides for evaluation runs.
     evalAllowedChatModels: idListEnv("EVAL_ALLOWED_CHAT_MODELS"),
     evalAllowedRerankModels: idListEnv("EVAL_ALLOWED_RERANK_MODELS"),

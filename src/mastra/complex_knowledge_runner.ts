@@ -232,6 +232,12 @@ export interface ComplexKnowledgeMastraRunnerDeps {
   /** Ticket 34: per-tool-call deadline. Default 30s. */
   toolTimeoutMs?: number
   /**
+   * Ticket 35 (TOOL-01B): names of discovered MCP tools. They join the
+   * read-only allowlist — an assistant with "read_only_retrieval" may call
+   * them; toolPolicy "none" still means no tools at all.
+   */
+  mcpToolNames?: readonly string[]
+  /**
    * Ticket 61/04: LLM-backed Evidence-Context compressor. Optional — when
    * absent, the deterministic assembler output is used as-is. Also used as
    * the loop's observation compressor (when complexLoopController is wired).
@@ -586,7 +592,7 @@ export function createComplexKnowledgeMastraRunner(
     const allowedTools =
       assistant?.toolPolicy === "none"
         ? []
-        : [...READ_ONLY_TOOL_ALLOWLIST]
+        : [...READ_ONLY_TOOL_ALLOWLIST, ...(deps.mcpToolNames ?? [])]
     const toolInvoker =
       deps.toolRegistry && allowedTools.length > 0
         ? createComplexLoopToolInvoker({

@@ -65,7 +65,7 @@ import {
   type RunResourceBudgetOptions,
 } from "../runtime/run_context"
 import type { AccessContext } from "../access/context"
-import type { AgentMessage, AnswerRunEvent } from "../types"
+import type { AgentMessage, AnswerRunEvent, AnswerRunResult } from "../types"
 import type { AnswerModelProfileSnapshot } from "../types/answer"
 import type { AttachmentSearchOperations } from "../types/retrieval"
 import { knowledgeBaseEmbeddingProfile } from "../types/knowledge_base"
@@ -79,6 +79,7 @@ import type { MemorySuggestionStore } from "../memory/memory_suggestion_store"
 import { createMemoryRecallRunner } from "./memory_recall_runner"
 import { ToolRegistry } from "../tools/invocation"
 import { registerBuiltinTools } from "../tools/knowledge_tools"
+import { createMcpToolBridge, type McpToolBridge } from "../mcp/tool_bridge"
 import {
   createDirectAmbiguousMastraRunner,
   type DirectReplyStream,
@@ -344,6 +345,13 @@ export async function createSharedAnswerEntry(
     documentRepo: new DocumentRepo(db),
     pageIndexRepo,
   })
+  // Ticket 35 (TOOL-01B): discover the local read-only MCP capability server
+  // and register its status tools through the SAME boundary. A failed
+  // discovery leaves no MCP tools and chat unchanged — never a broken run.
+  const mcpBridge: McpToolBridge | null = await createMcpToolBridge({
+    registry: toolRegistry,
+    config: cfg,
+  }).catch(() => null)
   const complexRunner = createComplexKnowledgeMastraRunner({
     router,
     createSearcher: (assistant) =>
@@ -357,6 +365,10 @@ export async function createSharedAnswerEntry(
     complexLoopController,
     // Ticket 34 (TOOL-01A): the schema-validated tool boundary.
     toolRegistry,
+    // Ticket 35 (TOOL-01B): discovered MCP tools join the read-only allowlist.
+    ...(mcpBridge && mcpBridge.toolNames().length > 0
+      ? { mcpToolNames: mcpBridge.toolNames() }
+      : {}),
     conversationStore,
     contextualizer,
     summarizer,
@@ -436,12 +448,19 @@ export async function createSharedAnswerEntry(
   // The adapter notifies the trace observer with the ORIGINAL event object
   // BEFORE yielding it, so the persistence path gets its own stamped copy:
   // wrap whichever hard observer was injected and stamp its done events too.
+  const stampDoneResult = (result: AnswerRunResult): AnswerRunResult => ({
+    ...result,
+    modelProfile,
+    // Ticket 35 (TOOL-01B): the persisted run trace carries MCP discovery
+    // state exactly like the transport copy does.
+    ...(mcpBridge ? { mcp: mcpBridge.status() } : {}),
+  })
   const baseTraceObserver = options.traceObserver ?? answerRuntime.traceRepository
   const traceObserver: AnswerRunObserver = {
     onEvent: (event) => {
       baseTraceObserver.onEvent(
         event.type === "done"
-          ? { ...event, result: { ...event.result, modelProfile } }
+          ? { ...event, result: stampDoneResult(event.result) }
           : event
       )
     },
@@ -461,7 +480,16 @@ export async function createSharedAnswerEntry(
   ): AsyncIterable<AnswerRunEvent> {
     for await (const event of eventsSource(message, runOptions)) {
       yield event.type === "done"
-        ? { ...event, result: { ...event.result, modelProfile } }
+        ? {
+            ...event,
+            result: {
+              ...event.result,
+              modelProfile,
+              // Ticket 35 (TOOL-01B): discovery state rides every terminal so
+              // the persisted run trace shows whether MCP tools were live.
+              ...(mcpBridge ? { mcp: mcpBridge.status() } : {}),
+            },
+          }
         : event
     }
   }
