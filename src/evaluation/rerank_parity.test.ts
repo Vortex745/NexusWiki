@@ -68,9 +68,11 @@ test("both paths retrieve through the same operations and searcher", () => {
   ] as const) {
     assert.match(source, /new RuntimeSearchOperations\(/, `${name} builds the shared operations`)
   }
+  // Ticket 31 (FAQ-01B): the searcher is built through the local helper that
+  // adds the FAQ evidence channel — same shared operations, same SearcherImpl.
   assert.match(
     entry,
-    /new SearcherImpl\(searcherOperationsFor\(assistant\), options\.attachments\)/,
+    /const buildSearcher = \(operations: SearchOperations\) =>\s*new SearcherImpl\(operations, options\.attachments, faqEvidence\)/,
     "chat searches through the shared SearcherImpl over those operations"
   )
   assert.match(

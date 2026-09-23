@@ -70,6 +70,11 @@ export const DEMO_REBUILD_SQLITE_TABLES = [
   // workspace state of one knowledge base — a rebuild clears both.
   "faq_entries",
   "faq_entry_versions",
+  // Tickets 32/33 (MEM-01A/B): long-term memories and their pending
+  // extraction suggestions are user data — a deterministic demo namespace
+  // carries none of it.
+  "long_term_memories",
+  "memory_suggestions",
 ] as const
 
 /**

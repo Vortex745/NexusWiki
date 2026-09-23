@@ -46,10 +46,19 @@ test("P1 regression: production dispatch executes through a real one-step Mastra
   }
 
   const entrySource = readFileSync(path.join(__dirname, "shared_answer_entry.ts"), "utf8")
+  // Tickets 31/33 (FAQ-01B, MEM-01B): the dispatch runner is wrapped by the
+  // FAQ exact-match and memory recall gates INSIDE the workflow — the P1
+  // property still holds: production dispatch (however composed) executes
+  // through the real Mastra Workflow, never around it.
   assert.match(
     entrySource,
-    /const runner = await createMastraWorkflowRunner\(dispatchRunner\)/,
+    /const runner = await createMastraWorkflowRunner\(\s*createFaqExactMatchRunner\(/,
     "production dispatch must be wrapped by the real Mastra Workflow"
+  )
+  assert.match(
+    entrySource,
+    /createFaqExactMatchRunner\(\s*\{[\s\S]*?createMemoryRecallRunner\(\s*\{[\s\S]*?dispatchRunner/,
+    "FAQ and memory gates compose the dispatch runner inside the workflow"
   )
 })
 
