@@ -35,6 +35,15 @@ export interface SearchOptions {
    */
   attachments?: { sessionId: string }
   /**
+   * Ticket 36 (WEB-01): true when the run explicitly opted into web search
+   * (the transport's `useWeb` flag). Like the attachment channel, the web
+   * channel is not part of the caller's channel selection — it runs when the
+   * composition wired a web-evidence adapter AND (the run requested web
+   * search OR the query text carries a URL). Runners forward the run's flag;
+   * nothing else can set it.
+   */
+  webRequested?: boolean
+  /**
    * Ticket 06: Select an allowed subset of retrieval channels to execute.
    * Undefined/omitted → execute all four channels (backward compat with
    * pre-Ticket 06 callers). Non-empty array of known channels → execute
@@ -175,6 +184,13 @@ export interface SearchOutcome {
    */
   unselectedChannels?: RetrievalChannel[]
   degradationReasons?: string[]
+  /**
+   * Ticket 36 (WEB-01): bounded web-channel note. Present when the web
+   * channel ran and had something honest to report (e.g. `web_unconfigured`
+   * plus which URL was policy-denied). Absent when web never ran or reported
+   * nothing.
+   */
+  webDetail?: string
   graphBudget?: GraphBudget
   /**
    * Ticket 03: score source of `results`. Always present on a real result

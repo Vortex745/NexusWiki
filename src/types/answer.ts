@@ -54,8 +54,11 @@ export interface Evidence {
    * Ticket 31 (FAQ-01B): "faq" marks a STANDARD ANSWER from a versioned FAQ
    * entry of the run's knowledge scope. It is not a knowledge-base document
    * either — it is labeled as a FAQ and cannot be opened as a document.
+   * Ticket 36 (WEB-01): "web" marks WEB evidence read from a user-supplied
+   * URL (or configured Tavily search). It carries its own URL and fetch time
+   * and is never openable as a knowledge-base document.
    */
-  origin?: "attachment" | "faq"
+  origin?: "attachment" | "faq" | "web"
   attachmentId?: string
   attachmentName?: string
   /**
@@ -70,6 +73,13 @@ export interface Evidence {
    */
   faqEntryId?: string
   faqVersion?: number
+  /**
+   * Ticket 36 (WEB-01): which URL this web citation carries and when the
+   * server fetched it. Both travel with the citation so a reader can always
+   * see the page a web claim came from and how fresh the read was.
+   */
+  webUrl?: string
+  webFetchedAt?: string
 }
 
 export type AnswerReference = Evidence

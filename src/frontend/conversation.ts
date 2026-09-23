@@ -65,12 +65,17 @@ export interface Reference {
    * presented as one and never opened through the document viewer.
    * Ticket 31 (FAQ-01B): "faq" marks a STANDARD ANSWER citation from a
    * versioned FAQ entry — labeled as such, never opened as a document.
+   * Ticket 36 (WEB-01): "web" marks WEB evidence with its own URL and fetch
+   * time — labeled as web, never opened through the document viewer.
    */
-  origin?: "attachment" | "faq"
+  origin?: "attachment" | "faq" | "web"
   attachmentName?: string
   /** Ticket 31 (FAQ-01B): which FAQ entry version this citation carries. */
   faqEntryId?: string
   faqVersion?: number
+  /** Ticket 36 (WEB-01): the page URL and server-side fetch time. */
+  webUrl?: string
+  webFetchedAt?: string
   [key: string]: unknown
 }
 

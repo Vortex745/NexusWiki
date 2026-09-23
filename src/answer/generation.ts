@@ -45,6 +45,13 @@ export interface AnswerRunOptions {
    * (recall enabled when the deployment wires a memory store).
    */
   useMemory?: boolean
+  /**
+   * Ticket 36 (WEB-01): true opts this run into web SEARCH (configured
+   * Tavily). Opt-in only: absent/false keeps web search off. URL reads of
+   * links the user actually pasted into the message never need the flag —
+   * the message itself is the only URL source either way.
+   */
+  useWeb?: boolean
 }
 
 export class OpenAIAnswerModel implements AnswerModel {

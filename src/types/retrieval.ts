@@ -21,9 +21,16 @@ export interface RetrievalResult {
    * knowledge scope contains FAQ entries whose question or a variant matches
    * the query. Results carry `metadata.origin = "faq"` so the citation layer
    * labels them as standard answers, never as knowledge-base documents.
+   * Ticket 36 (WEB-01): "web" is the web-evidence channel. Also not
+   * selectable: it runs exactly when the run's message carries a URL (safe
+   * server-side fetch) or the run opted into configured Tavily search.
+   * Results carry `metadata.origin = "web"` so citations stay distinct from
+   * knowledge-base citations.
    */
-  source: "vector" | "bm25" | "graph" | "pageIndex" | "attachment" | "faq"
-  channels?: Array<"vector" | "bm25" | "graph" | "pageIndex" | "attachment" | "faq">
+  source: "vector" | "bm25" | "graph" | "pageIndex" | "attachment" | "faq" | "web"
+  channels?: Array<
+    "vector" | "bm25" | "graph" | "pageIndex" | "attachment" | "faq" | "web"
+  >
   wikilinks: Wikilink[]
 }
 
@@ -64,6 +71,41 @@ export interface FaqEvidenceRequest {
 
 export interface FaqEvidenceOperations {
   search(request: FaqEvidenceRequest): Promise<RetrievalResult[]>
+}
+
+/**
+ * Ticket 36 (WEB-01): the web-evidence channel boundary. The adapter extracts
+ * URLs server-side from the run's own message and (when configured) searches
+ * Tavily with the server-side key. Results carry `metadata.origin = "web"`
+ * plus `webUrl`/`fetchedAt` so citations stay traceable to a URL and its
+ * fetch time, distinct from knowledge-base documents.
+ */
+export interface WebEvidenceRequest {
+  /** The run's own message text — the only source of user-supplied URLs. */
+  message: string
+  /** The effective query text for Tavily search. */
+  query: string
+  /** True when the run explicitly opted into web search (`useWeb: true`). */
+  requested: boolean
+  signal?: AbortSignal
+}
+
+/**
+ * "unconfigured" is an HONEST outcome, not a failure: the run asked for web
+ * search but the deployment has no Tavily key. The searcher records it in the
+ * degradation trace while the run proceeds with everything else it has.
+ */
+export type WebEvidenceStatus = "ok" | "unconfigured" | "skipped"
+
+export interface WebEvidenceOutcome {
+  status: WebEvidenceStatus
+  results: RetrievalResult[]
+  /** Bounded reason detail (unconfigured / policy-denied / skipped notes). */
+  detail?: string
+}
+
+export interface WebEvidenceOperations {
+  search(request: WebEvidenceRequest): Promise<WebEvidenceOutcome>
 }
 
 export interface RerankInput {

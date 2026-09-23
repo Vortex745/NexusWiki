@@ -132,6 +132,13 @@ export interface MastraRunnerInput {
    */
   useMemory?: boolean
   /**
+   * Ticket 36 (WEB-01): true opts this run into web search (configured
+   * Tavily). Forwarded verbatim from the transport's opt-in flag; runners
+   * pass it to the searcher's web channel. URL reads from message-supplied
+   * links never depend on this flag.
+   */
+  useWeb?: boolean
+  /**
    * Ticket 33 (MEM-01B): the owner-scoped long-term memories recalled into
    * this run, injected by the memory-recall wrapper. Runners render them
    * through `renderMemoryPromptSuffix` — never as evidence or citations.
@@ -511,6 +518,8 @@ export function createMastraChatEventAdapter(
           ...(runOptions?.assistant ? { assistant: runOptions.assistant } : {}),
           // Ticket 33 (MEM-01B): the narrowing-only memory disable flag.
           ...(runOptions?.useMemory === false ? { useMemory: false } : {}),
+          // Ticket 36 (WEB-01): the explicit web-search opt-in flag.
+          ...(runOptions?.useWeb === true ? { useWeb: true } : {}),
           onAnswerDelta,
         })
 

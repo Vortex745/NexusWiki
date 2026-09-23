@@ -70,9 +70,13 @@ export function ReferencesPanel({ references, detailsRef, highlightedId }: Refer
           // Ticket 31 (FAQ-01B): a FAQ citation is a STANDARD ANSWER from a
           // versioned FAQ entry — labelled as such, not openable as a document.
           const faq = reference.origin === "faq"
+          // Ticket 36 (WEB-01): a web citation is EXTERNAL evidence with its
+          // own URL and fetch time — labelled as web, never opened as a
+          // knowledge-base document.
+          const webRef = reference.origin === "web"
           // Ticket 13 (DOC-02): a citation that carries its document version
           // opens the exact authorized version (and the cited chunk).
-          const openable = !temporary && !faq && typeof reference.documentId === "string"
+          const openable = !temporary && !faq && !webRef && typeof reference.documentId === "string"
           return (
             <li
               key={reference.id}
@@ -120,6 +124,18 @@ export function ReferencesPanel({ references, detailsRef, highlightedId }: Refer
                     >
                       FAQ{Number.isInteger(reference.faqVersion) ? ` v${reference.faqVersion}` : ""}
                     </span>
+                  ) : null}
+                  {webRef ? (
+                    <a
+                      className="ml-1.5 rounded bg-brand-subtle px-1 text-[10px] font-normal text-brand"
+                      title={`网页证据：${reference.webUrl ?? ""}${reference.webFetchedAt ? `（抓取于 ${reference.webFetchedAt}）` : ""}`}
+                      href={reference.webUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      onClick={(event) => event.stopPropagation()}
+                    >
+                      网页
+                    </a>
                   ) : null}
                   {openable ? <span className="ml-1.5 text-[10px] font-normal text-brand">查看来源</span> : null}
                 </div>

@@ -8,7 +8,12 @@ import type { ActiveVersionRepository } from "../../ingestion/tracking/active_ve
 import type { AccessContext } from "../../access/context"
 import type { Query, RetrievalResult, Chunk } from "../../types"
 import type { RetrievalScope } from "../../types/retrieval_scope"
-import type { AttachmentSearchOperations, FaqEvidenceOperations } from "../../types/retrieval"
+import type {
+  AttachmentSearchOperations,
+  FaqEvidenceOperations,
+  WebEvidenceOperations,
+} from "../../types/retrieval"
+import { containsWebUrl } from "../../web/web_evidence"
 import type {
   DebugCandidate,
   Reranker,
@@ -44,6 +49,12 @@ const PAGE_INDEX_NODE_LIMIT = 5
  * evidence — a standard-answer channel, not a second result set.
  */
 const FAQ_EVIDENCE_LIMIT = 3
+
+/**
+ * Ticket 36 (WEB-01): the web channel is a bounded CONTEXT source, not a
+ * second result set — at most this many web results join one search.
+ */
+const WEB_EVIDENCE_LIMIT = 4
 
 function abortError(message: string): Error {
   const err = new Error(message)
@@ -715,7 +726,15 @@ export class SearcherImpl implements Searcher {
      * knowledge bases, so an explicit empty knowledge scope has no FAQ
      * channel either.
      */
-    private faqEvidence?: FaqEvidenceOperations
+    private faqEvidence?: FaqEvidenceOperations,
+    /**
+     * Ticket 36 (WEB-01): the web-evidence adapter. Optional — a composition
+     * without it (evaluation scopes, probes) never fetches URLs or calls
+     * Tavily. The channel runs when the query text carries a URL (safe
+     * server-side fetch of what the user pasted) or the run opted into
+     * configured web search (`webRequested`).
+     */
+    private webEvidence?: WebEvidenceOperations
   ) {}
 
   async search(query: Query, options?: SearchOptions): Promise<SearchOutcome> {
@@ -805,7 +824,33 @@ export class SearcherImpl implements Searcher {
               }),
           }
         : undefined
-    if (hasNoKnowledgeContext(retrievalScope) && !attachmentRunner) {
+    // Ticket 36 (WEB-01): the web channel runs when the composition wired a
+    // web adapter AND the run carries web intent — a URL in the query text
+    // (the user's own pasted link, fetched server-side through the shared
+    // safe fetcher) or an explicit web-search opt-in. Like attachments, it is
+    // NOT knowledge: an empty knowledge scope does not exclude it, and a web
+    // result alone can legitimately be the remaining evidence.
+    const webRequested = options?.webRequested === true
+    let webUnconfiguredDetail: string | undefined
+    const webRunner =
+      this.webEvidence && (webRequested || containsWebUrl(query.text))
+        ? {
+            name: "web" as const,
+            run: async (): Promise<RetrievalResult[]> => {
+              const outcome = await this.webEvidence!.search({
+                message: query.text,
+                query: query.text,
+                requested: webRequested,
+                ...(signal ? { signal } : {}),
+              })
+              if (outcome.status === "unconfigured") {
+                webUnconfiguredDetail = outcome.detail ?? "web search is not configured"
+              }
+              return outcome.results.slice(0, WEB_EVIDENCE_LIMIT)
+            },
+          }
+        : undefined
+    if (hasNoKnowledgeContext(retrievalScope) && !attachmentRunner && !webRunner) {
       return {
         status: "insufficient",
         results: [],
@@ -849,6 +894,7 @@ export class SearcherImpl implements Searcher {
       ...selectedRunners,
       ...(attachmentRunner ? [attachmentRunner] : []),
       ...(faqRunner ? [faqRunner] : []),
+      ...(webRunner ? [webRunner] : []),
     ]
     const channelRunners = runnersToRun
       .map(({ name, run }) => ({
@@ -1042,8 +1088,14 @@ export class SearcherImpl implements Searcher {
     const degradationReasons: string[] = []
     if (parentExpansionFailed) degradationReasons.push("parent_expansion_unavailable")
     if (rerankerFailed) degradationReasons.push("reranker_unavailable")
+    // Ticket 36 (WEB-01): web search that was asked for but not configured is
+    // reported honestly — it is an absence of capability, not a channel
+    // failure, so the other channels are unaffected and the status only
+    // degrades when this search actually carried web intent.
+    const webUnconfigured = webUnconfiguredDetail !== undefined
+    if (webUnconfigured) degradationReasons.push("web_unconfigured")
     return {
-      status: unavailableChannels.length === 0 && !parentExpansionFailed && !rerankerFailed
+      status: unavailableChannels.length === 0 && !parentExpansionFailed && !rerankerFailed && !webUnconfigured
         ? "ok"
         : "degraded",
       results,
@@ -1052,6 +1104,9 @@ export class SearcherImpl implements Searcher {
       ...(graphBudget ? { graphBudget } : {}),
       ...(degradationReasons.length > 0
         ? { degradationReasons }
+        : {}),
+      ...(webUnconfiguredDetail !== undefined
+        ? { webDetail: webUnconfiguredDetail }
         : {}),
       ...(unselectedChannels.length > 0
         ? { unselectedChannels }

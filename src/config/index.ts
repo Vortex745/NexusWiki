@@ -75,6 +75,13 @@ export interface AppConfig {
    */
   mcpCapabilitiesEnabled: boolean
   /**
+   * Ticket 36 (WEB-01): the server-side Tavily key for optional web search.
+   * The key lives ONLY in server config — a request can never supply one.
+   * Absent → a run that asks for web search gets an honest `unconfigured`
+   * report; URL reads from the message keep working without it.
+   */
+  tavilyApiKey?: string
+  /**
    * Eval refactor Ticket 11: model ids one evaluation task may pick instead of
    * the server default (comma-separated env lists). Empty/absent means the
    * server default is the only choice — a request can then never make the
@@ -276,6 +283,8 @@ export function loadConfig(): AppConfig {
     rerankTimeoutMs: integerEnv("RERANK_TIMEOUT_MS", "positive", 30_000),
     rerankMaxDocumentChars: integerEnv("RERANK_MAX_DOCUMENT_CHARS", "positive", 4_000),
     mcpCapabilitiesEnabled: process.env.MCP_CAPABILITIES !== "0",
+    // Ticket 36 (WEB-01): optional server-side Tavily key for web search.
+    tavilyApiKey: process.env.TAVILY_API_KEY || undefined,
     // Ticket 11: opt-in per-task model overrides for evaluation runs.
     evalAllowedChatModels: idListEnv("EVAL_ALLOWED_CHAT_MODELS"),
     evalAllowedRerankModels: idListEnv("EVAL_ALLOWED_RERANK_MODELS"),

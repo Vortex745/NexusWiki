@@ -832,6 +832,9 @@ export function createComplexKnowledgeMastraRunner(
             // Ticket 22 (ATT-01): sub-queries share the run's session, so the
             // temporary attachments stay available to all of them.
             ...(sessionId ? { attachments: { sessionId } } : {}),
+            // Ticket 36 (WEB-01): the run's explicit web-search opt-in; a URL
+            // pasted into the message is fetched regardless of the flag.
+            ...(input.useWeb === true ? { webRequested: true } : {}),
             signal,
           }),
           signal

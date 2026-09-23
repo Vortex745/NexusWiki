@@ -52,6 +52,12 @@ interface ChatRequest {
    * request sends can add memories the owner does not have.
    */
   useMemory?: unknown
+  /**
+   * Ticket 36 (WEB-01): true opts this run into web search (Tavily, keyed
+   * server-side). Opt-in only. The request can never supply a key or a URL
+   * list — URLs are extracted server-side from the message itself.
+   */
+  useWeb?: unknown
 }
 
 function streamPayload(event: AnswerRunEvent, sessionId: string) {
@@ -281,6 +287,8 @@ export function createChatRouter(
       accessContext: undefined,
       // Ticket 33 (MEM-01B): only an explicit false disables memory recall.
       ...(req.body?.useMemory === false ? { useMemory: false } : {}),
+      // Ticket 36 (WEB-01): only an explicit true opts into web search.
+      ...(req.body?.useWeb === true ? { useWeb: true } : {}),
       ...(retrievalScope ? { retrievalScope } : {}),
       ...(assistantSnapshot ? { assistant: assistantSnapshot } : {}),
     }

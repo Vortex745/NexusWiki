@@ -37,6 +37,7 @@ import {
   assertRuntimeModeStartupAllowed,
 } from "./mastra/promotion_gate"
 import { createRealLangfuseClient } from "./answer/langfuse_client"
+import { createWebEvidenceOperations } from "./web/web_evidence"
 
 async function main() {
   const cfg = loadConfig()
@@ -173,6 +174,13 @@ async function main() {
     // Ticket 33 (MEM-01B): scoped memory recall + suggestion extraction.
     memories: memoryStore,
     suggestions: suggestionStore,
+    // Ticket 36 (WEB-01): the web-evidence channel — safe URL reads of the
+    // user's own pasted links + optional configured Tavily search (server-
+    // side key). Runs only when the composition wires it, so evaluation
+    // scopes and probes never touch the network.
+    web: createWebEvidenceOperations({
+      ...(cfg.tavilyApiKey ? { tavilyApiKey: cfg.tavilyApiKey } : {}),
+    }),
   })
   console.log("[kefu-RAG] Mastra runner wired — direct + ambiguous + simple + complex knowledge routes enabled with Conversation Memory + Handoff + Observer fanout")
 

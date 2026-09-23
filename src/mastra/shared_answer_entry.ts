@@ -77,6 +77,7 @@ import { createFaqExactMatchRunner } from "./faq_exact_runner"
 import type { LongTermMemoryStore } from "../memory/long_term_memory_store"
 import type { MemorySuggestionStore } from "../memory/memory_suggestion_store"
 import { createMemoryRecallRunner } from "./memory_recall_runner"
+import type { WebEvidenceOperations } from "../types/retrieval"
 import { ToolRegistry, ToolInvocationService } from "../tools/invocation"
 import { registerBuiltinTools } from "../tools/knowledge_tools"
 import { createMcpToolBridge, type McpToolBridge } from "../mcp/tool_bridge"
@@ -167,6 +168,13 @@ export interface SharedAnswerEntryOptions {
    */
   memories?: LongTermMemoryStore
   suggestions?: MemorySuggestionStore
+  /**
+   * Ticket 36 (WEB-01): the web-evidence adapter. Default: the production
+   * adapter over the shared safe URL fetcher + config's server-side Tavily
+   * key. Injected `undefined` (evaluation scopes, probes) removes the web
+   * channel entirely — no URL fetch, no web search.
+   */
+  web?: WebEvidenceOperations
 }
 
 export interface SharedAnswerEntry {
@@ -277,8 +285,12 @@ export async function createSharedAnswerEntry(
   const faqEvidence = options.faq
     ? createFaqEvidenceOperations(options.faq)
     : undefined
+  // Ticket 36 (WEB-01): the web-evidence channel. Like attachments and FAQ,
+  // it exists only when the composition wires it — the production root
+  // (src/index.ts) passes the shared safe fetcher + the config's server-side
+  // Tavily key; evaluation scopes and probes omit it entirely.
   const buildSearcher = (operations: SearchOperations) =>
-    new SearcherImpl(operations, options.attachments, faqEvidence)
+    new SearcherImpl(operations, options.attachments, faqEvidence, options.web)
   const searchOperationsWithoutRerank = options.searchOperations
     ? undefined
     : new RuntimeSearchOperations({

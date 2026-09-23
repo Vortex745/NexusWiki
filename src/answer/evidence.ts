@@ -130,6 +130,28 @@ function faqProvenance(
   }
 }
 
+/**
+ * Ticket 36 (WEB-01): web provenance, or undefined otherwise. Mirrors
+ * {@link attachmentProvenance} / {@link faqProvenance}: the fields are only
+ * emitted when the chunk really is web evidence, so a web citation always
+ * carries its URL and the server-side fetch time and stays distinguishable
+ * from knowledge-base documents, FAQ standard answers and session
+ * attachments.
+ */
+function webProvenance(
+  metadata: Record<string, unknown>
+): Pick<Evidence, "origin" | "webUrl" | "webFetchedAt"> | undefined {
+  if (metadata.origin !== "web") return undefined
+  const webUrl = typeof metadata.webUrl === "string" ? metadata.webUrl : undefined
+  const webFetchedAt = typeof metadata.fetchedAt === "string" ? metadata.fetchedAt : undefined
+  if (!webUrl) return undefined
+  return {
+    origin: "web",
+    webUrl,
+    ...(webFetchedAt ? { webFetchedAt } : {}),
+  }
+}
+
 export function buildEvidence(results: RetrievalResult[]): Evidence[] {
   const evidence = new Map<string, Evidence>()
   for (const result of results) {
@@ -169,8 +191,11 @@ export function buildEvidence(results: RetrievalResult[]): Evidence[] {
     // knowledge-base document.
     // Ticket 31 (FAQ-01B): a FAQ entry version is a STANDARD ANSWER. Its
     // provenance travels the same way so no layer presents it as a document.
+    // Ticket 36 (WEB-01): a web result is EXTERNAL evidence with its own URL
+    // and fetch time — never a knowledge-base document either.
     const attachment = attachmentProvenance(metadata)
     const faq = faqProvenance(metadata)
+    const web = webProvenance(metadata)
     evidence.set(key, {
       id: stableEvidenceId(result),
       documentId: result.chunk.documentId,
@@ -184,6 +209,7 @@ export function buildEvidence(results: RetrievalResult[]): Evidence[] {
       source: typeof metadata.source === "string" ? metadata.source : "unknown",
       ...(attachment ?? {}),
       ...(faq ?? {}),
+      ...(web ?? {}),
       ...location,
       ...(image ? { image } : {}),
       excerpt: result.chunk.content.slice(0, EXCERPT_LIMIT),

@@ -576,6 +576,9 @@ export function createSimpleKnowledgeMastraRunner(
         // Ticket 22 (ATT-01): this run may also read its OWN session's
         // temporary attachments — never another session's.
         ...(sessionId ? { attachments: { sessionId } } : {}),
+        // Ticket 36 (WEB-01): the run's explicit web-search opt-in. URL reads
+        // of links pasted into the message never need the flag.
+        ...(input.useWeb === true ? { webRequested: true } : {}),
         signal,
       }),
       signal
@@ -589,7 +592,7 @@ export function createSimpleKnowledgeMastraRunner(
 
     // Build the initial retrieval trace data (aggregated; final state).
     const channelStatuses = Object.fromEntries(
-      (["vector", "bm25", "graph"] as const).map((channel) => [
+      (["vector", "bm25", "graph", "web"] as const).map((channel) => [
         channel,
         outcome.unavailableChannels.includes(channel) ? "unavailable" : "completed",
       ])
@@ -598,9 +601,11 @@ export function createSimpleKnowledgeMastraRunner(
       channelStatuses,
       resultCount: outcome.results.length,
       selectedEvidenceIds: [],
-      degradedReasons: outcome.unavailableChannels.map((channel) =>
-        `${channel} unavailable`
-      ),
+      degradedReasons: [
+        ...outcome.unavailableChannels.map((channel) => `${channel} unavailable`),
+        // Ticket 36 (WEB-01): honest web notes (e.g. web_unconfigured).
+        ...(outcome.degradationReasons ?? []),
+      ],
       ...(selectedTool ? { selectedTool } : {}),
       ...(toolInputSummary ? { toolInputSummary } : {}),
       ...(toolFallbackReason ? { toolFallbackReason } : {}),
