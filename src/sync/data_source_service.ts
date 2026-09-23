@@ -83,6 +83,12 @@ export class InvalidSyncSourceError extends Error {
 }
 
 export const SYNC_INTERVALS: readonly SyncInterval[] = ["manual", "1h", "6h", "24h"]
+/** Milliseconds behind each schedulable interval choice (ticket 40). */
+export const SYNC_INTERVAL_MS: Record<Exclude<SyncInterval, "manual">, number> = {
+  "1h": 3_600_000,
+  "6h": 21_600_000,
+  "24h": 86_400_000,
+}
 /** Bounded sync window: a sitemap sync reads at most this many pages. */
 export const SYNC_MAX_PAGES_PER_RUN = 10
 const SYNC_FETCH_TIMEOUT_MS = 20_000
@@ -225,6 +231,14 @@ export class SyncDataSourceService {
     return rowToSource(row)
   }
 
+  /** Ticket 40 (SYNC-01B): the stored next-run state of one source. */
+  private getNextRunAt(id: string): string | null {
+    const row = this.options.db
+      .prepare(`SELECT next_run_at FROM sync_data_sources WHERE id = ?`)
+      .get(id) as { next_run_at: string | null } | undefined
+    return row?.next_run_at ?? null
+  }
+
   /** Operator lifecycle updates: the interval choice and the active/paused state. */
   update(
     tenantId: string,
@@ -238,15 +252,26 @@ export class SyncDataSourceService {
     if (patch.state !== undefined && patch.state !== "active" && patch.state !== "paused") {
       throw new InvalidSyncSourceError('state must be "active" or "paused"')
     }
+    // Ticket 40 (SYNC-01B): an interval change re-rolls the stored next-run
+    // state from now. "manual" never schedules (next_run_at cleared); an
+    // unchanged interval keeps its existing schedule.
+    let nextRunAt: string | null = this.getNextRunAt(id)
+    if (patch.interval !== undefined) {
+      nextRunAt =
+        patch.interval === "manual"
+          ? null
+          : new Date(this.now().getTime() + SYNC_INTERVAL_MS[patch.interval]).toISOString()
+    }
     this.options.db
       .prepare(
         `UPDATE sync_data_sources
-         SET interval = ?, state = ?, updated_at = ?
+         SET interval = ?, state = ?, next_run_at = ?, updated_at = ?
          WHERE id = ?`
       )
       .run(
         patch.interval ?? existing.interval,
         patch.state ?? existing.state,
+        nextRunAt,
         this.now().toISOString(),
         id
       )

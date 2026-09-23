@@ -431,6 +431,28 @@ const SCHEMA = [
   )`,
   `CREATE INDEX IF NOT EXISTS idx_sync_data_sources_kb
     ON sync_data_sources(tenant_id, knowledge_base_id, state)`,
+  // Ticket 40 (SYNC-01B): durable sync runs. Exactly ONE pending/running run
+  // may exist per data source — enforced by the partial unique index, which
+  // is what makes concurrent triggers claim-safe without a separate lock
+  // service. A run row IS the durable work item: a process restart finds
+  // pending rows and resumes them; failed rows are kept as records (they
+  // never auto-retry and never touched the active version).
+  `CREATE TABLE IF NOT EXISTS sync_runs (
+    id TEXT PRIMARY KEY,
+    source_id TEXT NOT NULL,
+    tenant_id TEXT NOT NULL,
+    trigger TEXT NOT NULL CHECK(trigger IN ('manual','schedule')),
+    status TEXT NOT NULL CHECK(status IN ('pending','running','completed','failed')),
+    summary TEXT,
+    error TEXT,
+    lease_expires_at TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  )`,
+  `CREATE UNIQUE INDEX IF NOT EXISTS idx_sync_runs_single_active
+    ON sync_runs(source_id) WHERE status IN ('pending','running')`,
+  `CREATE INDEX IF NOT EXISTS idx_sync_runs_claim
+    ON sync_runs(status, created_at)`,
 ].join(";\n")
 
 let _db: DB | null = null
@@ -467,6 +489,15 @@ export function openDb(dbPath?: string): DB {
   }
   if (!documentColumns.some(({ name }) => name === "source_id")) {
     db.exec("ALTER TABLE documents ADD COLUMN source_id TEXT")
+  }
+  // Ticket 40 (SYNC-01B): additive migration — the stored next-run state of a
+  // scheduled sync data source (databases created before ticket 40 lack it).
+  const syncSourceColumns = db.pragma("table_info(sync_data_sources)") as Array<{ name: string }>
+  if (
+    syncSourceColumns.length > 0 &&
+    !syncSourceColumns.some(({ name }) => name === "next_run_at")
+  ) {
+    db.exec("ALTER TABLE sync_data_sources ADD COLUMN next_run_at TEXT")
   }
   if (!documentColumns.some(({ name }) => name === "content_hash")) {
     db.exec("ALTER TABLE documents ADD COLUMN content_hash TEXT")

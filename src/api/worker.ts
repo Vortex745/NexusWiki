@@ -1,6 +1,7 @@
 import { loadConfig } from "../config"
 import { createIngestionLifecycle } from "../ingestion/pipeline"
 import { type DB, openDb } from "../ingestion/tracking"
+import { SyncRunService } from "../sync/sync_run_service"
 
 let timer: NodeJS.Timeout | null = null
 let isBusy = false
@@ -23,6 +24,20 @@ export function startWorker(options: {
   const pollIntervalMs = options.pollIntervalMs ?? cfg.pollIntervalMs
   const claimedTimeoutMs = options.claimedTimeoutMs ?? cfg.claimedTimeoutMs
 
+  // Ticket 40 (SYNC-01B): pending sync work resumes safely after a restart —
+  // runs that were 'running' when the previous process died are requeued.
+  try {
+    const recovered = new SyncRunService({ db, lifecycle }).recoverOnStartup()
+    if (recovered > 0) {
+      console.log(`[worker] Recovered ${recovered} interrupted sync run(s)`)
+    }
+  } catch (error) {
+    console.warn(
+      "[worker] Sync run recovery skipped:",
+      error instanceof Error ? error.message : String(error)
+    )
+  }
+
   console.log(`[worker] Polling every ${pollIntervalMs}ms`)
 
   timer = setInterval(async () => {
@@ -30,6 +45,11 @@ export function startWorker(options: {
     isBusy = true
     try {
       lifecycle.recoverStaleClaims(claimedTimeoutMs)
+      // Ticket 40 (SYNC-01B): sync scheduling rides the SAME worker timer —
+      // recover expired leases, enqueue due scheduled sources and execute at
+      // most one claimed run per tick. No new permanent service.
+      const syncRuns = new SyncRunService({ db, lifecycle })
+      await syncRuns.sweep()
       const result = await lifecycle.runNext()
       if (!result) return
 

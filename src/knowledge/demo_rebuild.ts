@@ -75,6 +75,11 @@ export const DEMO_REBUILD_SQLITE_TABLES = [
   // carries none of it.
   "long_term_memories",
   "memory_suggestions",
+  // Ticket 39/40 (SYNC-01A/B): URL/sitemap sync data sources, their stored
+  // schedule state and their durable run history are workspace state of the
+  // demo namespace — a rebuild clears all of it.
+  "sync_data_sources",
+  "sync_runs",
 ] as const
 
 /**

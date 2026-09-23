@@ -70,9 +70,10 @@ test("both paths retrieve through the same operations and searcher", () => {
   }
   // Ticket 31 (FAQ-01B): the searcher is built through the local helper that
   // adds the FAQ evidence channel — same shared operations, same SearcherImpl.
+  // Ticket 36 (WEB-01): the helper also carries the optional web channel.
   assert.match(
     entry,
-    /const buildSearcher = \(operations: SearchOperations\) =>\s*new SearcherImpl\(operations, options\.attachments, faqEvidence\)/,
+    /const buildSearcher = \(operations: SearchOperations\) =>\s*new SearcherImpl\(operations, options\.attachments, faqEvidence, options\.web\)/,
     "chat searches through the shared SearcherImpl over those operations"
   )
   assert.match(

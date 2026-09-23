@@ -11,6 +11,7 @@ import {
   SyncSourceNotFoundError,
   type SyncDataSource,
 } from "../sync/data_source_service"
+import { SyncRunConflictError, SyncRunService } from "../sync/sync_run_service"
 
 /**
  * Ticket 39 (SYNC-01A): the URL/sitemap data-source HTTP contract.
@@ -171,9 +172,36 @@ export function createSyncDataSourcesRouter(options: {
   router.post("/sync-data-sources/:id/run", async (req: Request, res: Response) => {
     const guard = requireSource(req, res)
     if (!guard) return
+    // Ticket 40 (SYNC-01B): the trigger is a DURABLE run — enqueue, claim and
+    // execute through the run service. A concurrent trigger for the same
+    // source loses the single-active-run claim with an explicit 409.
+    const runService = new SyncRunService({
+      db,
+      lifecycle: createIngestionLifecycle(db),
+    })
     try {
-      const report = await guard.service.runOnce(guard.context.tenantId, String(req.params.id))
-      res.json({ report })
+      const run = await runService.runNow(guard.context.tenantId, String(req.params.id))
+      res.json({ run })
+    } catch (error) {
+      if (error instanceof SyncRunConflictError) {
+        res.status(409).json({ error: error.message, activeRunId: error.activeRunId })
+        return
+      }
+      res.status(errorStatus(error)).json({ error: error instanceof Error ? error.message : String(error) })
+    }
+  })
+
+  router.get("/sync-data-sources/:id/runs", (req: Request, res: Response) => {
+    const guard = requireSource(req, res)
+    if (!guard) return
+    try {
+      // 404 semantics for an unknown source come from the data-source service.
+      guard.service.get(guard.context.tenantId, String(req.params.id))
+      const runService = new SyncRunService({
+        db,
+        lifecycle: createIngestionLifecycle(db),
+      })
+      res.json({ runs: runService.listRuns(guard.context.tenantId, String(req.params.id)) })
     } catch (error) {
       res.status(errorStatus(error)).json({ error: error instanceof Error ? error.message : String(error) })
     }
