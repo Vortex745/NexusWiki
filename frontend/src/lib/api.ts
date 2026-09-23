@@ -93,6 +93,7 @@ export async function fetchSession(): Promise<SessionPayload | null> {
 
 export interface StatusChannel {
   status: string
+  detail?: string
   responseTimeMs?: number
   error?: string
 }
@@ -103,13 +104,19 @@ export interface StatusPayload {
   channels: {
     elasticsearch: StatusChannel
     neo4j: StatusChannel
-    openai: StatusChannel
+    chat: StatusChannel
+    embedding: StatusChannel
+    rerank: StatusChannel
+    parsers: StatusChannel
+    mcp: StatusChannel
+    webSearch: StatusChannel
+    langfuse: StatusChannel
   }
   config?: {
-    esNode?: string
-    neo4jUri?: string
-    openaiBaseUrl?: string
-    openaiChatModel?: string
+    esNodeHost?: string
+    neo4jUriHost?: string
+    chatBaseUrlHost?: string
+    chatModel?: string
   }
 }
 

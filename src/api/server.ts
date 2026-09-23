@@ -447,6 +447,7 @@ export function createApp(options: {
       elasticsearch: options.processRuntime.elasticsearch,
       neo4jDriver: options.processRuntime.neo4jDriver,
       chatClient: options.processRuntime.chatClient,
+      embeddingClient: options.processRuntime.embeddingClient,
     })
     app.use("/api", statusRouter)
     // The /api/models route is no longer mounted in production — the

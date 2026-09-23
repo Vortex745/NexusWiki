@@ -14,16 +14,26 @@ export const INSIGHT_PATH_STEPS = [
 ] as const
 
 export const CHANNEL_LABELS: Record<string, { name: string; short: string }> = {
-  elasticsearch: { name: "Elasticsearch", short: "ES" },
+  elasticsearch: { name: "Elasticsearch 检索", short: "ES" },
   neo4j: { name: "Neo4j 知识图谱", short: "Neo4j" },
-  openai: { name: "OpenAI 兼容接口", short: "LLM" },
+  chat: { name: "Chat 对话模型", short: "Chat" },
+  embedding: { name: "Embedding 向量模型", short: "向量" },
+  rerank: { name: "Rerank 重排模型（可选）", short: "重排" },
+  parsers: { name: "文档解析器", short: "解析" },
+  mcp: { name: "MCP 能力服务器（可选）", short: "MCP" },
+  webSearch: { name: "网络搜索（可选）", short: "网络" },
+  langfuse: { name: "Langfuse 追踪（可选）", short: "追踪" },
 }
 
 export const STATUS_LABELS: Record<string, { text: string; dot: "green" | "amber" | "red" | "gray" }> = {
   connected: { text: "已连接", dot: "green" },
   degraded: { text: "部分降级", dot: "amber" },
   disconnected: { text: "未连接", dot: "red" },
+  // Ticket 44: an optional capability the deployment deliberately did not
+  // configure is NEITHER failed nor successful — it is simply not there.
   unconfigured: { text: "未配置", dot: "gray" },
+  // Configured but not probed live by this page — no liveness claim either way.
+  configured: { text: "已配置", dot: "gray" },
 }
 
 export const TRACE_STATUS_LABELS: Record<string, string> = {
