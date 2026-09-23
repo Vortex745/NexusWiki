@@ -1580,3 +1580,47 @@ export async function forgetAllMemories(): Promise<number> {
   if (!response.ok) throw new Error(`记忆清空失败 (${response.status})`)
   return ((await response.json()) as { forgotten: number }).forgotten
 }
+
+// ---------------------------------------------------------------------------
+// Memory extraction suggestions (ticket 33, MEM-01B) — the review queue.
+// ---------------------------------------------------------------------------
+
+export type MemorySuggestionStatus = "pending" | "accepted" | "dismissed"
+
+export interface ServerMemorySuggestion {
+  id: string
+  assistantId: string | null
+  sourceRunId: string
+  content: string
+  status: MemorySuggestionStatus
+  createdAt: string
+}
+
+export async function fetchMemorySuggestions(
+  status: MemorySuggestionStatus = "pending",
+): Promise<ServerMemorySuggestion[]> {
+  const response = await apiFetch(`/memory-suggestions?status=${encodeURIComponent(status)}`)
+  if (!response.ok) throw new Error(`记忆建议读取失败 (${response.status})`)
+  const body = (await response.json()) as { suggestions?: ServerMemorySuggestion[] }
+  return Array.isArray(body.suggestions) ? body.suggestions : []
+}
+
+export async function acceptMemorySuggestion(id: string): Promise<void> {
+  const response = await apiFetch(`/memory-suggestions/${encodeURIComponent(id)}/accept`, {
+    method: "POST",
+  })
+  if (!response.ok) {
+    const body = (await response.json().catch(() => ({}))) as { error?: string }
+    throw new Error(body.error || `记忆建议采纳失败 (${response.status})`)
+  }
+}
+
+export async function dismissMemorySuggestion(id: string): Promise<void> {
+  const response = await apiFetch(`/memory-suggestions/${encodeURIComponent(id)}/dismiss`, {
+    method: "POST",
+  })
+  if (!response.ok) {
+    const body = (await response.json().catch(() => ({}))) as { error?: string }
+    throw new Error(body.error || `记忆建议忽略失败 (${response.status})`)
+  }
+}

@@ -96,6 +96,7 @@ import type {
   SearchOptions,
 } from "../retrieval/search/interface"
 import { SYSTEM_PROMPT } from "./system_prompt"
+import { renderMemoryPromptSuffix } from "./memory_prompt"
 import type { ContextAssembler } from "../retrieval/context/interface"
 import { formatToolInputSummary } from "../retrieval/tool_selector"
 import type { Planner, DecomposeResult } from "../retrieval/planner/interface"
@@ -998,13 +999,17 @@ export function createComplexKnowledgeMastraRunner(
     // -------------------------------------------------------------------------
     // GATE 3: answer draft (LLM stream). Mirrors T11.
     // -------------------------------------------------------------------------
+    // Ticket 33 (MEM-01B): recalled long-term memories ride the system prompt
+    // as clearly-labeled background — never evidence, never citations.
+    // -------------------------------------------------------------------------
+    const memorySuffix = renderMemoryPromptSuffix(input.longTermMemories)
     const initialMessages: AgentMessage[] = [
       // Ticket 19 (AST-01B): the assistant's own prompt leads, ahead of the
       // platform instructions — it is part of the immutable version snapshot.
       ...(assistant?.systemPrompt
         ? [{ role: "system" as const, content: assistant.systemPrompt }]
         : []),
-      { role: "system", content: SYSTEM_PROMPT },
+      { role: "system", content: SYSTEM_PROMPT + memorySuffix },
       { role: "user", content: `${context}\n\n用户问题：${effectiveMessage}` },
     ]
     const initialTokens: string[] = []
@@ -1419,7 +1424,7 @@ export function createComplexKnowledgeMastraRunner(
         ...(assistant?.systemPrompt
           ? [{ role: "system" as const, content: assistant.systemPrompt }]
           : []),
-        { role: "system", content: SYSTEM_PROMPT },
+        { role: "system", content: SYSTEM_PROMPT + memorySuffix },
         { role: "user", content: `${context}\n\n用户问题：${effectiveMessage}` },
       ]
       const regenTokens: string[] = []

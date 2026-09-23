@@ -46,6 +46,12 @@ interface ChatRequest {
    * absent on a normal send.
    */
   truncateFromRunId?: unknown
+  /**
+   * Ticket 33 (MEM-01B): false disables long-term memory recall for this
+   * run. Narrowing-only: absent/true keeps the default behavior; nothing a
+   * request sends can add memories the owner does not have.
+   */
+  useMemory?: unknown
 }
 
 function streamPayload(event: AnswerRunEvent, sessionId: string) {
@@ -272,6 +278,8 @@ export function createChatRouter(
       sessionId,
       signal: undefined,
       accessContext: undefined,
+      // Ticket 33 (MEM-01B): only an explicit false disables memory recall.
+      ...(req.body?.useMemory === false ? { useMemory: false } : {}),
       ...(retrievalScope ? { retrievalScope } : {}),
       ...(assistantSnapshot ? { assistant: assistantSnapshot } : {}),
     }

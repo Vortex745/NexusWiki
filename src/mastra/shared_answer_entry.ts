@@ -73,6 +73,9 @@ import type { AssistantRunSnapshot } from "../assistants/assistant_service"
 import type { FaqEntryService } from "../faq/faq_entry_service"
 import { createFaqEvidenceOperations } from "../faq/faq_evidence"
 import { createFaqExactMatchRunner } from "./faq_exact_runner"
+import type { LongTermMemoryStore } from "../memory/long_term_memory_store"
+import type { MemorySuggestionStore } from "../memory/memory_suggestion_store"
+import { createMemoryRecallRunner } from "./memory_recall_runner"
 import {
   createDirectAmbiguousMastraRunner,
   type DirectReplyStream,
@@ -149,6 +152,16 @@ export interface SharedAnswerEntryOptions {
    * ordinary citable evidence — always inside the run's knowledge scope.
    */
   faq?: FaqEntryService
+  /**
+   * Ticket 33 (MEM-01B): the user-owned long-term memory stores. Default:
+   * undefined — a composition without them never recalls memory and never
+   * extracts suggestions (evaluation scopes, probes). When wired, the run
+   * recalls the owner's global + assistant-pinned memories into the system
+   * prompt (traceable, disableable per run) and completed answers may create
+   * PENDING extraction suggestions for the owner to review.
+   */
+  memories?: LongTermMemoryStore
+  suggestions?: MemorySuggestionStore
 }
 
 export interface SharedAnswerEntry {
@@ -353,6 +366,8 @@ export async function createSharedAnswerEntry(
   // Ticket 31 (FAQ-01B): the exact-FAQ gate sits in front of routing — a
   // unique normalized match publishes the stored standard answer without a
   // model call, while everything else runs the normal routes unchanged.
+  // Ticket 33 (MEM-01B): memory recall + suggestion extraction wrap the
+  // routes INSIDE the FAQ gate — a direct standard answer needs neither.
   const runner = await createMastraWorkflowRunner(
     createFaqExactMatchRunner(
       {
@@ -360,7 +375,14 @@ export async function createSharedAnswerEntry(
         conversationStore,
         resolveTenantId,
       },
-      dispatchRunner
+      createMemoryRecallRunner(
+        {
+          ...(options.memories ? { memories: options.memories } : {}),
+          ...(options.suggestions ? { suggestions: options.suggestions } : {}),
+          resolveTenantId,
+        },
+        dispatchRunner
+      )
     )
   )
 

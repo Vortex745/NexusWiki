@@ -337,6 +337,24 @@ test("the evaluation dialog is operable by keyboard and collapses on a narrow la
   assert.match(dialog, /max-md:px-4/, "content padding follows the narrow screen")
 })
 
+test("the FAQ workspace manages versioned entries and row-precise imports", () => {
+  const dialog = read("frontend/src/components/panels/FaqDialog.tsx")
+  const sidebar = read("frontend/src/components/Sidebar.tsx")
+  assert.match(dialog, /fetchFaqEntries\(/, "entries come from the knowledge-scoped API")
+  assert.match(dialog, /createFaqEntry\(/, "an entry can be created")
+  assert.match(dialog, /editFaqEntry\(/, "an edit goes through the versioned API")
+  assert.match(dialog, /setFaqEntryStatus\(/, "activate/disable go through the API")
+  assert.match(dialog, /fetchFaqEntryVersions\(/, "the immutable version history is readable")
+  assert.match(dialog, /importFaqEntries\(/, "the JSON/CSV import is offered")
+  assert.match(dialog, /STATUS_LABELS/, "both statuses are labelled")
+  assert.match(dialog, /归一化问题/, "the normalized question (the conflict axis) is shown")
+  assert.match(dialog, /逐行校验/, "the copy states that rejected rows are reported")
+  assert.match(dialog, /importResult\.issues\.map/, "every rejected row is displayed")
+  assert.match(dialog, /max-md:h-dvh/, "the panel reflows on a narrow screen")
+  assert.match(sidebar, /标准问答/, "the FAQ workspace has a first-class entry")
+  assert.match(read("frontend/src/App.tsx"), /<FaqDialog\b/, "the app mounts the FAQ panel")
+})
+
 test("an answer carries a feedback submission and reviewers can filter the store", () => {
   const thread = read("frontend/src/components/thread/Thread.tsx")
   const feedbackDialog = read("frontend/src/components/panels/FeedbackDialog.tsx")
@@ -508,7 +526,10 @@ test("mem0-style composer and suggestion surface are preserved", () => {
   const memoryDialog = read("frontend/src/components/panels/MemoryDialog.tsx")
   assert.match(thread, /--thread-max-width/, "thread keeps the 42rem mem0 column")
   assert.match(thread, /输入消息，向 NexusRAG 提问/, "composer placeholder is preserved")
-  assert.match(app, /getMemoriesPromptContext/, "memory context is injected into prompts")
+  // Ticket 33 (MEM-01B): memory is recalled SERVER-side (owner-scoped,
+  // traceable, disableable) — the client no longer pastes it into prompts.
+  assert.doesNotMatch(app, /getMemoriesPromptContext/, "memory is not injected into prompts client-side")
   assert.match(memoryDialog, /记忆/, "memory management surface is preserved")
+  assert.match(memoryDialog, /建议/, "the suggestion review surface lives in the memory dialog")
   assert.match(references, /参考来源/, "references disclosure is preserved")
 })

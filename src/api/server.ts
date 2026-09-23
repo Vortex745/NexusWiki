@@ -49,7 +49,9 @@ import { createModelProfilesRouter } from "./model_profiles"
 import { createAssistantsRouter } from "./assistants"
 import { createConversationsRouter } from "./conversations"
 import { createMemoriesRouter } from "./memories"
+import { createMemorySuggestionsRouter } from "./memory_suggestions"
 import { LongTermMemoryStore } from "../memory/long_term_memory_store"
+import { MemorySuggestionStore } from "../memory/memory_suggestion_store"
 import { createFaqEntriesRouter } from "./faq_entries"
 import { FaqEntryServiceImpl } from "../faq/faq_entry_service"
 import { SqliteFaqEntryRepo } from "../faq/faq_entry_repo"
@@ -130,6 +132,8 @@ export function createApp(options: {
    * routes not mounted (bare mounts, probes).
    */
   memories?: import("../memory/long_term_memory_store").LongTermMemoryStore
+  /** Ticket 33 (MEM-01B): extraction suggestions; omitted → routes not mounted. */
+  suggestions?: import("../memory/memory_suggestion_store").MemorySuggestionStore
 }) {
   const app = express()
   const db = options.db || openDb()
@@ -431,6 +435,15 @@ export function createApp(options: {
       })
     )
   }
+  // Ticket 33 (MEM-01B): the extraction-suggestion review surface. Mounted
+  // together with the memory routes — accepting a suggestion publishes it as
+  // a memory through the same store the runs recall from.
+  if (options.memories && options.suggestions) {
+    app.use(
+      "/api",
+      createMemorySuggestionsRouter({ suggestions: options.suggestions, memories: options.memories })
+    )
+  }
   app.use("/api", ingestRouter)
   return app
 }
@@ -591,6 +604,8 @@ export async function startServer(
     conversationHistory: new SqliteConversationHistoryStore(processRuntime.db),
     // Ticket 32 (MEM-01A): user-owned long-term memories on the shared db.
     memories: new LongTermMemoryStore({ db: processRuntime.db }),
+    // Ticket 33 (MEM-01B): extraction suggestions on the same db.
+    suggestions: new MemorySuggestionStore({ db: processRuntime.db }),
     // Ticket 22 (ATT-01): the session attachment routes (upload/list/promote/
     // cleanup). Absent when the composition did not build the service — the
     // routes then simply do not exist and no run reads attachments.

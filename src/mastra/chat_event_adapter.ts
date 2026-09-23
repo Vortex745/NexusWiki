@@ -125,6 +125,18 @@ export interface MastraRunnerInput {
    * (prompt + rerank binding), forwarded verbatim — runners never read raw
    * request fields for the assistant overlay. */
   assistant?: import("../assistants/assistant_service").AssistantRunSnapshot
+  /**
+   * Ticket 33 (MEM-01B): false disables long-term memory recall for this
+   * run (narrowing-only transport flag). The memory-recall wrapper reads it;
+   * runners receive the RECALLED memories via {@link longTermMemories}.
+   */
+  useMemory?: boolean
+  /**
+   * Ticket 33 (MEM-01B): the owner-scoped long-term memories recalled into
+   * this run, injected by the memory-recall wrapper. Runners render them
+   * through `renderMemoryPromptSuffix` — never as evidence or citations.
+   */
+  longTermMemories?: import("./memory_prompt").RecalledMemory[]
   /** Route preparation produced once by the dispatch runner. Standalone
    * route runners may omit it and perform their own ownership check. */
   preparedRoute?: PreparedMastraRoute
@@ -176,6 +188,12 @@ export interface MastraRunnerOutput {
    * so transports can label the standard answer.
    */
   faq?: AnswerRunResult["faq"]
+  /**
+   * Ticket 33 (MEM-01B): the long-term memories recalled into this run's
+   * prompts (absent when memory is disabled, unwired or empty). Copied onto
+   * the done event's result — informational trace, never a citation.
+   */
+  memoryUsed?: AnswerRunResult["memoryUsed"]
 }
 
 /**
@@ -491,6 +509,8 @@ export function createMastraChatEventAdapter(
             : {}),
           // Ticket 19 (AST-01B): the server-resolved assistant snapshot.
           ...(runOptions?.assistant ? { assistant: runOptions.assistant } : {}),
+          // Ticket 33 (MEM-01B): the narrowing-only memory disable flag.
+          ...(runOptions?.useMemory === false ? { useMemory: false } : {}),
           onAnswerDelta,
         })
 
@@ -624,6 +644,7 @@ export function createMastraChatEventAdapter(
           summarizationCheckpoint: runnerOutput.summarizationCheckpoint,
           summarizationOutcome: runnerOutput.summarizationOutcome,
           ...(runnerOutput.faq ? { faq: runnerOutput.faq } : {}),
+          ...(runnerOutput.memoryUsed ? { memoryUsed: runnerOutput.memoryUsed } : {}),
         })
         notifyObservers(event)
         yield event

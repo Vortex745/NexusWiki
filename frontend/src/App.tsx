@@ -22,11 +22,10 @@ import {
   uploadSessionAttachment,
   type SessionAttachmentPayload,
 } from "./lib/api"
-import { getMemoriesPromptContext } from "./lib/memory"
 import { knowledgeStore } from "./runtime/knowledgeStore"
 import { useTheme } from "./lib/theme"
 import { AppShellProvider, type AppShellActions } from "./runtime/AppShellContext"
-import { MemoryProvider, useMemoryApi } from "./runtime/MemoryContext"
+import { MemoryProvider } from "./runtime/MemoryContext"
 import { PromptComposerProvider } from "./runtime/PromptComposerContext"
 import { ConversationRuntimeProvider } from "./runtime/ConversationRuntimeProvider"
 import { SessionProvider, useSession } from "./runtime/SessionContext"
@@ -93,7 +92,6 @@ function toChipAttachment(attachment: SessionAttachmentPayload): Attachment {
 }
 
 function AppRoot() {
-  const { memories } = useMemoryApi()
   const { isDark, toggleTheme } = useTheme()
 
   const [attachments, setAttachments] = useState<Attachment[]>([])
@@ -177,15 +175,12 @@ function AppRoot() {
     }
   }, [activeThreadId])
 
+  // Ticket 33 (MEM-01B): the prompt carries ONLY what the user typed —
+  // long-term memories are recalled SERVER-side now (owner-scoped, traceable,
+  // disableable per run), so the client no longer pastes them into the message.
   const composePrompt = useCallback(
-    (displayText: string) => {
-      // Ticket 22: attachment text is NOT pasted into the prompt anymore —
-      // the run retrieves the session's own attachments through the
-      // attachment search channel, so they can be retrieved and cited.
-      const memoryContext = getMemoriesPromptContext(memories)
-      return `${displayText}${memoryContext}`.trim()
-    },
-    [memories],
+    (displayText: string) => displayText,
+    [],
   )
 
   const handleAddAttachments = useCallback(

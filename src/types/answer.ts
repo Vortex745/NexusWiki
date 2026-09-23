@@ -138,6 +138,16 @@ export interface AnswerRunResult {
     version: number
     question: string
   }
+  /**
+   * Ticket 33 (MEM-01B): present when the run's prompts included the owner's
+   * long-term memories. Informational only — memories are background
+   * preferences, NEVER citations: they never appear in `references`, and the
+   * UI labels them so a reader can ignore them.
+   */
+  memoryUsed?: {
+    ids: string[]
+    count: number
+  }
 }
 
 export type AnswerRunStage =
@@ -275,6 +285,14 @@ export interface RouteTraceData {
     version: number
     question: string
     viaVariant: boolean
+  }
+  /**
+   * Ticket 33 (MEM-01B): the long-term memories that were recalled into this
+   * run's prompts (owner-scoped; absent when memory is disabled or empty).
+   */
+  memoryUsed?: {
+    ids: string[]
+    count: number
   }
 }
 

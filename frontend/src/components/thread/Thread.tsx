@@ -50,6 +50,8 @@ interface MessageCustom {
   runId?: string | null
   /** Ticket 31 (FAQ-01B): the direct standard-answer hit, if any. */
   faq?: { entryId: string; version: number; question: string } | null
+  /** Ticket 33 (MEM-01B): the informational memory trace, if any. */
+  memoryUsed?: { ids: string[]; count: number } | null
 }
 
 export interface Attachment {
@@ -510,6 +512,16 @@ function AssistantMessage() {
               FAQ 标准答案 · v{custom.faq.version}
             </span>
             <span>来自知识库标准问答（FAQ），非生成内容</span>
+          </div>
+        ) : null}
+        {custom?.memoryUsed && custom.memoryUsed.count > 0 ? (
+          <div className="mt-1.5 flex items-center text-[11px] text-muted">
+            <span
+              className="rounded bg-surface-subtle px-1.5 py-0.5 text-[10px] font-medium text-muted"
+              title="结合了您的长期记忆与偏好（可在记忆面板管理），仅供参考，不是知识库引用来源"
+            >
+              已结合 {custom.memoryUsed.count} 条长期记忆 · 仅供参考，非引用来源
+            </span>
           </div>
         ) : null}
         <ReferencesPanel

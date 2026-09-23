@@ -394,6 +394,22 @@ const SCHEMA = [
     ON long_term_memories(tenant_id, subject_id, created_at)`,
   `CREATE INDEX IF NOT EXISTS idx_long_term_memories_recall
     ON long_term_memories(tenant_id, subject_id, assistant_id)`,
+  // Ticket 33 (MEM-01B): extraction suggestions. Automatic extraction only
+  // ever writes PENDING rows here — a memory is published exclusively by the
+  // owner accepting a suggestion. Same owner triple as the memory table.
+  `CREATE TABLE IF NOT EXISTS memory_suggestions (
+    id TEXT PRIMARY KEY,
+    tenant_id TEXT NOT NULL,
+    subject_id TEXT NOT NULL,
+    assistant_id TEXT,
+    source_run_id TEXT NOT NULL,
+    content TEXT NOT NULL,
+    status TEXT NOT NULL CHECK(status IN ('pending','accepted','dismissed')),
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_memory_suggestions_review
+    ON memory_suggestions(tenant_id, subject_id, status, created_at)`,
 ].join(";\n")
 
 let _db: DB | null = null

@@ -36,6 +36,11 @@ export interface TraceEvent {
      * standard answer of a unique normalized FAQ exact match.
      */
     faq?: { entryId: string; version: number; question: string }
+    /**
+     * Ticket 33 (MEM-01B): the long-term memories recalled into this run's
+     * prompts — informational trace, never a citation.
+     */
+    memoryUsed?: { ids: string[]; count: number }
   }
   runId?: string
 }
@@ -86,6 +91,11 @@ export interface Message {
    * directly (unique normalized exact match). Absent for every other answer.
    */
   faq?: { entryId: string; version: number; question: string }
+  /**
+   * Ticket 33 (MEM-01B): how many long-term memories were recalled into the
+   * run's prompts. Informational only — memory is never a citation.
+   */
+  memoryUsed?: { ids: string[]; count: number }
 }
 
 export interface Thread {
@@ -286,6 +296,8 @@ export function mergeTraceEvent(message: Message, event: TraceEvent): void {
       : message.references
     // Ticket 31 (FAQ-01B): a direct FAQ hit labels the answer itself.
     message.faq = event.result?.faq ?? undefined
+    // Ticket 33 (MEM-01B): the informational memory trace rides along.
+    message.memoryUsed = event.result?.memoryUsed ?? undefined
   }
 }
 

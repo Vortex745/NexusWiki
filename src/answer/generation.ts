@@ -38,6 +38,13 @@ export interface AnswerRunOptions {
    * cannot enlarge its scope or enable tools beyond this snapshot.
    */
   assistant?: AssistantRunSnapshot
+  /**
+   * Ticket 33 (MEM-01B): false disables long-term memory recall for this
+   * run. Narrowing-only: the transport accepts `useMemory: false` and never
+   * anything that could widen the run; absent/true keeps the default
+   * (recall enabled when the deployment wires a memory store).
+   */
+  useMemory?: boolean
 }
 
 export class OpenAIAnswerModel implements AnswerModel {

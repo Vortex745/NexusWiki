@@ -1,4 +1,4 @@
-import { Brain, Check, Pencil, Search, Trash2, X } from "lucide"
+import { Brain, Check, Pencil, Search, Sparkles, Trash2, X } from "lucide"
 import { useEffect, useRef, useState } from "react"
 
 import { formatMemoryDate, useMemoryFilter } from "../../lib/memory"
@@ -8,7 +8,17 @@ import { Icon } from "../ui/Icon"
 
 export function MemoryDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
   const dialogRef = useRef<HTMLDialogElement>(null)
-  const { memories, loaded, addMemory, editMemory, deleteMemory, clearMemories } = useMemoryApi()
+  const {
+    memories,
+    loaded,
+    addMemory,
+    editMemory,
+    deleteMemory,
+    clearMemories,
+    suggestions,
+    acceptSuggestion,
+    dismissSuggestion,
+  } = useMemoryApi()
   const { showToast } = useAppShell()
   const [query, setQuery] = useState("")
   const [addText, setAddText] = useState("")
@@ -136,6 +146,55 @@ export function MemoryDialog({ open, onClose }: { open: boolean; onClose: () => 
           </button>
         </form>
       </div>
+
+      {/* Suggestion review queue (ticket 33) — pending only, never a memory
+          until the owner accepts it. */}
+      {suggestions.length > 0 ? (
+        <div className="border-b border-line bg-brand-subtle/40 p-3">
+          <div className="mb-1.5 flex items-center gap-1.5 text-[11px] font-medium text-ink">
+            <Icon icon={Sparkles} className="size-3.5 text-brand" />
+            提取建议 {suggestions.length} 条待确认
+          </div>
+          <ul className="grid gap-1.5">
+            {suggestions.map((suggestion) => (
+              <li
+                key={suggestion.id}
+                className="flex items-start justify-between gap-2 rounded-lg border border-line bg-surface p-2"
+              >
+                <p className="min-w-0 flex-1 text-xs leading-relaxed text-ink">{suggestion.text}</p>
+                <div className="flex flex-none items-center gap-1">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      void acceptSuggestion(suggestion.id)
+                        .then(() => showToast("已保存为长期记忆"))
+                        .catch((error: unknown) =>
+                          showToast(error instanceof Error ? error.message : "采纳失败")
+                        )
+                    }}
+                    className="cursor-pointer rounded-md bg-neutral-900 px-2 py-1 text-[10px] font-medium text-white dark:bg-neutral-200 dark:text-neutral-900"
+                  >
+                    记住
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      void dismissSuggestion(suggestion.id)
+                        .then(() => showToast("已忽略该建议"))
+                        .catch((error: unknown) =>
+                          showToast(error instanceof Error ? error.message : "忽略失败")
+                        )
+                    }}
+                    className="cursor-pointer rounded-md bg-surface-subtle px-2 py-1 text-[10px] font-medium text-muted"
+                  >
+                    忽略
+                  </button>
+                </div>
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
 
       {/* List */}
       <div className="min-h-0 flex-1 overflow-y-auto p-4">

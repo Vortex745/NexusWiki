@@ -1,12 +1,16 @@
 import { useCallback, useEffect, useMemo, useState } from "react"
 
 import {
+  acceptMemorySuggestion as acceptMemorySuggestionApi,
   createMemory as createMemoryApi,
+  dismissMemorySuggestion as dismissMemorySuggestionApi,
   fetchMemories,
+  fetchMemorySuggestions,
   forgetAllMemories as forgetAllMemoriesApi,
   forgetMemory as forgetMemoryApi,
   updateMemory as updateMemoryApi,
   type ServerMemory,
+  type ServerMemorySuggestion,
 } from "./api"
 
 /**
@@ -45,12 +49,6 @@ export function formatMemoryDate(isoString?: string): string {
   } catch {
     return ""
   }
-}
-
-export function getMemoriesPromptContext(memories: MemoryEntry[]): string {
-  if (!memories.length) return ""
-  const lines = memories.map((entry, index) => `${index + 1}. ${entry.text}`)
-  return `\n\n[持久记忆与偏好]:\n${lines.join("\n")}`
 }
 
 export function useMemories() {
@@ -116,4 +114,51 @@ export function useMemoryFilter(memories: MemoryEntry[], query: string): MemoryE
         (entry.assistantId ?? "").toLowerCase().includes(needle),
     )
   }, [memories, query])
+}
+
+export interface SuggestionEntry {
+  id: string
+  text: string
+  createdAt: string
+}
+
+/**
+ * Ticket 33 (MEM-01B): the owner's PENDING extraction suggestions — the
+ * review queue. Accepting publishes the suggestion as a real memory through
+ * the server; dismissing discards it. Nothing here is a memory until the
+ * owner acts.
+ */
+export function useMemorySuggestions() {
+  const [suggestions, setSuggestions] = useState<SuggestionEntry[]>([])
+
+  const refresh = useCallback(async () => {
+    try {
+      const server = await fetchMemorySuggestions("pending")
+      setSuggestions(
+        server.map((suggestion) => ({
+          id: suggestion.id,
+          text: suggestion.content,
+          createdAt: suggestion.createdAt,
+        })),
+      )
+    } catch {
+      // The queue keeps its last known state; the server stays the source.
+    }
+  }, [])
+
+  useEffect(() => {
+    void refresh()
+  }, [refresh])
+
+  const accept = useCallback(async (id: string) => {
+    await acceptMemorySuggestionApi(id)
+    setSuggestions((prev) => prev.filter((entry) => entry.id !== id))
+  }, [])
+
+  const dismiss = useCallback(async (id: string) => {
+    await dismissMemorySuggestionApi(id)
+    setSuggestions((prev) => prev.filter((entry) => entry.id !== id))
+  }, [])
+
+  return { suggestions, refresh, accept, dismiss }
 }

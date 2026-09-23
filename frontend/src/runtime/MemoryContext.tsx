@@ -1,6 +1,6 @@
 import { createContext, useContext } from "react"
 
-import { useMemories, type MemoryEntry } from "../lib/memory"
+import { useMemories, useMemorySuggestions, type MemoryEntry, type SuggestionEntry } from "../lib/memory"
 
 export interface MemoryApi {
   memories: MemoryEntry[]
@@ -10,6 +10,11 @@ export interface MemoryApi {
   editMemory: (id: string, text: string) => Promise<void>
   deleteMemory: (id: string) => Promise<void>
   clearMemories: () => Promise<void>
+  /** Ticket 33 (MEM-01B): the pending extraction-suggestion review queue. */
+  suggestions: SuggestionEntry[]
+  refreshSuggestions: () => Promise<void>
+  acceptSuggestion: (id: string) => Promise<void>
+  dismissSuggestion: (id: string) => Promise<void>
 }
 
 const MemoryContext = createContext<MemoryApi | null>(null)
@@ -21,6 +26,7 @@ const MemoryContext = createContext<MemoryApi | null>(null)
  */
 export function MemoryProvider({ children }: { children: React.ReactNode }) {
   const memory = useMemories()
+  const suggestions = useMemorySuggestions()
   return (
     <MemoryContext.Provider
       value={{
@@ -31,6 +37,10 @@ export function MemoryProvider({ children }: { children: React.ReactNode }) {
         editMemory: memory.editMemory,
         deleteMemory: memory.deleteMemory,
         clearMemories: memory.clearMemories,
+        suggestions: suggestions.suggestions,
+        refreshSuggestions: suggestions.refresh,
+        acceptSuggestion: suggestions.accept,
+        dismissSuggestion: suggestions.dismiss,
       }}
     >
       {children}

@@ -29,6 +29,8 @@ import { createSharedAnswerEntry } from "./mastra/shared_answer_entry"
 import { createSessionAttachmentService } from "./attachments/session_attachment_service"
 import { FaqEntryServiceImpl } from "./faq/faq_entry_service"
 import { SqliteFaqEntryRepo } from "./faq/faq_entry_repo"
+import { LongTermMemoryStore } from "./memory/long_term_memory_store"
+import { MemorySuggestionStore } from "./memory/memory_suggestion_store"
 import { readMastraRuntimeMode } from "./mastra/runtime_mode"
 import {
   MASTRA_PROMOTION_ARTIFACT_ENV,
@@ -151,6 +153,15 @@ async function main() {
   const faqService = new FaqEntryServiceImpl({
     repo: new SqliteFaqEntryRepo(answerRuntime.processRuntime.db),
   })
+  // Ticket 33 (MEM-01B): ONE memory pair for the answer path — recall reads
+  // the owner's memories and completed runs may create pending suggestions.
+  // Shares the process db with the management routes' own instances.
+  const memoryStore = new LongTermMemoryStore({
+    db: answerRuntime.processRuntime.db,
+  })
+  const suggestionStore = new MemorySuggestionStore({
+    db: answerRuntime.processRuntime.db,
+  })
 
   const sharedAnswerEntry = await createSharedAnswerEntry({
     config: cfg,
@@ -159,6 +170,9 @@ async function main() {
     attachments,
     // Ticket 31 (FAQ-01B): the FAQ standard-answer channel.
     faq: faqService,
+    // Ticket 33 (MEM-01B): scoped memory recall + suggestion extraction.
+    memories: memoryStore,
+    suggestions: suggestionStore,
   })
   console.log("[kefu-RAG] Mastra runner wired — direct + ambiguous + simple + complex knowledge routes enabled with Conversation Memory + Handoff + Observer fanout")
 

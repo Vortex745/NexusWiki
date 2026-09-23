@@ -61,6 +61,7 @@ import type {
   SearchOptions,
 } from "../retrieval/search/interface"
 import { SYSTEM_PROMPT } from "./system_prompt"
+import { renderMemoryPromptSuffix } from "./memory_prompt"
 import type { ContextAssembler } from "../retrieval/context/interface"
 import type {
   ToolSelector,
@@ -745,13 +746,16 @@ export function createSimpleKnowledgeMastraRunner(
     // Critic approves (T03 §5 single-shot; the runner does NOT publish tokens
     // directly — the adapter publishes them from MastraRunnerOutput.tokens).
     // -------------------------------------------------------------------------
+    // Ticket 33 (MEM-01B): recalled long-term memories ride the system prompt
+    // as clearly-labeled background — never evidence, never citations.
+    const memorySuffix = renderMemoryPromptSuffix(input.longTermMemories)
     const initialMessages: AgentMessage[] = [
       // Ticket 19 (AST-01B): the assistant's own prompt leads, ahead of the
       // platform instructions — it is part of the immutable version snapshot.
       ...(assistant?.systemPrompt
         ? [{ role: "system" as const, content: assistant.systemPrompt }]
         : []),
-      { role: "system", content: SYSTEM_PROMPT },
+      { role: "system", content: SYSTEM_PROMPT + memorySuffix },
       { role: "user", content: `${context}\n\n用户问题：${effectiveMessage}` },
     ]
     const initialTokens: string[] = []
@@ -1012,7 +1016,7 @@ export function createSimpleKnowledgeMastraRunner(
         ...(assistant?.systemPrompt
           ? [{ role: "system" as const, content: assistant.systemPrompt }]
           : []),
-        { role: "system", content: SYSTEM_PROMPT },
+        { role: "system", content: SYSTEM_PROMPT + memorySuffix },
         { role: "user", content: `${context}\n\n用户问题：${effectiveMessage}` },
       ]
       const regenTokens: string[] = []

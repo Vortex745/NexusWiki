@@ -51,6 +51,7 @@ import type { AccessContext } from "../access/context"
 import type { TokenUsage } from "../types"
 import type { MastraMemoryAdapter } from "./memory_adapter"
 import { formatMemoryAsContext } from "./memory_adapter"
+import { renderMemoryPromptSuffix } from "./memory_prompt"
 
 /**
  * Error thrown when the route decision is not supported by T09's
@@ -309,9 +310,15 @@ export function createDirectAmbiguousMastraRunner(
       ? `${contextPrefix}\n\n${effectiveMessage}`
       : effectiveMessage
 
+    // Ticket 33 (MEM-01B): recalled long-term memories ride the system prompt
+    // as clearly-labeled background — never evidence, never citations.
+    const memorySuffix = renderMemoryPromptSuffix(input.longTermMemories)
+    const systemPrompt = [input.assistant?.systemPrompt, memorySuffix]
+      .filter((part): part is string => Boolean(part))
+      .join("")
     const tokens: string[] = []
     for await (const token of streamDirectReply(promptMessage, input.signal, {
-      ...(input.assistant?.systemPrompt ? { systemPrompt: input.assistant.systemPrompt } : {}),
+      ...(systemPrompt ? { systemPrompt } : {}),
     })) {
       tokens.push(token)
       // Direct route has no critic gate before publication (T09 §13) — push
