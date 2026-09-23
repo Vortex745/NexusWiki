@@ -1520,3 +1520,63 @@ export async function importConversations(
   }
   return (await response.json()) as { imported: number; skipped: number }
 }
+
+// ---------------------------------------------------------------------------
+// Long-term memories (ticket 32, MEM-01A) — user-owned durable preferences.
+// The server owns the list; the browser never seeds or persists it.
+// ---------------------------------------------------------------------------
+
+export interface ServerMemory {
+  id: string
+  /** null → applies across the user's assistants; otherwise pinned. */
+  assistantId: string | null
+  content: string
+  createdAt: string
+  updatedAt: string
+}
+
+export async function fetchMemories(): Promise<ServerMemory[]> {
+  const response = await apiFetch("/memories")
+  if (!response.ok) throw new Error(`记忆读取失败 (${response.status})`)
+  const body = (await response.json()) as { memories?: ServerMemory[] }
+  return Array.isArray(body.memories) ? body.memories : []
+}
+
+export async function createMemory(content: string, assistantId?: string): Promise<ServerMemory> {
+  const response = await apiFetch("/memories", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ content, ...(assistantId ? { assistantId } : {}) }),
+  })
+  if (!response.ok) {
+    const body = (await response.json().catch(() => ({}))) as { error?: string }
+    throw new Error(body.error || `记忆添加失败 (${response.status})`)
+  }
+  return ((await response.json()) as { memory: ServerMemory }).memory
+}
+
+export async function updateMemory(id: string, content: string): Promise<ServerMemory> {
+  const response = await apiFetch(`/memories/${encodeURIComponent(id)}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ content }),
+  })
+  if (!response.ok) {
+    const body = (await response.json().catch(() => ({}))) as { error?: string }
+    throw new Error(body.error || `记忆更新失败 (${response.status})`)
+  }
+  return ((await response.json()) as { memory: ServerMemory }).memory
+}
+
+export async function forgetMemory(id: string): Promise<void> {
+  const response = await apiFetch(`/memories/${encodeURIComponent(id)}`, { method: "DELETE" })
+  if (!response.ok && response.status !== 404) {
+    throw new Error(`记忆删除失败 (${response.status})`)
+  }
+}
+
+export async function forgetAllMemories(): Promise<number> {
+  const response = await apiFetch("/memories", { method: "DELETE" })
+  if (!response.ok) throw new Error(`记忆清空失败 (${response.status})`)
+  return ((await response.json()) as { forgotten: number }).forgotten
+}

@@ -48,6 +48,8 @@ import { createRetrievalDebugRouter } from "./retrieval_debug"
 import { createModelProfilesRouter } from "./model_profiles"
 import { createAssistantsRouter } from "./assistants"
 import { createConversationsRouter } from "./conversations"
+import { createMemoriesRouter } from "./memories"
+import { LongTermMemoryStore } from "../memory/long_term_memory_store"
 import { createFaqEntriesRouter } from "./faq_entries"
 import { FaqEntryServiceImpl } from "../faq/faq_entry_service"
 import { SqliteFaqEntryRepo } from "../faq/faq_entry_repo"
@@ -123,6 +125,11 @@ export function createApp(options: {
    * mounted and no run can read attachment evidence.
    */
   attachments?: import("../attachments/session_attachment_service").SessionAttachmentService
+  /**
+   * Ticket 32 (MEM-01A): the user-owned long-term memory store; omitted →
+   * routes not mounted (bare mounts, probes).
+   */
+  memories?: import("../memory/long_term_memory_store").LongTermMemoryStore
 }) {
   const app = express()
   const db = options.db || openDb()
@@ -412,6 +419,18 @@ export function createApp(options: {
   if (options.conversationHistory) {
     app.use("/api", createConversationsRouter({ history: options.conversationHistory }))
   }
+  // Ticket 32 (MEM-01A): the user-owned long-term memory API (add, edit,
+  // forget, clear). Ownership is enforced per (tenant, subject) inside the
+  // store; an assistant pin must resolve to an assistant the caller can see.
+  if (options.memories) {
+    app.use(
+      "/api",
+      createMemoriesRouter({
+        memories: options.memories,
+        ...(options.assistants ? { assistants: options.assistants } : {}),
+      })
+    )
+  }
   app.use("/api", ingestRouter)
   return app
 }
@@ -570,6 +589,8 @@ export async function startServer(
     assistants,
     // Ticket 20 (CONV-01A): server-owned conversation directories + history.
     conversationHistory: new SqliteConversationHistoryStore(processRuntime.db),
+    // Ticket 32 (MEM-01A): user-owned long-term memories on the shared db.
+    memories: new LongTermMemoryStore({ db: processRuntime.db }),
     // Ticket 22 (ATT-01): the session attachment routes (upload/list/promote/
     // cleanup). Absent when the composition did not build the service — the
     // routes then simply do not exist and no run reads attachments.

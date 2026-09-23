@@ -376,6 +376,24 @@ const SCHEMA = [
   )`,
   `CREATE INDEX IF NOT EXISTS idx_session_attachment_chunks_session
     ON session_attachment_chunks(session_id, tenant_id, attachment_id, position)`,
+  // Ticket 32 (MEM-01A): user-owned durable preferences. One owner
+  // (tenant, subject), optionally pinned to one assistant; assistant_id
+  // NULL means the record applies across the user's assistants. The owner
+  // columns are part of every read and write — another user's row is the
+  // same missing row as an unknown id.
+  `CREATE TABLE IF NOT EXISTS long_term_memories (
+    id TEXT PRIMARY KEY,
+    tenant_id TEXT NOT NULL,
+    subject_id TEXT NOT NULL,
+    assistant_id TEXT,
+    content TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_long_term_memories_owner
+    ON long_term_memories(tenant_id, subject_id, created_at)`,
+  `CREATE INDEX IF NOT EXISTS idx_long_term_memories_recall
+    ON long_term_memories(tenant_id, subject_id, assistant_id)`,
 ].join(";\n")
 
 let _db: DB | null = null
