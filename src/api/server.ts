@@ -50,6 +50,7 @@ import { createSyncDataSourcesRouter } from "./sync_data_sources"
 import { ActiveVersionRepository } from "../ingestion/tracking/active_version_repo"
 import { createRetrievalDebugRouter } from "./retrieval_debug"
 import { createModelProfilesRouter } from "./model_profiles"
+import { createDemoConfigRouter } from "./demo_config"
 import { createAssistantsRouter } from "./assistants"
 import { createConversationsRouter } from "./conversations"
 import { createMemoriesRouter } from "./memories"
@@ -474,6 +475,33 @@ export function createApp(options: {
   // base or profile the server would refuse.
   if (options.assistants) {
     app.use("/api", createAssistantsRouter({ service: options.assistants }))
+  }
+  // Ticket 43 (DEMO-01B): the portable, non-secret demo configuration
+  // surface. Mounted when the profile registry is wired (production). The
+  // demo-config prefix carries the IDENTITY middleware explicitly — an
+  // unauthenticated request must never reach the fallback single-tenant
+  // context (the export exposes execution configuration readers cannot see,
+  // and the import writes). The router itself enforces the admin scope,
+  // exports configuration only (no credentials, documents, vectors or
+  // sessions) and imports through a dry-run-first plan with explicit
+  // conflict resolutions.
+  if (options.assistants && options.modelProfiles) {
+    if (options.accessMiddleware) {
+      app.use("/api/demo-config", options.accessMiddleware)
+    }
+    app.use(
+      "/api",
+      createDemoConfigRouter({
+        db,
+        knowledgeBases: workspaceKnowledgeBaseService,
+        embeddingProfile: knowledgeBaseEmbeddingProfile(
+          options.config?.embeddingModel ?? "unspecified",
+          options.config?.embeddingDimensions ?? 0
+        ),
+        modelProfiles: options.modelProfiles,
+        assistants: options.assistants,
+      })
+    )
   }
   // Ticket 20 (CONV-01A): the user-owned conversation history API (directory
   // list, per-thread history, one-time browser import). Identity arrives via

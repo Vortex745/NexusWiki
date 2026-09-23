@@ -50,6 +50,18 @@ export interface KnowledgeBaseRepo {
    * Name is the ONLY thing changed besides updated_at.
    */
   setName(id: string, tenantId: string, name: string, updatedAt: string): boolean
+
+  /**
+   * Ticket 43 (DEMO-01B): update the description, scoped by tenant. Returns
+   * false when no row matched. Description is the ONLY thing changed besides
+   * updated_at.
+   */
+  setDescription(
+    id: string,
+    tenantId: string,
+    description: string,
+    updatedAt: string
+  ): boolean
 }
 
 interface StoredKnowledgeBase {
@@ -135,6 +147,19 @@ export class SqliteKnowledgeBaseRepo implements KnowledgeBaseRepo {
       `UPDATE knowledge_bases SET name = ?, updated_at = ?
        WHERE id = ? AND tenant_id = ?`
     ).run(name, updatedAt, id, tenantId)
+    return result.changes > 0
+  }
+
+  setDescription(
+    id: string,
+    tenantId: string,
+    description: string,
+    updatedAt: string
+  ): boolean {
+    const result = this.db.prepare(
+      `UPDATE knowledge_bases SET description = ?, updated_at = ?
+       WHERE id = ? AND tenant_id = ?`
+    ).run(description, updatedAt, id, tenantId)
     return result.changes > 0
   }
 }

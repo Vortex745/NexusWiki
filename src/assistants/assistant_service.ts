@@ -187,13 +187,30 @@ export class AssistantService {
       description?: unknown
       allowedGroups?: unknown
       config: unknown
+      /**
+       * Ticket 43 (DEMO-01B): an explicit deterministic id for the portable
+       * config import — `assistant-<slug>` so a re-imported namespace keeps
+       * stable identity. Anything else keeps the random id.
+       */
+      id?: unknown
     }
   ): AssistantWithVersion {
     const name = this.validateName(input.name)
     const description = this.validateDescription(input.description)
     const allowedGroups = this.validateGroups(input.allowedGroups)
     const config = this.validateConfig(tenantId, input.config)
-    const id = `assistant-${randomUUID()}`
+    let id = `assistant-${randomUUID()}`
+    if (input.id !== undefined) {
+      if (
+        typeof input.id !== "string" ||
+        !/^assistant-[a-z0-9][a-z0-9-]{0,98}$/.test(input.id)
+      ) {
+        throw new InvalidAssistantCommandError(
+          "id must match assistant-<slug> with lowercase letters, digits and dashes"
+        )
+      }
+      id = input.id
+    }
     const timestamp = this.now().toISOString()
     const insert = this.db.transaction(() => {
       this.db
@@ -298,6 +315,26 @@ export class AssistantService {
       )
       .get(id, version, tenantId) as VersionRow | undefined
     return row ? rowToVersion(row) : null
+  }
+
+  /**
+   * Ticket 43 (DEMO-01B): every assistant of the tenant WITH its current
+   * execution config, oldest first (deterministic order for the portable
+   * export).
+   */
+  listForTenant(tenantId: string): AssistantWithVersion[] {
+    const rows = this.db
+      .prepare(`SELECT * FROM assistants WHERE tenant_id = ? ORDER BY created_at ASC, id ASC`)
+      .all(tenantId) as AssistantRow[]
+    const result: AssistantWithVersion[] = []
+    for (const row of rows) {
+      const version = this.getVersion(row.id, tenantId, row.current_version)
+      if (!version) {
+        throw new Error(`assistant ${row.id} is missing its current version ${row.current_version}`)
+      }
+      result.push({ ...rowToAssistant(row), version })
+    }
+    return result
   }
 
   listVersions(id: string, tenantId: string): AssistantVersion[] {
