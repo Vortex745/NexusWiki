@@ -8,6 +8,8 @@ import type { FetchOptions } from "../ingestion/url_fetcher"
 import {
   InvalidSyncSourceError,
   SyncDataSourceService,
+  SyncPageNotFoundError,
+  SyncPageRetirementConflictError,
   SyncSourceNotFoundError,
   type SyncDataSource,
 } from "../sync/data_source_service"
@@ -21,6 +23,12 @@ import { SyncRunConflictError, SyncRunService } from "../sync/sync_run_service"
  *   PATCH  /sync-data-sources/:id                        { interval?, state? }
  *   POST   /sync-data-sources/:id/run                    — one safe manual sync
  *   DELETE /sync-data-sources/:id
+ *
+ * Ticket 41 (SYNC-02): operate runs and confirm safe retirement.
+ *
+ *   GET    /sync-data-sources/:id/runs/:runId            — run detail + run-log pages
+ *   GET    /sync-data-sources/:id/pages                  — per-page presence ledger
+ *   POST   /sync-data-sources/:id/pages/retire { uri }   — explicit retirement confirmation
  *
  * Administrators only (the ticket names administrators as the actor); every
  * route resolves the tenant from the AccessContext and the KB ownership
@@ -57,6 +65,8 @@ function sourcePayload(source: SyncDataSource) {
 
 function errorStatus(error: unknown): number {
   if (error instanceof SyncSourceNotFoundError) return 404
+  if (error instanceof SyncPageNotFoundError) return 404
+  if (error instanceof SyncPageRetirementConflictError) return 409
   if (error instanceof InvalidSyncSourceError) return 400
   return 500
 }
@@ -202,6 +212,69 @@ export function createSyncDataSourcesRouter(options: {
         lifecycle: createIngestionLifecycle(db),
       })
       res.json({ runs: runService.listRuns(guard.context.tenantId, String(req.params.id)) })
+    } catch (error) {
+      res.status(errorStatus(error)).json({ error: error instanceof Error ? error.message : String(error) })
+    }
+  })
+
+  // Ticket 41 (SYNC-02): the run detail — one run plus its durable per-page
+  // run-log, where success/unchanged/timeout/rate-limit/invalid-url are
+  // distinguishable (status + failure_kind per page).
+  router.get("/sync-data-sources/:id/runs/:runId", (req: Request, res: Response) => {
+    const guard = requireSource(req, res)
+    if (!guard) return
+    try {
+      guard.service.get(guard.context.tenantId, String(req.params.id))
+      const runService = new SyncRunService({
+        db,
+        lifecycle: createIngestionLifecycle(db),
+      })
+      const run = runService.getRun(
+        guard.context.tenantId,
+        String(req.params.id),
+        String(req.params.runId)
+      )
+      if (!run) {
+        res.status(404).json({ error: "sync run not found" })
+        return
+      }
+      res.json({ run, pages: runService.listRunPages(run.id) })
+    } catch (error) {
+      res.status(errorStatus(error)).json({ error: error instanceof Error ? error.message : String(error) })
+    }
+  })
+
+  // Ticket 41 (SYNC-02): the per-page presence ledger — miss counts and
+  // retirement states an operator inspects before confirming retirement.
+  router.get("/sync-data-sources/:id/pages", (req: Request, res: Response) => {
+    const guard = requireSource(req, res)
+    if (!guard) return
+    try {
+      res.json({ pages: guard.service.listPages(guard.context.tenantId, String(req.params.id)) })
+    } catch (error) {
+      res.status(errorStatus(error)).json({ error: error instanceof Error ? error.message : String(error) })
+    }
+  })
+
+  // Ticket 41 (SYNC-02): explicit administrator confirmation. Only a page
+  // marked 'pending_retirement' (TWO consecutive missing-page observations)
+  // can be retired — anything else is a 400, never a silent success.
+  router.post("/sync-data-sources/:id/pages/retire", (req: Request, res: Response) => {
+    const guard = requireSource(req, res)
+    if (!guard) return
+    const body = req.body as { uri?: unknown }
+    if (typeof body.uri !== "string" || body.uri.trim() === "") {
+      res.status(400).json({ error: "uri is required" })
+      return
+    }
+    try {
+      const result = guard.service.confirmPageRetirement(
+        guard.context.tenantId,
+        String(req.params.id),
+        body.uri,
+        guard.context.subjectId
+      )
+      res.json(result)
     } catch (error) {
       res.status(errorStatus(error)).json({ error: error instanceof Error ? error.message : String(error) })
     }

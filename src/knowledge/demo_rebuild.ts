@@ -80,6 +80,10 @@ export const DEMO_REBUILD_SQLITE_TABLES = [
   // demo namespace — a rebuild clears all of it.
   "sync_data_sources",
   "sync_runs",
+  // Ticket 41 (SYNC-02): the per-page run log and the missing-page ledger
+  // belong to the sync sources above — cleared with them.
+  "sync_run_pages",
+  "sync_source_pages",
 ] as const
 
 /**

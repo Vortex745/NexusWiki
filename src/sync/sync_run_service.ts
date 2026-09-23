@@ -32,7 +32,11 @@ import type { FetchOptions } from "../ingestion/url_fetcher"
 import {
   SyncDataSourceService,
   SYNC_INTERVAL_MS,
+  summarizePages,
   type SyncInterval,
+  type SyncPageOutcome,
+  type SyncPageFailureKind,
+  type SyncMissingPage,
 } from "./data_source_service"
 
 export type SyncRunStatus = "pending" | "running" | "completed" | "failed"
@@ -54,6 +58,42 @@ export class SyncRunConflictError extends Error {
   constructor(readonly activeRunId: string) {
     super("another sync run is already active for this data source")
     this.name = "SyncRunConflictError"
+  }
+}
+
+/** Ticket 41 (SYNC-02): one durable per-page outcome of a run (run-log). */
+export interface SyncRunPage {
+  runId: string
+  uri: string
+  status: "submitted" | "unchanged" | "failed" | "missing"
+  failureKind: SyncPageFailureKind | null
+  detail: string | null
+  documentId: string | null
+  version: number | null
+  createdAt: string
+}
+
+interface SyncRunPageRow {
+  run_id: string
+  uri: string
+  status: string
+  failure_kind: string | null
+  detail: string | null
+  document_id: string | null
+  version: number | null
+  created_at: string
+}
+
+function rowToRunPage(row: SyncRunPageRow): SyncRunPage {
+  return {
+    runId: row.run_id,
+    uri: row.uri,
+    status: row.status as SyncRunPage["status"],
+    failureKind: (row.failure_kind as SyncPageFailureKind | null) ?? null,
+    detail: row.detail,
+    documentId: row.document_id,
+    version: row.version,
+    createdAt: row.created_at,
   }
 }
 
@@ -266,6 +306,11 @@ export class SyncRunService {
    * Execute a claimed run through the module-owned sync service and the
    * NORMAL ingestion lifecycle, then finalize. A failure marks the run
    * failed — the active version was never touched (ticket 39 isolation).
+   *
+   * Ticket 41 (SYNC-02): every page outcome is persisted to `sync_run_pages`
+   * (the run-log detail view), and the summary headline carries the failure
+   * kind breakdown so list/detail views can distinguish timeout, rate limit
+   * and invalid URL from generic failures without re-reading pages.
    */
   async executeClaimed(run: SyncRun): Promise<SyncRun> {
     const finalize = (status: SyncRunStatus, fields: { summary?: string; error?: string }) => {
@@ -289,8 +334,9 @@ export class SyncRunService {
     try {
       const report = await this.dataSourceService().runOnce(run.tenantId, run.sourceId)
       await this.drainLifecycle()
+      this.persistRunPages(run.id, report.pages, report.missing ?? [])
       const failedPages = report.pages.filter((page) => page.status === "failed")
-      const summary = `submitted=${report.pages.filter((page) => page.status === "submitted").length} unchanged=${report.pages.filter((page) => page.status === "unchanged").length} failed=${failedPages.length}`
+      const summary = summarizePages(report.pages, report.missing)
       if (failedPages.length > 0) {
         // The durable run record names WHAT failed, bounded like every field.
         const detail = failedPages
@@ -307,6 +353,72 @@ export class SyncRunService {
         error: (error instanceof Error ? error.message : String(error)).slice(0, 300),
       })
     }
+  }
+
+  /**
+   * Ticket 41 (SYNC-02): the durable run-log. One row per page outcome so a
+   * detail view can distinguish success/unchanged/timeout/rate limit/
+   * invalid URL without reconstructing anything, plus one 'missing' row per
+   * page that disappeared from a successful sitemap read.
+   */
+  private persistRunPages(
+    runId: string,
+    pages: SyncPageOutcome[],
+    missing: SyncMissingPage[]
+  ): void {
+    const createdAt = this.now().toISOString()
+    const insert = this.options.db.prepare(
+      `INSERT INTO sync_run_pages (
+         run_id, uri, status, failure_kind, detail, document_id, version, created_at
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+    )
+    this.options.db.transaction(() => {
+      for (const page of pages) {
+        insert.run(
+          runId,
+          page.uri,
+          page.status,
+          page.failureKind ?? null,
+          page.detail ?? null,
+          page.documentId ?? null,
+          page.version ?? null,
+          createdAt
+        )
+      }
+      for (const miss of missing) {
+        insert.run(
+          runId,
+          miss.uri,
+          "missing",
+          null,
+          `missing from sitemap (consecutive miss ${miss.missCount}${miss.pendingRetirement ? ", pending retirement" : ""})`,
+          null,
+          null,
+          createdAt
+        )
+      }
+    })()
+  }
+
+  /** Ticket 41 (SYNC-02): one run of this source, tenant-scoped. */
+  getRun(tenantId: string, sourceId: string, runId: string): SyncRun | null {
+    const row = this.options.db
+      .prepare(
+        `SELECT * FROM sync_runs
+         WHERE tenant_id = ? AND source_id = ? AND id = ?`
+      )
+      .get(tenantId, sourceId, runId) as SyncRunRow | undefined
+    return row ? rowToRun(row) : null
+  }
+
+  /** Ticket 41 (SYNC-02): the per-page outcomes of one run (run-log view). */
+  listRunPages(runId: string): SyncRunPage[] {
+    const rows = this.options.db
+      .prepare(
+        `SELECT * FROM sync_run_pages WHERE run_id = ? ORDER BY uri ASC`
+      )
+      .all(runId) as SyncRunPageRow[]
+    return rows.map(rowToRunPage)
   }
 
   /** The worker path: drain ingested sync output to ACTIVE. */

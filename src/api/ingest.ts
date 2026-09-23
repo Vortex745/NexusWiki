@@ -521,10 +521,10 @@ router.post("/ingest/url", async (req: Request, res: Response) => {
   )
   let pages: { url: URL; fileName: string }[]
   try {
-    pages = await fetchSitemapUrls(parsedUrl, {
+    pages = (await fetchSitemapUrls(parsedUrl, {
       timeoutMs: URL_FETCH_TIMEOUT_MS,
       maxPages,
-    })
+    })).urls
   } catch (err) {
     // P4.3: sitemap.xml 本身的 SSRF 拒绝也走 422 non-retryable 路径。
     if (err instanceof UrlPolicyDenyError) {

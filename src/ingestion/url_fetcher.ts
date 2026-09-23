@@ -332,6 +332,16 @@ async function drainBody(response: Response): Promise<void> {
   }
 }
 
+export interface SitemapFetchResult {
+  urls: { url: URL; fileName: string }[]
+  /**
+   * 截断前的 <loc> 解析总数。返回列表是 urls.length = min(parsedCount,
+   * maxPages)；调用方若必须把列表当作"完整清单"（如 ticket 41 的缺页台账），
+   * 可以用 parsedCount > urls.length 识别被截断的读取。
+   */
+  parsedCount: number
+}
+
 /**
  * 抓取 sitemap.xml，解析所有 <loc>，截断到 maxPages 后返回 URL 列表。
  * 不抓取页面内容——页面抓取留给调用方（避免在此函数做 N 次网络请求）。
@@ -342,12 +352,12 @@ async function drainBody(response: Response): Promise<void> {
 export async function fetchSitemapUrls(
   sitemapUrl: URL,
   options: SitemapFetchOptions,
-): Promise<{ url: URL; fileName: string }[]> {
+): Promise<SitemapFetchResult> {
   const fetched = await fetchSingleUrl(sitemapUrl, options)
   const xml = fetched.buffer.toString("utf8")
   const urls = parseSitemapXml(xml)
   const capped = urls.slice(0, options.maxPages)
-  return capped
+  const result = capped
     .map((u) => {
       let parsed: URL
       try {
@@ -362,6 +372,7 @@ export async function fetchSitemapUrls(
       }
     })
     .filter((x): x is { url: URL; fileName: string } => x !== null)
+  return { urls: result, parsedCount: urls.length }
 }
 
 /**

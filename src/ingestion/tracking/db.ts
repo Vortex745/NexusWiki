@@ -453,6 +453,46 @@ const SCHEMA = [
     ON sync_runs(source_id) WHERE status IN ('pending','running')`,
   `CREATE INDEX IF NOT EXISTS idx_sync_runs_claim
     ON sync_runs(status, created_at)`,
+  // Ticket 41 (SYNC-02): per-page outcomes of one sync run — the durable
+  // run-log. A run's summary is the bounded headline; these rows are the
+  // detail view: per-page status plus a machine-readable failure kind
+  // (timeout / rate_limit / invalid_url / policy_denied / http_error /
+  // network / empty) so operators can tell WHY a page failed. A page that
+  // disappeared from a successful sitemap read is a 'missing' row — the
+  // observation an explicit retirement confirmation is later based on.
+  `CREATE TABLE IF NOT EXISTS sync_run_pages (
+    run_id TEXT NOT NULL,
+    uri TEXT NOT NULL,
+    status TEXT NOT NULL CHECK(status IN ('submitted','unchanged','failed','missing')),
+    failure_kind TEXT,
+    detail TEXT,
+    document_id TEXT,
+    version INTEGER,
+    created_at TEXT NOT NULL
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_sync_run_pages ON sync_run_pages(run_id)`,
+  // Ticket 41 (SYNC-02): per-page presence of a sitemap data source — the
+  // missing-page ledger behind safe retirement. A page that was previously
+  // synced but absent from the current successful sitemap read accumulates
+  // miss_count; TWO consecutive misses mark it 'pending_retirement'. The
+  // content stays searchable until an administrator EXPLICITLY confirms
+  // retirement (retirement_state 'retired' is terminal here, mirroring the
+  // source lifecycle's terminal 'retired').
+  `CREATE TABLE IF NOT EXISTS sync_source_pages (
+    source_id TEXT NOT NULL,
+    tenant_id TEXT NOT NULL,
+    uri TEXT NOT NULL,
+    ingest_source_id TEXT,
+    document_id TEXT,
+    last_seen_at TEXT,
+    miss_count INTEGER NOT NULL DEFAULT 0,
+    retirement_state TEXT NOT NULL DEFAULT 'none'
+      CHECK(retirement_state IN ('none','pending_retirement','retired')),
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY (source_id, uri)
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_sync_source_pages_state
+    ON sync_source_pages(source_id, retirement_state)`,
 ].join(";\n")
 
 let _db: DB | null = null
