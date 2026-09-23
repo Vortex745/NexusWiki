@@ -194,7 +194,10 @@ async function main() {
     mastraBoundary.eventsSource,
     identityAdapter,
     {
-      ...(demoAuth ? demoAuth : {}),
+      // Ticket 01 wiring fix: the session router reads options.demoAuth — the
+      // spread leaked the three fields as top-level options and the sign-in
+      // flow never came up (the root cause recorded in TD-24-01).
+      ...(demoAuth ? { demoAuth } : {}),
       // Ticket 14 (RET-01): the retrieval-debug endpoint shares chat's search
       // operations (same clients + reranker) — no second retrieval config.
       searchOperations: sharedAnswerEntry.searchOperations,
