@@ -50,6 +50,7 @@ export const EVAL_BUILTIN_ASSISTANTS: readonly EvalAssistantSnapshot[] = Object.
     configDigest: evalAssistantConfigDigest({ systemPrompt: "", rerankModelProfileId: "rerank" }),
     systemPrompt: "",
     rerankModelProfileId: "rerank" as const,
+    toolPolicy: "read_only_retrieval" as const,
   }),
   Object.freeze({
     assistantId: EVAL_BUILTIN_RERANK_OFF_ID,
@@ -58,6 +59,7 @@ export const EVAL_BUILTIN_ASSISTANTS: readonly EvalAssistantSnapshot[] = Object.
     configDigest: evalAssistantConfigDigest({ systemPrompt: "", rerankModelProfileId: null }),
     systemPrompt: "",
     rerankModelProfileId: null,
+    toolPolicy: "read_only_retrieval" as const,
   }),
 ])
 
@@ -84,6 +86,9 @@ export function normalizeEvalAssistantSnapshot(
   const name = record.name
   const systemPrompt = record.systemPrompt ?? ""
   const rerankModelProfileId = record.rerankModelProfileId ?? null
+  // Ticket 34: absent on datasets uploaded before the tool policy existed —
+  // the read-only default preserves their behavior.
+  const toolPolicy = record.toolPolicy ?? "read_only_retrieval"
   const version = record.version
   const configDigest = record.configDigest
   const issues: string[] = []
@@ -94,6 +99,9 @@ export function normalizeEvalAssistantSnapshot(
   if (typeof systemPrompt !== "string") issues.push("systemPrompt must be a string")
   if (rerankModelProfileId !== null && rerankModelProfileId !== "rerank") {
     issues.push("rerankModelProfileId must be \"rerank\" or null")
+  }
+  if (toolPolicy !== "none" && toolPolicy !== "read_only_retrieval") {
+    issues.push("toolPolicy must be \"none\" or \"read_only_retrieval\"")
   }
   if (typeof version !== "number" || !Number.isInteger(version) || version < 1) {
     issues.push("version must be a positive integer")
@@ -109,5 +117,6 @@ export function normalizeEvalAssistantSnapshot(
     configDigest: configDigest as string,
     systemPrompt: systemPrompt as string,
     rerankModelProfileId: rerankModelProfileId as "rerank" | null,
+    toolPolicy: toolPolicy as "none" | "read_only_retrieval",
   }
 }

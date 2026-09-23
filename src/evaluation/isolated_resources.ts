@@ -841,6 +841,7 @@ export function createIsolatedEvalResources(
                 version: options.assistant.version,
                 systemPrompt: options.assistant.systemPrompt,
                 rerankModelProfileId: options.assistant.rerankModelProfileId,
+                toolPolicy: options.assistant.toolPolicy,
               },
             }
           : {}),

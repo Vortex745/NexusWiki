@@ -341,6 +341,7 @@ export function createApp(options: {
                   }),
                   systemPrompt: stored.config.systemPrompt,
                   rerankModelProfileId: stored.config.rerankModelProfileId,
+                  toolPolicy: stored.config.toolPolicy,
                 }
               },
             }

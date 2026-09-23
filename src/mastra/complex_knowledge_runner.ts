@@ -109,6 +109,7 @@ import {
   type ComplexLoopResult,
   type NormalizedToolCall,
 } from "../retrieval/complex_loop"
+import { createComplexLoopToolInvoker, READ_ONLY_TOOL_ALLOWLIST } from "../tools/complex_loop_adapter"
 import type { Validator } from "../critic/validator/interface"
 import type { RePlanner } from "../critic/replanner/interface"
 import type { ConversationStore, ConversationTurn } from "../answer/conversation_store"
@@ -220,6 +221,16 @@ export interface ComplexKnowledgeMastraRunnerDeps {
    * runner falls back to the legacy multi-query planner flow.
    */
   complexLoopController?: ComplexLoopController
+  /**
+   * Ticket 34 (TOOL-01A): the tool registry. When present, the complex
+   * loop's tool calls execute through the schema-validated invocation
+   * boundary, allowlisted by the run's assistant tool policy (the legacy /
+   * default assistant keeps the read-only allowlist). Absent → the loop's
+   * legacy direct search path.
+   */
+  toolRegistry?: import("../tools/invocation").ToolRegistry
+  /** Ticket 34: per-tool-call deadline. Default 30s. */
+  toolTimeoutMs?: number
   /**
    * Ticket 61/04: LLM-backed Evidence-Context compressor. Optional — when
    * absent, the deterministic assembler output is used as-is. Also used as
@@ -569,6 +580,25 @@ export function createComplexKnowledgeMastraRunner(
     // GATE 1: retrieval (dual-path — complex loop OR planner.decompose).
     // -------------------------------------------------------------------------
     const searcher = createSearcher(assistant)
+    // Ticket 34 (TOOL-01A): tool calls run through the invocation boundary,
+    // allowlisted by the run's own policy snapshot (legacy/default assistant
+    // = read-only allowlist; "none" = no tools at all).
+    const allowedTools =
+      assistant?.toolPolicy === "none"
+        ? []
+        : [...READ_ONLY_TOOL_ALLOWLIST]
+    const toolInvoker =
+      deps.toolRegistry && allowedTools.length > 0
+        ? createComplexLoopToolInvoker({
+            registry: deps.toolRegistry,
+            allowedTools,
+            ...(deps.toolTimeoutMs !== undefined ? { timeoutMs: deps.toolTimeoutMs } : {}),
+            ...(accessContext ? { accessContext } : {}),
+            ...(retrievalScope ? { retrievalScope } : {}),
+            signal,
+            searcher,
+          })
+        : undefined
     const unavailableChannels = new Set<RetrievalResult["source"]>()
     let retrievalAttempted = false
     let retrievalAvailable = false
@@ -638,6 +668,7 @@ export function createComplexKnowledgeMastraRunner(
               searcher,
               assembler,
               ...(loopCompressor ? { compressor: loopCompressor } : {}),
+              ...(toolInvoker ? { toolInvoker } : {}),
             },
             {
               query: contextualizedQuery,

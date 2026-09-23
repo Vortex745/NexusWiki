@@ -132,6 +132,14 @@ export interface ComplexLoopToolCallTrace {
   compressionDroppedEvidenceIds?: string[]
   /** Present when the LLM's tool choice was a fallback. */
   fallbackReason?: string
+  /**
+   * Ticket 34 (TOOL-01A): present when the call did NOT execute because the
+   * tool-invocation boundary refused it (unknown tool, not allowlisted,
+   * invalid arguments) or bounded it (timeout, failure). Absent for executed
+   * calls (outcome ok is implied) and duplicates.
+   */
+  toolOutcome?: "unknown_tool" | "policy_denied" | "invalid_args" | "timeout" | "failed"
+  toolOutcomeError?: string
 }
 
 export interface ComplexLoopResult {
@@ -191,7 +199,31 @@ export interface ComplexLoopDeps {
   assembler: ComplexLoopAssembler
   /** Optional compressor for bounding observation memory (criterion #5). */
   compressor?: ComplexLoopCompressor
+  /**
+   * Ticket 34 (TOOL-01A): the schema-validated tool-invocation boundary.
+   * When wired, every loop tool call executes THROUGH it — strict argument
+   * validation, the run's allowlist, a per-call deadline and trace records —
+   * instead of hitting the searcher directly. Absent → the legacy direct
+   * search path (backward compat with pre-ticket callers and tests).
+   */
+  toolInvoker?: ToolInvoker
 }
+
+/**
+ * Ticket 34 (TOOL-01A): the loop-facing shape of one validated tool call.
+ * `ok` carries the search outcome; every refusal/failure carries a bounded
+ * reason and records a trace entry instead of executing.
+ */
+export type ToolInvoker = (
+  call: { tool: RetrievalToolName; args: RetrievalToolArgs }
+) => Promise<
+  | {
+      outcome: "ok"
+      results: RetrievalResult[]
+      unavailableChannels: RetrievalChannel[]
+    }
+  | { outcome: "unknown_tool" | "policy_denied" | "invalid_args" | "timeout" | "failed"; error?: string }
+>
 
 export interface ComplexLoopInput {
   query: string
@@ -523,22 +555,55 @@ export async function runComplexLoop(
       break
     }
 
-    // 6. Execute retrieval
+    // 6. Execute retrieval — through the schema-validated tool boundary when
+    // wired (ticket 34); legacy direct search otherwise. A refusal
+    // (unknown/policy/invalid args) records a trace entry and lets the loop
+    // continue so the LLM can correct; a bounded failure (timeout/failed)
+    // stops the loop with the traceable provider-failure terminal.
     const searchStartedAt = Date.now()
     let outcome
-    try {
-      const searchOptions: SearchOptions = {
-        ...toolToSearchOptions({ tool, args }),
-        ...(input.accessContext ? { accessContext: input.accessContext } : {}),
-        // Ticket 05 (KB-03A): every loop iteration stays inside the run's
-        // server-computed knowledge scope.
-        ...(input.retrievalScope ? { retrievalScope: input.retrievalScope } : {}),
+    if (deps.toolInvoker) {
+      const invocation = await deps.toolInvoker({ tool, args })
+      if (invocation.outcome !== "ok") {
+        const bounded =
+          invocation.outcome === "timeout" || invocation.outcome === "failed"
+        toolCalls.push({
+          tool,
+          args,
+          argsKey: normalized.argsKey,
+          duplicate: false,
+          resultCount: 0,
+          unavailableChannels: [],
+          durationMs: Date.now() - searchStartedAt,
+          compressionRan: false,
+          toolOutcome: invocation.outcome,
+          ...(invocation.error ? { toolOutcomeError: invocation.error.slice(0, 200) } : {}),
+        })
+        if (bounded) {
+          stopReason = "provider-failure"
+          break
+        }
+        continue
       }
-      outcome = await deps.searcher.search({ text: args.query }, searchOptions)
-    } catch (err) {
-      if (err instanceof Error && err.name === "AbortError") throw err
-      stopReason = "provider-failure"
-      break
+      outcome = {
+        results: invocation.results,
+        unavailableChannels: invocation.unavailableChannels,
+      }
+    } else {
+      try {
+        const searchOptions: SearchOptions = {
+          ...toolToSearchOptions({ tool, args }),
+          ...(input.accessContext ? { accessContext: input.accessContext } : {}),
+          // Ticket 05 (KB-03A): every loop iteration stays inside the run's
+          // server-computed knowledge scope.
+          ...(input.retrievalScope ? { retrievalScope: input.retrievalScope } : {}),
+        }
+        outcome = await deps.searcher.search({ text: args.query }, searchOptions)
+      } catch (err) {
+        if (err instanceof Error && err.name === "AbortError") throw err
+        stopReason = "provider-failure"
+        break
+      }
     }
     const durationMs = Date.now() - searchStartedAt
 

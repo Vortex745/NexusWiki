@@ -58,6 +58,7 @@ import { ValidatorImpl } from "../critic/validator/validator"
 import { RePlannerImpl } from "../critic/replanner/replanner"
 import { PageIndexRepository } from "../ingestion/tracking/page_index_repo"
 import { ActiveVersionRepository } from "../ingestion/tracking/active_version_repo"
+import { DocumentRepo } from "../ingestion/tracking/doc_repo"
 import {
   createModelCostEstimator,
   DEFAULT_RUN_BUDGET_MS,
@@ -76,6 +77,8 @@ import { createFaqExactMatchRunner } from "./faq_exact_runner"
 import type { LongTermMemoryStore } from "../memory/long_term_memory_store"
 import type { MemorySuggestionStore } from "../memory/memory_suggestion_store"
 import { createMemoryRecallRunner } from "./memory_recall_runner"
+import { ToolRegistry } from "../tools/invocation"
+import { registerBuiltinTools } from "../tools/knowledge_tools"
 import {
   createDirectAmbiguousMastraRunner,
   type DirectReplyStream,
@@ -333,6 +336,14 @@ export async function createSharedAnswerEntry(
     cfg.openaiChatModel
   )
   const planner = new PlannerImpl(chatClient, cfg.openaiChatModel)
+  // Ticket 34 (TOOL-01A): the built-in read-only tool registry. Tool calls
+  // of the complex route execute through the schema-validated invocation
+  // boundary, allowlisted by the run's assistant tool policy; document
+  // lookups check tenant, scope and group visibility against the run.
+  const toolRegistry = registerBuiltinTools(new ToolRegistry(), {
+    documentRepo: new DocumentRepo(db),
+    pageIndexRepo,
+  })
   const complexRunner = createComplexKnowledgeMastraRunner({
     router,
     createSearcher: (assistant) =>
@@ -344,6 +355,8 @@ export async function createSharedAnswerEntry(
       answerModel.stream(messages, signal),
     planner,
     complexLoopController,
+    // Ticket 34 (TOOL-01A): the schema-validated tool boundary.
+    toolRegistry,
     conversationStore,
     contextualizer,
     summarizer,

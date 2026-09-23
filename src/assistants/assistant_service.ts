@@ -89,6 +89,12 @@ export interface AssistantRunSnapshot {
   version: number
   systemPrompt: string
   rerankModelProfileId: "rerank" | null
+  /**
+   * Ticket 34 (TOOL-01A): the tool allowlist this version pins. "none" → no
+   * tools execute; "read_only_retrieval" → the built-in read-only toolset.
+   * Part of the immutable version snapshot, so a run cannot widen it.
+   */
+  toolPolicy: AssistantToolPolicy
 }
 
 export class InvalidAssistantCommandError extends Error {

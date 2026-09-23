@@ -154,6 +154,11 @@ export interface EvalAssistantSnapshot {
   systemPrompt: string
   /** `null` = this configuration runs WITHOUT the dedicated reranker. */
   rerankModelProfileId: "rerank" | null
+  /**
+   * Ticket 34 (TOOL-01A): the tool allowlist the version pins — evaluations
+   * run the same bounded tools normal chat runs, never more.
+   */
+  toolPolicy: "none" | "read_only_retrieval"
 }
 
 /** Redacted configuration snapshot — never contains credentials. */

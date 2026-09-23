@@ -241,6 +241,7 @@ export function createChatRouter(
           version: assistant.version.version,
           systemPrompt: config.systemPrompt,
           rerankModelProfileId: config.rerankModelProfileId,
+          toolPolicy: config.toolPolicy,
         }
         // Bound scope: the assistant's own binding REPLACES the request's
         // knowledge selection (the request cannot influence it at all — it
@@ -377,6 +378,7 @@ export function createChatRouter(
               version: locked.assistantVersion,
               systemPrompt: version.config.systemPrompt,
               rerankModelProfileId: version.config.rerankModelProfileId,
+              toolPolicy: version.config.toolPolicy,
             }
             runOptions.assistant = assistantSnapshot
           }
