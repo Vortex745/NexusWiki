@@ -67,9 +67,12 @@ export function ReferencesPanel({ references, detailsRef, highlightedId }: Refer
           // knowledge-base document — it is labelled as temporary and cannot
           // be opened as one.
           const temporary = reference.origin === "attachment"
+          // Ticket 31 (FAQ-01B): a FAQ citation is a STANDARD ANSWER from a
+          // versioned FAQ entry — labelled as such, not openable as a document.
+          const faq = reference.origin === "faq"
           // Ticket 13 (DOC-02): a citation that carries its document version
           // opens the exact authorized version (and the cited chunk).
-          const openable = !temporary && typeof reference.documentId === "string"
+          const openable = !temporary && !faq && typeof reference.documentId === "string"
           return (
             <li
               key={reference.id}
@@ -108,6 +111,14 @@ export function ReferencesPanel({ references, detailsRef, highlightedId }: Refer
                       title="来自本次会话的临时附件，不属于知识库"
                     >
                       临时
+                    </span>
+                  ) : null}
+                  {faq ? (
+                    <span
+                      className="ml-1.5 rounded bg-brand-subtle px-1 text-[10px] font-normal text-brand"
+                      title="来自知识库标准问答（FAQ）的固定答案，随版本引用"
+                    >
+                      FAQ{Number.isInteger(reference.faqVersion) ? ` v${reference.faqVersion}` : ""}
                     </span>
                   ) : null}
                   {openable ? <span className="ml-1.5 text-[10px] font-normal text-brand">查看来源</span> : null}

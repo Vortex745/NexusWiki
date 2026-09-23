@@ -8,7 +8,7 @@ import type { ActiveVersionRepository } from "../../ingestion/tracking/active_ve
 import type { AccessContext } from "../../access/context"
 import type { Query, RetrievalResult, Chunk } from "../../types"
 import type { RetrievalScope } from "../../types/retrieval_scope"
-import type { AttachmentSearchOperations } from "../../types/retrieval"
+import type { AttachmentSearchOperations, FaqEvidenceOperations } from "../../types/retrieval"
 import type {
   DebugCandidate,
   Reranker,
@@ -39,6 +39,11 @@ const RERANK_MIN_CANDIDATES = 2
 const GRAPH_CANDIDATE_MULTIPLIER = 4
 const GRAPH_HOPS = 1
 const PAGE_INDEX_NODE_LIMIT = 5
+/**
+ * Ticket 31 (FAQ-01B): at most this many FAQ entries join one search as
+ * evidence — a standard-answer channel, not a second result set.
+ */
+const FAQ_EVIDENCE_LIMIT = 3
 
 function abortError(message: string): Error {
   const err = new Error(message)
@@ -702,7 +707,15 @@ export class SearcherImpl implements Searcher {
      * attachment evidence, and a search without `options.attachments` never
      * calls it at all.
      */
-    private attachments?: AttachmentSearchOperations
+    private attachments?: AttachmentSearchOperations,
+    /**
+     * Ticket 31 (FAQ-01B): the knowledge-scoped FAQ evidence channel.
+     * Optional — a composition without the FAQ service (evaluation scopes,
+     * probes) never runs it. Unlike attachments, FAQ entries live INSIDE
+     * knowledge bases, so an explicit empty knowledge scope has no FAQ
+     * channel either.
+     */
+    private faqEvidence?: FaqEvidenceOperations
   ) {}
 
   async search(query: Query, options?: SearchOptions): Promise<SearchOutcome> {
@@ -775,6 +788,23 @@ export class SearcherImpl implements Searcher {
               }),
           }
         : undefined
+    // Ticket 31 (FAQ-01B): the FAQ channel runs only inside a real knowledge
+    // scope — FAQ entries are knowledge, so "no knowledge context" excludes
+    // them too (unlike the attachment exception above). Merged BEFORE fusion
+    // and rerank so the published ordering stays honest about what scored it.
+    const faqRunner =
+      this.faqEvidence && accessContext && retrievalScope && !hasNoKnowledgeContext(retrievalScope)
+        ? {
+            name: "faq" as const,
+            run: () =>
+              this.faqEvidence!.search({
+                tenantId: accessContext.tenantId,
+                knowledgeBaseIds: [...retrievalScope.knowledgeBaseIds],
+                query: query.text,
+                limit: FAQ_EVIDENCE_LIMIT,
+              }),
+          }
+        : undefined
     if (hasNoKnowledgeContext(retrievalScope) && !attachmentRunner) {
       return {
         status: "insufficient",
@@ -812,7 +842,14 @@ export class SearcherImpl implements Searcher {
     // carries a session — it is not part of the caller's channel selection,
     // because it is not knowledge the caller may or may not read: it is the
     // caller's OWN temporary context.
-    const runnersToRun = attachmentRunner ? [...selectedRunners, attachmentRunner] : selectedRunners
+    // Ticket 31 (FAQ-01B): same for the FAQ channel — it is not selectable;
+    // it runs exactly when the run has a live knowledge scope to read FAQ
+    // entries from.
+    const runnersToRun = [
+      ...selectedRunners,
+      ...(attachmentRunner ? [attachmentRunner] : []),
+      ...(faqRunner ? [faqRunner] : []),
+    ]
     const channelRunners = runnersToRun
       .map(({ name, run }) => ({
         name,

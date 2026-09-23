@@ -170,6 +170,12 @@ export interface MastraRunnerOutput {
   summarizationDurationMs?: AnswerRunResult["summarizationDurationMs"]
   summarizationCheckpoint?: AnswerRunResult["summarizationCheckpoint"]
   summarizationOutcome?: AnswerRunResult["summarizationOutcome"]
+  /**
+   * Ticket 31 (FAQ-01B): present only when the run was answered directly by
+   * a unique normalized FAQ exact match. Copied onto the done event's result
+   * so transports can label the standard answer.
+   */
+  faq?: AnswerRunResult["faq"]
 }
 
 /**
@@ -617,6 +623,7 @@ export function createMastraChatEventAdapter(
           summarizationDurationMs: runnerOutput.summarizationDurationMs,
           summarizationCheckpoint: runnerOutput.summarizationCheckpoint,
           summarizationOutcome: runnerOutput.summarizationOutcome,
+          ...(runnerOutput.faq ? { faq: runnerOutput.faq } : {}),
         })
         notifyObservers(event)
         yield event

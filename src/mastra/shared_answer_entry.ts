@@ -70,6 +70,9 @@ import type { AttachmentSearchOperations } from "../types/retrieval"
 import { knowledgeBaseEmbeddingProfile } from "../types/knowledge_base"
 import { createMastraChatEventAdapter } from "./chat_event_adapter"
 import type { AssistantRunSnapshot } from "../assistants/assistant_service"
+import type { FaqEntryService } from "../faq/faq_entry_service"
+import { createFaqEvidenceOperations } from "../faq/faq_evidence"
+import { createFaqExactMatchRunner } from "./faq_exact_runner"
 import {
   createDirectAmbiguousMastraRunner,
   type DirectReplyStream,
@@ -138,6 +141,14 @@ export interface SharedAnswerEntryOptions {
    * reads temporary attachments (evaluation scopes, probes).
    */
   attachments?: AttachmentSearchOperations
+  /**
+   * Ticket 31 (FAQ-01B): the versioned FAQ service. Default: undefined — a
+   * composition without it never matches FAQ entries (evaluation scopes,
+   * probes). When wired, a UNIQUE normalized exact match answers directly
+   * with the stored standard answer and fuzzy matches join retrieval as
+   * ordinary citable evidence — always inside the run's knowledge scope.
+   */
+  faq?: FaqEntryService
 }
 
 export interface SharedAnswerEntry {
@@ -231,6 +242,13 @@ export async function createSharedAnswerEntry(
   // dedicated reranker (fused order + explicit reason), never with it. Only
   // derivable when this entry built its own operations; injected operations
   // (evaluation scopes) never carry assistant overlays.
+  // Ticket 31 (FAQ-01B): both searcher variants share the FAQ evidence
+  // channel; optional params accept undefined explicitly.
+  const faqEvidence = options.faq
+    ? createFaqEvidenceOperations(options.faq)
+    : undefined
+  const buildSearcher = (operations: SearchOperations) =>
+    new SearcherImpl(operations, options.attachments, faqEvidence)
   const searchOperationsWithoutRerank = options.searchOperations
     ? undefined
     : new RuntimeSearchOperations({
@@ -280,7 +298,7 @@ export async function createSharedAnswerEntry(
   const simpleRunner = createSimpleKnowledgeMastraRunner({
     router,
     createSearcher: (assistant) =>
-      new SearcherImpl(searcherOperationsFor(assistant), options.attachments),
+      buildSearcher(searcherOperationsFor(assistant)),
     assembler: new ContextAssemblerImpl(),
     validator: new ValidatorImpl(chatClient, cfg.openaiChatModel),
     replanner: new RePlannerImpl(),
@@ -305,7 +323,7 @@ export async function createSharedAnswerEntry(
   const complexRunner = createComplexKnowledgeMastraRunner({
     router,
     createSearcher: (assistant) =>
-      new SearcherImpl(searcherOperationsFor(assistant), options.attachments),
+      buildSearcher(searcherOperationsFor(assistant)),
     assembler: new ContextAssemblerImpl(),
     validator: new ValidatorImpl(chatClient, cfg.openaiChatModel),
     replanner: new RePlannerImpl(),
@@ -332,7 +350,19 @@ export async function createSharedAnswerEntry(
     contextualizer,
     resolveTenantId,
   })
-  const runner = await createMastraWorkflowRunner(dispatchRunner)
+  // Ticket 31 (FAQ-01B): the exact-FAQ gate sits in front of routing — a
+  // unique normalized match publishes the stored standard answer without a
+  // model call, while everything else runs the normal routes unchanged.
+  const runner = await createMastraWorkflowRunner(
+    createFaqExactMatchRunner(
+      {
+        ...(options.faq ? { faq: options.faq } : {}),
+        conversationStore,
+        resolveTenantId,
+      },
+      dispatchRunner
+    )
+  )
 
   // Observer fanout (T06 §5.3 order): traceObserver (hard) first, then the
   // Langfuse observer when Real, then any injected observers (evaluation).

@@ -28,7 +28,15 @@ export interface TraceEvent {
   round?: number
   durationMs?: number
   data?: Record<string, unknown>
-  result?: { status?: string; references?: Reference[] }
+  result?: {
+    status?: string
+    references?: Reference[]
+    /**
+     * Ticket 31 (FAQ-01B): present only when the answer IS the stored
+     * standard answer of a unique normalized FAQ exact match.
+     */
+    faq?: { entryId: string; version: number; question: string }
+  }
   runId?: string
 }
 
@@ -50,9 +58,14 @@ export interface Reference {
    * Ticket 22 (ATT-01): "attachment" marks a TEMPORARY citation from a
    * session attachment. It is not a knowledge-base document, so it is never
    * presented as one and never opened through the document viewer.
+   * Ticket 31 (FAQ-01B): "faq" marks a STANDARD ANSWER citation from a
+   * versioned FAQ entry — labeled as such, never opened as a document.
    */
-  origin?: "attachment"
+  origin?: "attachment" | "faq"
   attachmentName?: string
+  /** Ticket 31 (FAQ-01B): which FAQ entry version this citation carries. */
+  faqEntryId?: string
+  faqVersion?: number
   [key: string]: unknown
 }
 
@@ -68,6 +81,11 @@ export interface Message {
   references: Reference[]
   traceStatus?: string
   prompt?: string
+  /**
+   * Ticket 31 (FAQ-01B): the FAQ entry/version this answer published
+   * directly (unique normalized exact match). Absent for every other answer.
+   */
+  faq?: { entryId: string; version: number; question: string }
 }
 
 export interface Thread {
@@ -132,6 +150,8 @@ export interface CompleteReplyData {
   references?: Reference[]
   status?: string
   reply?: string
+  /** Ticket 31 (FAQ-01B): direct standard-answer hit, if any. */
+  faq?: { entryId: string; version: number; question: string }
 }
 
 export interface ProcessSseEventResult {
@@ -264,6 +284,8 @@ export function mergeTraceEvent(message: Message, event: TraceEvent): void {
     message.references = Array.isArray(event.result?.references)
       ? event.result.references
       : message.references
+    // Ticket 31 (FAQ-01B): a direct FAQ hit labels the answer itself.
+    message.faq = event.result?.faq ?? undefined
   }
 }
 
@@ -558,6 +580,7 @@ export class ConversationImpl implements Conversation {
     message.traceEvents = normalizeTraceEvents(data?.events)
     message.references = Array.isArray(data?.references) ? data.references : []
     message.traceStatus = data?.status
+    message.faq = data?.faq ?? undefined
     if (!ok) {
       message.content = "处理请求时出现错误，请重试。"
       message.status = "error"

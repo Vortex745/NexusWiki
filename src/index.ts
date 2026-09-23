@@ -27,6 +27,8 @@ import { createShutdownController, installSignalHandlers } from "./shutdown"
 import { createMastraRuntimeBoundary } from "./mastra/runtime_boundary"
 import { createSharedAnswerEntry } from "./mastra/shared_answer_entry"
 import { createSessionAttachmentService } from "./attachments/session_attachment_service"
+import { FaqEntryServiceImpl } from "./faq/faq_entry_service"
+import { SqliteFaqEntryRepo } from "./faq/faq_entry_repo"
 import { readMastraRuntimeMode } from "./mastra/runtime_mode"
 import {
   MASTRA_PROMOTION_ARTIFACT_ENV,
@@ -142,11 +144,21 @@ async function main() {
   // run can only ever retrieve the attachments of its own conversation.
   const attachments = createSessionAttachmentService(answerRuntime.processRuntime.db)
 
+  // Ticket 31 (FAQ-01B): ONE FAQ service for the answer path — exact matches
+  // answer directly, fuzzy matches join retrieval as evidence. Shares the
+  // process db with the management routes' own instance; both read the same
+  // versioned rows.
+  const faqService = new FaqEntryServiceImpl({
+    repo: new SqliteFaqEntryRepo(answerRuntime.processRuntime.db),
+  })
+
   const sharedAnswerEntry = await createSharedAnswerEntry({
     config: cfg,
     answerRuntime,
     // The retrieval channel that reads this session's temporary attachments.
     attachments,
+    // Ticket 31 (FAQ-01B): the FAQ standard-answer channel.
+    faq: faqService,
   })
   console.log("[kefu-RAG] Mastra runner wired — direct + ambiguous + simple + complex knowledge routes enabled with Conversation Memory + Handoff + Observer fanout")
 

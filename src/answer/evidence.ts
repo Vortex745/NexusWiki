@@ -107,6 +107,29 @@ function attachmentProvenance(
   }
 }
 
+/**
+ * Ticket 31 (FAQ-01B): FAQ provenance, or undefined otherwise. Mirrors
+ * {@link attachmentProvenance}: the fields are only emitted when the chunk
+ * really is a FAQ standard answer, so every pre-existing evidence shape is
+ * untouched and a FAQ citation stays distinguishable from knowledge-base
+ * documents and memory context.
+ */
+function faqProvenance(
+  metadata: Record<string, unknown>
+): Pick<Evidence, "origin" | "faqEntryId" | "faqVersion"> | undefined {
+  if (metadata.origin !== "faq") return undefined
+  const faqEntryId = typeof metadata.faqEntryId === "string" ? metadata.faqEntryId : undefined
+  const faqVersion = Number.isInteger(metadata.faqVersion) &&
+      (metadata.faqVersion as number) > 0
+    ? metadata.faqVersion as number
+    : undefined
+  return {
+    origin: "faq",
+    ...(faqEntryId ? { faqEntryId } : {}),
+    ...(faqVersion ? { faqVersion } : {}),
+  }
+}
+
 export function buildEvidence(results: RetrievalResult[]): Evidence[] {
   const evidence = new Map<string, Evidence>()
   for (const result of results) {
@@ -144,7 +167,10 @@ export function buildEvidence(results: RetrievalResult[]): Evidence[] {
     // Ticket 22 (ATT-01): a session attachment is TEMPORARY context. Its
     // provenance travels with the citation so no layer mistakes it for a
     // knowledge-base document.
+    // Ticket 31 (FAQ-01B): a FAQ entry version is a STANDARD ANSWER. Its
+    // provenance travels the same way so no layer presents it as a document.
     const attachment = attachmentProvenance(metadata)
+    const faq = faqProvenance(metadata)
     evidence.set(key, {
       id: stableEvidenceId(result),
       documentId: result.chunk.documentId,
@@ -157,6 +183,7 @@ export function buildEvidence(results: RetrievalResult[]): Evidence[] {
       title: typeof metadata.title === "string" ? metadata.title : "Untitled",
       source: typeof metadata.source === "string" ? metadata.source : "unknown",
       ...(attachment ?? {}),
+      ...(faq ?? {}),
       ...location,
       ...(image ? { image } : {}),
       excerpt: result.chunk.content.slice(0, EXCERPT_LIMIT),

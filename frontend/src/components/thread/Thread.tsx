@@ -48,6 +48,8 @@ interface MessageCustom {
   traceEvents?: TraceEvent[]
   traceStatus?: string | null
   runId?: string | null
+  /** Ticket 31 (FAQ-01B): the direct standard-answer hit, if any. */
+  faq?: { entryId: string; version: number; question: string } | null
 }
 
 export interface Attachment {
@@ -499,6 +501,17 @@ function AssistantMessage() {
     <MessagePrimitive.Root className="relative grid w-full max-w-[var(--thread-max-width)] grid-cols-[auto_auto_1fr] grid-rows-[auto_1fr] py-4">
       <div className="col-span-2 col-start-2 row-start-1 my-1.5 max-w-[calc(var(--thread-max-width)*0.8)] animate-message-in break-words rounded-3xl border border-line bg-surface px-5 py-2.5 leading-7 text-ink shadow-card">
         <MessagePrimitive.Parts components={parts} />
+        {custom?.faq ? (
+          <div className="mt-2 flex items-center gap-1.5 text-[11px] text-muted">
+            <span
+              className="rounded bg-brand-subtle px-1.5 py-0.5 text-[10px] font-medium text-brand"
+              title={`命中知识库标准问答：${custom.faq.question}`}
+            >
+              FAQ 标准答案 · v{custom.faq.version}
+            </span>
+            <span>来自知识库标准问答（FAQ），非生成内容</span>
+          </div>
+        ) : null}
         <ReferencesPanel
           references={references}
           detailsRef={detailsRef}

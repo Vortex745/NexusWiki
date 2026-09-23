@@ -16,9 +16,14 @@ export interface RetrievalResult {
    * It is NOT one of the four selectable knowledge channels — a caller cannot
    * ask for it and cannot ask for it to be skipped; it runs exactly when the
    * request carries a session that has live attachments.
+   * Ticket 31 (FAQ-01B): "faq" is the knowledge-scoped standard-answer
+   * channel. It is likewise not selectable: it runs exactly when the run's
+   * knowledge scope contains FAQ entries whose question or a variant matches
+   * the query. Results carry `metadata.origin = "faq"` so the citation layer
+   * labels them as standard answers, never as knowledge-base documents.
    */
-  source: "vector" | "bm25" | "graph" | "pageIndex" | "attachment"
-  channels?: Array<"vector" | "bm25" | "graph" | "pageIndex" | "attachment">
+  source: "vector" | "bm25" | "graph" | "pageIndex" | "attachment" | "faq"
+  channels?: Array<"vector" | "bm25" | "graph" | "pageIndex" | "attachment" | "faq">
   wikilinks: Wikilink[]
 }
 
@@ -40,6 +45,25 @@ export interface AttachmentSearchRequest {
 
 export interface AttachmentSearchOperations {
   search(request: AttachmentSearchRequest): Promise<RetrievalResult[]>
+}
+
+/**
+ * Ticket 31 (FAQ-01B): the FAQ evidence channel boundary. The caller passes
+ * the run's server-computed (tenant, knowledge scope) — the implementation
+ * MUST only ever return ACTIVE entries of exactly that scope, so a disabled,
+ * conflicting or cross-knowledge entry can never surface. Results carry
+ * `metadata.origin = "faq"` plus the entry id and version so citations stay
+ * traceable to an immutable FAQ version.
+ */
+export interface FaqEvidenceRequest {
+  tenantId: string
+  knowledgeBaseIds: string[]
+  query: string
+  limit: number
+}
+
+export interface FaqEvidenceOperations {
+  search(request: FaqEvidenceRequest): Promise<RetrievalResult[]>
 }
 
 export interface RerankInput {

@@ -51,8 +51,11 @@ export interface Evidence {
    * citation. It is not a knowledge-base document and must never be presented
    * as one. Absent → the evidence came from knowledge, not from a session
    * attachment.
+   * Ticket 31 (FAQ-01B): "faq" marks a STANDARD ANSWER from a versioned FAQ
+   * entry of the run's knowledge scope. It is not a knowledge-base document
+   * either — it is labeled as a FAQ and cannot be opened as a document.
    */
-  origin?: "attachment"
+  origin?: "attachment" | "faq"
   attachmentId?: string
   attachmentName?: string
   /**
@@ -60,6 +63,13 @@ export interface Evidence {
    * stays inside that session; opening it elsewhere is not offered.
    */
   attachmentSessionId?: string
+  /**
+   * Ticket 31 (FAQ-01B): which FAQ entry and version this evidence carries.
+   * Versions are immutable, so a citation stays resolvable to the exact
+   * answer text that was published even after the entry is edited.
+   */
+  faqEntryId?: string
+  faqVersion?: number
 }
 
 export type AnswerReference = Evidence
@@ -117,6 +127,17 @@ export interface AnswerRunResult {
    * "failed" = LLM call rejected or returned empty (safe degradation).
    */
   summarizationOutcome?: "success" | "skipped" | "failed"
+  /**
+   * Ticket 31 (FAQ-01B): present only when the run was answered DIRECTLY by a
+   * unique normalized FAQ match — the reply IS the stored standard answer of
+   * this immutable version, not generated text. Fuzzy FAQ matches never set
+   * it (they only contribute ordinary, citable evidence).
+   */
+  faq?: {
+    entryId: string
+    version: number
+    question: string
+  }
 }
 
 export type AnswerRunStage =
@@ -243,6 +264,18 @@ export interface RouteTraceData {
    * complexLoopStopReason is present.
    */
   complexLoopToolCalls?: number
+  /**
+   * Ticket 31 (FAQ-01B): present when the run was answered by a unique
+   * normalized FAQ exact match (the direct standard answer) — names the entry
+   * and immutable version that produced the reply. Absent for every other
+   * terminal, including fuzzy FAQ evidence contributions.
+   */
+  faqMatch?: {
+    entryId: string
+    version: number
+    question: string
+    viaVariant: boolean
+  }
 }
 
 export interface RetrievalTraceData {
