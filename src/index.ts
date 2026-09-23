@@ -192,6 +192,8 @@ async function main() {
       searchOperations: sharedAnswerEntry.searchOperations,
       // Ticket 22 (ATT-01): the routes and the runs share ONE instance.
       attachments,
+      // Ticket 35 (TOOL-01B): the MCP capability invocation seam.
+      ...(sharedAnswerEntry.mcp ? { mcpCapabilities: sharedAnswerEntry.mcp } : {}),
     }
   )
   const worker = startWorker({ db: processRuntime.db })

@@ -298,14 +298,6 @@ export interface RouteTraceData {
     question: string
     viaVariant: boolean
   }
-  /**
-   * Ticket 33 (MEM-01B): the long-term memories that were recalled into this
-   * run's prompts (owner-scoped; absent when memory is disabled or empty).
-   */
-  memoryUsed?: {
-    ids: string[]
-    count: number
-  }
 }
 
 export interface RetrievalTraceData {

@@ -77,9 +77,10 @@ import { createFaqExactMatchRunner } from "./faq_exact_runner"
 import type { LongTermMemoryStore } from "../memory/long_term_memory_store"
 import type { MemorySuggestionStore } from "../memory/memory_suggestion_store"
 import { createMemoryRecallRunner } from "./memory_recall_runner"
-import { ToolRegistry } from "../tools/invocation"
+import { ToolRegistry, ToolInvocationService } from "../tools/invocation"
 import { registerBuiltinTools } from "../tools/knowledge_tools"
 import { createMcpToolBridge, type McpToolBridge } from "../mcp/tool_bridge"
+import { singleTenantAccessContext } from "../access/context"
 import {
   createDirectAmbiguousMastraRunner,
   type DirectReplyStream,
@@ -179,6 +180,18 @@ export interface SharedAnswerEntry {
    * is exactly what the chat runners do.
    */
   searchOperations: SearchOperations
+  /**
+   * Ticket 35 (TOOL-01B): the product-level MCP capability invocation seam —
+   * the SAME boundary the runs use (allowlist = the discovered tools, 30s
+   * deadline, bounded trace records). Undefined when MCP is disabled or the
+   * composition failed; undefined means "no MCP tools", never a broken run.
+   */
+  mcp?: {
+    status(): ReturnType<McpToolBridge["status"]>
+    invoke(
+      name: string
+    ): Promise<import("../tools/invocation").ToolInvocationResult>
+  }
 }
 
 /**
@@ -351,7 +364,15 @@ export async function createSharedAnswerEntry(
   const mcpBridge: McpToolBridge | null = await createMcpToolBridge({
     registry: toolRegistry,
     config: cfg,
-  }).catch(() => null)
+  }).catch((error: unknown) => {
+    // Ticket 35: a broken bridge must be VISIBLE but never fatal — ordinary
+    // knowledge-base chat runs without MCP tools.
+    console.warn(
+      "[mcp] capability bridge failed to compose (chat runs without MCP tools):",
+      error instanceof Error ? error.message : String(error)
+    )
+    return null
+  })
   const complexRunner = createComplexKnowledgeMastraRunner({
     router,
     createSearcher: (assistant) =>
@@ -451,8 +472,9 @@ export async function createSharedAnswerEntry(
   const stampDoneResult = (result: AnswerRunResult): AnswerRunResult => ({
     ...result,
     modelProfile,
-    // Ticket 35 (TOOL-01B): the persisted run trace carries MCP discovery
-    // state exactly like the transport copy does.
+    // Ticket 35 (TOOL-01B): the MCP discovery state rides EVERY terminal —
+    // both the persisted run trace and the transport copy — so trace readers
+    // see whether MCP tools were live.
     ...(mcpBridge ? { mcp: mcpBridge.status() } : {}),
   })
   const baseTraceObserver = options.traceObserver ?? answerRuntime.traceRepository
@@ -480,19 +502,30 @@ export async function createSharedAnswerEntry(
   ): AsyncIterable<AnswerRunEvent> {
     for await (const event of eventsSource(message, runOptions)) {
       yield event.type === "done"
-        ? {
-            ...event,
-            result: {
-              ...event.result,
-              modelProfile,
-              // Ticket 35 (TOOL-01B): discovery state rides every terminal so
-              // the persisted run trace shows whether MCP tools were live.
-              ...(mcpBridge ? { mcp: mcpBridge.status() } : {}),
-            },
-          }
+        ? { ...event, result: stampDoneResult(event.result) }
         : event
     }
   }
 
-  return { eventsSource: stampedEventsSource, searchOperations }
+  const mcpCapabilityInvoker =
+    mcpBridge && mcpBridge.toolNames().length > 0
+      ? new ToolInvocationService({
+          registry: toolRegistry,
+          allowedTools: mcpBridge.toolNames(),
+        })
+      : undefined
+
+  return {
+    eventsSource: stampedEventsSource,
+    searchOperations,
+    ...(mcpBridge && mcpCapabilityInvoker
+      ? {
+          mcp: {
+            status: () => mcpBridge.status(),
+            invoke: (name: string) =>
+              mcpCapabilityInvoker.invoke(name, {}, { accessContext: singleTenantAccessContext() }),
+          },
+        }
+      : {}),
+  }
 }

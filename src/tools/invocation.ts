@@ -162,18 +162,32 @@ export class ToolInvocationService {
     }
     const args = parsed.data as A
 
-    // Linked cancellation: the run's signal OR the deadline aborts the tool's
-    // own operations. User abort rethrows as AbortError (the run's single
-    // cancelled terminal); deadline expiry is the bounded "timeout" outcome.
+    // Linked cancellation + REAL deadline: the run's signal OR the deadline
+    // aborts the tool's own operations, and the deadline is a race, not
+    // advisory — a tool that ignores its signal still converges to the
+    // bounded "timeout" outcome instead of hanging the run. User abort
+    // rethrows as AbortError (the run's single cancelled terminal).
     const controller = new AbortController()
     const onOuterAbort = () => controller.abort()
     env.signal?.addEventListener("abort", onOuterAbort, { once: true })
-    const timer = setTimeout(() => controller.abort(), this.timeoutMs)
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const deadline = new Promise<never>((_resolve, reject) => {
+      timer = setTimeout(() => {
+        controller.abort()
+        reject(timeoutError())
+      }, this.timeoutMs)
+    })
+    void deadline.catch(() => {})
     try {
-      const result = await tool.execute(args, {
+      const pending = tool.execute(args, {
         ...env,
         signal: controller.signal,
-      })
+      }) as Promise<A>
+      // The race's loser may reject late — mark it handled so a signal-blind
+      // tool's late failure after a deadline win cannot surface as
+      // an unhandled rejection.
+      void pending.catch(() => {})
+      const result = await Promise.race([pending, deadline])
       return {
         outcome: "ok",
         result,
@@ -186,7 +200,10 @@ export class ToolInvocationService {
       }
     } catch (error) {
       if (env.signal?.aborted) throw error
-      if (controller.signal.aborted && !env.signal?.aborted) {
+      const timedOut =
+        controller.signal.aborted ||
+        (error instanceof Error && error.name === "ToolTimeoutError")
+      if (timedOut) {
         return {
           outcome: "timeout",
           trace: {
@@ -210,7 +227,7 @@ export class ToolInvocationService {
       }
     } finally {
       env.signal?.removeEventListener("abort", onOuterAbort)
-      clearTimeout(timer)
+      if (timer !== undefined) clearTimeout(timer)
     }
   }
 }

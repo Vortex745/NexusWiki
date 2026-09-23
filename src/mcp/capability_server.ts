@@ -23,6 +23,7 @@ import { loadConfig, type AppConfig } from "../config"
 const PROBE_TIMEOUT_MS = 3_000
 
 function bounded<T>(probe: () => Promise<T>): Promise<{ ok: boolean; detail?: string }> {
+  let timer: ReturnType<typeof setTimeout> | undefined
   return Promise.race([
     probe()
       .then(() => ({ ok: true as const }))
@@ -30,13 +31,15 @@ function bounded<T>(probe: () => Promise<T>): Promise<{ ok: boolean; detail?: st
         ok: false as const,
         detail: (error instanceof Error ? error.message : String(error)).slice(0, 200),
       })),
-    new Promise<{ ok: boolean; detail: string }>((resolve) =>
-      setTimeout(
+    new Promise<{ ok: boolean; detail: string }>((resolve) => {
+      timer = setTimeout(
         () => resolve({ ok: false, detail: `probe exceeded ${PROBE_TIMEOUT_MS}ms` }),
         PROBE_TIMEOUT_MS
       )
-    ),
-  ])
+    }),
+  ]).finally(() => {
+    if (timer !== undefined) clearTimeout(timer)
+  })
 }
 
 async function elasticsearchStatus(config: AppConfig) {

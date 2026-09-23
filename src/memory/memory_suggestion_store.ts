@@ -209,9 +209,10 @@ export class MemorySuggestionStore {
     const updatedAt = this.now().toISOString()
     this.db
       .prepare(
-        `UPDATE memory_suggestions SET status = 'accepted', updated_at = ? WHERE id = ?`
+        `UPDATE memory_suggestions SET status = 'accepted', updated_at = ?
+         WHERE id = ? AND tenant_id = ? AND subject_id = ?`
       )
-      .run(updatedAt, id)
+      .run(updatedAt, id, tenantId, subjectId)
     return { ...existing, status: "accepted", updatedAt }
   }
 
@@ -222,9 +223,10 @@ export class MemorySuggestionStore {
     const updatedAt = this.now().toISOString()
     this.db
       .prepare(
-        `UPDATE memory_suggestions SET status = 'dismissed', updated_at = ? WHERE id = ?`
+        `UPDATE memory_suggestions SET status = 'dismissed', updated_at = ?
+         WHERE id = ? AND tenant_id = ? AND subject_id = ?`
       )
-      .run(updatedAt, id)
+      .run(updatedAt, id, tenantId, subjectId)
     return { ...existing, status: "dismissed", updatedAt }
   }
 }

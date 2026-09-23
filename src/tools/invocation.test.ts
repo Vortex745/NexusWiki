@@ -111,6 +111,25 @@ test("Ticket 34: a tool exceeding its deadline converges to the bounded timeout 
   assert.ok(outcome.trace.error)
 })
 
+test("Ticket 34: the deadline is a race, not advisory — a signal-blind hung tool still converges", async () => {
+  // Ignores its signal entirely (like a third-party MCP client): the 60ms
+  // deadline must still bound the invocation instead of hanging the run.
+  const blindTool: ToolDefinition<Record<string, never>, string> = {
+    name: "blind",
+    description: "hangs forever, ignores the signal",
+    schema: z.strictObject({}),
+    summarize: () => "blind",
+    execute: () => new Promise<string>(() => {}),
+  }
+  const tool = service(["blind"], {
+    registry: new ToolRegistry().register(blindTool),
+    timeoutMs: 60,
+  })
+  const outcome = await tool.invoke("blind", {}, env)
+  assert.equal(outcome.outcome, "timeout")
+  assert.ok(outcome.trace.error)
+})
+
 test("Ticket 34: the run's signal cancels in-flight tools via AbortError", async () => {
   const controller = new AbortController()
   const cancelAware: ToolDefinition<Record<string, never>, string> = {

@@ -327,7 +327,8 @@ function summarizeConversationForHandoff(
   return parts.join("\n")
 }
 
-function saveValidatedTurnPair(
+/** Ticket 33/31: the validated turn pair every completed answer records. */
+export function saveValidatedTurnPair(
   conversationStore: ConversationStore,
   sessionId: string,
   tenantId: string,

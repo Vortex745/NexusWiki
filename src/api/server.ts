@@ -49,6 +49,7 @@ import { createModelProfilesRouter } from "./model_profiles"
 import { createAssistantsRouter } from "./assistants"
 import { createConversationsRouter } from "./conversations"
 import { createMemoriesRouter } from "./memories"
+import { createCapabilitiesRouter } from "./capabilities"
 import { createMemorySuggestionsRouter } from "./memory_suggestions"
 import { LongTermMemoryStore } from "../memory/long_term_memory_store"
 import { MemorySuggestionStore } from "../memory/memory_suggestion_store"
@@ -134,6 +135,11 @@ export function createApp(options: {
   memories?: import("../memory/long_term_memory_store").LongTermMemoryStore
   /** Ticket 33 (MEM-01B): extraction suggestions; omitted → routes not mounted. */
   suggestions?: import("../memory/memory_suggestion_store").MemorySuggestionStore
+  /**
+   * Ticket 35 (TOOL-01B): the shared entry's MCP capability invocation seam;
+   * omitted → the capabilities route is not mounted.
+   */
+  mcpCapabilities?: import("../mastra/shared_answer_entry").SharedAnswerEntry["mcp"]
 }) {
   const app = express()
   const db = options.db || openDb()
@@ -303,6 +309,9 @@ export function createApp(options: {
     // Ticket 01: reading your own identity needs identity but no particular
     // scope — a reader must be able to learn its navigation from the server.
     app.use("/api/session", options.managementAccessMiddleware)
+    // Ticket 35: capability introspection is deployment state — same
+    // identity-only gate as the session surface.
+    app.use("/api/capabilities", options.managementAccessMiddleware)
   }
   // Ticket 01: identity session + demo sign-in. /api/auth/* is deliberately
   // outside the identity middleware — you cannot be required to authenticate
@@ -444,6 +453,11 @@ export function createApp(options: {
       "/api",
       createMemorySuggestionsRouter({ suggestions: options.suggestions, memories: options.memories })
     )
+  }
+  // Ticket 35 (TOOL-01B): the MCP capability invocation surface — every
+  // discovered capability tool invoked through the shared tool boundary.
+  if (options.mcpCapabilities) {
+    app.use("/api", createCapabilitiesRouter({ mcp: options.mcpCapabilities }))
   }
   app.use("/api", ingestRouter)
   return app

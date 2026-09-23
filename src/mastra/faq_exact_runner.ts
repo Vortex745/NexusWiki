@@ -25,6 +25,7 @@ import { matchExactFaq } from "../faq/faq_matcher"
 import { buildFaqEvidence } from "../faq/faq_evidence"
 import type { ConversationStore } from "../answer/conversation_store"
 import type { AccessContext } from "../access/context"
+import { saveValidatedTurnPair } from "./simple_knowledge_runner"
 
 export interface FaqExactMatchRunnerDeps {
   /** Absent → the wrapper is a pure pass-through (evaluation scopes, probes). */
@@ -84,23 +85,16 @@ export function createFaqExactMatchRunner(
     if (!match) return inner(input)
 
     if (deps.conversationStore && deps.resolveTenantId) {
-      const now = (deps.now ?? (() => new Date()))().toISOString()
-      deps.conversationStore.saveValidatedTurn({
-        sessionId: input.sessionId,
+      // The same validated pair any completed answer records.
+      saveValidatedTurnPair(
+        deps.conversationStore,
+        input.sessionId,
         tenantId,
-        role: "user",
-        content: input.message,
-        runId: input.runId,
-        createdAt: now,
-      })
-      deps.conversationStore.saveValidatedTurn({
-        sessionId: input.sessionId,
-        tenantId,
-        role: "assistant",
-        content: match.row.answer,
-        runId: input.runId,
-        createdAt: now,
-      })
+        input.runId,
+        input.message,
+        match.row.answer,
+        deps.now ?? (() => new Date())
+      )
     }
     return faqOutput(input, match.row, match.viaVariant)
   }
