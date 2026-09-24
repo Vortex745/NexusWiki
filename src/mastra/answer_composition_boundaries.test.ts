@@ -207,3 +207,88 @@ test("ARCH-01A #6: chat and isolated evaluation are the only production callers"
     "the HTTP transport consumes the entry's eventsSource and nothing else"
   )
 })
+
+/** Every non-test production source under src/, repo-relative. */
+function productionSources(): string[] {
+  const out: string[] = []
+  const walk = (dir: string): void => {
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      const path = join(dir, entry.name)
+      if (entry.isDirectory()) {
+        if (entry.name === "node_modules" || entry.name === "dist") continue
+        walk(path)
+        continue
+      }
+      if (!entry.name.endsWith(".ts") || entry.name.endsWith(".test.ts")) continue
+      out.push(toPosix(relative(REPO_ROOT, path)))
+    }
+  }
+  walk(join(REPO_ROOT, "src"))
+  return out.sort()
+}
+
+test("ARCH-01C #6: the entry forwards every retrieval seam into the stack", () => {
+  // Dropping a seam here would silently narrow what an evaluation scope, a
+  // probe or a deployment without a reranker can inject — the chat happy path
+  // would stay green. Ticket 50 acceptance: the optional-channel behavior is
+  // exposed ONLY through the existing shared-entry seams.
+  const entry = sourceOf(ENTRY)
+  const call = /createAnswerRetrievalStack\(\{([\s\S]*?)\n\s*\}\)/.exec(entry)
+  assert.ok(call, "the entry composes the retrieval stack inline")
+  const body = call[1]
+  for (const resolved of ["config", "db", "elasticsearch", "embeddingClient"]) {
+    assert.match(
+      body,
+      new RegExp(`(^|[\\s,{])${resolved}\\s*[,:]`, "m"),
+      `the stack receives the resolved ${resolved}`
+    )
+  }
+  for (const seam of ["searchOperations", "reranker", "attachments", "faq", "web"]) {
+    assert.match(
+      body,
+      new RegExp(`\\.\\.\\..*options\\.${seam}\\b[\\s\\S]*\\{\\s*${seam}:\\s*options\\.${seam}\\s*\\}`),
+      `${seam} is forwarded when and only when the caller injected it`
+    )
+  }
+})
+
+test("ARCH-01C #6: production search operations are composed in exactly one place", () => {
+  const composers = productionSources().filter((file) =>
+    /new RuntimeSearchOperations\(/.test(sourceOf(file))
+  )
+  assert.deepEqual(
+    composers,
+    ["src/evaluation/isolated_resources.ts", "src/mastra/answer_retrieval_stack.ts"],
+    "only the retrieval stack composes operations; an isolated evaluation scope builds its own and injects it through the entry seam"
+  )
+  assert.ok(
+    !AREA.some(
+      (file) =>
+        file !== "src/mastra/answer_retrieval_stack.ts" &&
+        /new RuntimeSearchOperations\(/.test(sourceOf(file))
+    ),
+    "no second retrieval configuration may live inside the Answer composition area"
+  )
+})
+
+test("ARCH-01C #2: retrieval-debug shares chat's operations and deliberately carries no optional channel", () => {
+  assert.match(
+    sourceOf("src/index.ts"),
+    /searchOperations:\s*sharedAnswerEntry\.searchOperations/,
+    "the debug route is handed the SAME operations object the shared entry publishes"
+  )
+  const debug = sourceOf("src/api/retrieval_debug.ts")
+  assert.match(
+    debug,
+    /new SearcherImpl\(searchOperations\)/,
+    "the debug searcher is built from the operations alone"
+  )
+  // Pinned divergence, not a bug to fix: unifying it would change what
+  // /api/retrieval-debug returns, which ticket 47 puts out of scope. That the
+  // channels DO reach chat's searcher is proven in answer_retrieval_stack.test.ts.
+  assert.equal(
+    /AttachmentSearchOperations|faqEvidence|WebEvidence|attachments/.test(debug),
+    false,
+    "the debug run has no attachment, FAQ or Web evidence channel"
+  )
+})

@@ -232,3 +232,78 @@ test("Ticket 14 RET-01: no operations wired → the deployment reports 503", asy
     server.close()
   }
 })
+
+/**
+ * Ticket 50 (ARCH-01C) #2 — the debug run and chat share ONE search
+ * configuration, and the debug run's evidence set stays the smaller one.
+ *
+ * "Same search operations" is the wiring asserted in
+ * `answer_composition_boundaries.test.ts` (src/index.ts passes
+ * `sharedAnswerEntry.searchOperations`); what this pins is what that shared
+ * object does and does not run: the router builds `new SearcherImpl(operations)`
+ * with the operations alone, so even a query that carries a URL — the exact
+ * input that fires the Web channel on the chat path — traces only the four
+ * knowledge channels here. That divergence is deliberate and established;
+ * closing it would change this endpoint's output, which ticket 47 excludes.
+ */
+test("Ticket 50 ARCH-01C #2: the debug run reads the shared operations and traces no optional evidence channel", async () => {
+  const reads: string[] = []
+  const operations: SearchOperations = {
+    async vectorSearch() {
+      reads.push("vector")
+      return [result("c1", 0.9), result("c2", 0.8)]
+    },
+    async bm25Search() {
+      reads.push("bm25")
+      return []
+    },
+    async graphSearch() {
+      reads.push("graph")
+      return []
+    },
+    async pageIndexSearch() {
+      reads.push("pageIndex")
+      return []
+    },
+    async rerank(_query, results) {
+      reads.push("rerank")
+      return results
+    },
+    async loadParents() {
+      return []
+    },
+  }
+  const app = buildApp({
+    searchOperations: operations,
+    resolver: () => ({ knowledgeBaseIds: ["kb-1"] }) as unknown as RetrievalScope,
+  })
+  const { server, port } = await listen(app)
+  try {
+    const response = await fetch(`http://127.0.0.1:${port}/api/retrieval-debug`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ query: "请核对 https://example.com/returns 上的退货窗口" }),
+    })
+    assert.equal(response.status, 200)
+    const body = (await response.json()) as Record<string, any>
+
+    assert.deepEqual(
+      [...new Set(reads)].sort(),
+      ["bm25", "graph", "pageIndex", "rerank", "vector"],
+      "the run went through the operations object the caller supplied"
+    )
+    assert.deepEqual(
+      (body.debug.channels as Array<Record<string, any>>).map((c) => c.channel).sort(),
+      ["bm25", "graph", "pageIndex", "vector"],
+      "a URL-bearing query stays answer-free here: no Web, attachment or FAQ stage is recorded"
+    )
+    assert.equal(body.unavailableChannels.length, 0, "nothing failed — nothing was wired")
+    assert.equal(body.debug.fused.rawCandidateCount, 2)
+    assert.equal(body.debug.rerank.applied, true, "two candidates is the rerank threshold")
+    for (const key of ["answer", "reply", "runId", "sessionId"]) {
+      assert.equal(key in body, false, `no ${key} field`)
+    }
+  } finally {
+    server.close()
+  }
+})
