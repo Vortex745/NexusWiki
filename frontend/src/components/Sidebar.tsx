@@ -1,5 +1,5 @@
 import { ThreadListItemPrimitive, ThreadListPrimitive } from "@assistant-ui/react"
-import { BookOpen, Bot, Brain, Check, Database, FileText, FlaskConical, HelpCircle, MessageCircle, MessageSquareWarning, Moon, Network, Plus, Settings, Sun, Trash2 } from "lucide"
+import { BookOpen, Bot, Brain, Check, ChevronDown, Database, FileText, FlaskConical, HelpCircle, LayoutGrid, MessageCircle, MessageSquareWarning, Moon, Network, Plus, Settings, Sun, Trash2 } from "lucide"
 import { useEffect, useState } from "react"
 import type { IconProps } from "./ui/Icon"
 
@@ -46,16 +46,19 @@ function SidebarButton({
   label,
   onClick,
   trailing,
+  ariaExpanded,
 }: {
   icon: IconProps["icon"]
   label: string
   onClick: () => void
   trailing?: React.ReactNode
+  ariaExpanded?: boolean
 }) {
   return (
     <button
       type="button"
       onClick={onClick}
+      aria-expanded={ariaExpanded}
       className="flex h-8.5 w-full cursor-pointer items-center gap-2 rounded-lg bg-transparent px-3 text-left text-xs text-muted transition-[colors,transform] duration-150 ease-out hover:bg-surface-subtle hover:text-ink active:scale-[0.98]"
     >
       <Icon icon={icon} className="size-3.5" />
@@ -74,9 +77,6 @@ function SidebarButton({
  */
 function KnowledgeSelector() {
   const { status, activeKnowledgeBases: bases, selectedIds, error } = useKnowledgeBases()
-  const { openKnowledge } = useAppShell()
-  const scopes = useSignedInSession()?.scopes ?? []
-  const canAdmin = scopes.includes("admin")
   // Ticket 11 (DOC-01A): browsing a base's document catalog is for every
   // signed-in member — the server applies the tenant/group/kb scoping.
   const [browsingDocs, setBrowsingDocs] = useState<{ id: string; name: string } | null>(null)
@@ -84,24 +84,10 @@ function KnowledgeSelector() {
   // is for every signed-in member — the server authorizes every relation and
   // every provenance record.
   const [browsingGraph, setBrowsingGraph] = useState<{ id: string; name: string } | null>(null)
-  // Ticket 15 (RET-02): the retrieval laboratory is for every signed-in
-  // member — it runs the same read-only debug endpoint their chat scope backs.
-  const [laboratoryOpen, setLaboratoryOpen] = useState(false)
-
   return (
     <div className="mt-4">
       <div className="flex items-center justify-between px-1 text-[11px] font-semibold uppercase tracking-wider text-muted/70">
         <span>知识库</span>
-        {canAdmin ? (
-          <button
-            type="button"
-            onClick={openKnowledge}
-            title="管理知识库"
-            className="cursor-pointer rounded p-0.5 text-muted/70 transition-colors hover:text-ink"
-          >
-            <Icon icon={BookOpen} className="size-3.5" />
-          </button>
-        ) : null}
       </div>
       {status === "loading" || (status === "idle" && bases.length === 0) ? (
         <p className="px-3 py-2 text-xs text-muted/70">正在加载知识库…</p>
@@ -170,13 +156,6 @@ function KnowledgeSelector() {
           ? `新对话将检索选中的 ${selectedIds.length} 个知识库`
           : "未选择时检索默认知识库"}
       </p>
-      {/* Ticket 15 (RET-02): the retrieval laboratory entry — same knowledge
-          scope as new conversations. */}
-      <SidebarButton
-        icon={FlaskConical}
-        label="检索实验室"
-        onClick={() => setLaboratoryOpen(true)}
-      />
       <DocumentsDialog
         open={browsingDocs !== null}
         knowledgeBase={browsingDocs}
@@ -188,7 +167,6 @@ function KnowledgeSelector() {
         knowledgeBase={browsingGraph}
         onClose={() => setBrowsingGraph(null)}
       />
-      <LaboratoryDialog open={laboratoryOpen} onClose={() => setLaboratoryOpen(false)} />
     </div>
   )
 }
@@ -327,23 +305,103 @@ function ImportHistoryButton() {
   )
 }
 
-export function Sidebar({ open, collapsed, isDark, onToggleTheme, onCloseMobile }: SidebarProps) {
+/**
+ * Keep the chat workspace quiet by grouping secondary tools behind one entry.
+ * The actions themselves stay in their existing dialogs and retain the server
+ * scope checks that decide which rows are visible.
+ */
+function WorkspaceMenu() {
   const {
     openImport,
-    openMemory,
     openEvaluation,
+    openKnowledge,
     openSettings,
     openAssistants,
     openFeedback,
     openFaqs,
   } = useAppShell()
-  const { memories } = useMemoryApi()
-  const { threads } = useConversation()
-  // Ticket 01: navigation mirrors what the server will actually authorize —
-  // the scopes come from `GET /api/session`, never from client-side state.
   const scopes = useSignedInSession()?.scopes ?? []
   const canIngest = scopes.includes("ingest")
   const canAdmin = scopes.includes("admin")
+  const [expanded, setExpanded] = useState(false)
+  const [laboratoryOpen, setLaboratoryOpen] = useState(false)
+
+  const openModule = (action: () => void) => {
+    setExpanded(false)
+    action()
+  }
+
+  return (
+    <>
+      <SidebarButton
+        icon={LayoutGrid}
+        label="工作区"
+        ariaExpanded={expanded}
+        onClick={() => setExpanded((previous) => !previous)}
+        trailing={
+          <Icon
+            icon={ChevronDown}
+            className={cn("ml-auto size-3.5 transition-transform", expanded && "rotate-180")}
+          />
+        }
+      />
+      {expanded ? (
+        <div className="mx-1 rounded-lg border border-line bg-surface-subtle/50 p-1">
+          {canIngest || canAdmin ? (
+            <p className="px-2 py-1 text-[10px] font-semibold uppercase tracking-wider text-muted/60">
+              数据
+            </p>
+          ) : null}
+          {canIngest ? (
+            <SidebarButton icon={Database} label="导入文档" onClick={() => openModule(openImport)} />
+          ) : null}
+          {canAdmin ? (
+            <SidebarButton icon={BookOpen} label="知识库管理" onClick={() => openModule(openKnowledge)} />
+          ) : null}
+
+          <p className="px-2 py-1 text-[10px] font-semibold uppercase tracking-wider text-muted/60">
+            分析
+          </p>
+          <SidebarButton
+            icon={FlaskConical}
+            label="检索实验室"
+            onClick={() => {
+              setExpanded(false)
+              setLaboratoryOpen(true)
+            }}
+          />
+          {canAdmin ? (
+            <SidebarButton icon={FlaskConical} label="运行评测" onClick={() => openModule(openEvaluation)} />
+          ) : null}
+          {canAdmin ? (
+            <SidebarButton
+              icon={MessageSquareWarning}
+              label="反馈审阅"
+              onClick={() => openModule(openFeedback)}
+            />
+          ) : null}
+
+          {canAdmin ? (
+            <>
+              <p className="px-2 py-1 text-[10px] font-semibold uppercase tracking-wider text-muted/60">
+                管理
+              </p>
+              <SidebarButton icon={HelpCircle} label="标准问答" onClick={() => openModule(openFaqs)} />
+              <SidebarButton icon={Settings} label="模型设置" onClick={() => openModule(openSettings)} />
+              <SidebarButton icon={Bot} label="助手管理" onClick={() => openModule(openAssistants)} />
+            </>
+          ) : null}
+        </div>
+      ) : null}
+      <LaboratoryDialog open={laboratoryOpen} onClose={() => setLaboratoryOpen(false)} />
+    </>
+  )
+}
+
+export function Sidebar({ open, collapsed, isDark, onToggleTheme, onCloseMobile }: SidebarProps) {
+  const { openMemory } = useAppShell()
+  const { memories } = useMemoryApi()
+  const { threads } = useConversation()
 
   // Ticket 08 (KB-04): load the knowledge-base list once per sign-in.
   useEffect(() => {
@@ -400,22 +458,7 @@ export function Sidebar({ open, collapsed, isDark, onToggleTheme, onCloseMobile 
                 <span>新建对话</span>
               </button>
             </ThreadListPrimitive.New>
-            {canIngest ? <SidebarButton icon={Database} label="导入文档" onClick={openImport} /> : null}
-            {canAdmin ? (
-              <SidebarButton icon={FlaskConical} label="运行评测" onClick={openEvaluation} />
-            ) : null}
-            {canAdmin ? (
-              <SidebarButton icon={MessageSquareWarning} label="反馈审阅" onClick={openFeedback} />
-            ) : null}
-            {canAdmin ? (
-              <SidebarButton icon={HelpCircle} label="标准问答" onClick={openFaqs} />
-            ) : null}
-            {canAdmin ? (
-              <SidebarButton icon={Settings} label="模型设置" onClick={openSettings} />
-            ) : null}
-            {canAdmin ? (
-              <SidebarButton icon={Bot} label="助手管理" onClick={openAssistants} />
-            ) : null}
+            <WorkspaceMenu />
             <SidebarButton
               icon={isDark ? Sun : Moon}
               label={isDark ? "切换浅色模式" : "切换深色模式"}
