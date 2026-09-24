@@ -457,3 +457,101 @@ test("ARCH-01C #2: retrieval-debug shares chat's operations and deliberately car
     "the debug run has no attachment, FAQ or Web evidence channel"
   )
 })
+
+// ---------------------------------------------------------------------------
+// Ticket 53 (ARCH-01F) — the cutover is closed: the entry keeps the six
+// responsibilities a caller's contract is made of, and everything about HOW a
+// run reads and answers has exactly one production home.
+// ---------------------------------------------------------------------------
+
+const RETRIEVAL_STACK = "src/mastra/answer_retrieval_stack.ts"
+const ROUTE_STACK = "src/mastra/answer_route_stack.ts"
+
+test("ARCH-01F #1: the shared entry owns only wiring, fanout, budget, snapshot and stamping", () => {
+  const entry = codeOf(ENTRY)
+  // Nothing that decides HOW a run retrieves or answers: no searcher, no
+  // router, no runner, no tool registry, no operations composition.
+  for (const forbidden of [
+    "RouterImpl",
+    "SearcherImpl",
+    "RuntimeSearchOperations",
+    "createDedicatedReranker",
+    "createDirectAmbiguousMastraRunner",
+    "createSimpleKnowledgeMastraRunner",
+    "createComplexKnowledgeMastraRunner",
+    "createRouteDispatchRunner",
+    "createMastraWorkflowRunner",
+    "createFaqExactMatchRunner",
+    "createMemoryRecallRunner",
+    "ToolRegistry",
+    "registerBuiltinTools",
+    "createMcpToolBridge",
+  ]) {
+    assert.equal(
+      entry.includes(forbidden),
+      false,
+      `the entry must not name ${forbidden} — it belongs to a stack`
+    )
+  }
+  // It connects the two stacks and the one adapter, and nothing else internal.
+  assert.match(entry, /from "\.\/answer_retrieval_stack"/)
+  assert.match(entry, /from "\.\/answer_route_stack"/)
+  assert.match(entry, /createMastraChatEventAdapter\(\{[\s\S]*?runner,[\s\S]*?traceObserver,[\s\S]*?observers,[\s\S]*?budgetMs,[\s\S]*?resourceBudget,\s*\}\)/)
+})
+
+test("ARCH-01F #3: no route or retrieval composition helper has a second production caller", () => {
+  // `src/release/*` is the one documented exception, and it is not an Answer
+  // composition: the ticket-24 golden-set runner and the two retrieval probes
+  // drive ONE runner at a time against fake routers, validators and searchers
+  // to observe bounded evidence. They compose no entry, no dispatch and no tool
+  // layer, so every entry-level API below stays single-owner.
+  //
+  // `createDedicatedReranker` is deliberately absent: the model-profile catalog
+  // and the release probes call it to report or verify deployment
+  // configuration. It builds one collaborator, not a run — what a RUN uses is
+  // pinned by "production search operations are composed in exactly one place".
+  const HARNESS_RUNNER_BUILDERS = [
+    "src/release/golden_set_runner.ts",
+    "src/release/hybrid_retrieval_probe.ts",
+    "src/release/retrieval_acl_outage_probe.ts",
+  ]
+  const owned: Array<{ api: string; owner: string; also?: string[] }> = [
+    { api: "RouterImpl", owner: ROUTE_STACK },
+    {
+      api: "createDirectAmbiguousMastraRunner",
+      owner: ROUTE_STACK,
+      also: ["src/release/golden_set_runner.ts"],
+    },
+    {
+      api: "createSimpleKnowledgeMastraRunner",
+      owner: ROUTE_STACK,
+      also: HARNESS_RUNNER_BUILDERS,
+    },
+    { api: "createComplexKnowledgeMastraRunner", owner: ROUTE_STACK },
+    { api: "createRouteDispatchRunner", owner: ROUTE_STACK },
+    { api: "createMastraWorkflowRunner", owner: ROUTE_STACK },
+    { api: "createFaqExactMatchRunner", owner: ROUTE_STACK },
+    { api: "createMemoryRecallRunner", owner: ROUTE_STACK },
+    { api: "registerBuiltinTools", owner: ROUTE_STACK },
+    { api: "createMcpToolBridge", owner: ROUTE_STACK },
+    { api: "createFaqEvidenceOperations", owner: RETRIEVAL_STACK },
+  ]
+  const sources = productionSources()
+  for (const { api, owner, also = [] } of owned) {
+    // An import names the symbol without a `(`, and `(?<!function )` skips the
+    // definition — what is left is a call site.
+    const site = new RegExp(`(?<!function )(?<!interface )\\b${api}\\(`)
+    const callers = sources.filter((file) => site.test(codeOf(file)))
+    assert.deepEqual(
+      callers,
+      [owner, ...also].sort(),
+      `${api} is called only by ${owner}${also.length ? " and the documented harnesses" : ""}`
+    )
+    const outside = callers.filter((file) => !file.startsWith("src/mastra/"))
+    assert.deepEqual(
+      outside,
+      also,
+      `${api}: a caller outside src/mastra must be a documented verification harness`
+    )
+  }
+})

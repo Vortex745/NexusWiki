@@ -22,6 +22,15 @@
  * answers without a model call and without recalling or extracting memory;
  * everything else runs the ordinary routes with memory in the system prompt.
  *
+ * It also owns the read-only capability layer (tickets 34/35, moved here by
+ * ARCH-01E): the built-in tool registry over the caller's db handle and the MCP
+ * capability discovery that registers into the SAME registry, so a tool call
+ * keeps its schema validation, allowlist, deadline, cancellation and trace
+ * records wherever the run is composed. What leaves this module is two values:
+ * `mcpStatus` (visibility — it rides a terminal even when nothing was
+ * discovered) and `mcp` (the callable seam — only when a tool was discovered).
+ * Discovery failure is a visible degradation, never a broken run.
+ *
  * Boundary (T02 #5): lives in src/mastra/* and MUST NOT import `src/api/*`,
  * `src/evaluation/*` or `src/index`.
  */

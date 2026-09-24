@@ -1,20 +1,27 @@
 /**
- * Eval refactor Ticket 01 — Shared Answer run entry.
+ * Shared Answer run entry — the small public face of a three-file composition
+ * root (ARCH-01, tickets 47-53).
  *
- * Extracts the composition that `src/index.ts` (the process composition
- * root) previously performed inline: production routing (direct / simple /
- * complex / ambiguous), retrieval, Critic/Replan, single-terminal logic,
- * observer fanout, and run budgets — assembled into ONE callable event
- * source.
+ * What lives where:
+ *   - `answer_retrieval_stack.ts` — HOW a run reads the knowledge base: the
+ *     dedicated reranker, the search operations, the optional attachment/FAQ/
+ *     Web evidence channels and the per-assistant rerank-free searcher.
+ *   - `answer_route_stack.ts` — HOW a run answers: the router, the four
+ *     route runners, the single dispatch, the FAQ gate and memory wrappers,
+ *     and the read-only tool registry plus MCP capability discovery.
+ *   - this module — only what a caller observes: narrow-context resolution
+ *     (which seams the caller injected), connecting the two stacks, observer
+ *     fanout, run budget and cancellation, the frozen model snapshot, and
+ *     terminal-event stamping.
  *
  * Two consumers, one implementation:
  *   - Normal chat: `src/index.ts` wires the returned `eventsSource` through
- *     the Mastra runtime boundary into the HTTP server — behavior identical
- *     to the previous inline composition.
- *   - Evaluation (later tickets): calls the same factory with injected
- *     isolated repositories (conversation store, search operations, handoff
- *     store, trace observer) and additional observers — WITHOUT duplicating
- *     the QA implementation and WITHOUT any HTTP handler dependency.
+ *     the Mastra runtime boundary into the HTTP server.
+ *   - Evaluation: `src/evaluation/isolated_resources.ts` calls the same
+ *     factory with injected isolated repositories and observers. Neither sees
+ *     the stacks; both get the same transport-agnostic events source, so chat
+ *     and an isolated run cannot drift apart in routing, retrieval or
+ *     terminal behavior.
  *
  * Boundary (T02 #5): this module MUST NOT import `src/api/*`,
  * `src/evaluation/*`, or `src/index`. It depends only on config, the answer
@@ -199,11 +206,12 @@ function resourceBudgetFromConfig(
 }
 
 /**
- * Create the shared Answer run entry. The composition executes the
- * production direct/simple/complex/ambiguous routing, retrieval,
- * Critic/Replan, and single-terminal logic via the route-dispatch runner,
- * wrapped by the Mastra workflow runner and the chat event adapter
- * (observer fanout + budgets + cancellation).
+ * Create the shared Answer run entry: resolve what the caller injected,
+ * connect the retrieval stack's searcher factory to the route stack's runner,
+ * and wrap that runner in the observer, budget, cancellation and model-
+ * snapshot behavior one Answer run owes every consumer. The routing,
+ * retrieval, Critic/Replan and single-terminal logic themselves run inside the
+ * two stacks — this function never composes them directly.
  */
 export async function createSharedAnswerEntry(
   options: SharedAnswerEntryOptions
