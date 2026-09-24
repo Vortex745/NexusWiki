@@ -41,15 +41,8 @@ import {
   NoopLangfuseExporter,
 } from "../answer/langfuse_exporter"
 import { RouterImpl } from "../retrieval/router/router"
-import {
-  RuntimeSearchOperations,
-  SearcherImpl,
-  type SearchOperations,
-} from "../retrieval/search/searcher"
-import {
-  createDedicatedReranker,
-  type Reranker,
-} from "../retrieval/search/dedicated_reranker"
+import type { SearchOperations } from "../retrieval/search/searcher"
+import type { Reranker } from "../retrieval/search/dedicated_reranker"
 import { ContextAssemblerImpl } from "../retrieval/context/assembler"
 import { PlannerImpl } from "../retrieval/planner/planner"
 import { ComplexLoopControllerImpl } from "../retrieval/complex_loop"
@@ -57,7 +50,6 @@ import { ToolSelectorImpl } from "../retrieval/tool_selector"
 import { ValidatorImpl } from "../critic/validator/validator"
 import { RePlannerImpl } from "../critic/replanner/replanner"
 import { PageIndexRepository } from "../ingestion/tracking/page_index_repo"
-import { ActiveVersionRepository } from "../ingestion/tracking/active_version_repo"
 import { DocumentRepo } from "../ingestion/tracking/doc_repo"
 import {
   createModelCostEstimator,
@@ -70,9 +62,9 @@ import type { AnswerModelProfileSnapshot } from "../types/answer"
 import type { AttachmentSearchOperations } from "../types/retrieval"
 import { knowledgeBaseEmbeddingProfile } from "../types/knowledge_base"
 import { createMastraChatEventAdapter } from "./chat_event_adapter"
+import { createAnswerRetrievalStack } from "./answer_retrieval_stack"
 import type { AssistantRunSnapshot } from "../assistants/assistant_service"
 import type { FaqEntryService } from "../faq/faq_entry_service"
-import { createFaqEvidenceOperations } from "../faq/faq_evidence"
 import { createFaqExactMatchRunner } from "./faq_exact_runner"
 import type { LongTermMemoryStore } from "../memory/long_term_memory_store"
 import type { MemorySuggestionStore } from "../memory/memory_suggestion_store"
@@ -251,59 +243,24 @@ export async function createSharedAnswerEntry(
     answerRuntime.processRuntime
   const conversationStore =
     options.conversationStore ?? new SqliteConversationStore(db)
-  // Ticket 03: the dedicated reranker is shared by normal chat and evaluation.
-  // No key configured → undefined → retrieval degrades visibly
-  // (`rerank.reason = "not_configured"`), never a different scorer.
-  const reranker =
-    options.reranker ??
-    createDedicatedReranker({
-      baseUrl: cfg.rerankBaseUrl,
-      apiKey: cfg.rerankApiKey,
-      model: cfg.rerankModel,
-      timeoutMs: cfg.rerankTimeoutMs,
-      maxDocumentChars: cfg.rerankMaxDocumentChars,
-    })
-  const pageIndexRepo = new PageIndexRepository(db)
-  const activeVersionRepo = new ActiveVersionRepository(db)
-  const searchOperations =
-    options.searchOperations ??
-    new RuntimeSearchOperations({
-      es: elasticsearch,
-      embeddingClient,
-      embeddingModel: cfg.embeddingModel,
-      pageIndexRepo,
-      activeVersionRepo,
-      ...(reranker ? { reranker } : {}),
-    })
-  // Ticket 19 (AST-01B): the rerank-free variant — an assistant whose
-  // immutable snapshot pins `rerankModelProfileId: null` runs WITHOUT the
-  // dedicated reranker (fused order + explicit reason), never with it. Only
-  // derivable when this entry built its own operations; injected operations
-  // (evaluation scopes) never carry assistant overlays.
-  // Ticket 31 (FAQ-01B): both searcher variants share the FAQ evidence
-  // channel; optional params accept undefined explicitly.
-  const faqEvidence = options.faq
-    ? createFaqEvidenceOperations(options.faq)
-    : undefined
-  // Ticket 36 (WEB-01): the web-evidence channel. Like attachments and FAQ,
-  // it exists only when the composition wires it — the production root
-  // (src/index.ts) passes the shared safe fetcher + the config's server-side
-  // Tavily key; evaluation scopes and probes omit it entirely.
-  const buildSearcher = (operations: SearchOperations) =>
-    new SearcherImpl(operations, options.attachments, faqEvidence, options.web)
-  const searchOperationsWithoutRerank = options.searchOperations
-    ? undefined
-    : new RuntimeSearchOperations({
-        es: elasticsearch,
-        embeddingClient,
-        embeddingModel: cfg.embeddingModel,
-        pageIndexRepo,
-        activeVersionRepo,
-      })
-  const searcherOperationsFor = (assistant?: AssistantRunSnapshot) =>
-    assistant?.rerankModelProfileId === null && searchOperationsWithoutRerank
-      ? searchOperationsWithoutRerank
-      : searchOperations
+  // Ticket 49 (ARCH-01B): everything about HOW a run reads the knowledge base
+  // — the dedicated reranker, the search operations, the optional evidence
+  // channels and the per-assistant rerank-free variant — lives in the
+  // retrieval stack. The entry keeps only what callers observe.
+  const retrieval = createAnswerRetrievalStack({
+    config: cfg,
+    db,
+    elasticsearch,
+    embeddingClient,
+    ...(options.searchOperations
+      ? { searchOperations: options.searchOperations }
+      : {}),
+    ...(options.reranker ? { reranker: options.reranker } : {}),
+    ...(options.attachments ? { attachments: options.attachments } : {}),
+    ...(options.faq ? { faq: options.faq } : {}),
+    ...(options.web ? { web: options.web } : {}),
+  })
+  const searchOperations = retrieval.searchOperations
   const handoffStore = options.handoffStore ?? new SqliteHandoffStore(db)
   const resolveTenantId = (accessContext: AccessContext) =>
     accessContext.tenantId
@@ -339,8 +296,7 @@ export async function createSharedAnswerEntry(
   const contextualizer = new ContextualizerImpl(chatClient, cfg.openaiChatModel)
   const simpleRunner = createSimpleKnowledgeMastraRunner({
     router,
-    createSearcher: (assistant) =>
-      buildSearcher(searcherOperationsFor(assistant)),
+    createSearcher: retrieval.createSearcher,
     assembler: new ContextAssemblerImpl(),
     validator: new ValidatorImpl(chatClient, cfg.openaiChatModel),
     replanner: new RePlannerImpl(),
@@ -368,7 +324,8 @@ export async function createSharedAnswerEntry(
   // lookups check tenant, scope and group visibility against the run.
   const toolRegistry = registerBuiltinTools(new ToolRegistry(), {
     documentRepo: new DocumentRepo(db),
-    pageIndexRepo,
+    // Read-only lookups over the same db the retrieval stack searches.
+    pageIndexRepo: new PageIndexRepository(db),
   })
   // Ticket 35 (TOOL-01B): discover the local read-only MCP capability server
   // and register its status tools through the SAME boundary. A failed
@@ -387,8 +344,7 @@ export async function createSharedAnswerEntry(
   })
   const complexRunner = createComplexKnowledgeMastraRunner({
     router,
-    createSearcher: (assistant) =>
-      buildSearcher(searcherOperationsFor(assistant)),
+    createSearcher: retrieval.createSearcher,
     assembler: new ContextAssemblerImpl(),
     validator: new ValidatorImpl(chatClient, cfg.openaiChatModel),
     replanner: new RePlannerImpl(),
@@ -472,7 +428,7 @@ export async function createSharedAnswerEntry(
   // (evaluation tasks compose their own entries from per-task config copies).
   const modelProfile: AnswerModelProfileSnapshot = Object.freeze({
     chatModel: cfg.openaiChatModel,
-    rerankModel: reranker?.model ?? null,
+    rerankModel: retrieval.rerankModel,
     embeddingProfile: knowledgeBaseEmbeddingProfile(
       cfg.embeddingModel,
       cfg.embeddingDimensions

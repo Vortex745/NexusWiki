@@ -60,22 +60,40 @@ test("chat and evaluation compose the same shared answer entry", () => {
 })
 
 test("both paths retrieve through the same operations and searcher", () => {
+  // Ticket 49 (ARCH-01B): the retrieval assembly moved into the entry's
+  // internal AnswerRetrievalStack. The invariant is unchanged — one set of
+  // operations, one searcher implementation, shared by chat and evaluation —
+  // it is now owned by a different file, so the scan follows it there.
+  const retrievalStack = read("src/mastra/answer_retrieval_stack.ts")
   const entry = read("src/mastra/shared_answer_entry.ts")
   const evalScope = read("src/evaluation/isolated_resources.ts")
   for (const [name, source] of [
-    ["shared_answer_entry", entry],
+    ["answer_retrieval_stack", retrievalStack],
     ["isolated_resources", evalScope],
   ] as const) {
     assert.match(source, /new RuntimeSearchOperations\(/, `${name} builds the shared operations`)
   }
-  // Ticket 31 (FAQ-01B): the searcher is built through the local helper that
-  // adds the FAQ evidence channel — same shared operations, same SearcherImpl.
-  // Ticket 36 (WEB-01): the helper also carries the optional web channel.
-  assert.match(
+  // The entry no longer assembles retrieval itself: it consumes the stack's
+  // operations and searcher factory and has no direct SearcherImpl seam.
+  assert.doesNotMatch(
     entry,
-    /const buildSearcher = \(operations: SearchOperations\) =>\s*new SearcherImpl\(operations, options\.attachments, faqEvidence, options\.web\)/,
-    "chat searches through the shared SearcherImpl over those operations"
+    /new SearcherImpl\(/,
+    "the entry delegates searcher construction to the retrieval stack"
   )
+  // Ticket 31 (FAQ-01B) + Ticket 22 (ATT-01) + Ticket 36 (WEB-01): the ONE
+  // searcher factory wires the optional FAQ/attachment/web channels alongside
+  // the operations. Asserted semantically (which arguments the single
+  // `new SearcherImpl` receives) rather than by source text, so moving the
+  // factory between files cannot silently drop a channel.
+  const searcherCalls = retrievalStack.match(/new SearcherImpl\(([^)]*)\)/g) ?? []
+  assert.equal(searcherCalls.length, 1, "the stack builds searchers through one factory")
+  const searcherArgs = searcherCalls[0]
+  for (const channel of ["operations", "attachments", "faqEvidence", "web"]) {
+    assert.ok(
+      searcherArgs.includes(channel),
+      `the searcher factory must keep the ${channel} channel`
+    )
+  }
   assert.match(
     evalScope,
     /searchOperations: new RuntimeSearchOperations\(\{/,
@@ -86,12 +104,16 @@ test("both paths retrieve through the same operations and searcher", () => {
 
 test("the dedicated reranker keeps one adapter and one config surface", () => {
   const sources = [
-    "src/mastra/shared_answer_entry.ts",
+    "src/mastra/answer_retrieval_stack.ts",
     "src/api/server.ts",
     "src/evaluation/isolated_resources.ts",
   ].map(read)
   const shapes = new Set(
     sources.flatMap(rerankerCallArgNames).map((names) => names.join(","))
+  )
+  assert.ok(
+    rerankerCallArgNames(read("src/mastra/answer_retrieval_stack.ts")).length >= 1,
+    "the retrieval stack must still be one of the scanned reranker call sites"
   )
   assert.equal(
     shapes.size,

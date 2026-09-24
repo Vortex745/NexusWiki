@@ -87,6 +87,7 @@ function listSourceFiles(): string[] {
     "evaluation/p9_1_release_artifact.ts",
     "mastra/chat_event_adapter.ts",
     "mastra/shared_answer_entry.ts",
+    "mastra/answer_retrieval_stack.ts",
     "mastra/stop_conditions.ts",
     "mastra/promotion_gate.ts",
     "mastra/runtime_boundary.ts",

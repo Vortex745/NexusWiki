@@ -143,6 +143,41 @@ test("ARCH-01A #6: the entry does not re-export an internal composition stack to
   )
 })
 
+test("ARCH-01A #6: the retrieval stack takes a narrow context, not the entry's options", () => {
+  // Ticket 49 acceptance: the stack must not accept or retain the complete
+  // SharedAnswerEntryOptions object. Anything that would let it reach request
+  // concerns (observers, budgets, the runtime) is checked structurally here.
+  // Comments are stripped first — the stack documents what it deliberately
+  // does NOT own, and prose must not trip the check.
+  const source = sourceOf("src/mastra/answer_retrieval_stack.ts")
+    .replace(/\/\*[\s\S]*?\*\//g, "")
+    .replace(/^\s*\/\/.*$/gm, "")
+  assert.ok(existsSync(join(REPO_ROOT, "src/mastra/answer_retrieval_stack.ts")))
+  for (const forbidden of [
+    "SharedAnswerEntryOptions",
+    "AnswerRuntime",
+    "traceObserver",
+    "observers",
+    "budgetMs",
+    "resourceBudget",
+    "eventsSource",
+  ]) {
+    assert.equal(
+      source.includes(forbidden),
+      false,
+      `the retrieval stack must not know about ${forbidden}`
+    )
+  }
+  // It is composed by the entry and by nothing else — a second caller would be
+  // a second, undocumented retrieval seam.
+  const stackCallers = AREA.filter(
+    (file) =>
+      file !== "src/mastra/answer_retrieval_stack.ts" &&
+      /createAnswerRetrievalStack\(/.test(sourceOf(file))
+  )
+  assert.deepEqual(stackCallers, ["src/mastra/shared_answer_entry.ts"])
+})
+
 test("ARCH-01A #6: chat and isolated evaluation are the only production callers", () => {
   const callers: string[] = []
   const walk = (dir: string): void => {
