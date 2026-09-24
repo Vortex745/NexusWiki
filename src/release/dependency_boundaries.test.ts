@@ -111,6 +111,15 @@ test("knowledge-layer modules never import the runtime or UI layers", () => {
  * repository module. Composition roots (`src/index.ts`, `src/api/server.ts`)
  * and the modules that own a repository's lifecycle are the only allowed
  * importers; anything else must go through the owning module's service.
+ *
+ * NOTE (ticket 52): this ratchet is currently INERT — `localImports()` returns
+ * extensionless, srcRoot-relative paths (`ingestion/tracking/doc_repo`) while
+ * these keys carry the `src/` prefix and `.ts` suffix, so no import ever
+ * matches and the loop below can find no violation. The sets are kept
+ * accurate anyway (the Answer composition moved its repository reads into
+ * `answer_route_stack.ts` in ARCH-01E) so the ratchet does not lie about what
+ * it reviews. Fixing the comparison is outside ARCH-01's scope: it would
+ * newly flag importers that have always been there.
  */
 const REPOSITORY_IMPORTERS: Record<string, string[]> = {
   "src/ingestion/tracking/doc_repo.ts": [
@@ -118,12 +127,13 @@ const REPOSITORY_IMPORTERS: Record<string, string[]> = {
     "src/api/ingest.ts",
     "src/api/server.ts",
     "src/knowledge/candidate_review_store.ts",
+    "src/mastra/answer_route_stack.ts",
   ],
   "src/ingestion/tracking/page_index_repo.ts": [
     "src/api/documents.ts",
     "src/api/server.ts",
     "src/evaluation/isolated_resources.ts",
-    "src/mastra/shared_answer_entry.ts",
+    "src/mastra/answer_route_stack.ts",
     "src/mastra/answer_retrieval_stack.ts",
     "src/retrieval/search/searcher.ts",
   ],

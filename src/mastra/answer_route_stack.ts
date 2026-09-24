@@ -43,12 +43,22 @@ import { ToolSelectorImpl } from "../retrieval/tool_selector"
 import { ValidatorImpl } from "../critic/validator/validator"
 import { RePlannerImpl } from "../critic/replanner/replanner"
 import type { AccessContext } from "../access/context"
+import { singleTenantAccessContext } from "../access/context"
 import type { AgentMessage } from "../types"
 import type { AssistantRunSnapshot } from "../assistants/assistant_service"
 import type { FaqEntryService } from "../faq/faq_entry_service"
 import type { LongTermMemoryStore } from "../memory/long_term_memory_store"
 import type { MemorySuggestionStore } from "../memory/memory_suggestion_store"
-import type { ToolRegistry } from "../tools/invocation"
+import type { DB } from "../ingestion/tracking/db"
+import { PageIndexRepository } from "../ingestion/tracking/page_index_repo"
+import { DocumentRepo } from "../ingestion/tracking/doc_repo"
+import {
+  ToolRegistry,
+  ToolInvocationService,
+  type ToolInvocationResult,
+} from "../tools/invocation"
+import { registerBuiltinTools } from "../tools/knowledge_tools"
+import { createMcpToolBridge, type McpToolBridge } from "../mcp/tool_bridge"
 import type { MastraRunner } from "./chat_event_adapter"
 import { createFaqExactMatchRunner } from "./faq_exact_runner"
 import { createMemoryRecallRunner } from "./memory_recall_runner"
@@ -63,21 +73,26 @@ import { createComplexKnowledgeMastraRunner } from "./complex_knowledge_runner"
 import { createRouteDispatchRunner } from "./route_dispatch_runner"
 import { createMastraWorkflowRunner } from "./workflow_runner"
 
+/** The safe discovery snapshot the bridge reports (no credentials, no URLs). */
+export type AnswerMcpStatus = ReturnType<McpToolBridge["status"]>
+
 /**
- * The tool boundary the complex route executes through. Ticket 51 keeps its
- * construction in the entry; ticket 52 (ARCH-01E) moves it behind this stack.
+ * Ticket 35 (TOOL-01B): the product-level MCP capability invocation seam — the
+ * SAME boundary the runs use (allowlist = the discovered tools, 30s deadline,
+ * bounded trace records). Undefined means "no MCP tools", never a broken run.
  */
-export interface AnswerRouteStackTooling {
-  toolRegistry: ToolRegistry
-  /** Discovered MCP tool names, when the capability bridge composed. */
-  mcpToolNames?: string[]
+export interface AnswerMcpCapabilities {
+  status(): AnswerMcpStatus
+  invoke(name: string): Promise<ToolInvocationResult>
 }
 
 export interface AnswerRouteStackContext {
-  /** Read for the chat model and the direct-reply agent's credentials only. */
+  /** Read for the chat model, the direct-reply agent and the MCP policy. */
   config: AppConfig
   /** The shared chat client every router, planner, critic and generator uses. */
   answerModelClient: OpenAI
+  /** Process db: the read-only document/PageIndex lookups behind the tools. */
+  db: DB
   /**
    * The retrieval stack's searcher factory — the only thing a knowledge route
    * needs to know about retrieval.
@@ -95,7 +110,6 @@ export interface AnswerRouteStackContext {
   /** Ticket 33 (MEM-01B): the owner-scoped recall and suggestion stores. */
   memories?: LongTermMemoryStore
   suggestions?: MemorySuggestionStore
-  tooling: AnswerRouteStackTooling
 }
 
 export interface AnswerRouteStack {
@@ -105,15 +119,48 @@ export interface AnswerRouteStack {
    * outside dispatch. This is the only runner the shared entry adapts.
    */
   runner: MastraRunner
+  /**
+   * MCP discovery state, present whenever a bridge composed — including a
+   * connected bridge that discovered no tools. The entry stamps it onto every
+   * terminal so trace readers see whether MCP tools were live.
+   */
+  mcpStatus?: () => AnswerMcpStatus
+  /** The invocation seam, present only when the bridge discovered tools. */
+  mcp?: AnswerMcpCapabilities
 }
 
 export async function createAnswerRouteStack(
   context: AnswerRouteStackContext
 ): Promise<AnswerRouteStack> {
   const { config: cfg, answerModelClient: chatClient } = context
-  const { conversationStore, handoffStore, createSearcher, tooling } = context
+  const { conversationStore, handoffStore, createSearcher, db } = context
   const resolveTenantId = (accessContext: AccessContext) =>
     accessContext.tenantId
+
+  // Ticket 34 (TOOL-01A): the built-in read-only tool registry. Tool calls
+  // of the complex route execute through the schema-validated invocation
+  // boundary, allowlisted by the run's assistant tool policy; document
+  // lookups check tenant, scope and group visibility against the run.
+  const toolRegistry = registerBuiltinTools(new ToolRegistry(), {
+    documentRepo: new DocumentRepo(db),
+    // Read-only lookups over the same db the retrieval stack searches.
+    pageIndexRepo: new PageIndexRepository(db),
+  })
+  // Ticket 35 (TOOL-01B): discover the local read-only MCP capability server
+  // and register its status tools through the SAME boundary. A failed
+  // discovery leaves no MCP tools and chat unchanged — never a broken run.
+  const mcpBridge: McpToolBridge | null = await createMcpToolBridge({
+    registry: toolRegistry,
+    config: cfg,
+  }).catch((error: unknown) => {
+    // Ticket 35: a broken bridge must be VISIBLE but never fatal — ordinary
+    // knowledge-base chat runs without MCP tools.
+    console.warn(
+      "[mcp] capability bridge failed to compose (chat runs without MCP tools):",
+      error instanceof Error ? error.message : String(error)
+    )
+    return null
+  })
 
   const router = new RouterImpl(chatClient, cfg.openaiChatModel)
   const streamDirectReply =
@@ -179,9 +226,11 @@ export async function createAnswerRouteStack(
     planner,
     complexLoopController,
     // Ticket 34 (TOOL-01A): the schema-validated tool boundary.
-    toolRegistry: tooling.toolRegistry,
+    toolRegistry,
     // Ticket 35 (TOOL-01B): discovered MCP tools join the read-only allowlist.
-    ...(tooling.mcpToolNames ? { mcpToolNames: tooling.mcpToolNames } : {}),
+    ...(mcpBridge && mcpBridge.toolNames().length > 0
+      ? { mcpToolNames: mcpBridge.toolNames() }
+      : {}),
     conversationStore,
     contextualizer,
     summarizer,
@@ -226,5 +275,32 @@ export async function createAnswerRouteStack(
     )
   )
 
-  return { runner }
+  // Ticket 35 (TOOL-01B): the invocation seam the capabilities router exposes.
+  // It is the SAME ToolInvocationService boundary the complex loop runs tools
+  // through — the same allowlist, deadline, trace records and budget — so a
+  // tool caller gets no second Answer entry and no bypass around route,
+  // observer or budget handling.
+  const mcpCapabilityInvoker =
+    mcpBridge && mcpBridge.toolNames().length > 0
+      ? new ToolInvocationService({
+          registry: toolRegistry,
+          allowedTools: mcpBridge.toolNames(),
+        })
+      : undefined
+
+  return {
+    runner,
+    ...(mcpBridge ? { mcpStatus: () => mcpBridge.status() } : {}),
+    ...(mcpBridge && mcpCapabilityInvoker
+      ? {
+          mcp: {
+            status: () => mcpBridge.status(),
+            invoke: (name: string) =>
+              mcpCapabilityInvoker.invoke(name, {}, {
+                accessContext: singleTenantAccessContext(),
+              }),
+          },
+        }
+      : {}),
+  }
 }

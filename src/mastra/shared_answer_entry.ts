@@ -38,8 +38,6 @@ import {
 } from "../answer/langfuse_exporter"
 import type { SearchOperations } from "../retrieval/search/searcher"
 import type { Reranker } from "../retrieval/search/dedicated_reranker"
-import { PageIndexRepository } from "../ingestion/tracking/page_index_repo"
-import { DocumentRepo } from "../ingestion/tracking/doc_repo"
 import {
   createModelCostEstimator,
   DEFAULT_RUN_BUDGET_MS,
@@ -51,15 +49,14 @@ import type { AttachmentSearchOperations } from "../types/retrieval"
 import { knowledgeBaseEmbeddingProfile } from "../types/knowledge_base"
 import { createMastraChatEventAdapter } from "./chat_event_adapter"
 import { createAnswerRetrievalStack } from "./answer_retrieval_stack"
-import { createAnswerRouteStack } from "./answer_route_stack"
+import {
+  createAnswerRouteStack,
+  type AnswerMcpCapabilities,
+} from "./answer_route_stack"
 import type { FaqEntryService } from "../faq/faq_entry_service"
 import type { LongTermMemoryStore } from "../memory/long_term_memory_store"
 import type { MemorySuggestionStore } from "../memory/memory_suggestion_store"
 import type { WebEvidenceOperations } from "../types/retrieval"
-import { ToolRegistry, ToolInvocationService } from "../tools/invocation"
-import { registerBuiltinTools } from "../tools/knowledge_tools"
-import { createMcpToolBridge, type McpToolBridge } from "../mcp/tool_bridge"
-import { singleTenantAccessContext } from "../access/context"
 import { type DirectReplyStream } from "./direct_ambiguous_runner"
 
 /**
@@ -162,13 +159,10 @@ export interface SharedAnswerEntry {
    * the SAME boundary the runs use (allowlist = the discovered tools, 30s
    * deadline, bounded trace records). Undefined when MCP is disabled or the
    * composition failed; undefined means "no MCP tools", never a broken run.
+   * ARCH-01E: the route stack owns discovery and invocation; the entry only
+   * publishes what it exposed before.
    */
-  mcp?: {
-    status(): ReturnType<McpToolBridge["status"]>
-    invoke(
-      name: string
-    ): Promise<import("../tools/invocation").ToolInvocationResult>
-  }
+  mcp?: AnswerMcpCapabilities
 }
 
 /**
@@ -240,38 +234,15 @@ export async function createSharedAnswerEntry(
   const searchOperations = retrieval.searchOperations
   const handoffStore = options.handoffStore ?? new SqliteHandoffStore(db)
 
-  // Ticket 34 (TOOL-01A): the built-in read-only tool registry. Tool calls
-  // of the complex route execute through the schema-validated invocation
-  // boundary, allowlisted by the run's assistant tool policy; document
-  // lookups check tenant, scope and group visibility against the run.
-  const toolRegistry = registerBuiltinTools(new ToolRegistry(), {
-    documentRepo: new DocumentRepo(db),
-    // Read-only lookups over the same db the retrieval stack searches.
-    pageIndexRepo: new PageIndexRepository(db),
-  })
-  // Ticket 35 (TOOL-01B): discover the local read-only MCP capability server
-  // and register its status tools through the SAME boundary. A failed
-  // discovery leaves no MCP tools and chat unchanged — never a broken run.
-  const mcpBridge: McpToolBridge | null = await createMcpToolBridge({
-    registry: toolRegistry,
-    config: cfg,
-  }).catch((error: unknown) => {
-    // Ticket 35: a broken bridge must be VISIBLE but never fatal — ordinary
-    // knowledge-base chat runs without MCP tools.
-    console.warn(
-      "[mcp] capability bridge failed to compose (chat runs without MCP tools):",
-      error instanceof Error ? error.message : String(error)
-    )
-    return null
-  })
-
   // Ticket 51 (ARCH-01D): everything about HOW a run routes and produces its
-  // answer — the router, the four runners, the single dispatch and the
-  // FAQ/memory/workflow wrappers — lives in the route stack. The entry keeps
-  // only what a caller observes.
-  const { runner } = await createAnswerRouteStack({
+  // answer — the router, the four runners, the single dispatch, the FAQ/memory/
+  // workflow wrappers and (ticket 52, ARCH-01E) the tool registry and MCP
+  // bridge — lives in the route stack. The entry keeps only what a caller
+  // observes.
+  const { runner, mcpStatus, mcp } = await createAnswerRouteStack({
     config: cfg,
     answerModelClient: chatClient,
+    db,
     createSearcher: retrieval.createSearcher,
     conversationStore,
     handoffStore,
@@ -281,12 +252,6 @@ export async function createSharedAnswerEntry(
     ...(options.faq ? { faq: options.faq } : {}),
     ...(options.memories ? { memories: options.memories } : {}),
     ...(options.suggestions ? { suggestions: options.suggestions } : {}),
-    tooling: {
-      toolRegistry,
-      ...(mcpBridge && mcpBridge.toolNames().length > 0
-        ? { mcpToolNames: mcpBridge.toolNames() }
-        : {}),
-    },
   })
 
   // Observer fanout (T06 §5.3 order): traceObserver (hard) first, then the
@@ -332,7 +297,7 @@ export async function createSharedAnswerEntry(
     // Ticket 35 (TOOL-01B): the MCP discovery state rides EVERY terminal —
     // both the persisted run trace and the transport copy — so trace readers
     // see whether MCP tools were live.
-    ...(mcpBridge ? { mcp: mcpBridge.status() } : {}),
+    ...(mcpStatus ? { mcp: mcpStatus() } : {}),
   })
   const baseTraceObserver = options.traceObserver ?? answerRuntime.traceRepository
   const traceObserver: AnswerRunObserver = {
@@ -364,25 +329,9 @@ export async function createSharedAnswerEntry(
     }
   }
 
-  const mcpCapabilityInvoker =
-    mcpBridge && mcpBridge.toolNames().length > 0
-      ? new ToolInvocationService({
-          registry: toolRegistry,
-          allowedTools: mcpBridge.toolNames(),
-        })
-      : undefined
-
   return {
     eventsSource: stampedEventsSource,
     searchOperations,
-    ...(mcpBridge && mcpCapabilityInvoker
-      ? {
-          mcp: {
-            status: () => mcpBridge.status(),
-            invoke: (name: string) =>
-              mcpCapabilityInvoker.invoke(name, {}, { accessContext: singleTenantAccessContext() }),
-          },
-        }
-      : {}),
+    ...(mcp ? { mcp } : {}),
   }
 }

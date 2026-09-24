@@ -266,8 +266,129 @@ test("ARCH-01D #6: the entry adapts the route stack's runner and nothing else", 
   const entry = sourceOf(ENTRY)
   assert.match(
     entry,
-    /const \{ runner \} = await createAnswerRouteStack\(\{/,
-    "the entry consumes exactly the route stack's one exported runner"
+    /const \{ runner, mcpStatus, mcp \} = await createAnswerRouteStack\(\{/,
+    "the entry consumes exactly what the route stack exports: its one runner and the MCP state"
+  )
+})
+
+// ---------------------------------------------------------------------------
+// Ticket 52 (ARCH-01E) — the tool and MCP layer moved behind the route stack.
+// The behavior itself (schema validation, allowlist, deadline, cancellation,
+// trace records) is the ticket-34/35 boundary and its own suites; what the
+// split could break is WHERE the registry is composed and WHO can reach it, so
+// that is what these pin.
+// ---------------------------------------------------------------------------
+
+/** Production source with comments stripped — prose must not trip a check. */
+function codeOf(file: string): string {
+  return sourceOf(file)
+    .replace(/\/\*[\s\S]*?\*\//g, "")
+    .replace(/^\s*\/\/.*$/gm, "")
+}
+
+test("ARCH-01E #1/#2: the tool registry and MCP bridge are composed in exactly one production place", () => {
+  const ROUTE_STACK = "src/mastra/answer_route_stack.ts"
+  // `(?<!function )` keeps a definition from counting as a composition site.
+  const callSites: Record<string, RegExp> = {
+    "registerBuiltinTools": /(?<!function )registerBuiltinTools\(/,
+    "createMcpToolBridge": /(?<!function )createMcpToolBridge\(/,
+    "new ToolInvocationService": /new ToolInvocationService\(/,
+  }
+  const composed: Record<string, string[]> = {}
+  for (const api of Object.keys(callSites)) composed[api] = []
+  for (const file of productionSources()) {
+    const code = codeOf(file)
+    for (const [api, site] of Object.entries(callSites)) {
+      if (site.test(code)) composed[api].push(file)
+    }
+  }
+  assert.deepEqual(composed["registerBuiltinTools"], [ROUTE_STACK])
+  assert.deepEqual(composed["createMcpToolBridge"], [ROUTE_STACK])
+  // The only two invocation services are the route stack's published seam and
+  // the complex loop's own invoker — ONE boundary, two entrances to it.
+  assert.deepEqual(composed["new ToolInvocationService"].sort(), [
+    "src/mastra/answer_route_stack.ts",
+    "src/tools/complex_loop_adapter.ts",
+  ])
+})
+
+test("ARCH-01E #6: the shared entry no longer touches the tool layer at all", () => {
+  // Every tool capability the entry publishes can only come from the route
+  // stack — the entry has no handle on the registry, the bridge or the
+  // repositories the built-in tools read.
+  const entry = codeOf(ENTRY)
+  for (const forbidden of [
+    "ToolRegistry",
+    "ToolInvocationService",
+    "registerBuiltinTools",
+    "createMcpToolBridge",
+    "McpToolBridge",
+    "DocumentRepo",
+    "PageIndexRepository",
+    "singleTenantAccessContext",
+  ]) {
+    assert.equal(
+      entry.includes(forbidden),
+      false,
+      `the entry must not name ${forbidden}`
+    )
+  }
+  // The published seam and the stamped state are forwarded unchanged.
+  assert.match(entry, /\.\.\.\(mcpStatus \? \{ mcp: mcpStatus\(\) \} : \{\}\)/)
+  assert.match(entry, /\.\.\.\(mcp \? \{ mcp \} : \{\}\)/)
+})
+
+test("ARCH-01E #4: the route stack reads only the db handle its caller owns", () => {
+  // Isolated evaluation composes its own process runtime; the tool layer must
+  // therefore see the caller's store and never reach a business one. A second
+  // db handle inside the route stack would be that escape.
+  const route = codeOf("src/mastra/answer_route_stack.ts")
+  assert.equal(route.includes("openDb("), false, "the route stack opens no database")
+  assert.equal(
+    /from "\.\.\/runtime\/process_runtime"/.test(route),
+    false,
+    "the route stack imports no process runtime"
+  )
+  assert.equal(
+    /from "\.\.\/config"/.test(route) && /loadConfig\(/.test(route),
+    false,
+    "the route stack reads no environment configuration"
+  )
+  assert.match(route, /db: DB/, "the caller hands the route stack its own handle")
+  // The built-in document tools read through THAT handle and nothing else.
+  assert.match(route, /documentRepo: new DocumentRepo\(db\)/)
+  assert.match(route, /pageIndexRepo: new PageIndexRepository\(db\)/)
+})
+
+test("ARCH-01E #1/#2: the complex route keeps the registry and the discovered MCP tools", () => {
+  const route = codeOf("src/mastra/answer_route_stack.ts")
+  assert.match(
+    route,
+    /createComplexKnowledgeMastraRunner\(\{[\s\S]*?toolRegistry,\s*[\s\S]*?mcpToolNames: mcpBridge\.toolNames\(\)/,
+    "the loop still runs tools through the route stack's registry and allowlist"
+  )
+})
+
+test("ARCH-01E #3/#6: discovery stays visible, callable only for discovered tools", () => {
+  const route = codeOf("src/mastra/answer_route_stack.ts")
+  // A failed discovery is caught, warned and leaves no bridge: never a broken
+  // run, never a silent one.
+  assert.match(route, /createMcpToolBridge\(\{[\s\S]*?\}\)\.catch\(\(error: unknown\) => \{/)
+  assert.match(route, /\[mcp\] capability bridge failed to compose/)
+  // The established degradation state is the asymmetry: the STAMP rides every
+  // terminal whenever a bridge exists — including a connected bridge that
+  // discovered nothing — while the callable seam needs a discovered tool.
+  assert.match(route, /\.\.\.\(mcpBridge \? \{ mcpStatus: \(\) => mcpBridge\.status\(\) \} : \{\}\)/)
+  assert.match(
+    route,
+    /\.\.\.\(mcpBridge && mcpCapabilityInvoker\s*\?\s*\{/,
+    "the invocation seam appears only with a bridge that discovered tools"
+  )
+  // The seam's allowlist is the discovered MCP names — a capability caller gets
+  // no business tool through it.
+  assert.match(
+    route,
+    /new ToolInvocationService\(\{\s*registry: toolRegistry,\s*allowedTools: mcpBridge\.toolNames\(\),\s*\}\)/
   )
 })
 
