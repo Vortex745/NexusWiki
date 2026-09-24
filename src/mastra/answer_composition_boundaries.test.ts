@@ -349,10 +349,18 @@ test("ARCH-01E #4: the route stack reads only the db handle its caller owns", ()
     false,
     "the route stack imports no process runtime"
   )
+  // Two separate assertions on purpose: `A && B === false` would pass vacuously
+  // if the config import ever disappeared, and "reads no environment
+  // configuration" would then be unproven while still reporting green.
+  assert.match(
+    route,
+    /^import type \{ AppConfig \} from "\.\.\/config"$/m,
+    'the route stack takes config only as its caller-supplied type, never a value import'
+  )
   assert.equal(
-    /from "\.\.\/config"/.test(route) && /loadConfig\(/.test(route),
+    /loadConfig\(/.test(route),
     false,
-    "the route stack reads no environment configuration"
+    "the route stack never reads the environment itself"
   )
   assert.match(route, /db: DB/, "the caller hands the route stack its own handle")
   // The built-in document tools read through THAT handle and nothing else.
@@ -470,12 +478,22 @@ const ROUTE_STACK = "src/mastra/answer_route_stack.ts"
 test("ARCH-01F #1: the shared entry owns only wiring, fanout, budget, snapshot and stamping", () => {
   const entry = codeOf(ENTRY)
   // Nothing that decides HOW a run retrieves or answers: no searcher, no
-  // router, no runner, no tool registry, no operations composition.
+  // router, no runner, no tool registry, no operations composition — and no
+  // single collaborator the two stacks wire, which is why the Critic/Replan and
+  // memory components are listed here too. `release_acceptance.test.ts` proves
+  // the positive half: each of these has exactly one owning file in the root.
   for (const forbidden of [
     "RouterImpl",
     "SearcherImpl",
     "RuntimeSearchOperations",
     "createDedicatedReranker",
+    "PlannerImpl",
+    "ContextAssemblerImpl",
+    "ValidatorImpl",
+    "RePlannerImpl",
+    "ContextualizerImpl",
+    "SummarizerImpl",
+    "ContextCompressorImpl",
     "createDirectAmbiguousMastraRunner",
     "createSimpleKnowledgeMastraRunner",
     "createComplexKnowledgeMastraRunner",
@@ -554,4 +572,33 @@ test("ARCH-01F #3: no route or retrieval composition helper has a second product
       `${api}: a caller outside src/mastra must be a documented verification harness`
     )
   }
+})
+
+test("ARCH-01F #4: the route stack keeps the pre-split construction order", () => {
+  // Code review of the cutover found that ticket 52 had hoisted the tool layer
+  // to the top of the route stack, where the entry used to build it last. That
+  // is not cosmetic: MCP discovery SPAWNS a stdio child process, so hoisting it
+  // means an aborted composition (a failing direct-reply agent, say) leaves a
+  // spawned child behind with no handle to close. Pin the order the entry had
+  // at the ARCH-01 base (f2ebdc7), which is `router` -> direct-reply stream ->
+  // tool registry -> MCP bridge -> complex runner.
+  const route = codeOf(ROUTE_STACK)
+  const at = (needle: RegExp) => {
+    const index = route.search(needle)
+    assert.notEqual(index, -1, `${needle.source} is composed by the route stack`)
+    return index
+  }
+  const router = at(/new RouterImpl\(/)
+  const directReply = at(/await createDirectReplyStream\(\{/)
+  const registry = at(/registerBuiltinTools\(new ToolRegistry\(\)/)
+  const bridge = at(/await createMcpToolBridge\(\{/)
+  const complex = at(/createComplexKnowledgeMastraRunner\(\{/)
+  assert.ok(
+    router < directReply && directReply < registry,
+    "the direct-reply agent is constructed before the tool layer"
+  )
+  assert.ok(
+    registry < bridge && bridge < complex,
+    "MCP discovery happens after the registry it fills and before the runner it feeds"
+  )
 })

@@ -67,9 +67,9 @@ const INDEX_SOURCE_PATH = join(here, "..", "index.ts")
 const SHARED_ENTRY_SOURCE_PATH = join(here, "..", "mastra", "shared_answer_entry.ts")
 // ARCH-01 (tickets 49/51): the composition root is now three files — the entry
 // plus the retrieval and route stacks. Each assembly assertion below reads the
-// file that actually holds the code; only the cross-capability coexistence
-// check reads the whole region, because what it guarantees is that the
-// capabilities share ONE composition root, not that they share one file.
+// file that actually holds the code, and the cross-capability check names the
+// owning file per capability. Nothing reads the three as one blob, because "the
+// capability is somewhere in the root" says nothing about who wires it.
 const ANSWER_RETRIEVAL_STACK_SOURCE_PATH = join(
   here,
   "..",
@@ -82,9 +82,6 @@ const COMPOSITION_ROOT_PATHS = [
   ANSWER_RETRIEVAL_STACK_SOURCE_PATH,
   ANSWER_ROUTE_STACK_SOURCE_PATH,
 ]
-const COMPOSITION_ROOT_SOURCE = COMPOSITION_ROOT_PATHS.map((path) =>
-  readFileSync(path, "utf8")
-).join("\n")
 const CHAT_EVENT_ADAPTER_SOURCE_PATH = join(here, "..", "mastra", "chat_event_adapter.ts")
 const SIMPLE_RUNNER_SOURCE_PATH = join(here, "..", "mastra", "simple_knowledge_runner.ts")
 const COMPLEX_RUNNER_SOURCE_PATH = join(here, "..", "mastra", "complex_knowledge_runner.ts")
@@ -481,40 +478,41 @@ test("T17 #8: Conversation GC rollback — CONVERSATION_GC_INTERVAL_MS controls 
 
 test("T17 coexistence: runtime wires ALL T61 capabilities without mutual exclusion", () => {
   const runtimeSource = readFileSync(RUNTIME_SOURCE_PATH, "utf8")
-  // All orchestration capabilities must be wired in the same composition root.
-  // ARCH-01 split that root across the entry and its two stacks, so this is
-  // the one assertion that reads the region — what it forbids is a capability
-  // living OUTSIDE the root, which the region file list pins below.
-  const required = [
-    /RouterImpl/,
-    /PlannerImpl/,
-    /SearcherImpl/,
-    /ContextAssemblerImpl/,
-    /ValidatorImpl/,
-    /RePlannerImpl/,
-    /SqliteConversationStore/,
-    /ContextualizerImpl/,
-    /SqliteHandoffStore/,
-    /SummarizerImpl/,
-    /ContextCompressorImpl/,
-    /langfuseObserver/,
-  ]
-  for (const re of required) {
-    assert.match(
-      COMPOSITION_ROOT_SOURCE,
-      re,
-      `the composition root wires ${re.source}`
+  // All orchestration capabilities must stay wired in the shared Answer
+  // composition. ARCH-01 split that composition across the entry and its two
+  // stacks, so each capability is pinned to the ONE file that owns it. A
+  // region-wide "somewhere inside these three files" match would still pass if
+  // two files competed for a capability or a fourth absorbed one; naming the
+  // owner does not. (That each file owns NOTHING it should not is pinned from
+  // the other direction by ARCH-01F #1 in
+  // src/mastra/answer_composition_boundaries.test.ts.)
+  const CAPABILITY_OWNERS: Record<string, string> = {
+    RouterImpl: ANSWER_ROUTE_STACK_SOURCE_PATH,
+    PlannerImpl: ANSWER_ROUTE_STACK_SOURCE_PATH,
+    ContextAssemblerImpl: ANSWER_ROUTE_STACK_SOURCE_PATH,
+    ValidatorImpl: ANSWER_ROUTE_STACK_SOURCE_PATH,
+    RePlannerImpl: ANSWER_ROUTE_STACK_SOURCE_PATH,
+    ContextualizerImpl: ANSWER_ROUTE_STACK_SOURCE_PATH,
+    SummarizerImpl: ANSWER_ROUTE_STACK_SOURCE_PATH,
+    ContextCompressorImpl: ANSWER_ROUTE_STACK_SOURCE_PATH,
+    SearcherImpl: ANSWER_RETRIEVAL_STACK_SOURCE_PATH,
+    SqliteConversationStore: SHARED_ENTRY_SOURCE_PATH,
+    SqliteHandoffStore: SHARED_ENTRY_SOURCE_PATH,
+    langfuseObserver: SHARED_ENTRY_SOURCE_PATH,
+  }
+  for (const [capability, owner] of Object.entries(CAPABILITY_OWNERS)) {
+    assert.ok(
+      readFileSync(owner, "utf8").includes(capability),
+      `${capability} is wired by ${owner}`
     )
   }
-  assert.deepEqual(
-    COMPOSITION_ROOT_PATHS,
-    [
-      join(here, "..", "mastra", "shared_answer_entry.ts"),
-      join(here, "..", "mastra", "answer_retrieval_stack.ts"),
-      join(here, "..", "mastra", "answer_route_stack.ts"),
-    ],
-    "the composition root is these three files and nothing else"
-  )
+  // The three-file root is now a claim this test can fail: a root file that
+  // stopped owning any capability means the composition moved somewhere the
+  // root does not cover.
+  const owningFiles = new Set(Object.values(CAPABILITY_OWNERS))
+  for (const path of COMPOSITION_ROOT_PATHS) {
+    assert.ok(owningFiles.has(path), `${path} owns no composition capability`)
+  }
   assert.match(runtimeSource, /createLangfuseExporter/, "shared runtime constructs Langfuse exporter")
 })
 

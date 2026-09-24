@@ -146,31 +146,6 @@ export async function createAnswerRouteStack(
   const resolveTenantId = (accessContext: AccessContext) =>
     accessContext.tenantId
 
-  // Ticket 34 (TOOL-01A): the built-in read-only tool registry. Tool calls
-  // of the complex route execute through the schema-validated invocation
-  // boundary, allowlisted by the run's assistant tool policy; document
-  // lookups check tenant, scope and group visibility against the run.
-  const toolRegistry = registerBuiltinTools(new ToolRegistry(), {
-    documentRepo: new DocumentRepo(db),
-    // Read-only lookups over the same db the retrieval stack searches.
-    pageIndexRepo: new PageIndexRepository(db),
-  })
-  // Ticket 35 (TOOL-01B): discover the local read-only MCP capability server
-  // and register its status tools through the SAME boundary. A failed
-  // discovery leaves no MCP tools and chat unchanged — never a broken run.
-  const mcpBridge: McpToolBridge | null = await createMcpToolBridge({
-    registry: toolRegistry,
-    config: cfg,
-  }).catch((error: unknown) => {
-    // Ticket 35: a broken bridge must be VISIBLE but never fatal — ordinary
-    // knowledge-base chat runs without MCP tools.
-    console.warn(
-      "[mcp] capability bridge failed to compose (chat runs without MCP tools):",
-      error instanceof Error ? error.message : String(error)
-    )
-    return null
-  })
-
   const router = new RouterImpl(chatClient, cfg.openaiChatModel)
   const streamDirectReply =
     context.streamDirectReply ??
@@ -224,6 +199,36 @@ export async function createAnswerRouteStack(
     cfg.openaiChatModel
   )
   const planner = new PlannerImpl(chatClient, cfg.openaiChatModel)
+  // Ticket 34 (TOOL-01A): the built-in read-only tool registry. Tool calls
+  // of the complex route execute through the schema-validated invocation
+  // boundary, allowlisted by the run's assistant tool policy; document
+  // lookups check tenant, scope and group visibility against the run.
+  //
+  // This position is load-bearing, not stylistic: MCP discovery spawns a stdio
+  // child, so it must stay AFTER the direct-reply agent construction that
+  // precedes it in the pre-split entry. Hoisting it to the top of this function
+  // would spawn that child on a composition that then aborts, with no handle to
+  // close it.
+  const toolRegistry = registerBuiltinTools(new ToolRegistry(), {
+    documentRepo: new DocumentRepo(db),
+    // Read-only lookups over the same db the retrieval stack searches.
+    pageIndexRepo: new PageIndexRepository(db),
+  })
+  // Ticket 35 (TOOL-01B): discover the local read-only MCP capability server
+  // and register its status tools through the SAME boundary. A failed
+  // discovery leaves no MCP tools and chat unchanged — never a broken run.
+  const mcpBridge: McpToolBridge | null = await createMcpToolBridge({
+    registry: toolRegistry,
+    config: cfg,
+  }).catch((error: unknown) => {
+    // Ticket 35: a broken bridge must be VISIBLE but never fatal — ordinary
+    // knowledge-base chat runs without MCP tools.
+    console.warn(
+      "[mcp] capability bridge failed to compose (chat runs without MCP tools):",
+      error instanceof Error ? error.message : String(error)
+    )
+    return null
+  })
   const complexRunner = createComplexKnowledgeMastraRunner({
     router,
     createSearcher,

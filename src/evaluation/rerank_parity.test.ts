@@ -82,9 +82,12 @@ test("both paths retrieve through the same operations and searcher", () => {
   )
   // Ticket 31 (FAQ-01B) + Ticket 22 (ATT-01) + Ticket 36 (WEB-01): the ONE
   // searcher factory wires the optional FAQ/attachment/web channels alongside
-  // the operations. Asserted semantically (which arguments the single
-  // `new SearcherImpl` receives) rather than by source text, so moving the
-  // factory between files cannot silently drop a channel.
+  // the operations. This is a source-text check on the factory's argument
+  // list, and it is honestly only that: it proves one `new SearcherImpl` exists
+  // in the stack and names all four channels where it is built, so moving the
+  // factory to another file means retargeting this scan (done in ARCH-01B), not
+  // that a dropped channel is caught semantically. The channels' actual wiring
+  // is behavior-tested in the retrieval-stack suite.
   const searcherCalls = retrievalStack.match(/new SearcherImpl\(([^)]*)\)/g) ?? []
   assert.equal(searcherCalls.length, 1, "the stack builds searchers through one factory")
   const searcherArgs = searcherCalls[0]
