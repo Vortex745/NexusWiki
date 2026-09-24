@@ -88,6 +88,7 @@ function listSourceFiles(): string[] {
     "mastra/chat_event_adapter.ts",
     "mastra/shared_answer_entry.ts",
     "mastra/answer_retrieval_stack.ts",
+    "mastra/answer_route_stack.ts",
     "mastra/stop_conditions.ts",
     "mastra/promotion_gate.ts",
     "mastra/runtime_boundary.ts",

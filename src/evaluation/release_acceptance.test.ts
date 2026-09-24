@@ -65,6 +65,26 @@ const INDEX_SOURCE_PATH = join(here, "..", "index.ts")
 // assertions read the new composition site; index.ts still owns process
 // wiring (server, worker, GC, shutdown).
 const SHARED_ENTRY_SOURCE_PATH = join(here, "..", "mastra", "shared_answer_entry.ts")
+// ARCH-01 (tickets 49/51): the composition root is now three files — the entry
+// plus the retrieval and route stacks. Each assembly assertion below reads the
+// file that actually holds the code; only the cross-capability coexistence
+// check reads the whole region, because what it guarantees is that the
+// capabilities share ONE composition root, not that they share one file.
+const ANSWER_RETRIEVAL_STACK_SOURCE_PATH = join(
+  here,
+  "..",
+  "mastra",
+  "answer_retrieval_stack.ts"
+)
+const ANSWER_ROUTE_STACK_SOURCE_PATH = join(here, "..", "mastra", "answer_route_stack.ts")
+const COMPOSITION_ROOT_PATHS = [
+  SHARED_ENTRY_SOURCE_PATH,
+  ANSWER_RETRIEVAL_STACK_SOURCE_PATH,
+  ANSWER_ROUTE_STACK_SOURCE_PATH,
+]
+const COMPOSITION_ROOT_SOURCE = COMPOSITION_ROOT_PATHS.map((path) =>
+  readFileSync(path, "utf8")
+).join("\n")
 const CHAT_EVENT_ADAPTER_SOURCE_PATH = join(here, "..", "mastra", "chat_event_adapter.ts")
 const SIMPLE_RUNNER_SOURCE_PATH = join(here, "..", "mastra", "simple_knowledge_runner.ts")
 const COMPLEX_RUNNER_SOURCE_PATH = join(here, "..", "mastra", "complex_knowledge_runner.ts")
@@ -184,13 +204,17 @@ test("T17 #2: Complex loop controller module exists with tool-selection gate (T1
 })
 
 test("T17 #2: Runtime wires compressor + handoff + summarizer (coexistence of T61 capabilities)", () => {
-  const source = readFileSync(SHARED_ENTRY_SOURCE_PATH, "utf8")
+  // ARCH-01D: the injection seam defaults and the event adapter stayed in the
+  // entry; the runners they feed moved into the route stack. Asserted where
+  // they live so a future move has to update the check, not pass it by accident.
+  const entrySource = readFileSync(SHARED_ENTRY_SOURCE_PATH, "utf8")
+  const source = readFileSync(ANSWER_ROUTE_STACK_SOURCE_PATH, "utf8")
   // All three T61 capabilities must be wired in the Mastra composition root.
   assert.match(source, /compressor:\s*new ContextCompressorImpl/, "compressor wired")
   // Ticket 01: handoffStore is an injection seam defaulting to the production
   // SQLite store (const handoffStore = options.handoffStore ?? new SqliteHandoffStore(db)).
   assert.match(
-    source,
+    entrySource,
     /const handoffStore = options\.handoffStore\s*\?\?\s*new SqliteHandoffStore/,
     "handoffStore wired",
   )
@@ -212,7 +236,7 @@ test("T17 #2: Runtime wires compressor + handoff + summarizer (coexistence of T6
   )
   assert.match(source, /toolSelector:\s*new ToolSelectorImpl\(chatClient,\s*cfg\.openaiChatModel\)/)
   assert.match(
-    source,
+    entrySource,
     /createMastraChatEventAdapter\(\{[\s\S]*?budgetMs,\s*\n\s*resourceBudget,/,
   )
 })
@@ -353,9 +377,15 @@ test("T17 #6: Session/run/Evidence identities use stable prefixes (no identity f
 })
 
 test("T17 #6: History replay via conversation store (SqliteConversationStore wired)", () => {
+  // ARCH-01D: the store default stayed with the entry (it is an injection
+  // seam); the Mastra memory adapter that replays history is a route concern.
   const source = readFileSync(SHARED_ENTRY_SOURCE_PATH, "utf8")
   assert.match(source, /SqliteConversationStore/, "SqliteConversationStore wired (history replay)")
-  assert.match(source, /createMastraMemoryAdapter\(\{ conversationStore \}\)/, "conversationStore wired into Mastra memory")
+  assert.match(
+    readFileSync(ANSWER_ROUTE_STACK_SOURCE_PATH, "utf8"),
+    /createMastraMemoryAdapter\(\{ conversationStore \}\)/,
+    "conversationStore wired into Mastra memory"
+  )
 })
 
 test("T17 #6: API chat endpoint preserves {message, stream} request shape", () => {
@@ -451,8 +481,10 @@ test("T17 #8: Conversation GC rollback — CONVERSATION_GC_INTERVAL_MS controls 
 
 test("T17 coexistence: runtime wires ALL T61 capabilities without mutual exclusion", () => {
   const runtimeSource = readFileSync(RUNTIME_SOURCE_PATH, "utf8")
-  const source = readFileSync(SHARED_ENTRY_SOURCE_PATH, "utf8")
   // All orchestration capabilities must be wired in the same composition root.
+  // ARCH-01 split that root across the entry and its two stacks, so this is
+  // the one assertion that reads the region — what it forbids is a capability
+  // living OUTSIDE the root, which the region file list pins below.
   const required = [
     /RouterImpl/,
     /PlannerImpl/,
@@ -468,8 +500,21 @@ test("T17 coexistence: runtime wires ALL T61 capabilities without mutual exclusi
     /langfuseObserver/,
   ]
   for (const re of required) {
-    assert.match(source, re, `runtime wires ${re.source}`)
+    assert.match(
+      COMPOSITION_ROOT_SOURCE,
+      re,
+      `the composition root wires ${re.source}`
+    )
   }
+  assert.deepEqual(
+    COMPOSITION_ROOT_PATHS,
+    [
+      join(here, "..", "mastra", "shared_answer_entry.ts"),
+      join(here, "..", "mastra", "answer_retrieval_stack.ts"),
+      join(here, "..", "mastra", "answer_route_stack.ts"),
+    ],
+    "the composition root is these three files and nothing else"
+  )
   assert.match(runtimeSource, /createLangfuseExporter/, "shared runtime constructs Langfuse exporter")
 })
 
@@ -497,11 +542,12 @@ test("T17 coexistence: ACL scopes (tenant/subject/groups) preserved across all c
 // ---------------------------------------------------------------------------
 
 test("T17: ComplexLoopControllerImpl is wired into the Mastra composition root", () => {
-  const entrySource = readFileSync(SHARED_ENTRY_SOURCE_PATH, "utf8")
+  // ARCH-01D: the bounded complex loop is composed by the route stack.
+  const routeSource = readFileSync(ANSWER_ROUTE_STACK_SOURCE_PATH, "utf8")
   const complexLoopSource = readFileSync(join(here, "..", "retrieval", "complex_loop.ts"), "utf8")
   assert.match(complexLoopSource, /export class ComplexLoopControllerImpl/, "ComplexLoopControllerImpl defined")
-  assert.match(entrySource, /new ComplexLoopControllerImpl/, "ComplexLoopControllerImpl wired")
-  assert.match(entrySource, /complexLoopController,/, "controller passed to complex runner")
+  assert.match(routeSource, /new ComplexLoopControllerImpl/, "ComplexLoopControllerImpl wired")
+  assert.match(routeSource, /complexLoopController,/, "controller passed to complex runner")
 })
 
 test("T17: enforced management routes use production identity admission", () => {

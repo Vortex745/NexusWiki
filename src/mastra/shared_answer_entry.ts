@@ -28,27 +28,16 @@ import type {
   AnswerRunObserver,
   AnswerRunOptions,
 } from "../answer/generation"
-import { OpenAIAnswerModel } from "../answer/generation"
 import type { ConversationStore } from "../answer/conversation_store"
 import { SqliteConversationStore } from "../answer/conversation_store"
 import type { HandoffStore } from "../answer/handoff_store"
 import { SqliteHandoffStore } from "../answer/handoff_store"
-import { ContextualizerImpl } from "../answer/contextualizer"
-import { SummarizerImpl } from "../answer/summarizer"
-import { ContextCompressorImpl } from "../answer/context_compressor"
 import {
   langfuseObserver,
   NoopLangfuseExporter,
 } from "../answer/langfuse_exporter"
-import { RouterImpl } from "../retrieval/router/router"
 import type { SearchOperations } from "../retrieval/search/searcher"
 import type { Reranker } from "../retrieval/search/dedicated_reranker"
-import { ContextAssemblerImpl } from "../retrieval/context/assembler"
-import { PlannerImpl } from "../retrieval/planner/planner"
-import { ComplexLoopControllerImpl } from "../retrieval/complex_loop"
-import { ToolSelectorImpl } from "../retrieval/tool_selector"
-import { ValidatorImpl } from "../critic/validator/validator"
-import { RePlannerImpl } from "../critic/replanner/replanner"
 import { PageIndexRepository } from "../ingestion/tracking/page_index_repo"
 import { DocumentRepo } from "../ingestion/tracking/doc_repo"
 import {
@@ -56,34 +45,22 @@ import {
   DEFAULT_RUN_BUDGET_MS,
   type RunResourceBudgetOptions,
 } from "../runtime/run_context"
-import type { AccessContext } from "../access/context"
-import type { AgentMessage, AnswerRunEvent, AnswerRunResult } from "../types"
+import type { AnswerRunEvent, AnswerRunResult } from "../types"
 import type { AnswerModelProfileSnapshot } from "../types/answer"
 import type { AttachmentSearchOperations } from "../types/retrieval"
 import { knowledgeBaseEmbeddingProfile } from "../types/knowledge_base"
 import { createMastraChatEventAdapter } from "./chat_event_adapter"
 import { createAnswerRetrievalStack } from "./answer_retrieval_stack"
-import type { AssistantRunSnapshot } from "../assistants/assistant_service"
+import { createAnswerRouteStack } from "./answer_route_stack"
 import type { FaqEntryService } from "../faq/faq_entry_service"
-import { createFaqExactMatchRunner } from "./faq_exact_runner"
 import type { LongTermMemoryStore } from "../memory/long_term_memory_store"
 import type { MemorySuggestionStore } from "../memory/memory_suggestion_store"
-import { createMemoryRecallRunner } from "./memory_recall_runner"
 import type { WebEvidenceOperations } from "../types/retrieval"
 import { ToolRegistry, ToolInvocationService } from "../tools/invocation"
 import { registerBuiltinTools } from "../tools/knowledge_tools"
 import { createMcpToolBridge, type McpToolBridge } from "../mcp/tool_bridge"
 import { singleTenantAccessContext } from "../access/context"
-import {
-  createDirectAmbiguousMastraRunner,
-  type DirectReplyStream,
-} from "./direct_ambiguous_runner"
-import { createDirectReplyStream } from "./direct_reply_stream"
-import { createMastraMemoryAdapter } from "./memory_adapter"
-import { createSimpleKnowledgeMastraRunner } from "./simple_knowledge_runner"
-import { createComplexKnowledgeMastraRunner } from "./complex_knowledge_runner"
-import { createRouteDispatchRunner } from "./route_dispatch_runner"
-import { createMastraWorkflowRunner } from "./workflow_runner"
+import { type DirectReplyStream } from "./direct_ambiguous_runner"
 
 /**
  * Transport-level event source signature — structurally identical to
@@ -262,62 +239,7 @@ export async function createSharedAnswerEntry(
   })
   const searchOperations = retrieval.searchOperations
   const handoffStore = options.handoffStore ?? new SqliteHandoffStore(db)
-  const resolveTenantId = (accessContext: AccessContext) =>
-    accessContext.tenantId
 
-  const router = new RouterImpl(chatClient, cfg.openaiChatModel)
-  const streamDirectReply =
-    options.streamDirectReply ??
-    (await createDirectReplyStream({
-      model: cfg.openaiChatModel,
-      apiKey: cfg.openaiApiKey,
-      ...(cfg.openaiBaseUrl ? { baseURL: cfg.openaiBaseUrl } : {}),
-      timeout: cfg.openaiRequestTimeoutMs,
-      maxRetries: cfg.openaiMaxRetries,
-    }))
-  // Ticket 10 — Conversation Memory adapter (pass-through to the injected
-  // ConversationStore).
-  const memoryAdapter = createMastraMemoryAdapter({ conversationStore })
-  const summarizer = new SummarizerImpl(chatClient, cfg.openaiChatModel)
-
-  // Ticket 09 — direct + ambiguous route runner (no Handoff by design).
-  const directAmbiguousRunner = createDirectAmbiguousMastraRunner({
-    router,
-    streamDirectReply,
-    conversationStore,
-    resolveTenantId,
-    memoryAdapter,
-    summarizer,
-  })
-
-  // The Mastra runners reuse the existing retrieval, validation, memory,
-  // handoff, and summarization components (production implementations).
-  const answerModel = new OpenAIAnswerModel(chatClient, cfg.openaiChatModel)
-  const contextualizer = new ContextualizerImpl(chatClient, cfg.openaiChatModel)
-  const simpleRunner = createSimpleKnowledgeMastraRunner({
-    router,
-    createSearcher: retrieval.createSearcher,
-    assembler: new ContextAssemblerImpl(),
-    validator: new ValidatorImpl(chatClient, cfg.openaiChatModel),
-    replanner: new RePlannerImpl(),
-    streamAnswerDraft: (messages: AgentMessage[], signal: AbortSignal) =>
-      answerModel.stream(messages, signal),
-    toolSelector: new ToolSelectorImpl(chatClient, cfg.openaiChatModel),
-    conversationStore,
-    contextualizer,
-    summarizer,
-    compressor: new ContextCompressorImpl(chatClient, cfg.openaiChatModel),
-    handoffStore,
-    resolveTenantId,
-  })
-
-  // Ticket 12 — complex knowledge route runner (bounded LLM retrieval loop
-  // with planner fallback).
-  const complexLoopController = new ComplexLoopControllerImpl(
-    chatClient,
-    cfg.openaiChatModel
-  )
-  const planner = new PlannerImpl(chatClient, cfg.openaiChatModel)
   // Ticket 34 (TOOL-01A): the built-in read-only tool registry. Tool calls
   // of the complex route execute through the schema-validated invocation
   // boundary, allowlisted by the run's assistant tool policy; document
@@ -342,63 +264,30 @@ export async function createSharedAnswerEntry(
     )
     return null
   })
-  const complexRunner = createComplexKnowledgeMastraRunner({
-    router,
-    createSearcher: retrieval.createSearcher,
-    assembler: new ContextAssemblerImpl(),
-    validator: new ValidatorImpl(chatClient, cfg.openaiChatModel),
-    replanner: new RePlannerImpl(),
-    streamAnswerDraft: (messages: AgentMessage[], signal: AbortSignal) =>
-      answerModel.stream(messages, signal),
-    planner,
-    complexLoopController,
-    // Ticket 34 (TOOL-01A): the schema-validated tool boundary.
-    toolRegistry,
-    // Ticket 35 (TOOL-01B): discovered MCP tools join the read-only allowlist.
-    ...(mcpBridge && mcpBridge.toolNames().length > 0
-      ? { mcpToolNames: mcpBridge.toolNames() }
-      : {}),
-    conversationStore,
-    contextualizer,
-    summarizer,
-    compressor: new ContextCompressorImpl(chatClient, cfg.openaiChatModel),
-    handoffStore,
-    resolveTenantId,
-  })
 
-  // Ticket 11 + Ticket 12 — route dispatch composes all four routes into a
-  // single route-aware MastraRunner with one authoritative route decision.
-  const dispatchRunner = createRouteDispatchRunner({
-    router,
-    simpleRunner,
-    directAmbiguousRunner,
-    complexRunner,
+  // Ticket 51 (ARCH-01D): everything about HOW a run routes and produces its
+  // answer — the router, the four runners, the single dispatch and the
+  // FAQ/memory/workflow wrappers — lives in the route stack. The entry keeps
+  // only what a caller observes.
+  const { runner } = await createAnswerRouteStack({
+    config: cfg,
+    answerModelClient: chatClient,
+    createSearcher: retrieval.createSearcher,
     conversationStore,
-    contextualizer,
-    resolveTenantId,
+    handoffStore,
+    ...(options.streamDirectReply
+      ? { streamDirectReply: options.streamDirectReply }
+      : {}),
+    ...(options.faq ? { faq: options.faq } : {}),
+    ...(options.memories ? { memories: options.memories } : {}),
+    ...(options.suggestions ? { suggestions: options.suggestions } : {}),
+    tooling: {
+      toolRegistry,
+      ...(mcpBridge && mcpBridge.toolNames().length > 0
+        ? { mcpToolNames: mcpBridge.toolNames() }
+        : {}),
+    },
   })
-  // Ticket 31 (FAQ-01B): the exact-FAQ gate sits in front of routing — a
-  // unique normalized match publishes the stored standard answer without a
-  // model call, while everything else runs the normal routes unchanged.
-  // Ticket 33 (MEM-01B): memory recall + suggestion extraction wrap the
-  // routes INSIDE the FAQ gate — a direct standard answer needs neither.
-  const runner = await createMastraWorkflowRunner(
-    createFaqExactMatchRunner(
-      {
-        ...(options.faq ? { faq: options.faq } : {}),
-        conversationStore,
-        resolveTenantId,
-      },
-      createMemoryRecallRunner(
-        {
-          ...(options.memories ? { memories: options.memories } : {}),
-          ...(options.suggestions ? { suggestions: options.suggestions } : {}),
-          resolveTenantId,
-        },
-        dispatchRunner
-      )
-    )
-  )
 
   // Observer fanout (T06 §5.3 order): traceObserver (hard) first, then the
   // Langfuse observer when Real, then any injected observers (evaluation).

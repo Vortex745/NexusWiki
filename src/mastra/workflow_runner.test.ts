@@ -45,20 +45,29 @@ test("P1 regression: production dispatch executes through a real one-step Mastra
     assert.match(source, new RegExp(`\\b${api}\\b`), `wrapper must use ${api}`)
   }
 
-  const entrySource = readFileSync(path.join(__dirname, "shared_answer_entry.ts"), "utf8")
   // Tickets 31/33 (FAQ-01B, MEM-01B): the dispatch runner is wrapped by the
   // FAQ exact-match and memory recall gates INSIDE the workflow — the P1
   // property still holds: production dispatch (however composed) executes
   // through the real Mastra Workflow, never around it.
+  // ARCH-01D (ticket 51): that nesting is composed by the route stack, so the
+  // check follows the code. The entry must not wrap a runner itself — a second
+  // workflow outside this one would double the cancellation boundary.
+  const routeSource = readFileSync(path.join(__dirname, "answer_route_stack.ts"), "utf8")
   assert.match(
-    entrySource,
+    routeSource,
     /const runner = await createMastraWorkflowRunner\(\s*createFaqExactMatchRunner\(/,
     "production dispatch must be wrapped by the real Mastra Workflow"
   )
   assert.match(
-    entrySource,
+    routeSource,
     /createFaqExactMatchRunner\(\s*\{[\s\S]*?createMemoryRecallRunner\(\s*\{[\s\S]*?dispatchRunner/,
     "FAQ and memory gates compose the dispatch runner inside the workflow"
+  )
+  const entrySource = readFileSync(path.join(__dirname, "shared_answer_entry.ts"), "utf8")
+  assert.equal(
+    /createMastraWorkflowRunner\(/.test(entrySource),
+    false,
+    "the entry adapts the route stack's runner and never wraps a second workflow"
   )
 })
 

@@ -143,39 +143,46 @@ test("ARCH-01A #6: the entry does not re-export an internal composition stack to
   )
 })
 
-test("ARCH-01A #6: the retrieval stack takes a narrow context, not the entry's options", () => {
-  // Ticket 49 acceptance: the stack must not accept or retain the complete
+test("ARCH-01B/C/D #5: each stack takes a narrow context, not the entry's options", () => {
+  // Tickets 49/51 acceptance: a stack must not accept or retain the complete
   // SharedAnswerEntryOptions object. Anything that would let it reach request
-  // concerns (observers, budgets, the runtime) is checked structurally here.
-  // Comments are stripped first — the stack documents what it deliberately
-  // does NOT own, and prose must not trip the check.
-  const source = sourceOf("src/mastra/answer_retrieval_stack.ts")
-    .replace(/\/\*[\s\S]*?\*\//g, "")
-    .replace(/^\s*\/\/.*$/gm, "")
-  assert.ok(existsSync(join(REPO_ROOT, "src/mastra/answer_retrieval_stack.ts")))
-  for (const forbidden of [
-    "SharedAnswerEntryOptions",
-    "AnswerRuntime",
-    "traceObserver",
-    "observers",
-    "budgetMs",
-    "resourceBudget",
-    "eventsSource",
-  ]) {
-    assert.equal(
-      source.includes(forbidden),
-      false,
-      `the retrieval stack must not know about ${forbidden}`
+  // concerns (observers, budgets, the runtime, the events source) is checked
+  // structurally here. Comments are stripped first — a stack documents what it
+  // deliberately does NOT own, and prose must not trip the check.
+  const stacks: Array<{ file: string; factory: string }> = [
+    { file: "src/mastra/answer_retrieval_stack.ts", factory: "createAnswerRetrievalStack" },
+    { file: "src/mastra/answer_route_stack.ts", factory: "createAnswerRouteStack" },
+  ]
+  for (const { file, factory } of stacks) {
+    assert.ok(existsSync(join(REPO_ROOT, file)), `${file} exists`)
+    const source = sourceOf(file)
+      .replace(/\/\*[\s\S]*?\*\//g, "")
+      .replace(/^\s*\/\/.*$/gm, "")
+    for (const forbidden of [
+      "SharedAnswerEntryOptions",
+      "AnswerRuntime",
+      "traceObserver",
+      "observers",
+      "budgetMs",
+      "resourceBudget",
+      "eventsSource",
+      "langfuse",
+      "modelProfile",
+    ]) {
+      assert.equal(
+        source.includes(forbidden),
+        false,
+        `${factory}'s module must not know about ${forbidden}`
+      )
+    }
+    // It is composed by the entry and by nothing else — a second caller would be
+    // a second, undocumented composition seam.
+    const callers = AREA.filter(
+      (candidate) =>
+        candidate !== file && new RegExp(`${factory}\\(`).test(sourceOf(candidate))
     )
+    assert.deepEqual(callers, [ENTRY], `${factory} has exactly one caller`)
   }
-  // It is composed by the entry and by nothing else — a second caller would be
-  // a second, undocumented retrieval seam.
-  const stackCallers = AREA.filter(
-    (file) =>
-      file !== "src/mastra/answer_retrieval_stack.ts" &&
-      /createAnswerRetrievalStack\(/.test(sourceOf(file))
-  )
-  assert.deepEqual(stackCallers, ["src/mastra/shared_answer_entry.ts"])
 })
 
 test("ARCH-01A #6: chat and isolated evaluation are the only production callers", () => {
@@ -226,6 +233,43 @@ function productionSources(): string[] {
   walk(join(REPO_ROOT, "src"))
   return out.sort()
 }
+
+test("ARCH-01D #5: the route stack's only retrieval dependency is the searcher factory", () => {
+  // The entry hands the route stack ONE function for retrieval, so a route can
+  // never reach search operations, the reranker or an evidence channel — the
+  // layering ticket 47 §Design fixes.
+  const source = sourceOf("src/mastra/answer_route_stack.ts")
+    .replace(/\/\*[\s\S]*?\*\//g, "")
+    .replace(/^\s*\/\/.*$/gm, "")
+  for (const forbidden of [
+    "SearchOperations",
+    "RuntimeSearchOperations",
+    "createDedicatedReranker",
+    "Reranker",
+    "AttachmentSearchOperations",
+    "WebEvidenceOperations",
+    "createFaqEvidenceOperations",
+  ]) {
+    assert.equal(
+      source.includes(forbidden),
+      false,
+      `the route stack must not name ${forbidden}`
+    )
+  }
+  assert.match(
+    source,
+    /createSearcher: \(\s*assistant\?: AssistantRunSnapshot\s*\) => SearcherImpl/
+  )
+})
+
+test("ARCH-01D #6: the entry adapts the route stack's runner and nothing else", () => {
+  const entry = sourceOf(ENTRY)
+  assert.match(
+    entry,
+    /const \{ runner \} = await createAnswerRouteStack\(\{/,
+    "the entry consumes exactly the route stack's one exported runner"
+  )
+})
 
 test("ARCH-01C #6: the entry forwards every retrieval seam into the stack", () => {
   // Dropping a seam here would silently narrow what an evaluation scope, a
