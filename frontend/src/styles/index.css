@@ -35,15 +35,11 @@
     0 20px 45px -15px rgb(15 23 42 / 0.14), 0 0 0 1px rgb(15 23 42 / 0.06);
 
   --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
-  --ease-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
-  --ease-drawer: cubic-bezier(0.32, 0.72, 0, 1);
 
   --animate-message-in: message-in 160ms var(--ease-out) both;
-  /* User bubbles launch: the spring curve overshoots slightly — the bubble
-     lands with a tiny bounce, mirroring the press-and-release on Send. */
-  --animate-message-send: message-send 170ms var(--ease-spring) both;
-  --animate-thinking: thinking 1.15s ease-in-out infinite;
-  --animate-fade-in: fade-in 180ms ease-out both;
+  /* fade-in takes the shared custom ease like every other motion token; the
+     bare `ease-out` keyword would fall back to the weak built-in curve. */
+  --animate-fade-in: fade-in 180ms var(--ease-out) both;
   /* Welcome suggestions cascade in with a 45ms stagger (set per-card inline). */
   --animate-suggestion-in: suggestion-in 220ms var(--ease-out) both;
 
@@ -135,30 +131,6 @@
   }
   to {
     transform: translateY(0);
-    opacity: 1;
-  }
-}
-
-@keyframes message-send {
-  from {
-    transform: scale(0.97) translateY(3px);
-    opacity: 0;
-  }
-  to {
-    transform: scale(1) translateY(0);
-    opacity: 1;
-  }
-}
-
-@keyframes thinking {
-  0%,
-  75%,
-  100% {
-    transform: translateY(0);
-    opacity: 0.35;
-  }
-  38% {
-    transform: translateY(-4px);
     opacity: 1;
   }
 }
@@ -380,7 +352,6 @@ dialog[open]::backdrop {
   }
 
   .animate-message-in,
-  .animate-message-send,
   .animate-fade-in,
   .animate-suggestion-in {
     animation-duration: 1ms !important;
@@ -407,8 +378,22 @@ dialog[open]::backdrop {
     scale: none !important;
   }
 
-  .animate-thinking {
-    animation-name: thinking-reduced !important;
+  /* Chevron rotations and the mobile drawer's slide are transform-based
+     movement — freeze them under reduced motion. */
+  [class*="transition-transform"] {
+    transition: none !important;
+  }
+
+  /* ScrollToBottom shrinks through `scale` when disabled — pin it the same
+     way, also as a lone declaration (see button:active above). */
+  button:disabled {
+    scale: none !important;
+  }
+
+  /* Tooltips scale in from their trigger — neutralize `scale` so only the
+     opacity fade remains (lone declaration, same minifier trap as above). */
+  [role="tooltip"] {
+    scale: none !important;
   }
 
   /* transitions.dev guards — keep content legible, drop the motion. */
@@ -424,18 +409,5 @@ dialog[open]::backdrop {
      without tweening. */
   .t-reason-scroll {
     transition: none !important;
-  }
-}
-
-@keyframes thinking-reduced {
-  0%,
-  75%,
-  100% {
-    opacity: 0.35;
-    transform: none;
-  }
-  38% {
-    opacity: 1;
-    transform: none;
   }
 }

@@ -422,7 +422,7 @@ export function Sidebar({ open, collapsed, isDark, onToggleTheme, onCloseMobile 
       <aside
         aria-label="对话列表"
         className={cn(
-          "relative z-30 flex w-64 min-w-64 flex-col border-r border-line bg-surface px-3 pb-3 pt-3 transition-[margin-left] duration-200 ease-drawer",
+          "relative z-30 flex w-64 min-w-64 flex-col border-r border-line bg-surface px-3 pb-3 pt-3",
           collapsed && "-ml-64",
           "max-md:fixed max-md:inset-y-0 max-md:left-0 max-md:ml-0 max-md:w-[min(84vw,280px)] max-md:min-w-[min(84vw,280px)] max-md:shadow-lg max-md:transition-transform",
           open ? "max-md:translate-x-0" : "max-md:-translate-x-full",

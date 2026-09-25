@@ -56,7 +56,7 @@ export function ReferencesPanel({ references, detailsRef, highlightedId }: Refer
       className="mt-3 w-full rounded-xl border border-line bg-surface-subtle/60 p-2.5 text-muted"
     >
       <summary className="flex min-h-7 cursor-pointer list-none select-none items-center gap-1.5 text-xs font-medium text-muted transition-colors hover:text-ink">
-        <Icon icon={ChevronDown} className="size-3.5 transition-transform" />
+        <Icon icon={ChevronDown} className="size-3.5" />
         参考来源 {references.length}
       </summary>
       <ol className="mt-1.5 list-none">

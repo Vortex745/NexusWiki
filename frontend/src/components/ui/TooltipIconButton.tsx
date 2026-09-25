@@ -36,8 +36,11 @@ export function TooltipIconButton({
         className={cn(
           "pointer-events-none absolute left-1/2 z-50 -translate-x-1/2 whitespace-nowrap rounded-md",
           "bg-neutral-900 px-2 py-1 text-[11px] leading-4 text-white opacity-0 shadow-sm",
-          "transition-opacity duration-150 group-hover/tip:opacity-100 group-focus-within/tip:opacity-100",
-          side === "top" ? "bottom-[calc(100%+6px)]" : "top-[calc(100%+6px)]",
+          "scale-[0.98] transition-[opacity,scale] duration-150 ease-out",
+          "group-hover/tip:scale-100 group-hover/tip:opacity-100 group-focus-within/tip:scale-100 group-focus-within/tip:opacity-100",
+          side === "top"
+            ? "bottom-[calc(100%+6px)] origin-bottom"
+            : "top-[calc(100%+6px)] origin-top",
         )}
       >
         {tooltip}

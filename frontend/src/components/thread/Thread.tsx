@@ -248,7 +248,7 @@ function Composer({ attachmentsProps }: { attachmentsProps: ThreadAttachmentsPro
   const fileInputRef = useRef<HTMLInputElement>(null)
 
   return (
-    <ComposerPrimitive.Root className="flex w-full flex-wrap items-end rounded-full border border-line bg-surface px-2.5 shadow-composer transition-colors ease-in focus-within:border-brand/20">
+    <ComposerPrimitive.Root className="flex w-full flex-wrap items-end rounded-full border border-line bg-surface px-2.5 shadow-composer transition-colors ease-out focus-within:border-brand/20">
       <TooltipIconButton
         tooltip="添加文本附件"
         className="mb-2.5 size-8"
@@ -345,7 +345,9 @@ function UserMessage() {
         </ActionBarPrimitive.Edit>
       </ActionBarPrimitive.Root>
 
-      <div className="col-start-2 row-start-2 max-w-[calc(var(--thread-max-width)*0.8)] animate-message-send break-words rounded-3xl bg-brand px-5 py-2.5 text-sm text-white">
+      {/* No send animation by design: Enter-to-send is the app's highest-
+          frequency keyboard action — the bubble appears instantly. */}
+      <div className="col-start-2 row-start-2 max-w-[calc(var(--thread-max-width)*0.8)] break-words rounded-3xl bg-brand px-5 py-2.5 text-sm text-white">
         <MessagePrimitive.Parts components={{ Text: UserText }} />
       </div>
 

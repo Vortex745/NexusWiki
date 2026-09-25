@@ -179,12 +179,17 @@ export function StatusPopover() {
         <Icon icon={ChevronRight} className="size-3 shrink-0 rotate-90 text-muted/60" />
       </button>
 
-      {open ? (
-        <div
-          role="dialog"
-          aria-label="知识库连接详情"
-          className="absolute bottom-[calc(100%+6px)] left-0 right-0 z-50 max-h-[min(60vh,380px)] overflow-y-auto rounded-xl border border-line bg-surface p-3.5 shadow-dialog"
-        >
+      <div
+        role="dialog"
+        aria-label="知识库连接详情"
+        inert={!open}
+        className={cn(
+          "absolute bottom-[calc(100%+6px)] left-0 right-0 z-50 max-h-[min(60vh,380px)]",
+          "origin-bottom-left overflow-y-auto rounded-xl border border-line bg-surface p-3.5 shadow-dialog",
+          "transition-[opacity,scale] duration-150 ease-out",
+          open ? "scale-100 opacity-100" : "pointer-events-none scale-[0.97] opacity-0",
+        )}
+      >
           <div className="mb-2 flex items-center justify-between gap-2">
             <h3 className="text-xs font-semibold text-ink">服务状态</h3>
             <button
@@ -210,8 +215,7 @@ export function StatusPopover() {
               ))}
             </ul>
           ) : null}
-        </div>
-      ) : null}
+      </div>
     </div>
   )
 }

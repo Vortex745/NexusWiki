@@ -354,7 +354,7 @@ export function ImportDialog({
                 type="button"
                 onClick={() => setUrlMode(item.id)}
                 className={cn(
-                  "relative flex h-8 cursor-pointer items-center justify-center rounded-[6px] px-4 text-[13px] font-medium transition-all duration-200",
+                  "relative flex h-8 cursor-pointer items-center justify-center rounded-[6px] px-4 text-[13px] font-medium transition-[color,background-color,box-shadow] duration-150 ease-out",
                   urlMode === item.id
                     ? "bg-surface text-ink shadow-sm"
                     : "text-muted hover:bg-surface/50 hover:text-ink",
@@ -401,7 +401,7 @@ export function ImportDialog({
               type="button"
               disabled={submitting}
               onClick={() => void handleUrlImport()}
-              className="mt-2 inline-flex h-10 w-full cursor-pointer items-center justify-center gap-2 rounded-[8px] bg-neutral-900 px-4 text-[14px] font-medium text-white shadow-sm transition-all hover:bg-neutral-800 hover:shadow-md active:scale-[0.97] disabled:cursor-not-allowed disabled:opacity-50 disabled:active:scale-100 dark:bg-neutral-200 dark:text-neutral-900 dark:hover:bg-white"
+              className="mt-2 inline-flex h-10 w-full cursor-pointer items-center justify-center gap-2 rounded-[8px] bg-neutral-900 px-4 text-[14px] font-medium text-white shadow-sm transition-[color,background-color,border-color,box-shadow,transform,translate,scale] duration-150 ease-out hover:bg-neutral-800 hover:shadow-md active:scale-[0.97] disabled:cursor-not-allowed disabled:opacity-50 disabled:active:scale-100 dark:bg-neutral-200 dark:text-neutral-900 dark:hover:bg-white"
             >
               {submitting ? "导入中…" : urlMode === "single" ? "导入该网页" : "批量导入"}
             </button>
