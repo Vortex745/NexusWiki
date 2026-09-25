@@ -103,7 +103,7 @@ function ProfileRow({
             onClick={() => onTest(profile)}
             disabled={busy}
             title="按该配置自身的协议做一次连通性测试"
-            className="inline-flex h-8 cursor-pointer items-center gap-1.5 rounded-lg bg-brand px-2.5 text-xs font-medium text-white transition-[colors,transform] duration-150 ease-out hover:bg-brand-hover active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-50"
+            className="inline-flex h-8 cursor-pointer items-center gap-1.5 rounded-lg bg-brand px-2.5 text-xs font-medium text-white transition-[color,background-color,border-color,transform,translate,scale] duration-150 ease-out hover:bg-brand-hover active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-50"
           >
             <Icon icon={PlugZap} className="size-3.5" />
             测试连接
@@ -219,7 +219,7 @@ export function SettingsDialog({ open, onClose }: { open: boolean; onClose: () =
         if (event.target === event.currentTarget) onClose()
       }}
       aria-labelledby="settings-title"
-      className="m-auto h-[min(640px,calc(100dvh-48px))] w-[min(620px,calc(100vw-32px))] grid-rows-[auto_minmax(0,1fr)] overflow-hidden rounded-xl border border-line bg-surface text-ink shadow-dialog backdrop:bg-black/20 open:grid open:animate-dialog-enter max-md:m-0 max-md:h-dvh max-md:w-screen max-md:rounded-none max-md:border-0"
+      className="m-auto h-[min(640px,calc(100dvh-48px))] w-[min(620px,calc(100vw-32px))] grid-rows-[auto_minmax(0,1fr)] overflow-hidden rounded-xl border border-line bg-surface text-ink shadow-dialog backdrop:bg-black/20 open:grid max-md:m-0 max-md:h-dvh max-md:w-screen max-md:rounded-none max-md:border-0"
     >
       <div className="flex h-13 flex-none items-center justify-between border-b border-line px-5 max-md:px-4">
         <div className="flex items-center gap-2">

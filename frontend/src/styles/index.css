@@ -44,7 +44,6 @@
   --animate-message-send: message-send 170ms var(--ease-spring) both;
   --animate-thinking: thinking 1.15s ease-in-out infinite;
   --animate-fade-in: fade-in 180ms ease-out both;
-  --animate-dialog-enter: dialog-enter 180ms var(--ease-out) both;
   /* Welcome suggestions cascade in with a 45ms stagger (set per-card inline). */
   --animate-suggestion-in: suggestion-in 220ms var(--ease-out) both;
 
@@ -54,14 +53,8 @@
   --stream-blur: 1px;
   --stream-ease: cubic-bezier(0.22, 1, 0.36, 1);
 
-  /* transitions.dev — matrix dot loader: 4×4 colour-pulse matrix. */
-  --matrix-cycle: 1200ms;
-  --matrix-base: #cbd5e1; /* slate-300; dark overrides below */
-  --matrix-active: #64748b; /* slate-500 */
-  --matrix-ease: ease-in-out;
-
   /* transitions.dev — shimmer text: highlight band sweeping muted text. */
-  --shimmer-dur: 2000ms;
+  --shimmer-dur: 1200ms;
   --shimmer-base: #94a3b8; /* slate-400 */
   --shimmer-highlight: #1e293b; /* slate-800 */
   --shimmer-band: 400%;
@@ -94,8 +87,6 @@
     --shadow-dialog:
       0 20px 45px -15px rgb(0 0 0 / 0.6), 0 0 0 1px rgb(63 63 70 / 1);
 
-    --matrix-base: #3f3f46; /* zinc-700 */
-    --matrix-active: #a1a1aa; /* zinc-400 */
     --shimmer-base: #71717a; /* zinc-500 */
     --shimmer-highlight: #e4e4e7; /* zinc-200 */
   }
@@ -192,19 +183,34 @@
   }
 }
 
-@keyframes dialog-enter {
-  from {
-    opacity: 0;
-    transform: scale(0.98) translateY(-4px);
-  }
-  to {
-    opacity: 1;
-    transform: scale(1) translateY(0);
-  }
+/* Native dialogs open AND close through one transition (the old enter-only
+   keyframes vanished on close). allow-discrete keeps display/overlay alive
+   until the exit transition finishes, so dialog.close() fades out instead of
+   teleporting, and a reopen mid-close retargets instead of restarting.
+   Longhands (not the shorthand) so engines without transition-behavior only
+   drop the discrete part, not the whole fade. */
+dialog {
+  opacity: 0;
+  transform: scale(0.98) translateY(-4px);
+  transition-property: opacity, transform, display, overlay;
+  transition-duration: 180ms;
+  transition-timing-function: var(--ease-out);
+  transition-behavior: allow-discrete;
+}
+dialog[open] {
+  opacity: 1;
+  transform: scale(1) translateY(0);
+}
+dialog::backdrop {
+  opacity: 0;
+  transition: opacity 180ms var(--ease-out);
+}
+dialog[open]::backdrop {
+  opacity: 1;
 }
 
 /* ---------------------------------------------------------------------------
-   transitions.dev components — t-stream / t-matrix / t-shimmer.
+   transitions.dev components — t-stream / t-shimmer.
    Streaming words use a mount animation (not the JS replay transition) so
    React can render them incrementally: each new word span mounts and resolves
    through opacity + blur exactly once; stable spans never remount, never
@@ -221,34 +227,6 @@
   to {
     opacity: 1;
     filter: blur(0);
-  }
-}
-
-.t-matrix {
-  display: grid;
-  grid-template-columns: repeat(4, 2px);
-  grid-auto-rows: 2px;
-  gap: 2px;
-}
-.t-matrix i {
-  display: block;
-  background: var(--matrix-base);
-  animation: t-matrix-pulse var(--matrix-cycle) var(--matrix-ease) infinite;
-  animation-delay: calc(var(--d, 0) * 1ms);
-}
-/* Hole positions (rounded variants) render nothing. */
-.t-matrix i.is-gap {
-  visibility: hidden;
-  animation: none;
-}
-@keyframes t-matrix-pulse {
-  0%,
-  45%,
-  100% {
-    background-color: var(--matrix-base);
-  }
-  15% {
-    background-color: var(--matrix-active);
   }
 }
 
@@ -404,16 +382,29 @@
   .animate-message-in,
   .animate-message-send,
   .animate-fade-in,
-  .animate-suggestion-in,
-  dialog[open] {
+  .animate-suggestion-in {
     animation-duration: 1ms !important;
     animation-timing-function: steps(1, end) !important;
   }
 
-  /* Press feedback is transform-based motion; flatten it but keep the color
-     response so the click still reads. */
+  /* Dialog open/close runs on a transition now — collapse it too. */
+  dialog,
+  dialog::backdrop {
+    transition-duration: 1ms !important;
+  }
+
+  /* Toast: keep the fade, drop the slide. */
+  .toast {
+    translate: -50% 0 !important;
+    transition-property: opacity !important;
+  }
+
+  /* Press feedback is scale-based motion (v4 native `scale` property); pin it
+     to identity but keep the color response so the click still reads. The
+     declaration must stay LONE: paired with `transform: none`, the minifier
+     folds both into `transform: scale(1)`, which no longer overrides `scale`. */
   button:active {
-    transform: none !important;
+    scale: none !important;
   }
 
   .animate-thinking {
@@ -425,10 +416,6 @@
     animation: none !important;
     filter: none !important;
     opacity: 1 !important;
-  }
-  .t-matrix i {
-    animation: none !important;
-    background: var(--matrix-active) !important;
   }
   .t-shimmer::before {
     animation: none !important;

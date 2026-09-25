@@ -646,7 +646,7 @@ export function EvaluationDialog({ open, onClose }: { open: boolean; onClose: ()
         if (event.target === event.currentTarget) onClose()
       }}
       aria-labelledby="evaluation-title"
-      className="m-auto h-[min(640px,calc(100dvh-48px))] w-[min(560px,calc(100vw-32px))] overflow-hidden rounded-xl border border-line bg-surface text-ink shadow-dialog backdrop:bg-black/20 open:flex open:animate-dialog-enter open:flex-col max-md:m-0 max-md:h-dvh max-md:w-screen max-md:rounded-none max-md:border-0"
+      className="m-auto h-[min(640px,calc(100dvh-48px))] w-[min(560px,calc(100vw-32px))] overflow-hidden rounded-xl border border-line bg-surface text-ink shadow-dialog backdrop:bg-black/20 open:flex open:flex-col max-md:m-0 max-md:h-dvh max-md:w-screen max-md:rounded-none max-md:border-0"
     >
       <div className="flex h-12 flex-none items-center justify-between border-b border-line px-5 max-md:px-4">
         <div className="flex items-center gap-2">

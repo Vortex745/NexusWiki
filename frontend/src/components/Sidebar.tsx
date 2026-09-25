@@ -32,7 +32,7 @@ function ThreadListItem() {
         <button
           type="button"
           title="删除对话"
-          className="absolute top-1/2 right-1.5 grid size-6 -translate-y-1/2 cursor-pointer place-items-center rounded-md text-muted/70 opacity-0 transition-[colors,opacity] hover:text-red-600 group-hover/thread:opacity-100 max-md:opacity-100 focus-visible:outline-2 focus-visible:outline-brand"
+          className="absolute top-1/2 right-1.5 grid size-6 -translate-y-1/2 cursor-pointer place-items-center rounded-md text-muted/70 opacity-0 transition-[color,opacity] hover:text-red-600 group-hover/thread:opacity-100 max-md:opacity-100 focus-visible:outline-2 focus-visible:outline-brand"
         >
           <Icon icon={Trash2} className="size-3.5" />
         </button>
@@ -59,7 +59,7 @@ function SidebarButton({
       type="button"
       onClick={onClick}
       aria-expanded={ariaExpanded}
-      className="flex h-8.5 w-full cursor-pointer items-center gap-2 rounded-lg bg-transparent px-3 text-left text-xs text-muted transition-[colors,transform] duration-150 ease-out hover:bg-surface-subtle hover:text-ink active:scale-[0.98]"
+      className="flex h-8.5 w-full cursor-pointer items-center gap-2 rounded-lg bg-transparent px-3 text-left text-xs text-muted transition-[color,background-color,border-color,transform,translate,scale] duration-150 ease-out hover:bg-surface-subtle hover:text-ink active:scale-[0.98]"
     >
       <Icon icon={icon} className="size-3.5" />
       <span>{label}</span>
@@ -116,7 +116,7 @@ function KnowledgeSelector() {
                   title={selected ? "取消选择（回到默认知识库）" : "选入新对话的检索范围"}
                   aria-pressed={selected}
                   className={cn(
-                    "flex h-8.5 w-full cursor-pointer items-center gap-2 rounded-lg px-3 text-left text-xs transition-[colors,transform] duration-150 ease-out hover:bg-surface-subtle active:scale-[0.98]",
+                    "flex h-8.5 w-full cursor-pointer items-center gap-2 rounded-lg px-3 text-left text-xs transition-[color,background-color,border-color,transform,translate,scale] duration-150 ease-out hover:bg-surface-subtle active:scale-[0.98]",
                     selected ? "text-ink" : "text-muted",
                   )}
                 >
@@ -134,7 +134,7 @@ function KnowledgeSelector() {
                   type="button"
                   onClick={() => setBrowsingDocs({ id: base.id, name: base.name })}
                   title={`浏览「${base.name}」的文档目录`}
-                  className="absolute top-1/2 right-8.5 grid size-6 -translate-y-1/2 cursor-pointer place-items-center rounded-md text-muted/70 opacity-0 transition-[colors,opacity] hover:text-ink group-hover/kb:opacity-100 max-md:opacity-100 focus-visible:opacity-100 focus-visible:outline-2 focus-visible:outline-brand"
+                  className="absolute top-1/2 right-8.5 grid size-6 -translate-y-1/2 cursor-pointer place-items-center rounded-md text-muted/70 opacity-0 transition-[color,opacity] hover:text-ink group-hover/kb:opacity-100 max-md:opacity-100 focus-visible:opacity-100 focus-visible:outline-2 focus-visible:outline-brand"
                 >
                   <Icon icon={FileText} className="size-3.5" />
                 </button>
@@ -142,7 +142,7 @@ function KnowledgeSelector() {
                   type="button"
                   onClick={() => setBrowsingGraph({ id: base.id, name: base.name })}
                   title={`浏览「${base.name}」的知识图谱`}
-                  className="absolute top-1/2 right-1.5 grid size-6 -translate-y-1/2 cursor-pointer place-items-center rounded-md text-muted/70 opacity-0 transition-[colors,opacity] hover:text-ink group-hover/kb:opacity-100 max-md:opacity-100 focus-visible:opacity-100 focus-visible:outline-2 focus-visible:outline-brand"
+                  className="absolute top-1/2 right-1.5 grid size-6 -translate-y-1/2 cursor-pointer place-items-center rounded-md text-muted/70 opacity-0 transition-[color,opacity] hover:text-ink group-hover/kb:opacity-100 max-md:opacity-100 focus-visible:opacity-100 focus-visible:outline-2 focus-visible:outline-brand"
                 >
                   <Icon icon={Network} className="size-3.5" />
                 </button>
@@ -208,7 +208,7 @@ function AssistantSelector() {
               title="使用默认助手（不加任何额外设定）"
               aria-pressed={selectedId === null}
               className={cn(
-                "flex h-8.5 w-full cursor-pointer items-center gap-2 rounded-lg px-3 text-left text-xs transition-[colors,transform] duration-150 ease-out hover:bg-surface-subtle active:scale-[0.98]",
+                "flex h-8.5 w-full cursor-pointer items-center gap-2 rounded-lg px-3 text-left text-xs transition-[color,background-color,border-color,transform,translate,scale] duration-150 ease-out hover:bg-surface-subtle active:scale-[0.98]",
                 selectedId === null ? "text-ink" : "text-muted",
               )}
             >
@@ -235,7 +235,7 @@ function AssistantSelector() {
                     title={`新对话将由「${assistant.name}」接答`}
                     aria-pressed={selected}
                     className={cn(
-                      "flex h-8.5 w-full cursor-pointer items-center gap-2 rounded-lg px-3 text-left text-xs transition-[colors,transform] duration-150 ease-out hover:bg-surface-subtle active:scale-[0.98]",
+                      "flex h-8.5 w-full cursor-pointer items-center gap-2 rounded-lg px-3 text-left text-xs transition-[color,background-color,border-color,transform,translate,scale] duration-150 ease-out hover:bg-surface-subtle active:scale-[0.98]",
                       selected ? "text-ink" : "text-muted",
                     )}
                   >
@@ -452,7 +452,7 @@ export function Sidebar({ open, collapsed, isDark, onToggleTheme, onCloseMobile 
             <ThreadListPrimitive.New asChild>
               <button
                 type="button"
-                className="flex h-9 w-full cursor-pointer items-center gap-2 rounded-lg bg-brand px-3 text-left text-xs font-medium text-white shadow-card transition-[colors,transform] duration-150 ease-out hover:bg-brand-hover active:scale-[0.98]"
+                className="flex h-9 w-full cursor-pointer items-center gap-2 rounded-lg bg-brand px-3 text-left text-xs font-medium text-white shadow-card transition-[color,background-color,border-color,transform,translate,scale] duration-150 ease-out hover:bg-brand-hover active:scale-[0.98]"
               >
                 <Icon icon={Plus} className="size-3.5 text-white/90" />
                 <span>新建对话</span>

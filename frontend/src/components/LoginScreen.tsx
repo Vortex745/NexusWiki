@@ -112,7 +112,7 @@ export function LoginScreen({ authConfig, onSignIn }: LoginScreenProps) {
         <button
           type="submit"
           disabled={pending || !account}
-          className="mt-4 h-9 w-full cursor-pointer rounded-lg bg-brand text-xs font-medium text-white shadow-card transition-[colors,transform] duration-150 ease-out hover:bg-brand-hover active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-60"
+          className="mt-4 h-9 w-full cursor-pointer rounded-lg bg-brand text-xs font-medium text-white shadow-card transition-[color,background-color,border-color,transform,translate,scale] duration-150 ease-out hover:bg-brand-hover active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-60"
         >
           {pending ? "登录中…" : "登录"}
         </button>

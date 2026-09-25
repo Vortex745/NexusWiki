@@ -95,7 +95,7 @@ export function MemoryDialog({ open, onClose }: { open: boolean; onClose: () => 
         if (event.target === event.currentTarget) onClose()
       }}
       aria-labelledby="memory-title"
-      className="m-auto h-[min(560px,calc(100dvh-48px))] w-[min(480px,calc(100vw-32px))] grid-rows-[auto_auto_minmax(0,1fr)_auto] overflow-hidden rounded-xl border border-line bg-surface text-ink shadow-dialog backdrop:bg-black/20 open:grid open:animate-dialog-enter max-md:m-0 max-md:h-dvh max-md:w-screen max-md:rounded-none max-md:border-0"
+      className="m-auto h-[min(560px,calc(100dvh-48px))] w-[min(480px,calc(100vw-32px))] grid-rows-[auto_auto_minmax(0,1fr)_auto] overflow-hidden rounded-xl border border-line bg-surface text-ink shadow-dialog backdrop:bg-black/20 open:grid max-md:m-0 max-md:h-dvh max-md:w-screen max-md:rounded-none max-md:border-0"
     >
       <div className="flex h-12 items-center justify-between border-b border-line px-5 max-md:px-4">
         <div className="flex items-center gap-2">

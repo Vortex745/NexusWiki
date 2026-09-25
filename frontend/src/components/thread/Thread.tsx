@@ -7,6 +7,7 @@ import {
   useAuiState,
 } from "@assistant-ui/react"
 import type { Reference, TraceEvent } from "@core/conversation"
+import { Cascade } from "loading-dev"
 import {
   ArrowDown,
   BarChart3,
@@ -37,10 +38,11 @@ import { useAppShell } from "../../runtime/AppShellContext"
 import { useMemoryApi } from "../../runtime/MemoryContext"
 import { Icon } from "../ui/Icon"
 import { TooltipIconButton } from "../ui/TooltipIconButton"
-import { MatrixLoader, ReasonStream, ShimmerText } from "../ui/transitions"
+import { ReasonStream, ShimmerText } from "../ui/transitions"
 import { BranchPicker } from "./BranchPicker"
 import { MarkdownText } from "./MarkdownText"
 import { ReferencesPanel, useReferenceHighlight } from "./References"
+import { useStreamReveal } from "./useStreamReveal"
 
 /** Business payload assistant-ui carries through untouched (see convertMessage). */
 interface MessageCustom {
@@ -224,7 +226,7 @@ function ThreadWelcomeSuggestions() {
       {SUGGESTIONS.map((suggestion, index) => (
         <ThreadPrimitive.Suggestion
           key={suggestion.prompt}
-          className="flex w-full grow basis-0 flex-col items-center justify-center rounded-[2rem] border border-line bg-surface p-3 transition-[colors,transform] ease-out hover:bg-brand-subtle active:scale-[0.97] md:max-w-sm animate-suggestion-in"
+          className="flex w-full grow basis-0 flex-col items-center justify-center rounded-[2rem] border border-line bg-surface p-3 transition-[color,background-color,border-color,transform,translate,scale] ease-out hover:bg-brand-subtle active:scale-[0.97] md:max-w-sm animate-suggestion-in"
           style={{ animationDelay: `${index * 45}ms` }}
           prompt={suggestion.prompt}
           method="replace"
@@ -297,7 +299,7 @@ function ComposerAction() {
       title={isRunning ? "停止生成" : "发送消息"}
       className={cn(
         "my-2.5 grid size-8 flex-none cursor-pointer place-items-center rounded-full",
-        "bg-brand text-white transition-[colors,transform] duration-150 ease-out hover:bg-brand-hover active:scale-[0.97]",
+        "bg-brand text-white transition-[color,background-color,border-color,transform,translate,scale] duration-150 ease-out hover:bg-brand-hover active:scale-[0.97]",
         "disabled:cursor-not-allowed disabled:opacity-30 disabled:hover:bg-brand",
         "focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand",
       )}
@@ -312,7 +314,7 @@ function ThreadScrollToBottom() {
     <ThreadPrimitive.ScrollToBottom asChild>
       <TooltipIconButton
         tooltip="回到底部"
-        className="absolute -top-8 rounded-full border border-line bg-surface shadow-card transition-[opacity,transform] duration-150 ease-out hover:bg-brand-subtle disabled:pointer-events-none disabled:scale-90 disabled:opacity-0"
+        className="absolute -top-8 rounded-full border border-line bg-surface shadow-card transition-[opacity,background-color,translate,scale] duration-150 ease-out hover:bg-brand-subtle disabled:pointer-events-none disabled:scale-90 disabled:opacity-0"
       >
         <Icon icon={ArrowDown} className="size-4" />
       </TooltipIconButton>
@@ -429,7 +431,7 @@ function ThinkingDots() {
   return (
     <div className="flex flex-col gap-3 py-1" role="status" aria-label={label}>
       <div className="flex h-5 items-center gap-3">
-        <MatrixLoader variant="scan" label={label} />
+        <Cascade size={20} duration={1200} />
         <ShimmerText text={`${label}…`} />
       </div>
       {lines.length > 0 && <ReasonStream lines={lines} rows={4} />}
@@ -447,14 +449,18 @@ function AssistantText({
   onCitationClick?: (referenceId: string) => void
 }) {
   const isRunning = useAuiState((s) => s.message.status?.type === "running")
-  const custom = useAuiState((s) => s.message.metadata?.custom as MessageCustom | undefined)
+  const revealed = useStreamReveal(text)
   if (!text) return isRunning ? <ThinkingDots /> : null
+  // Keep the per-word blur-in alive for as long as text is still being
+  // revealed, not just while the run is open — the reveal outlives the stream
+  // on the knowledge routes.
+  const revealing = revealed.length < text.length
   return (
     <MarkdownText
-      text={text}
+      text={revealed}
       references={references}
       onCitationClick={onCitationClick}
-      streaming={isRunning}
+      streaming={isRunning || revealing}
     />
   )
 }

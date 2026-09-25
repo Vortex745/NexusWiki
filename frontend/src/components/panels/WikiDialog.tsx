@@ -127,7 +127,7 @@ export function WikiDialog({
         if (event.target === event.currentTarget) onClose()
       }}
       aria-labelledby="wiki-title"
-      className="m-auto h-[min(680px,calc(100dvh-48px))] w-[min(760px,calc(100vw-32px))] grid-rows-[auto_minmax(0,1fr)] overflow-hidden rounded-xl border border-line bg-surface text-ink shadow-dialog backdrop:bg-black/20 open:grid open:animate-dialog-enter max-md:m-0 max-md:h-dvh max-md:w-screen max-md:rounded-none max-md:border-0"
+      className="m-auto h-[min(680px,calc(100dvh-48px))] w-[min(760px,calc(100vw-32px))] grid-rows-[auto_minmax(0,1fr)] overflow-hidden rounded-xl border border-line bg-surface text-ink shadow-dialog backdrop:bg-black/20 open:grid max-md:m-0 max-md:h-dvh max-md:w-screen max-md:rounded-none max-md:border-0"
     >
       <div className="flex h-13 flex-none items-center justify-between border-b border-line px-5 max-md:px-4">
         <div className="flex min-w-0 items-center gap-2">
@@ -173,7 +173,7 @@ export function WikiDialog({
               onClick={generate}
               disabled={busy !== "idle" || !title.trim() || selected.length === 0}
               title={selected.length === 0 ? "至少选择一份来源文档" : "生成并发布"}
-              className="inline-flex h-9 flex-none cursor-pointer items-center rounded-lg bg-brand px-3 text-xs font-medium text-white transition-[colors,transform] duration-150 ease-out hover:bg-brand-hover active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-50"
+              className="inline-flex h-9 flex-none cursor-pointer items-center rounded-lg bg-brand px-3 text-xs font-medium text-white transition-[color,background-color,border-color,transform,translate,scale] duration-150 ease-out hover:bg-brand-hover active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-50"
             >
               {busy === "generating" ? "生成中…" : "生成"}
             </button>
