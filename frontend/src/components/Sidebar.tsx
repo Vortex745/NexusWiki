@@ -1,4 +1,4 @@
-import { BookOpen, Bot, Brain, Check, ChevronDown, Database, FileText, FlaskConical, HelpCircle, LayoutGrid, MessageSquareWarning, Moon, Network, PanelLeft, PanelLeftClose, Plus, Search, Settings, Sun, Trash2, X } from "lucide"
+import { BarChart3, BookOpen, Bot, Brain, Check, ChevronDown, Database, FileText, FlaskConical, HelpCircle, LayoutGrid, MessageSquareWarning, Moon, Network, PanelLeft, PanelLeftClose, Plus, Search, Settings, Share2, ShieldCheck, Sparkles, Sun, Trash2, X } from "lucide"
 import { useEffect, useRef, useState } from "react"
 import type { IconProps } from "./ui/Icon"
 
@@ -8,10 +8,11 @@ import { useAppShell } from "../runtime/AppShellContext"
 import { assistantStore, useAssistants } from "../runtime/assistantStore"
 import { conversationStore } from "../conversation/useConversation"
 import { importConversations } from "../lib/api"
+import { copyText } from "../lib/clipboard"
 import { useSlidingHighlight } from "../lib/useSlidingHighlight"
 import { knowledgeStore, useKnowledgeBases } from "../runtime/knowledgeStore"
 import { useMemoryApi } from "../runtime/MemoryContext"
-import { useSignedInSession } from "../runtime/SessionContext"
+import { useSession, useSignedInSession } from "../runtime/SessionContext"
 import { DocumentsDialog } from "./panels/DocumentsDialog"
 import { GraphBrowseDialog } from "./panels/GraphBrowseDialog"
 import { LaboratoryDialog } from "./panels/LaboratoryDialog"
@@ -74,6 +75,7 @@ function SidebarButton({
   onClick,
   trailing,
   ariaExpanded,
+  active = false,
   collapsed = false,
 }: {
   icon: IconProps["icon"]
@@ -81,6 +83,7 @@ function SidebarButton({
   onClick: () => void
   trailing?: React.ReactNode
   ariaExpanded?: boolean
+  active?: boolean
   collapsed?: boolean
 }) {
   return (
@@ -88,9 +91,11 @@ function SidebarButton({
       type="button"
       onClick={onClick}
       aria-expanded={ariaExpanded}
+      aria-pressed={active || undefined}
       title={collapsed ? label : undefined}
       className={cn(
         "flex h-8.5 w-full cursor-pointer items-center gap-2 rounded-[8px] bg-transparent text-left text-xs text-muted transition-[color,background-color,border-color,transform,translate,scale] duration-150 ease-out hover:bg-surface-subtle hover:text-ink active:scale-[0.98]",
+        active && "bg-surface-subtle text-ink",
         collapsed ? "justify-center px-0" : "px-3",
       )}
     >
@@ -212,6 +217,8 @@ interface SidebarProps {
   isDark: boolean
   onToggleTheme: () => void
   onCloseMobile: () => void
+  traceOpen: boolean
+  onToggleTrace: () => void
 }
 
 /**
@@ -454,13 +461,32 @@ function WorkspaceMenu({ collapsed = false }: { collapsed?: boolean }) {
   )
 }
 
-export function Sidebar({ open, collapsed, isDark, onToggleTheme, onCloseMobile }: SidebarProps) {
-  const { openMemory } = useAppShell()
+export function Sidebar({ open, collapsed, isDark, onToggleTheme, onCloseMobile, traceOpen, onToggleTrace }: SidebarProps) {
+  const { openMemory, openInsight, showToast } = useAppShell()
   const { memories } = useMemoryApi()
+  const session = useSignedInSession()
+  const { signOut } = useSession()
   const { threads, activeThreadId } = useConversation()
   const [chatSearchOpen, setChatSearchOpen] = useState(false)
   const [chatQuery, setChatQuery] = useState("")
   const chatSearchInputRef = useRef<HTMLInputElement>(null)
+
+  const share = async () => {
+    const thread = conversationStore.getActiveThread()
+    if (!thread || thread.messages.length === 0) {
+      showToast("当前对话还没有可分享的内容")
+      return
+    }
+    const transcript = thread.messages
+      .map((message) => `${message.role === "user" ? "我" : "NexusRAG"}：${message.content}`)
+      .join("\n\n")
+    try {
+      await copyText(`${thread.title}\n\n${transcript}`)
+      showToast("对话内容已复制")
+    } catch {
+      showToast("复制失败，请检查浏览器权限")
+    }
+  }
 
   // Ticket 08 (KB-04): load the knowledge-base list once per sign-in.
   useEffect(() => {
@@ -653,8 +679,28 @@ export function Sidebar({ open, collapsed, isDark, onToggleTheme, onCloseMobile 
             </div>
           </div>
 
-          {/* Memory entry + service status */}
+          {/* Utility zone: analysis / trace / share moved here from the removed
+              top bar, alongside the pre-existing memory entry and account. */}
           <div className="mt-3 flex flex-col gap-1 border-t border-line pt-2">
+            <SidebarButton
+              icon={BarChart3}
+              label="回答分析"
+              onClick={() => openInsight()}
+              collapsed={collapsed}
+            />
+            <SidebarButton
+              icon={Sparkles}
+              label="链路追踪"
+              active={traceOpen}
+              onClick={onToggleTrace}
+              collapsed={collapsed}
+            />
+            <SidebarButton
+              icon={Share2}
+              label="分享对话"
+              onClick={() => void share()}
+              collapsed={collapsed}
+            />
             <button
               type="button"
               onClick={openMemory}
@@ -669,6 +715,23 @@ export function Sidebar({ open, collapsed, isDark, onToggleTheme, onCloseMobile 
                 {memories.length} 条
               </span>
             </button>
+            {session ? (
+              <button
+                type="button"
+                onClick={signOut}
+                aria-label="退出登录"
+                title={`${session.subjectId} · ${session.groups.join("、") || "无分组"} · 点击退出登录`}
+                className={cn(
+                  "flex h-8.5 w-full cursor-pointer items-center gap-2 rounded-[8px] text-left text-xs text-muted transition-[color,background-color] duration-150 hover:bg-surface-subtle hover:text-ink active:scale-[0.98]",
+                  collapsed ? "justify-center px-0" : "px-3",
+                )}
+              >
+                <Icon icon={ShieldCheck} className="size-3.5" />
+                <span className="sidebar-copy min-w-0 truncate">
+                  {session.role === "admin" ? "管理员" : "读者"}
+                </span>
+              </button>
+            ) : null}
             <div className="sidebar-module"><StatusPopover /></div>
           </div>
         </div>
