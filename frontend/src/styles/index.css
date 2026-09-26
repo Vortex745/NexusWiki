@@ -4,35 +4,82 @@
 @custom-variant dark (&:where(.dark, .dark *));
 
 /* ---------------------------------------------------------------------------
-   Design tokens — transcribed from the assistant-ui mem0 example
-   (components/assistant-ui/thread.tsx). Light values are the literal hex codes
-   used there; dark values are the zinc palette the same file pairs with them
-   (zinc-900 canvas / zinc-800 surface / zinc-700 border / zinc-200 text).
-   Overriding the variables under `.dark` cascades into every generated
-   utility, so components carry a single set of classes.
+   Design tokens — Grok clone palette (assistant-ui /examples/grok).
+
+   Two structural rules carried over from that example, not just its hex codes:
+
+   1. Recessed depth. The surface sits a perceptual step AWAY from the canvas in
+      whichever direction reads as a well — darker in light mode (#fdfdfd page /
+      #f8f8f8 field), lighter in dark (#141414 / #212121). Separation comes from
+      a 1px ring, not from elevation, so the shadows are near-zero.
+   2. Inverted primary. The one high-contrast object on screen is the trailing
+      composer button: near-black on light, white on dark. Everything else is
+      neutral, which is what makes that button read as the action.
+
+   Deviations from the example, both deliberate:
+   - `muted` is NOT Grok's #9a9a9a. That measures 2.77:1 on #fdfdfd, and
+     text-muted carries real content here (trace lines, reference excerpts,
+     status text) rather than only placeholder. It gets an AA-compliant step and
+     Grok's light value moves to a separate `faint` token for placeholder-tier
+     text only.
+   - `brand` survives as a low-frequency accent for links, focus rings and
+     active selection. Grok has no accent at all, but it also has no selectable
+     knowledge bases, no citation links and no 21-panel workspace to scan.
 --------------------------------------------------------------------------- */
 @theme {
   --font-sans:
     Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
     "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
-  --font-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  /* Mono carries machine-generated identifiers only: file names, commands,
+     diff counts, sequence numbers, timings. */
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
 
-  --color-canvas: #f8fafc;
-  --color-surface: #ffffff;
-  --color-surface-subtle: #f1f5f9;
-  --color-line: #e2e8f0;
-  --color-ink: #1e293b;
-  --color-muted: #475569;
+  --color-canvas: #fdfdfd;
+  --color-surface: #f8f8f8;
+  --color-surface-subtle: #f0f0f0;
+  --color-line: #e5e5e5;
+  --color-ink: #0d0d0d;
+  /* 4.67:1 against surface-subtle (#f0f0f0), the worst background text-muted
+     actually sits on inside cards. Sizing muted against canvas instead would
+     read 5.24:1 and look safe while failing everywhere it is really used. */
+  --color-muted: #6b6b6b;
+  /* 2.77:1 on canvas — placeholder, watermark and decorative labels only. */
+  --color-faint: #9a9a9a;
+
+  --color-primary: #0d0d0d;
+  --color-on-primary: #ffffff;
+  --color-primary-hover: #262626;
 
   --color-brand: #4f46e5;
   --color-brand-hover: #4338ca;
   --color-brand-subtle: #eef2ff;
   --color-brand-line: #c7d2fe;
 
-  --shadow-composer: 0 1px 2px 0 rgb(0 0 0 / 0.05);
-  --shadow-card: 0 1px 2px 0 rgb(0 0 0 / 0.03);
-  --shadow-dialog:
-    0 20px 45px -15px rgb(15 23 42 / 0.14), 0 0 0 1px rgb(15 23 42 / 0.06);
+  /* Status semantics. Grok's example has no error state to copy, so these are
+     ours; they are the only hues allowed outside the neutral ramp. Each family
+     ships a three-part set — text, subtle fill, line — because every panel that
+     hand-rolled these previously had to write a `dark:` twin for each one. With
+     the override living in the token, `text-danger` replaces
+     `text-red-600 dark:text-red-400` outright. */
+  --color-danger: #b91c1c;
+  --color-danger-subtle: #fef2f2;
+  --color-danger-line: #fecaca;
+  --color-success: #15803d;
+  --color-success-subtle: #f0fdf4;
+  --color-warning: #b45309;
+  --color-warning-subtle: #fffbeb;
+  --color-warning-line: #fde68a;
+
+  /* Recessed surfaces do not float, so the old 1px drop shadows are gone; the
+     hairline border each one already carries is what separates them. Dialogs
+     keep real elevation because they genuinely leave the page — and the shadow
+     stays border-free on purpose: all 16 shadow-dialog call sites already set
+     `border border-line`, so a hairline here would stack into a 2px line. */
+  --shadow-card: none;
+  --shadow-dialog: 0 20px 45px -15px rgb(13 13 13 / 0.14);
+
+  --radius-window: 2rem;
+  --radius-bubble: 1.5rem;
 
   --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
 
@@ -42,49 +89,50 @@
   --animate-fade-in: fade-in 180ms var(--ease-out) both;
   /* Welcome suggestions cascade in with a 45ms stagger (set per-card inline). */
   --animate-suggestion-in: suggestion-in 220ms var(--ease-out) both;
+  --animate-pop-in: pop-in 250ms var(--ease-out) both;
 
   /* transitions.dev — streaming text: words resolve through opacity + blur. */
   --stream-gap: 60ms;
   --stream-fade: 350ms;
   --stream-blur: 1px;
   --stream-ease: cubic-bezier(0.22, 1, 0.36, 1);
-
-  /* transitions.dev — shimmer text: highlight band sweeping muted text. */
-  --shimmer-dur: 1200ms;
-  --shimmer-base: #94a3b8; /* slate-400 */
-  --shimmer-highlight: #1e293b; /* slate-800 */
-  --shimmer-band: 400%;
-  --shimmer-ease: linear;
-
-  /* transitions.dev — reasoning stream: stepped auto-scroll transcript. */
-  --reason-hold: 840ms;
-  --reason-step: 500ms;
-  --reason-lines: 2;
-  --reason-fade: 28px;
-  --reason-ease: cubic-bezier(0.22, 1, 0.36, 1);
 }
 
 @layer base {
   .dark {
-    --color-canvas: #18181b; /* zinc-900 */
-    --color-surface: #27272a; /* zinc-800 */
-    --color-surface-subtle: #3f3f46; /* zinc-700 */
-    --color-line: #3f3f46; /* zinc-700 */
-    --color-ink: #e4e4e7; /* zinc-200 */
-    --color-muted: #d4d4d8; /* zinc-300 */
+    /* The ramp inverts direction but keeps the same rule: surface sits a step
+       away from canvas and reads as a well, separation comes from the ring. */
+    --color-canvas: #141414;
+    --color-surface: #212121;
+    --color-surface-subtle: #2a2a2a;
+    --color-line: #2a2a2a;
+    /* Grok uses pure white here; softened to #f2f2f2 because this app renders
+       long assistant answers and 19.5:1 body text halates on OLED. */
+    --color-ink: #f2f2f2;
+    /* 4.67:1 against surface-subtle (#2a2a2a). Grok's own #6b6b6b is 3.46:1
+       on canvas and fails outright. */
+    --color-muted: #939393;
+    --color-faint: #6b6b6b;
 
-    --color-brand: #6366f1;
-    --color-brand-hover: #4f46e5;
-    --color-brand-subtle: #27272a;
-    --color-brand-line: #4f46e5;
+    --color-primary: #ffffff;
+    --color-on-primary: #0d0d0d;
+    --color-primary-hover: #e5e5e5;
 
-    --shadow-composer: 0 1px 2px 0 rgb(0 0 0 / 0.4);
-    --shadow-card: 0 1px 2px 0 rgb(0 0 0 / 0.3);
-    --shadow-dialog:
-      0 20px 45px -15px rgb(0 0 0 / 0.6), 0 0 0 1px rgb(63 63 70 / 1);
+    --color-brand: #818cf8;
+    --color-brand-hover: #a5b4fc;
+    --color-brand-subtle: #1e1c2e;
+    --color-brand-line: #3730a3;
 
-    --shimmer-base: #71717a; /* zinc-500 */
-    --shimmer-highlight: #e4e4e7; /* zinc-200 */
+    --color-danger: #f87171;
+    --color-danger-subtle: #2a1515;
+    --color-danger-line: #7f1d1d;
+    --color-success: #4ade80;
+    --color-success-subtle: #12241a;
+    --color-warning: #fbbf24;
+    --color-warning-subtle: #2a200d;
+    --color-warning-line: #78350f;
+
+    --shadow-dialog: 0 20px 45px -15px rgb(0 0 0 / 0.6);
   }
 
   html,
@@ -120,7 +168,7 @@
   }
 
   ::selection {
-    @apply bg-brand text-white;
+    @apply bg-ink text-canvas;
   }
 }
 
@@ -142,6 +190,86 @@
   to {
     opacity: 1;
   }
+}
+
+/* The citation chip arrives mid-sentence, so it has to land like an object
+   rather than fade in flat: scale from 0.95 alongside the opacity. */
+@keyframes pop-in {
+  from {
+    opacity: 0;
+    transform: scale(0.95);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+/* Tail caret while an answer streams. This replaces the spinner + shimmer
+   label that used to fill the gap before the first token arrived. */
+@keyframes caret-blink {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.15;
+  }
+}
+
+/* Pixel-grid loader cells. The per-cell animation is authored inline in
+   ThinkingLoader.tsx because each cell needs its own delay; this only owns the
+   pulse shape. Cells hold dark, flash lit for ~20% of the cycle, then wait —
+   the staggered delays are what make the wavefront read as movement. */
+@keyframes pixel-on {
+  0%,
+  55%,
+  100% {
+    opacity: 0.15;
+  }
+  18%,
+  38% {
+    opacity: 1;
+  }
+}
+
+/* Shimmering status label: a highlight band swept across clipped text.
+   `muted` at the shoulders and `ink` at the centre keeps the label legible
+   between passes — the old shimmer used `faint`, which measured 2.77:1. */
+.t-shimmer-label {
+  font-size: 13px;
+  font-weight: 500;
+  color: transparent;
+  background-image: linear-gradient(
+    90deg,
+    var(--color-muted) 35%,
+    var(--color-ink) 50%,
+    var(--color-muted) 65%
+  );
+  background-size: 200% 100%;
+  background-repeat: no-repeat;
+  -webkit-background-clip: text;
+  background-clip: text;
+  animation: shimmer-text 1400ms linear infinite;
+}
+@keyframes shimmer-text {
+  0% {
+    background-position: 150% center;
+  }
+  100% {
+    background-position: -50% center;
+  }
+}
+
+.t-caret {
+  display: inline-block;
+  width: 2px;
+  height: 0.75em;
+  margin-left: 2px;
+  vertical-align: -0.05em;
+  border-radius: 9999px;
+  background: currentColor;
+  animation: caret-blink 1s steps(2, jump-none) infinite;
 }
 
 @keyframes suggestion-in {
@@ -173,6 +301,17 @@ dialog[open] {
   opacity: 1;
   transform: scale(1) translateY(0);
 }
+.trace-panel {
+  opacity: 0;
+  transform: translateX(100%);
+  transition-property: opacity, transform;
+  transition-duration: 220ms;
+  transition-timing-function: var(--ease-out);
+}
+.trace-panel[data-open="true"] {
+  opacity: 1;
+  transform: translateX(0);
+}
 dialog::backdrop {
   opacity: 0;
   transition: opacity 180ms var(--ease-out);
@@ -181,8 +320,124 @@ dialog[open]::backdrop {
   opacity: 1;
 }
 
+/* Sidebar motion follows the reference rail: the shell eases between its two
+   desktop widths while copy fades and slides out of the same layout slot.
+   Keeping the nodes mounted avoids a hard cut when the rail changes state. */
+.sidebar-shell {
+  width: 14rem;
+  min-width: 14rem;
+  padding-inline: 0.5rem;
+  transition-property: width, min-width, padding-left, padding-right;
+  transition-duration: 280ms;
+  transition-timing-function: cubic-bezier(0.16, 1, 0.3, 1);
+}
+.sidebar-shell[data-collapsed="true"] {
+  width: 3.25rem;
+  min-width: 3.25rem;
+  padding-inline: 0.25rem;
+}
+.sidebar-shell .sidebar-brand {
+  overflow: hidden;
+  max-width: 12rem;
+  opacity: 1;
+  transition-property: max-width, opacity, translate;
+  transition-duration: 180ms;
+  transition-timing-function: cubic-bezier(0.16, 1, 0.3, 1);
+}
+.sidebar-shell[data-collapsed="true"] .sidebar-brand {
+  max-width: 0;
+  opacity: 0;
+  translate: -0.5rem 0;
+}
+.sidebar-shell .sidebar-copy {
+  min-width: 0;
+  overflow: hidden;
+  opacity: 1;
+  translate: 0 0;
+  transition-property: max-width, opacity, translate, margin, padding;
+  transition-duration: 180ms;
+  transition-timing-function: cubic-bezier(0.16, 1, 0.3, 1);
+}
+.sidebar-shell:not([data-collapsed="true"]) .sidebar-copy {
+  max-width: 15rem;
+}
+.sidebar-shell[data-collapsed="true"] .sidebar-copy {
+  max-width: 0;
+  margin-left: 0;
+  margin-right: 0;
+  padding-left: 0;
+  padding-right: 0;
+  opacity: 0;
+  translate: -0.5rem 0;
+  pointer-events: none;
+}
+.sidebar-shell .sidebar-module {
+  overflow: hidden;
+  max-height: 28rem;
+  opacity: 1;
+  transition-property: max-height, opacity, margin, transform;
+  transition-duration: 180ms;
+  transition-timing-function: cubic-bezier(0.16, 1, 0.3, 1);
+}
+.sidebar-shell[data-collapsed="true"] .sidebar-module {
+  max-height: 0;
+  margin-top: 0;
+  opacity: 0;
+  transform: translateX(-0.5rem);
+  pointer-events: none;
+}
+.sidebar-shell[data-collapsed="true"] .sidebar-primary {
+  gap: 0.5rem;
+}
+.sidebar-shell[data-collapsed="true"] .sidebar-recent {
+  margin-top: 0.75rem;
+}
+.sidebar-shell[data-collapsed="true"] .sidebar-search-row {
+  margin-bottom: 0.5rem;
+}
+.sidebar-shell .sidebar-search-label {
+  transition-property: opacity, translate;
+  transition-duration: 180ms;
+  transition-timing-function: cubic-bezier(0.16, 1, 0.3, 1);
+}
+.sidebar-shell[data-collapsed="true"] .sidebar-search-label {
+  opacity: 0;
+  translate: -0.5rem 0;
+}
+.sidebar-search-field {
+  width: 2rem;
+  opacity: 0;
+  pointer-events: none;
+  transform-origin: right center;
+  scale: 0.96;
+  transition-property: width, opacity, scale;
+  transition-duration: 180ms;
+  transition-timing-function: cubic-bezier(0.16, 1, 0.3, 1);
+}
+.sidebar-search-field-open {
+  width: 100%;
+  opacity: 1;
+  pointer-events: auto;
+  scale: 1;
+}
+.sidebar-shell[data-collapsed="true"] .sidebar-search-field {
+  display: none;
+}
+
+@media (max-width: 767px) {
+  .sidebar-shell,
+  .sidebar-shell[data-collapsed="true"] {
+    width: min(84vw, 280px);
+    min-width: min(84vw, 280px);
+    padding-inline: 0.75rem;
+    transition-property: transform;
+    transition-duration: 180ms;
+    transition-timing-function: var(--ease-out);
+  }
+}
+
 /* ---------------------------------------------------------------------------
-   transitions.dev components — t-stream / t-shimmer.
+   transitions.dev component — t-stream.
    Streaming words use a mount animation (not the JS replay transition) so
    React can render them incrementally: each new word span mounts and resolves
    through opacity + blur exactly once; stable spans never remount, never
@@ -202,78 +457,14 @@ dialog[open]::backdrop {
   }
 }
 
-.t-shimmer {
-  position: relative;
-  display: inline-block;
-  color: var(--shimmer-base);
-}
-.t-shimmer::before {
-  content: attr(data-text);
-  position: absolute;
-  inset: 0;
+/* The action bar hands over when the answer has finished landing, not when the
+   transport closes — the knowledge routes deliver the whole reply and the
+   terminal frame together, so the run is already over while the reveal types.
+   Unlayered so it outranks the `opacity-100` utility, and a browser without
+   `:has()` simply keeps the previous run-status gate. */
+.assistant-turn:has([data-stream-revealing="true"]) .assistant-actions {
+  opacity: 0;
   pointer-events: none;
-  background-image: linear-gradient(
-    90deg,
-    transparent 0%,
-    transparent 40%,
-    var(--shimmer-highlight) 50%,
-    transparent 60%,
-    transparent 100%
-  );
-  background-size: var(--shimmer-band) 100%;
-  background-repeat: no-repeat;
-  -webkit-background-clip: text;
-  background-clip: text;
-  color: transparent;
-  -webkit-text-fill-color: transparent;
-  animation: t-shimmer var(--shimmer-dur) var(--shimmer-ease) infinite;
-}
-@keyframes t-shimmer {
-  0% {
-    background-position: 100% 0;
-  }
-  100% {
-    background-position: 0% 0;
-  }
-}
-
-/* transitions.dev — reasoning stream: the card clips a live transcript and
-   JS steps the scroll up --reason-lines rows every --reason-hold. Content
-   grows while streaming, so the scroll keeps following the tail until it
-   reaches the bottom. Edge fades are a mask on the viewport (not gradients
-   painted over the text), so the card background can be anything. */
-.t-reason {
-  position: relative;
-  overflow: hidden;
-}
-.t-reason-viewport {
-  position: absolute;
-  inset: 0;
-  overflow: hidden;
-  -webkit-mask-image: linear-gradient(
-    transparent 0,
-    black var(--reason-fade),
-    black calc(100% - var(--reason-fade)),
-    transparent 100%
-  );
-  mask-image: linear-gradient(
-    transparent 0,
-    black var(--reason-fade),
-    black calc(100% - var(--reason-fade)),
-    transparent 100%
-  );
-}
-.t-reason-scroll {
-  position: absolute;
-  left: 0;
-  right: 0;
-  transform: translateY(0);
-  will-change: transform;
-}
-.t-reason-text p {
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
 }
 
 /* Markdown inside assistant bubbles — restrained prose sized to the bubble. */
@@ -364,6 +555,44 @@ dialog[open]::backdrop {
     transition-duration: 1ms !important;
   }
 
+  .trace-panel {
+    transition-duration: 1ms;
+  }
+
+  .trace-panel[data-open="false"] {
+    transform: none;
+  }
+
+  [role="group"][data-motion="feedback-reason"] {
+    transition-property: opacity !important;
+    transition-duration: 1ms !important;
+  }
+
+  span[role="group"][data-motion="feedback-reason"][inert] {
+    scale: none !important;
+  }
+
+  [data-attachment-chip] {
+    transition-duration: 1ms !important;
+  }
+
+  [data-attachment-chip][data-exiting="true"] {
+    transition-property: opacity !important;
+  }
+
+  div[data-attachment-chip][data-exiting="true"] {
+    scale: none !important;
+  }
+
+  [data-trace-status] {
+    transition-property: opacity !important;
+    transition-duration: 1ms !important;
+  }
+
+  span[data-trace-status] {
+    scale: none !important;
+  }
+
   /* Toast: keep the fade, drop the slide. */
   .toast {
     translate: -50% 0 !important;
@@ -402,12 +631,49 @@ dialog[open]::backdrop {
     filter: none !important;
     opacity: 1 !important;
   }
-  .t-shimmer::before {
+  /* A blinking caret is motion, not feedback — freeze it lit rather than
+     hiding it, since it is the only running indicator left. */
+  .t-caret {
+    animation: none !important;
+    opacity: 1 !important;
+  }
+  .animate-pop-in {
     animation: none !important;
   }
-  /* Reduced motion: the transcript stays readable; JS jumps it to the tail
-     without tweening. */
-  .t-reason-scroll {
-    transition: none !important;
+  .t-pixel-cell {
+    animation: none !important;
+  }
+  /* The row highlight travels between rows, and its geometry is set inline in
+     Sidebar.tsx — this class is the only handle the stylesheet has on it. Freeze
+     the travel; the fill itself stays, because it is a highlight and not motion. */
+  .t-row-glider {
+    transition-duration: 1ms !important;
+  }
+  .sidebar-shell,
+  .sidebar-shell[data-collapsed="true"] {
+    transition-duration: 1ms !important;
+  }
+  .sidebar-shell .sidebar-copy,
+  .sidebar-shell .sidebar-module,
+  .sidebar-search-field,
+  .sidebar-search-label {
+    transition-duration: 1ms !important;
+  }
+  .sidebar-shell[data-collapsed="true"] .sidebar-copy {
+    translate: none !important;
+  }
+  .sidebar-shell[data-collapsed="true"] .sidebar-module {
+    transform: none !important;
+  }
+  .sidebar-search-field {
+    scale: none !important;
+  }
+  /* Restore an opaque fill: the shimmer effect paints clipped text through a
+     transparent colour, so killing the animation alone would leave the label
+     invisible. */
+  .t-shimmer-label {
+    animation: none !important;
+    color: var(--color-muted) !important;
+    -webkit-text-fill-color: var(--color-muted) !important;
   }
 }
