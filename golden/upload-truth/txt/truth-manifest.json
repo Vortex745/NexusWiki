@@ -1,0 +1,162 @@
+{
+  "manifestVersion": "ut01-txt-truth-v1",
+  "annotationMethod": "designed",
+  "designNote": "真值文本由本目录 generate.mjs 逐字设计，与被测提取管线完全独立；哈希把样本字节与真值文本固定下来。比较规则不得删除全部空白来掩盖损失。",
+  "allowedDecodeTransforms": [
+    "strip single leading BOM (recorded as whitespace-class finding)",
+    "CRLF/CR -> LF line-ending normalization"
+  ],
+  "samples": [
+    {
+      "id": "utf8-baseline",
+      "file": "utf8-baseline.txt",
+      "encoding": "utf-8",
+      "bom": false,
+      "lineEnding": "lf",
+      "fileSha256": "a505ddfacd5dc9cc047caee29474ab81293f1f46b3aee14caad9650716de4c41",
+      "fileBytes": 660,
+      "truthSha256": "a505ddfacd5dc9cc047caee29474ab81293f1f46b3aee14caad9650716de4c41",
+      "truthText": "退货政策真值样本 v1\nReturn Policy Truth Sample\n\n订单编号：A-2026-1004\n不支持七天无理由退款的条件包括：定制商品与激活类数字商品。\nSupport contact: support@example.com，电话 400-000-0000。\n\n步骤一：登录账户\n步骤二：打开订单详情\n步骤三：点击申请退款\n\n以下为示例配置（行首缩进必须保留）：\n    retry_limit = 3\n    timeout_ms = 1500\n        nested_flag = true\n\n字面记号：# 一级标记 **加粗** `code`\n重复行（有效重复，原样出现三次）：\n同一行内容原样重复\n同一行内容原样重复\n同一行内容原样重复\n\n结尾校验词：终线-42\n",
+      "decodeExpectation": "exact",
+      "mustPreserve": [
+        "word-spaces",
+        "indentation",
+        "numbers",
+        "negation",
+        "order",
+        "repetition"
+      ]
+    },
+    {
+      "id": "utf8-bom",
+      "file": "utf8-bom.txt",
+      "encoding": "utf-8",
+      "bom": true,
+      "lineEnding": "lf",
+      "fileSha256": "c9756d810aa5b586c321068da52e7e733da9c6afefa61feab91782a2d2f5346f",
+      "fileBytes": 663,
+      "truthSha256": "a505ddfacd5dc9cc047caee29474ab81293f1f46b3aee14caad9650716de4c41",
+      "truthText": "退货政策真值样本 v1\nReturn Policy Truth Sample\n\n订单编号：A-2026-1004\n不支持七天无理由退款的条件包括：定制商品与激活类数字商品。\nSupport contact: support@example.com，电话 400-000-0000。\n\n步骤一：登录账户\n步骤二：打开订单详情\n步骤三：点击申请退款\n\n以下为示例配置（行首缩进必须保留）：\n    retry_limit = 3\n    timeout_ms = 1500\n        nested_flag = true\n\n字面记号：# 一级标记 **加粗** `code`\n重复行（有效重复，原样出现三次）：\n同一行内容原样重复\n同一行内容原样重复\n同一行内容原样重复\n\n结尾校验词：终线-42\n",
+      "decodeExpectation": "exact_modulo_leading_bom",
+      "mustPreserve": [
+        "word-spaces",
+        "indentation",
+        "numbers",
+        "negation",
+        "order",
+        "repetition"
+      ]
+    },
+    {
+      "id": "utf16le-bom",
+      "file": "utf16le-bom.txt",
+      "encoding": "utf-16le",
+      "bom": true,
+      "lineEnding": "lf",
+      "fileSha256": "9243ebf507e0e599059f540d1ac9bce326b9d067dba086a1f151dafc1adfdbcc",
+      "fileBytes": 702,
+      "truthSha256": "a505ddfacd5dc9cc047caee29474ab81293f1f46b3aee14caad9650716de4c41",
+      "truthText": "退货政策真值样本 v1\nReturn Policy Truth Sample\n\n订单编号：A-2026-1004\n不支持七天无理由退款的条件包括：定制商品与激活类数字商品。\nSupport contact: support@example.com，电话 400-000-0000。\n\n步骤一：登录账户\n步骤二：打开订单详情\n步骤三：点击申请退款\n\n以下为示例配置（行首缩进必须保留）：\n    retry_limit = 3\n    timeout_ms = 1500\n        nested_flag = true\n\n字面记号：# 一级标记 **加粗** `code`\n重复行（有效重复，原样出现三次）：\n同一行内容原样重复\n同一行内容原样重复\n同一行内容原样重复\n\n结尾校验词：终线-42\n",
+      "decodeExpectation": "exact_modulo_leading_bom",
+      "mustPreserve": [
+        "word-spaces",
+        "indentation",
+        "numbers",
+        "negation",
+        "order",
+        "repetition"
+      ]
+    },
+    {
+      "id": "utf16be-bom",
+      "file": "utf16be-bom.txt",
+      "encoding": "utf-16be",
+      "bom": true,
+      "lineEnding": "lf",
+      "fileSha256": "e86ec31029bf5e1e63f6e15c40948a32637ee14af758ebac975aa2815b39110f",
+      "fileBytes": 702,
+      "truthSha256": "a505ddfacd5dc9cc047caee29474ab81293f1f46b3aee14caad9650716de4c41",
+      "truthText": "退货政策真值样本 v1\nReturn Policy Truth Sample\n\n订单编号：A-2026-1004\n不支持七天无理由退款的条件包括：定制商品与激活类数字商品。\nSupport contact: support@example.com，电话 400-000-0000。\n\n步骤一：登录账户\n步骤二：打开订单详情\n步骤三：点击申请退款\n\n以下为示例配置（行首缩进必须保留）：\n    retry_limit = 3\n    timeout_ms = 1500\n        nested_flag = true\n\n字面记号：# 一级标记 **加粗** `code`\n重复行（有效重复，原样出现三次）：\n同一行内容原样重复\n同一行内容原样重复\n同一行内容原样重复\n\n结尾校验词：终线-42\n",
+      "decodeExpectation": "exact_modulo_leading_bom",
+      "mustPreserve": [
+        "word-spaces",
+        "indentation",
+        "numbers",
+        "negation",
+        "order",
+        "repetition"
+      ]
+    },
+    {
+      "id": "legacy-gbk",
+      "file": "legacy-gbk.txt",
+      "encoding": "gbk",
+      "bom": false,
+      "lineEnding": "crlf",
+      "fileSha256": "7025c5dc4daed1df2cd82c4336e9496750868bb0d7a95517c3223e8882ea816b",
+      "fileBytes": 103,
+      "truthSha256": "05061da403d9d578dcd6081860e58c433987d023c44d33aae1ba56bd19260c73",
+      "truthText": "旧编码真值样本：订单不支持改址，请在工作日 9:00-18:00 联系客服。\n缩进行必须保留：\n    配置项 = 启用\n",
+      "decodeExpectation": "pending_review_allowed",
+      "mustPreserve": [
+        "word-spaces",
+        "numbers",
+        "negation",
+        "indentation"
+      ]
+    },
+    {
+      "id": "crlf-indent",
+      "file": "crlf-indent.txt",
+      "encoding": "utf-8",
+      "bom": false,
+      "lineEnding": "crlf",
+      "fileSha256": "a14f349c5bfad732c0d209b15bae8b828ef822f366e0d4849fadd720fe6f002e",
+      "fileBytes": 166,
+      "truthSha256": "4d7e2858c234fbd2025657e58bcfd8da875c24859ef117bd974b30c28ddcae65",
+      "truthText": "配置片段（CRLF 与缩进保持样本）：\n    server_port = 8080\n        ssl_enabled = false\n行尾空格行：   \n否定校验：不启用自动重试。\n",
+      "decodeExpectation": "exact_after_crlf_normalization",
+      "mustPreserve": [
+        "indentation",
+        "trailing-spaces-recorded",
+        "numbers",
+        "negation"
+      ]
+    },
+    {
+      "id": "literal-markdown",
+      "file": "literal-markdown.txt",
+      "encoding": "utf-8",
+      "bom": false,
+      "lineEnding": "lf",
+      "fileSha256": "e7114fb06a6098dbf20f93331ae373fc105e76717200a508b7e6c70f67a516a8",
+      "fileBytes": 138,
+      "truthSha256": "e7114fb06a6098dbf20f93331ae373fc105e76717200a508b7e6c70f67a516a8",
+      "truthText": "# 这一行以井号开头，井号属于内容\n**双星号必须原样保留**\n1. 第一项\n2. 第二项\n|列A|列B|\n|---|---|\n|甲|乙|\n",
+      "decodeExpectation": "exact",
+      "mustPreserve": [
+        "literal-markers",
+        "order",
+        "table-pipes-as-content"
+      ]
+    },
+    {
+      "id": "long-paragraph",
+      "file": "long-paragraph.txt",
+      "encoding": "utf-8",
+      "bom": false,
+      "lineEnding": "lf",
+      "fileSha256": "ae60c28482656aa8bad560495ed2d65c36eff57c1326cf5f234270c035907264",
+      "fileBytes": 4280,
+      "truthSha256": "ae60c28482656aa8bad560495ed2d65c36eff57c1326cf5f234270c035907264",
+      "truthText": "处理时限为1个工作日，节假日顺延并另行通知。第2条规则说明：金额上限为200元，且不支持跨店抵扣。处理时限为3个工作日，节假日顺延并另行通知。第4条规则说明：金额上限为400元，且不支持跨店抵扣。处理时限为5个工作日，节假日顺延并另行通知。第6条规则说明：金额上限为600元，且不支持跨店抵扣。处理时限为7个工作日，节假日顺延并另行通知。第8条规则说明：金额上限为800元，且不支持跨店抵扣。处理时限为9个工作日，节假日顺延并另行通知。第10条规则说明：金额上限为1000元，且不支持跨店抵扣。处理时限为11个工作日，节假日顺延并另行通知。第12条规则说明：金额上限为1200元，且不支持跨店抵扣。处理时限为13个工作日，节假日顺延并另行通知。第14条规则说明：金额上限为1400元，且不支持跨店抵扣。处理时限为15个工作日，节假日顺延并另行通知。第16条规则说明：金额上限为1600元，且不支持跨店抵扣。处理时限为17个工作日，节假日顺延并另行通知。第18条规则说明：金额上限为1800元，且不支持跨店抵扣。处理时限为19个工作日，节假日顺延并另行通知。第20条规则说明：金额上限为2000元，且不支持跨店抵扣。处理时限为21个工作日，节假日顺延并另行通知。第22条规则说明：金额上限为2200元，且不支持跨店抵扣。处理时限为23个工作日，节假日顺延并另行通知。第24条规则说明：金额上限为2400元，且不支持跨店抵扣。处理时限为25个工作日，节假日顺延并另行通知。第26条规则说明：金额上限为2600元，且不支持跨店抵扣。处理时限为27个工作日，节假日顺延并另行通知。第28条规则说明：金额上限为2800元，且不支持跨店抵扣。处理时限为29个工作日，节假日顺延并另行通知。第30条规则说明：金额上限为3000元，且不支持跨店抵扣。处理时限为31个工作日，节假日顺延并另行通知。第32条规则说明：金额上限为3200元，且不支持跨店抵扣。处理时限为33个工作日，节假日顺延并另行通知。第34条规则说明：金额上限为3400元，且不支持跨店抵扣。处理时限为35个工作日，节假日顺延并另行通知。第36条规则说明：金额上限为3600元，且不支持跨店抵扣。处理时限为37个工作日，节假日顺延并另行通知。第38条规则说明：金额上限为3800元，且不支持跨店抵扣。处理时限为39个工作日，节假日顺延并另行通知。第40条规则说明：金额上限为4000元，且不支持跨店抵扣。处理时限为41个工作日，节假日顺延并另行通知。第42条规则说明：金额上限为4200元，且不支持跨店抵扣。处理时限为43个工作日，节假日顺延并另行通知。第44条规则说明：金额上限为4400元，且不支持跨店抵扣。处理时限为45个工作日，节假日顺延并另行通知。第46条规则说明：金额上限为4600元，且不支持跨店抵扣。处理时限为47个工作日，节假日顺延并另行通知。第48条规则说明：金额上限为4800元，且不支持跨店抵扣。处理时限为49个工作日，节假日顺延并另行通知。第50条规则说明：金额上限为5000元，且不支持跨店抵扣。处理时限为51个工作日，节假日顺延并另行通知。第52条规则说明：金额上限为5200元，且不支持跨店抵扣。处理时限为53个工作日，节假日顺延并另行通知。第54条规则说明：金额上限为5400元，且不支持跨店抵扣。处理时限为55个工作日，节假日顺延并另行通知。第56条规则说明：金额上限为5600元，且不支持跨店抵扣。处理时限为57个工作日，节假日顺延并另行通知。第58条规则说明：金额上限为5800元，且不支持跨店抵扣。处理时限为59个工作日，节假日顺延并另行通知。\n\n重复结论（原样出现三次）：\n长段落结尾校验词：终线-LONG-77\n长段落结尾校验词：终线-LONG-77\n长段落结尾校验词：终线-LONG-77\n",
+      "decodeExpectation": "exact",
+      "mustPreserve": [
+        "numbers",
+        "repetition",
+        "no-truncation",
+        "order"
+      ]
+    }
+  ]
+}

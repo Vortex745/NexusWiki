@@ -27,6 +27,22 @@ export class MarkItDownParser {
   constructor(private options: MarkItDownParserOptions) {}
 
   async parse(input: ParseDocumentInput): Promise<NormalizedBlock[]> {
+    try {
+      const markdown = await this.parseRaw(input)
+      return normalizeMarkItDown(markdown, input.documentId)
+    } catch (error) {
+      throw this.wrapParseError(error)
+    }
+  }
+
+  /**
+   * UT-01 truth seam: run the MarkItDown CLI exactly like parse() but return
+   * the raw stdout BEFORE normalization — the extraction boundary the truth
+   * harness compares against. No behavior change for parse().
+   */
+  async parseRaw(
+    input: Omit<ParseDocumentInput, "documentId">
+  ): Promise<string> {
     if (input.content.length > this.options.inputLimitBytes) {
       throw new Error(
         `MarkItDown input exceeded ${this.options.inputLimitBytes} bytes`
@@ -37,7 +53,7 @@ export class MarkItDownParser {
     const sourcePath = join(workspace, `input${this.safeExtension(input.fileName)}`)
     try {
       await writeFile(sourcePath, input.content, { flag: "wx" })
-      const markdown = await runBoundedProcess({
+      return await runBoundedProcess({
         command: this.options.command,
         args: [...(this.options.commandArgs ?? []), sourcePath],
         cwd: workspace,
@@ -45,18 +61,19 @@ export class MarkItDownParser {
         outputLimitBytes: this.options.outputLimitBytes,
         signal: input.signal,
       })
-      return normalizeMarkItDown(markdown, input.documentId)
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error)
-      if (message.startsWith("Parser executable is unavailable:")) {
-        throw new Error(
-          `MarkItDown executable is unavailable. Configure MARKITDOWN_COMMAND. ${message}`
-        )
-      }
-      throw new Error(`MarkItDown failed: ${message}`)
     } finally {
       await rm(workspace, { recursive: true, force: true })
     }
+  }
+
+  private wrapParseError(error: unknown): Error {
+    const message = error instanceof Error ? error.message : String(error)
+    if (message.startsWith("Parser executable is unavailable:")) {
+      return new Error(
+        `MarkItDown executable is unavailable. Configure MARKITDOWN_COMMAND. ${message}`
+      )
+    }
+    return new Error(`MarkItDown failed: ${message}`)
   }
 
   private safeExtension(fileName: string): string {

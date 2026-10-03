@@ -1,0 +1,5 @@
+配置片段（CRLF 与缩进保持样本）：
+    server_port = 8080
+        ssl_enabled = false
+行尾空格行：   
+否定校验：不启用自动重试。
