@@ -201,7 +201,8 @@ export function ImportDialog({
   /** Rows a worker has claimed; claims happen synchronously so two workers
    * never pick up the same row. */
   const claimedRef = useRef(new Set<string>())
-  const workersRunningRef = useRef(false)
+  // UT-25: count of LIVE worker loops — the shared upload slot accounting.
+  const liveWorkersRef = useRef(0)
   const pollTimer = useRef<number | null>(null)
   const pollingRef = useRef(false)
   const completionNotifiedRef = useRef(false)
@@ -295,7 +296,7 @@ export function ImportDialog({
       pollTimer.current = null
     }
     const terminal = new Set<string>(IMPORT_TERMINAL_STATUSES)
-    const settled = queueRef.current.length > 0 && !workersRunningRef.current &&
+    const settled = queueRef.current.length > 0 && liveWorkersRef.current === 0 &&
       queueRef.current.every((item) => terminal.has(item.status))
     if (settled && !completionNotifiedRef.current) {
       completionNotifiedRef.current = true
@@ -412,35 +413,45 @@ export function ImportDialog({
   )
 
   const ensureWorkers = useCallback(() => {
-    if (workersRunningRef.current) return
-    workersRunningRef.current = true
-    const run = async () => {
-      try {
-        for (;;) {
-          const item = queueRef.current.find(
-            (candidate) =>
-              candidate.status === "queued" &&
-              // UT-24: an un-settled row's wave has not finished its
-              // pre-flight — a worker still running from an earlier wave must
-              // never claim it before admission/same-name confirmation lands.
-              candidate.precheckSettled !== false &&
-              !candidate.precheckHit &&
-              !claimedRef.current.has(candidate.id),
-          )
-          if (!item) break
-          claimedRef.current.add(item.id)
-          try {
-            await uploadOne(item)
-          } finally {
-            claimedRef.current.delete(item.id)
+    // UT-25: the shared slot count is the number of LIVE worker loops. The
+    // old boolean gate was zeroed by EVERY exiting run, so a wave appended
+    // while one worker was still uploading spawned a full fresh set —
+    // measured 4 concurrent uploads against a 3-slot limit. Top up only the
+    // deficit instead: each exit frees exactly one slot, never two.
+    const deficit = IMPORT_CONCURRENCY - liveWorkersRef.current
+    for (let worker = 0; worker < deficit; worker += 1) {
+      liveWorkersRef.current += 1
+      void (async () => {
+        try {
+          for (;;) {
+            const item = queueRef.current.find(
+              (candidate) =>
+                candidate.status === "queued" &&
+                // UT-24: an un-settled row's wave has not finished its
+                // pre-flight — a worker still running from an earlier wave must
+                // never claim it before admission/same-name confirmation lands.
+                candidate.precheckSettled !== false &&
+                !candidate.precheckHit &&
+                !claimedRef.current.has(candidate.id),
+            )
+            if (!item) break
+            claimedRef.current.add(item.id)
+            try {
+              await uploadOne(item)
+            } catch {
+              // uploadOne settles its own failures; a bug escaping it must
+              // not kill the worker loop — the slot survives and the next
+              // ready row proceeds.
+            } finally {
+              claimedRef.current.delete(item.id)
+            }
           }
+        } finally {
+          liveWorkersRef.current -= 1
+          if (liveWorkersRef.current === 0) stopPollingIfDone()
         }
-      } finally {
-        workersRunningRef.current = false
-        stopPollingIfDone()
-      }
+      })()
     }
-    for (let worker = 0; worker < IMPORT_CONCURRENCY; worker += 1) void run()
   }, [uploadOne, startPolling, stopPollingIfDone])
 
   // ---------------------------------------------------------------------------

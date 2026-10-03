@@ -315,10 +315,13 @@ function dialogHarness() {
   let status = payload([stage("chunk", "done"), stage("wikify", "done"), stage("storeChunks", "running")])
   let unavailable = false
   let uploadFailure = false
+  let failNext = false
   let refreshed = 0
   let uploadedTo: string | null = null
   let uploadCalls = 0
   let uploadHold = false
+  let inFlight = 0
+  let maxInFlight = 0
   const uploadedTos: Array<string | null> = []
   const parkedUploads: Array<() => void> = []
   let catalogHold = false
@@ -364,10 +367,24 @@ function dialogHarness() {
           uploadCalls += 1
           uploadedTo = options?.knowledgeBaseId ?? null
           uploadedTos.push(uploadedTo)
-          if (uploadFailure) throw new Error("upload rejected")
+          // UT-25: count truly concurrent transfers — the peak must never
+          // exceed the configured slot count, whatever the wave interleaving.
+          inFlight += 1
+          if (inFlight > maxInFlight) maxInFlight = inFlight
+          const done = () => { inFlight -= 1 }
+          if (failNext) {
+            failNext = false
+            done()
+            throw new Error("upload rejected")
+          }
+          if (uploadFailure) {
+            done()
+            throw new Error("upload rejected")
+          }
           // UT-24: hold() parks the upload so a worker stays visibly busy
           // while a later wave is appended.
-          if (uploadHold) return new Promise<void>((resolve) => parkedUploads.push(resolve))
+          if (uploadHold) return new Promise<void>((resolve) => parkedUploads.push(() => { done(); resolve() }))
+          done()
           return "doc-1"
         },
         async fetchIngestStatus() { if (unavailable) throw new Error("HTTP 503"); return status },
@@ -464,8 +481,10 @@ function dialogHarness() {
     progress() { return find(render(), (node) => node.type === "import-progress").props },
     failQuery(value: boolean) { unavailable = value },
     failUpload() { uploadFailure = true },
+    failNextUpload() { failNext = true },
     toasts, timers, get refreshed() { return refreshed }, get uploadedTo() { return uploadedTo },
     get uploadCalls() { return uploadCalls }, get uploadedTos() { return [...uploadedTos] },
+    get maxInFlight() { return maxInFlight },
   }
 }
 
@@ -584,4 +603,42 @@ test("UT-24: a failed pre-check settles the wave with an explainable toast, neve
     host.toasts.some((message) => message.includes("同名预检查不可用")),
     "the failure is explained, not hidden behind a wait",
   )
+})
+
+// ---------------------------------------------------------------------------
+// UT-25: shared cross-wave upload slots.
+// ---------------------------------------------------------------------------
+
+test("UT-25: concurrent uploads never exceed the shared slot count across waves", async () => {
+  const host = dialogHarness()
+  // Wave 1: one upload parks; the two surplus worker loops exit (their exit
+  // used to zero the boolean gate while the first worker was still alive).
+  host.holdUpload()
+  await host.upload()
+  assert.equal(host.uploadCalls, 1)
+
+  // Wave 2 appended mid-flight: three more rows, settled pre-check.
+  host.pick(["b.pdf", "c.pdf", "d.pdf"])
+  await settle()
+
+  // Drain everything, then inspect the peak.
+  host.releaseUpload()
+  await settle()
+  assert.ok(
+    host.maxInFlight <= 3,
+    `in-flight peaked at ${host.maxInFlight}; the shared limit is 3 (old bug: 4)`,
+  )
+  assert.equal(host.uploadCalls, 4, "every row uploaded exactly once")
+  assert.equal(host.maxInFlight, 3, "slots stay fully utilized without overshoot")
+})
+
+test("UT-25: one failed transfer neither leaks a slot nor blocks the other ready rows", async () => {
+  const host = dialogHarness()
+  host.failNextUpload()
+  await host.upload() // wave 1 row fails (terminal)
+  host.pick(["b.pdf", "c.pdf"])
+  await settle()
+  assert.equal(host.uploadCalls, 3, "the failure did not stall the worker — later rows still upload")
+  assert.ok(host.maxInFlight <= 3)
+  assert.equal(host.maxInFlight >= 1, true, "a slot was actually used")
 })
