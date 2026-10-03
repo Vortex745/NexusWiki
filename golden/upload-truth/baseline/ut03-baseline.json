@@ -1,0 +1,679 @@
+{
+  "ticket": "UT-03",
+  "generatedAt": "2026-10-03T17:14:04.612Z",
+  "disclaimer": "修复前基线：小样本观测分布，不是生产成功率、p95 或提速目标。当前管线没有待校验/校验阶段——相关计数为 0 或标注 not_present，绝不填零充当测量值。Jev 概率与既有测试通过率不进入本报告。",
+  "environment": {
+    "node": "v26.8.1",
+    "platform": "win32 x64",
+    "config": {
+      "pollIntervalMs": 250,
+      "ingestionConcurrency": 2,
+      "claimedTimeoutMs": 14400000,
+      "embeddingBatchMaxChunks": 64,
+      "embeddingBatchMaxBytes": 153600,
+      "parserTimeoutMs": 120000,
+      "activationMode": "auto",
+      "esNode": "http://localhost:9201",
+      "markitdownCommand": "markitdown",
+      "pythonCommand": "python",
+      "markerCommand": "marker_single"
+    },
+    "esIsolation": "tenant=truth-baseline namespace=ut03（ES 索引 kefu-rag-chunks 为共享索引，运行结束按租户清理）",
+    "sqliteIsolation": "C:\\Users\\14253\\AppData\\Local\\Temp\\kefu-rag-ut03-q8Eeh7\\baseline.db",
+    "esVersion": "9.0.2"
+  },
+  "parserAvailability": {
+    "markitdown": true,
+    "builtinPdf": true,
+    "marker": false
+  },
+  "offlineStageTimings": [
+    {
+      "id": "utf8-baseline",
+      "parseMs": {
+        "cold": 1525,
+        "warm": 1583
+      },
+      "chunkMs": {
+        "cold": 4,
+        "warm": 0
+      },
+      "blockCount": 6,
+      "chunkCount": 4
+    },
+    {
+      "id": "utf8-bom",
+      "parseMs": {
+        "cold": 1565,
+        "warm": 1596
+      },
+      "chunkMs": {
+        "cold": 0,
+        "warm": 0
+      },
+      "blockCount": 6,
+      "chunkCount": 4
+    },
+    {
+      "id": "utf16le-bom",
+      "parseMs": {
+        "cold": 1524,
+        "warm": 1594
+      },
+      "chunkMs": {
+        "cold": 0,
+        "warm": 0
+      },
+      "blockCount": 6,
+      "chunkCount": 4
+    },
+    {
+      "id": "utf16be-bom",
+      "parseMs": {
+        "cold": 1546,
+        "warm": 1621
+      },
+      "chunkMs": {
+        "cold": 1,
+        "warm": 0
+      },
+      "blockCount": 6,
+      "chunkCount": 4
+    },
+    {
+      "id": "legacy-gbk",
+      "parseMs": {
+        "cold": 1550,
+        "warm": 1527
+      },
+      "chunkMs": {
+        "cold": 0,
+        "warm": 0
+      },
+      "blockCount": 1,
+      "chunkCount": 2
+    },
+    {
+      "id": "crlf-indent",
+      "parseMs": {
+        "cold": 1557,
+        "warm": 1550
+      },
+      "chunkMs": {
+        "cold": 0,
+        "warm": 0
+      },
+      "blockCount": 1,
+      "chunkCount": 2
+    },
+    {
+      "id": "literal-markdown",
+      "parseMs": {
+        "cold": 1558,
+        "warm": 1584
+      },
+      "chunkMs": {
+        "cold": 0,
+        "warm": 0
+      },
+      "blockCount": 3,
+      "chunkCount": 2
+    },
+    {
+      "id": "long-paragraph",
+      "parseMs": {
+        "cold": 1633,
+        "warm": 1535
+      },
+      "chunkMs": {
+        "cold": 2,
+        "warm": 0
+      },
+      "blockCount": 2,
+      "chunkCount": 5
+    },
+    {
+      "id": "simple-body",
+      "parseMs": {
+        "cold": 261,
+        "warm": 241
+      },
+      "chunkMs": {
+        "cold": 0,
+        "warm": 1
+      },
+      "blockCount": 9,
+      "chunkCount": 3
+    },
+    {
+      "id": "mixed-scan",
+      "parseMs": {
+        "cold": 300,
+        "warm": 309
+      },
+      "chunkMs": {
+        "cold": 0,
+        "warm": 0
+      },
+      "blockCount": 2,
+      "chunkCount": 2
+    }
+  ],
+  "uploads": [
+    {
+      "sample": "utf8-baseline",
+      "designedExpectation": "complete_success",
+      "fileSha256": "a505ddfacd5dc9cc047caee29474ab81293f1f46b3aee14caad9650716de4c41",
+      "fileBytes": 660,
+      "uploadMs": 24,
+      "submit": {
+        "docId": "4d9fce48-4046-4af4-ba56-8d0246460eba",
+        "taskId": 1,
+        "status": "pending",
+        "version": 1
+      },
+      "timeline": {
+        "queueClaimMs": 235,
+        "serverProcessingMs": 2366,
+        "submissionAt": "2026-10-03T17:14:32.862Z",
+        "taskFinishedAt": "2026-10-03T17:14:35.463Z"
+      },
+      "spans": {
+        "root": {
+          "durationMs": 2366,
+          "startedAt": "2026-10-03T17:14:33.097Z",
+          "finishedAt": "2026-10-03T17:14:35.463Z"
+        },
+        "chunk": {
+          "durationMs": 1719,
+          "startedAt": "2026-10-03T17:14:33.098Z",
+          "finishedAt": "2026-10-03T17:14:34.817Z"
+        },
+        "wikify": {
+          "durationMs": 0,
+          "startedAt": "2026-10-03T17:14:34.817Z",
+          "finishedAt": "2026-10-03T17:14:34.817Z"
+        },
+        "storeChunks": {
+          "durationMs": 644,
+          "startedAt": "2026-10-03T17:14:34.818Z",
+          "finishedAt": "2026-10-03T17:14:35.462Z"
+        },
+        "storeGraph": {
+          "durationMs": 0,
+          "startedAt": "2026-10-03T17:14:35.463Z",
+          "finishedAt": "2026-10-03T17:14:35.463Z"
+        }
+      },
+      "activation": {
+        "status": "completed",
+        "candidateState": null,
+        "activeVersion": 1
+      },
+      "indexVisibility": {
+        "searched": true,
+        "tookMs": 12,
+        "hits": 4
+      },
+      "truthComparison": null,
+      "identity": null,
+      "category": "completed_current_semantics"
+    },
+    {
+      "sample": "utf16le-bom",
+      "designedExpectation": "complete_success",
+      "fileSha256": "9243ebf507e0e599059f540d1ac9bce326b9d067dba086a1f151dafc1adfdbcc",
+      "fileBytes": 702,
+      "uploadMs": 23,
+      "submit": {
+        "docId": "21260672-e9a5-4464-b83d-c21927ed55c6",
+        "taskId": 2,
+        "status": "pending",
+        "version": 1
+      },
+      "timeline": {
+        "queueClaimMs": 234,
+        "serverProcessingMs": 3448,
+        "submissionAt": "2026-10-03T17:14:32.865Z",
+        "taskFinishedAt": "2026-10-03T17:14:36.547Z"
+      },
+      "spans": {
+        "root": {
+          "durationMs": 3448,
+          "startedAt": "2026-10-03T17:14:33.099Z",
+          "finishedAt": "2026-10-03T17:14:36.547Z"
+        },
+        "chunk": {
+          "durationMs": 1739,
+          "startedAt": "2026-10-03T17:14:33.099Z",
+          "finishedAt": "2026-10-03T17:14:34.838Z"
+        },
+        "wikify": {
+          "durationMs": 0,
+          "startedAt": "2026-10-03T17:14:34.839Z",
+          "finishedAt": "2026-10-03T17:14:34.839Z"
+        },
+        "storeChunks": {
+          "durationMs": 1708,
+          "startedAt": "2026-10-03T17:14:34.839Z",
+          "finishedAt": "2026-10-03T17:14:36.547Z"
+        },
+        "storeGraph": {
+          "durationMs": 0,
+          "startedAt": "2026-10-03T17:14:36.547Z",
+          "finishedAt": "2026-10-03T17:14:36.547Z"
+        }
+      },
+      "activation": {
+        "status": "completed",
+        "candidateState": null,
+        "activeVersion": 1
+      },
+      "indexVisibility": {
+        "searched": true,
+        "tookMs": 8,
+        "hits": 4
+      },
+      "truthComparison": null,
+      "identity": null,
+      "category": "completed_current_semantics"
+    },
+    {
+      "sample": "simple-body",
+      "designedExpectation": "complete_success",
+      "fileSha256": "9c6f31e2a293004ec9eac46eae2e569a936058887467b485f470d40a8980328a",
+      "fileBytes": 3389,
+      "uploadMs": 23,
+      "submit": {
+        "docId": "b8996736-2aa5-49b4-9fcc-d9413fd445a4",
+        "taskId": 3,
+        "status": "pending",
+        "version": 1
+      },
+      "timeline": {
+        "queueClaimMs": 2597,
+        "serverProcessingMs": 1085,
+        "submissionAt": "2026-10-03T17:14:32.867Z",
+        "taskFinishedAt": "2026-10-03T17:14:36.549Z"
+      },
+      "spans": {
+        "root": {
+          "durationMs": 1085,
+          "startedAt": "2026-10-03T17:14:35.464Z",
+          "finishedAt": "2026-10-03T17:14:36.549Z"
+        },
+        "chunk": {
+          "durationMs": 263,
+          "startedAt": "2026-10-03T17:14:35.464Z",
+          "finishedAt": "2026-10-03T17:14:35.727Z"
+        },
+        "wikify": {
+          "durationMs": 0,
+          "startedAt": "2026-10-03T17:14:35.728Z",
+          "finishedAt": "2026-10-03T17:14:35.728Z"
+        },
+        "storeChunks": {
+          "durationMs": 820,
+          "startedAt": "2026-10-03T17:14:35.728Z",
+          "finishedAt": "2026-10-03T17:14:36.548Z"
+        },
+        "storeGraph": {
+          "durationMs": 1,
+          "startedAt": "2026-10-03T17:14:36.548Z",
+          "finishedAt": "2026-10-03T17:14:36.549Z"
+        }
+      },
+      "activation": {
+        "status": "completed",
+        "candidateState": null,
+        "activeVersion": 1
+      },
+      "indexVisibility": {
+        "searched": true,
+        "tookMs": 12,
+        "hits": 3
+      },
+      "truthComparison": null,
+      "identity": null,
+      "category": "completed_current_semantics"
+    },
+    {
+      "sample": "legacy-gbk",
+      "designedExpectation": "complete_success_or_pending",
+      "fileSha256": "7025c5dc4daed1df2cd82c4336e9496750868bb0d7a95517c3223e8882ea816b",
+      "fileBytes": 103,
+      "uploadMs": 4,
+      "submit": {
+        "docId": "b29e70a4-c28b-4e7d-8b44-586caa6417f9",
+        "taskId": 4,
+        "status": "pending",
+        "version": 1
+      },
+      "timeline": {
+        "queueClaimMs": 204,
+        "serverProcessingMs": 2730,
+        "submissionAt": "2026-10-03T17:14:36.653Z",
+        "taskFinishedAt": "2026-10-03T17:14:39.587Z"
+      },
+      "spans": {
+        "root": {
+          "durationMs": 2730,
+          "startedAt": "2026-10-03T17:14:36.857Z",
+          "finishedAt": "2026-10-03T17:14:39.587Z"
+        },
+        "chunk": {
+          "durationMs": 1557,
+          "startedAt": "2026-10-03T17:14:36.858Z",
+          "finishedAt": "2026-10-03T17:14:38.415Z"
+        },
+        "wikify": {
+          "durationMs": 0,
+          "startedAt": "2026-10-03T17:14:38.415Z",
+          "finishedAt": "2026-10-03T17:14:38.415Z"
+        },
+        "storeChunks": {
+          "durationMs": 1172,
+          "startedAt": "2026-10-03T17:14:38.415Z",
+          "finishedAt": "2026-10-03T17:14:39.587Z"
+        },
+        "storeGraph": {
+          "durationMs": 0,
+          "startedAt": "2026-10-03T17:14:39.587Z",
+          "finishedAt": "2026-10-03T17:14:39.587Z"
+        }
+      },
+      "activation": {
+        "status": "completed",
+        "candidateState": null,
+        "activeVersion": 1
+      },
+      "indexVisibility": {
+        "searched": true,
+        "tookMs": 8,
+        "hits": 2
+      },
+      "truthComparison": null,
+      "identity": null,
+      "category": "completed_current_semantics"
+    },
+    {
+      "sample": "long-paragraph",
+      "designedExpectation": "complete_success",
+      "fileSha256": "ae60c28482656aa8bad560495ed2d65c36eff57c1326cf5f234270c035907264",
+      "fileBytes": 4280,
+      "uploadMs": 6,
+      "submit": {
+        "docId": "fe2b2bc0-a0ed-40de-9f9c-65d2570fe229",
+        "taskId": 5,
+        "status": "pending",
+        "version": 1
+      },
+      "timeline": {
+        "queueClaimMs": 121,
+        "serverProcessingMs": 2866,
+        "submissionAt": "2026-10-03T17:14:39.741Z",
+        "taskFinishedAt": "2026-10-03T17:14:42.728Z"
+      },
+      "spans": {
+        "root": {
+          "durationMs": 2866,
+          "startedAt": "2026-10-03T17:14:39.862Z",
+          "finishedAt": "2026-10-03T17:14:42.728Z"
+        },
+        "chunk": {
+          "durationMs": 1554,
+          "startedAt": "2026-10-03T17:14:39.863Z",
+          "finishedAt": "2026-10-03T17:14:41.417Z"
+        },
+        "wikify": {
+          "durationMs": 1,
+          "startedAt": "2026-10-03T17:14:41.417Z",
+          "finishedAt": "2026-10-03T17:14:41.418Z"
+        },
+        "storeChunks": {
+          "durationMs": 1310,
+          "startedAt": "2026-10-03T17:14:41.418Z",
+          "finishedAt": "2026-10-03T17:14:42.728Z"
+        },
+        "storeGraph": {
+          "durationMs": 0,
+          "startedAt": "2026-10-03T17:14:42.728Z",
+          "finishedAt": "2026-10-03T17:14:42.728Z"
+        }
+      },
+      "activation": {
+        "status": "completed",
+        "candidateState": null,
+        "activeVersion": 1
+      },
+      "indexVisibility": {
+        "searched": true,
+        "tookMs": 9,
+        "hits": 5
+      },
+      "truthComparison": null,
+      "identity": null,
+      "category": "completed_current_semantics"
+    },
+    {
+      "sample": "mixed-scan",
+      "designedExpectation": "pending_review",
+      "fileSha256": "3106c50a19d79055a087f6a45663d68db4744dac063012809a115a4c4eb6d72c",
+      "fileBytes": 25089,
+      "uploadMs": 4,
+      "submit": {
+        "docId": "732001f4-f5b6-45bd-a905-dfe26c6c7a02",
+        "taskId": 6,
+        "status": "pending",
+        "version": 1
+      },
+      "timeline": {
+        "queueClaimMs": 36,
+        "serverProcessingMs": 893,
+        "submissionAt": "2026-10-03T17:14:42.831Z",
+        "taskFinishedAt": "2026-10-03T17:14:43.760Z"
+      },
+      "spans": {
+        "root": {
+          "durationMs": 893,
+          "startedAt": "2026-10-03T17:14:42.867Z",
+          "finishedAt": "2026-10-03T17:14:43.760Z"
+        },
+        "chunk": {
+          "durationMs": 317,
+          "startedAt": "2026-10-03T17:14:42.868Z",
+          "finishedAt": "2026-10-03T17:14:43.185Z"
+        },
+        "wikify": {
+          "durationMs": 0,
+          "startedAt": "2026-10-03T17:14:43.185Z",
+          "finishedAt": "2026-10-03T17:14:43.185Z"
+        },
+        "storeChunks": {
+          "durationMs": 574,
+          "startedAt": "2026-10-03T17:14:43.185Z",
+          "finishedAt": "2026-10-03T17:14:43.759Z"
+        },
+        "storeGraph": {
+          "durationMs": 1,
+          "startedAt": "2026-10-03T17:14:43.759Z",
+          "finishedAt": "2026-10-03T17:14:43.760Z"
+        }
+      },
+      "activation": {
+        "status": "completed",
+        "candidateState": null,
+        "activeVersion": 1
+      },
+      "indexVisibility": {
+        "searched": true,
+        "tookMs": 9,
+        "hits": 2
+      },
+      "truthComparison": {
+        "kind": "per-page-truth",
+        "designedExpectation": "pending_review",
+        "currentPageNumbers": [
+          1,
+          3
+        ],
+        "missingPageTruth": "page 2 (scanned, designed text) absent from extraction",
+        "falseSuccess": true
+      },
+      "identity": null,
+      "category": "false_success_current_semantics"
+    },
+    {
+      "sample": "utf8-baseline",
+      "designedExpectation": "complete_success",
+      "fileSha256": "a505ddfacd5dc9cc047caee29474ab81293f1f46b3aee14caad9650716de4c41",
+      "fileBytes": 660,
+      "uploadMs": 4,
+      "submit": {
+        "docId": "4d9fce48-4046-4af4-ba56-8d0246460eba",
+        "taskId": null,
+        "status": "unchanged",
+        "version": 1
+      },
+      "timeline": {},
+      "spans": {},
+      "activation": {
+        "status": ""
+      },
+      "indexVisibility": {
+        "searched": false,
+        "tookMs": null,
+        "hits": null
+      },
+      "truthComparison": null,
+      "identity": {
+        "note": "second submission of identical bytes; current identity semantics: no new document/task"
+      },
+      "category": "unchanged_noop"
+    },
+    {
+      "sample": "override-pollution",
+      "designedExpectation": "capability_pending",
+      "fileSha256": "a505ddfacd5dc9cc047caee29474ab81293f1f46b3aee14caad9650716de4c41",
+      "fileBytes": 660,
+      "uploadMs": 3,
+      "submit": {
+        "docId": "c1af5768-e011-4445-9680-a1371819bc9c",
+        "taskId": 7,
+        "status": "pending",
+        "version": 1
+      },
+      "timeline": {
+        "queueClaimMs": 191,
+        "serverProcessingMs": 12,
+        "submissionAt": "2026-10-03T17:14:43.928Z",
+        "taskFinishedAt": "2026-10-03T17:14:44.131Z"
+      },
+      "spans": {
+        "root": {
+          "durationMs": 16,
+          "startedAt": "2026-10-03T17:14:58.649Z",
+          "finishedAt": "2026-10-03T17:14:58.665Z"
+        },
+        "chunk": {
+          "durationMs": 14,
+          "startedAt": "2026-10-03T17:14:58.650Z",
+          "finishedAt": "2026-10-03T17:14:58.664Z"
+        },
+        "wikify": {
+          "durationMs": 0,
+          "startedAt": null,
+          "finishedAt": "2026-10-03T17:14:58.665Z"
+        },
+        "storeChunks": {
+          "durationMs": 0,
+          "startedAt": null,
+          "finishedAt": "2026-10-03T17:14:58.665Z"
+        },
+        "storeGraph": {
+          "durationMs": 0,
+          "startedAt": null,
+          "finishedAt": "2026-10-03T17:14:58.665Z"
+        }
+      },
+      "activation": {
+        "status": "failed",
+        "candidateState": null,
+        "activeVersion": 1
+      },
+      "indexVisibility": {
+        "searched": true,
+        "tookMs": 9,
+        "hits": 0
+      },
+      "truthComparison": null,
+      "identity": null,
+      "category": "task_failed",
+      "error": "Marker executable is unavailable. Configure MARKER_COMMAND. Parser executable is unavailable: marker_single"
+    },
+    {
+      "sample": "cancel-probe",
+      "designedExpectation": "cancelled",
+      "fileSha256": "a363aafb8752ac2d56ef3cac6bc348247affb0746230120ca924704ead36f289",
+      "fileBytes": 4561,
+      "uploadMs": 3,
+      "submit": {
+        "docId": "8fff2642-f8bd-48c9-9132-1f4e1841b869",
+        "taskId": 8,
+        "status": "pending",
+        "version": 1
+      },
+      "timeline": {
+        "queueClaimMs": null,
+        "serverProcessingMs": null,
+        "submissionAt": "2026-10-03T17:15:13.498Z",
+        "taskFinishedAt": null
+      },
+      "spans": {},
+      "activation": {
+        "status": "cancelled"
+      },
+      "indexVisibility": {
+        "searched": true,
+        "tookMs": 6,
+        "hits": 0
+      },
+      "truthComparison": null,
+      "identity": {
+        "note": "cancel raced against ingestion; recorded terminal status is authoritative"
+      },
+      "category": "cancelled"
+    }
+  ],
+  "counts": {
+    "denominator_all_attempts": 8,
+    "note_denominator": "分母 = 全部设计样本的尝试（含取消探针）；重复提交与恢复是身份语义记录，不计为新文档。",
+    "byCategory": {
+      "completed_current_semantics": 5,
+      "false_success_current_semantics": 1,
+      "unchanged_noop": 1,
+      "task_failed": 1,
+      "cancelled": 1
+    },
+    "complete_success_designed": 4,
+    "pending_review_current_pipeline": "not_present（当前管线没有待校验状态）",
+    "verification_phase": "not_present（当前管线没有独立校验阶段）",
+    "resume_attempts": 1,
+    "resume_identity_preserved": true,
+    "unsupported_capability_failures": 1
+  },
+  "cleanup": {
+    "esDeleted": 20,
+    "esRemainingForTenant": 0,
+    "sqlite": "one-shot temp database (discarded with temp dir)",
+    "wikiJobs": "no wiki engine wired in this harness; jobs stayed pending in the temp database only"
+  },
+  "retryIdentity": {
+    "retryHttpStatus": 200,
+    "retriedTaskId": 7,
+    "sameDocId": true,
+    "sameTaskId": true,
+    "secondRoundStatus": "failed",
+    "note": "resume reuses the same document/task row (not a new document); failure repeats because marker capability is absent"
+  }
+}
