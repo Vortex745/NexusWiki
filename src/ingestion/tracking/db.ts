@@ -145,6 +145,23 @@ const SCHEMA = [
     missing_fields_json TEXT NOT NULL DEFAULT '[]',
     created_at TEXT NOT NULL
   )`,
+  // Ticket UT-13: the EXPECTED retrieval manifest — every non-parent chunk a
+  // document version should contribute to the index, with its stable identity
+  // (deterministic uuid v5 from doc+content), content hash and the normalized
+  // source blocks it covers. Written at ingestion from the chunk stage; the
+  // index-verification ticket (UT-16) compares actual index entries against
+  // this persisted list instead of trusting the store's own bookkeeping.
+  `CREATE TABLE IF NOT EXISTS expected_chunks (
+    doc_id TEXT NOT NULL,
+    version INTEGER NOT NULL,
+    chunk_id TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    position INTEGER NOT NULL,
+    content_sha256 TEXT NOT NULL,
+    block_ids_json TEXT NOT NULL DEFAULT '[]',
+    created_at TEXT NOT NULL,
+    PRIMARY KEY (doc_id, version, chunk_id)
+  )`,
   `CREATE TABLE IF NOT EXISTS session_bindings (
     session_id TEXT PRIMARY KEY,
     tenant_id TEXT NOT NULL,

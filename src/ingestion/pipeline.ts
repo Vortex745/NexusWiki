@@ -30,9 +30,11 @@ import {
   IngestionStoreImpl,
   type ChunkStoreMetrics,
 } from "./storage"
+import { evaluateBlockCoverage } from "./chunk_coverage"
 import { buildPageIndex } from "./page_index_builder"
 import type { DB } from "./tracking/db"
 import { DocumentRepo } from "./tracking/doc_repo"
+import { ExpectedChunkRepository } from "./tracking/expected_chunk_repo"
 import { PageIndexRepository } from "./tracking/page_index_repo"
 import {
   EXTRACTION_EVIDENCE_SCHEMA_VERSION,
@@ -410,6 +412,34 @@ export class PipelineStageRunner implements IngestionStageRunner {
         })
       )
       const chunks = chunkResult.chunks
+
+      // Ticket UT-13: persist the EXPECTED retrieval manifest for this
+      // document version (every index-bound chunk with its stable identity,
+      // content hash and covered source blocks — parent chunks never enter
+      // the index), then verify block coverage independently. A coverage gap
+      // is a loud stage failure, never a silent partial index expectation.
+      const indexChunks = chunks.filter((chunk) => chunk.metadata.kind !== "parent")
+      new ExpectedChunkRepository(this.db).replaceAll(
+        document.id,
+        document.version,
+        indexChunks.map((chunk, position) => ({
+          chunkId: chunk.id,
+          kind: String(chunk.metadata.kind ?? "child"),
+          position,
+          contentSha256: ExpectedChunkRepository.contentSha256(chunk.content),
+          blockIds: ((chunk.metadata.normalizedBlocks as Array<{ id?: string }> | undefined) ?? [])
+            .map((block) => block.id)
+            .filter((id): id is string => typeof id === "string"),
+        }))
+      )
+      if (chunkResult.blocks.length > 0) {
+        const coverage = evaluateBlockCoverage(chunkResult.blocks, indexChunks)
+        if (coverage.verdict === "gaps") {
+          throw new Error(
+            `chunk coverage gaps: ${coverage.missingBlockIds.length}/${coverage.totalBlocks} normalized blocks missing from index chunks`
+          )
+        }
+      }
 
       const wikified = await execution.runStage(
         "wikify",
