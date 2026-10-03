@@ -6,7 +6,8 @@ export interface DocumentViewTarget {
 }
 
 export interface AppShellActions {
-  openInsight: (messageId?: string) => void
+  /** Opens the 执行链路 panel pinned to one answer; clicking it again closes it. */
+  openTrace: (messageId: string) => void
   openMemory: () => void
   openImport: () => void
   openEvaluation: () => void
@@ -25,10 +26,17 @@ export interface AppShellActions {
   showToast: (message: string) => void
 }
 
+/** Shell STATE alongside the actions: projections the sidebar renders. */
+export interface AppShellState {
+  /** Ticket 08: import rows still owing an outcome — the 导入中 N badge. */
+  activeImportCount: number
+}
+
 const noop = () => {}
 
-const AppShellContext = createContext<AppShellActions>({
-  openInsight: noop,
+const AppShellContext = createContext<AppShellActions & AppShellState>({
+  activeImportCount: 0,
+  openTrace: noop,
   openMemory: noop,
   openImport: noop,
   openEvaluation: noop,
@@ -43,6 +51,6 @@ const AppShellContext = createContext<AppShellActions>({
 
 export const AppShellProvider = AppShellContext.Provider
 
-export function useAppShell(): AppShellActions {
+export function useAppShell(): AppShellActions & AppShellState {
   return useContext(AppShellContext)
 }

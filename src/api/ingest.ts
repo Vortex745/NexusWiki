@@ -1,7 +1,9 @@
 import express, { Request, Response, Router } from "express"
+import type { NextFunction } from "express"
 import { randomUUID } from "node:crypto"
 import { singleTenantAccessContext, type AccessContext } from "../access/context"
 import { loadConfig } from "../config"
+import { decodeUtf8HeaderValue } from "./header_encoding"
 import { createIngestionLifecycle } from "../ingestion/pipeline"
 import type { SourceIdentityInput } from "../ingestion/source_identity"
 import { openDb } from "../ingestion/tracking"
@@ -11,6 +13,11 @@ import {
   SameNameIntentRequiredError,
 } from "../ingestion/lifecycle"
 import { SqliteKnowledgeBaseRepo } from "../knowledge/knowledge_base_repo"
+import {
+  DOCUMENT_FOLDER_ID_PREFIX,
+  InvalidDocumentFolderCommandError,
+  createDocumentFolderService,
+} from "../knowledge/document_folder_service"
 import {
   InvalidKnowledgeBaseScopeError,
   KnowledgeBaseArchivedError,
@@ -58,7 +65,7 @@ interface IngestUrlRequestBody {
   url?: string
   mode?: "single" | "sitemap"
   title?: string
-  parserOverride?: "markitdown" | "marker" | "mineru"
+  parserOverride?: "markitdown" | "marker" | "mineru" | "builtin-pdf"
   maxPages?: number
   /**
    * Ticket 04 (KB-02B): the owning knowledge base, same contract as `/ingest`
@@ -77,7 +84,7 @@ const router = Router()
 export const rawIngestRouter = Router()
 
 const RAW_FILE_LIMIT = "20mb"
-const PARSER_TYPES = new Set(["markitdown", "marker", "mineru"])
+const PARSER_TYPES = new Set(["markitdown", "marker", "mineru", "builtin-pdf"])
 const URL_FETCH_TIMEOUT_MS = 30_000
 const URL_FETCH_MAX_BYTES = 20 * 1024 * 1024 // 20MB，与单文件上传上限一致
 
@@ -126,11 +133,14 @@ type KnowledgeBaseResolution =
 
 /**
  * Ticket 11 (DOC-01A): validate the optional catalog metadata an import may
- * carry. Tags: array of non-empty strings (≤ 20, each ≤ 64 chars). Folder: a
- * non-empty one-level name (≤ 200 chars, no separators — one level by
- * contract). Absent/empty fields contribute nothing to the document metadata.
+ * carry. Tags: array of non-empty strings (≤ 20, each ≤ 64 chars). Folder: see
+ * {@link resolveDocumentFolder}. Absent/empty fields contribute nothing to the
+ * document metadata.
  */
 function parseCatalogMetadata(
+  res: Response,
+  db: DB,
+  knowledgeBaseId: string,
   tags: unknown,
   folder: unknown
 ): { ok: true; metadata?: Record<string, unknown> } | { ok: false; error: string } {
@@ -144,23 +154,50 @@ function parseCatalogMetadata(
       return { ok: false, error: "tags must have at most 20 values of 64 characters" }
     }
   }
-  let cleanFolder: string | undefined
-  if (folder !== undefined) {
-    if (typeof folder !== "string") {
-      return { ok: false, error: "folder must be a string" }
-    }
-    cleanFolder = folder.trim()
-    if (cleanFolder.includes("/") || cleanFolder.includes("\\")) {
-      return { ok: false, error: "folder must be a single level (no separators)" }
-    }
-    if (cleanFolder.length > 200) {
-      return { ok: false, error: "folder must be at most 200 characters" }
-    }
-  }
+  const resolvedFolder = resolveDocumentFolder(res, db, knowledgeBaseId, folder)
+  if (!resolvedFolder.ok) return { ok: false, error: resolvedFolder.error }
   const metadata: Record<string, unknown> = {}
   if (cleanTags?.length) metadata.tags = cleanTags
-  if (cleanFolder) metadata.folder = cleanFolder
+  if (resolvedFolder.name) metadata.folder = resolvedFolder.name
   return Object.keys(metadata).length > 0 ? { ok: true, metadata } : { ok: true }
+}
+
+/**
+ * Turn the caller's `folder` into the name stored on the document, registering
+ * the directory if it does not exist yet — so "create a folder and upload into
+ * it" is one request rather than two.
+ *
+ * The caller may send either a registry id (`docf-…`, what the import dialog
+ * picks from the list) or a plain name (what it types). Either way the document
+ * keeps storing the NAME, because that is what the catalog filter and the folder
+ * facets already read; the registry row is what makes an empty directory real.
+ */
+function resolveDocumentFolder(
+  res: Response,
+  db: DB,
+  knowledgeBaseId: string,
+  folder: unknown
+): { ok: true; name?: string } | { ok: false; error: string } {
+  if (folder === undefined || folder === null) return { ok: true }
+  if (typeof folder !== "string") return { ok: false, error: "folder must be a string" }
+  const value = folder.trim()
+  if (value === "") return { ok: true }
+  const accessContext =
+    (res.locals.accessContext as AccessContext | undefined) ?? singleTenantAccessContext()
+  const folders = createDocumentFolderService(db)
+  if (value.startsWith(DOCUMENT_FOLDER_ID_PREFIX)) {
+    const existing = folders.getById(value, accessContext.tenantId)
+    if (!existing) return { ok: false, error: "document folder not found" }
+    return { ok: true, name: existing.name }
+  }
+  try {
+    return { ok: true, name: folders.create(accessContext.tenantId, knowledgeBaseId, value).name }
+  } catch (error) {
+    if (error instanceof InvalidDocumentFolderCommandError) {
+      return { ok: false, error: error.message }
+    }
+    throw error
+  }
 }
 
 /**
@@ -307,30 +344,34 @@ function resolveRequestKnowledgeBaseId(
 
 rawIngestRouter.post(
   "/ingest/file",
-  express.raw({ type: "application/octet-stream", limit: RAW_FILE_LIMIT }),
+  // The raw parser bails with PayloadTooLargeError on oversize bodies; left
+  // unwrapped, Express's default handler answers with an HTML error page that
+  // the import popup would render verbatim. Map it to JSON like attachments.ts
+  // (the 20MB in the message mirrors RAW_FILE_LIMIT above).
+  (req: Request, res: Response, next: NextFunction) => {
+    express.raw({ type: "application/octet-stream", limit: RAW_FILE_LIMIT })(req, res, (error?: unknown) => {
+      if (error && (error as { type?: string }).type === "entity.too.large") {
+        res.status(413).json({
+          error: { kind: "file_size", message: "文件超过 20MB 单文件上限" },
+        })
+        return
+      }
+      next(error)
+    })
+  },
   (req: Request, res: Response) => {
     if (!Buffer.isBuffer(req.body) || req.body.length === 0) {
       return res.status(400).json({ error: "a non-empty application/octet-stream body is required" })
     }
-    const fileName = req.get("x-file-name")?.trim()
+    const fileName = decodeUtf8HeaderValue(req.get("x-file-name")).trim()
     if (!fileName) {
       return res.status(400).json({ error: "x-file-name is required" })
     }
     const parserOverride = req.get("x-parser")?.trim().toLowerCase()
     if (parserOverride && !PARSER_TYPES.has(parserOverride)) {
       return res.status(400).json({
-        error: "x-parser must be markitdown, marker, or mineru",
+        error: "x-parser must be markitdown, marker, mineru, or builtin-pdf",
       })
-    }
-    // Ticket 11 (DOC-01A): optional catalog metadata via headers.
-    const catalogMetadata = parseCatalogMetadata(
-      req.get("x-document-tags")?.trim()
-        ? req.get("x-document-tags")?.split(",").map((tag) => tag.trim())
-        : undefined,
-      req.get("x-document-folder")
-    )
-    if (!catalogMetadata.ok) {
-      return res.status(400).json({ error: catalogMetadata.error })
     }
     // Ticket 12 (DOC-01B): same-name files require an explicit intent.
     const versionIntent = parseVersionIntent(req.get("x-document-intent")?.trim() || undefined)
@@ -338,11 +379,30 @@ rawIngestRouter.post(
       return res.status(400).json({ error: versionIntent.error })
     }
 
-    const sourceExternalId = req.get("x-source-id")?.trim() || fileName
+    const sourceExternalId = decodeUtf8HeaderValue(req.get("x-source-id")).trim() || fileName
     const db = openDb()
     const resolved = resolveRequestKnowledgeBaseId(res, db, req.get("x-knowledge-base-id"))
     if (!resolved.ok) {
       return res.status(resolved.status).json(resolved.body)
+    }
+    // Ticket 11 (DOC-01A): optional catalog metadata via headers. Resolved after
+    // the knowledge base because a folder address is meaningless without it.
+    // Tags carry the same Latin-1 header constraint as the file name and the
+    // folder: the client percent-encodes them, so they decode here too.
+    const tagsHeader = req.get("x-document-tags")
+    const catalogMetadata = parseCatalogMetadata(
+      res,
+      db,
+      resolved.knowledgeBaseId,
+      tagsHeader?.trim()
+        ? decodeUtf8HeaderValue(tagsHeader).split(",").map((tag) => tag.trim())
+        : undefined,
+      req.get("x-document-folder")
+        ? decodeUtf8HeaderValue(req.get("x-document-folder"))
+        : undefined
+    )
+    if (!catalogMetadata.ok) {
+      return res.status(400).json({ error: catalogMetadata.error })
     }
     const lifecycle = createIngestionLifecycle(db)
     let submission
@@ -384,7 +444,13 @@ router.post("/ingest", (req: Request, res: Response) => {
     return res.status(resolved.status).json(resolved.body)
   }
   // Ticket 11 (DOC-01A): optional catalog metadata.
-  const catalogMetadata = parseCatalogMetadata(body.tags, body.folder)
+  const catalogMetadata = parseCatalogMetadata(
+    res,
+    db,
+    resolved.knowledgeBaseId,
+    body.tags,
+    body.folder
+  )
   if (!catalogMetadata.ok) {
     return res.status(400).json({ error: catalogMetadata.error })
   }
@@ -433,7 +499,7 @@ router.post("/ingest/url", async (req: Request, res: Response) => {
   const mode = body.mode === "sitemap" ? "sitemap" : "single"
   const parserOverride = body.parserOverride
   if (parserOverride && !PARSER_TYPES.has(parserOverride)) {
-    return res.status(400).json({ error: "parserOverride must be markitdown, marker, or mineru" })
+    return res.status(400).json({ error: "parserOverride must be markitdown, marker, mineru, or builtin-pdf" })
   }
 
   // Ticket 04 (KB-02B): resolve ownership BEFORE any outbound fetch. A rejected
@@ -448,7 +514,7 @@ router.post("/ingest/url", async (req: Request, res: Response) => {
 
   // Ticket 11 (DOC-01A): optional catalog metadata, resolved with the
   // ownership so a rejected import still does zero network work.
-  const catalogMetadata = parseCatalogMetadata(body.tags, body.folder)
+  const catalogMetadata = parseCatalogMetadata(res, db, knowledgeBaseId, body.tags, body.folder)
   if (!catalogMetadata.ok) {
     return res.status(400).json({ error: catalogMetadata.error })
   }

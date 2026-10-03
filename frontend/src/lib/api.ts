@@ -126,13 +126,43 @@ export interface IngestSubmission {
   items?: Array<{ url: string; docId?: string; status?: string }>
 }
 
+export interface IngestSpanNode {
+  span: {
+    id: number
+    name: string
+    kind: "root" | "stage"
+    status: "pending" | "running" | "done" | "failed" | "skipped" | "cancelled"
+    errorMessage: string | null
+    durationMs: number | null
+    output: Record<string, unknown> | null
+  }
+  children: IngestSpanNode[]
+}
+
 export interface IngestStatus {
-  status?: string
-  error?: string
+  documentStatus: "pending" | "completed" | "failed" | "cancelled" | null
+  lifecycleOutcome: string | null
+  task: {
+    status: "pending" | "running" | "completed" | "failed" | "cancelled"
+    failCount: number
+    nextAttemptAt: string | null
+  } | null
+  spanTree: IngestSpanNode[]
 }
 
 async function readError(response: Response): Promise<string> {
   const body = await response.text().catch(() => "")
+  // JSON error bodies carry a curated human message — prefer it over raw text,
+  // which for unmapped raw-parser errors used to be an entire HTML error page
+  // pasted into toasts and popups.
+  try {
+    const parsed = JSON.parse(body) as { error?: unknown }
+    if (typeof parsed.error === "string") return `HTTP ${response.status}: ${parsed.error}`
+    const nested = parsed.error as { message?: unknown } | undefined
+    if (nested && typeof nested.message === "string") return `HTTP ${response.status}: ${nested.message}`
+  } catch {
+    // not JSON — fall through to the raw-text path
+  }
   return `HTTP ${response.status}${body ? `: ${body.slice(0, 200)}` : ""}`
 }
 
@@ -808,35 +838,78 @@ export async function streamChat(
   if (buffer.trim()) processLine(buffer)
 }
 
-export async function uploadFileToIngest(file: File, relativePath: string): Promise<string> {
-  const bytes = new Uint8Array(await file.arrayBuffer())
-  const response = await apiFetch("/ingest/file", {
-    method: "POST",
-    headers: {
-      "content-type": "application/octet-stream",
-      "x-file-name": file.name,
-      "x-file-mime-type": file.type || guessMimeFromExt(file.name),
-      "x-source-kind": "file",
-      "x-source-id": relativePath || file.name,
-      "x-source-namespace": "local-folder",
-    },
-    body: bytes,
+export function uploadFileToIngest(
+  file: File,
+  relativePath: string,
+  onProgress?: (loaded: number, total: number) => void,
+  knowledgeBaseId?: string,
+  folder?: string,
+  options?: { parser?: string; tags?: string[] },
+): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest()
+    const sentToken = accessToken
+    xhr.open("POST", `${API_BASE}/ingest/file`)
+    xhr.timeout = 120_000
+    xhr.setRequestHeader("content-type", "application/octet-stream")
+    // Header values must be Latin-1; paths are decoded by the server.
+    xhr.setRequestHeader("x-file-name", encodeURIComponent(file.name))
+    xhr.setRequestHeader("x-file-mime-type", file.type || guessMimeFromExt(file.name))
+    xhr.setRequestHeader("x-source-kind", "file")
+    xhr.setRequestHeader("x-source-id", encodeURIComponent(relativePath || file.name))
+    xhr.setRequestHeader("x-source-namespace", "local-folder")
+    if (knowledgeBaseId) xhr.setRequestHeader("x-knowledge-base-id", knowledgeBaseId)
+    // Header values must be Latin-1, and a folder name is usually Chinese: the
+    // server decodes this the same way it decodes the file name.
+    if (folder) xhr.setRequestHeader("x-document-folder", encodeURIComponent(folder))
+    // Same Latin-1 constraint for the advanced options (ticket 04): the parser
+    // value is ASCII, tags go percent-encoded like the file name.
+    if (options?.parser) xhr.setRequestHeader("x-parser", options.parser)
+    if (options?.tags?.length) {
+      xhr.setRequestHeader("x-document-tags", encodeURIComponent(options.tags.join(",")))
+    }
+    if (sentToken) xhr.setRequestHeader("Authorization", `Bearer ${sentToken}`)
+    xhr.upload.onprogress = (event) => onProgress?.(event.loaded, event.lengthComputable ? event.total : file.size)
+    xhr.onload = () => {
+      if (xhr.status === 401 && sentToken) onUnauthorized?.()
+      if (xhr.status < 200 || xhr.status >= 300) {
+        void readError(new Response(xhr.responseText, { status: xhr.status || 500 }))
+          .then((message) => reject(new Error(message)))
+        return
+      }
+      try {
+        const data = JSON.parse(xhr.responseText) as { docId?: string }
+        resolve(data.docId ?? "")
+      } catch {
+        reject(new Error("上传响应无效"))
+      }
+    }
+    xhr.onerror = () => reject(new Error("上传网络连接失败"))
+    xhr.ontimeout = () => reject(new Error("上传超时，请检查网络后重试；如已开始处理，请先查看知识库文档"))
+    xhr.onabort = () => reject(new DOMException("上传已取消", "AbortError"))
+    xhr.send(file)
   })
-  if (!response.ok) throw new Error(await readError(response))
-  const data = (await response.json()) as { docId?: string }
-  return data.docId ?? ""
 }
 
 export async function submitUrlImport(
   url: string,
   mode: "single" | "sitemap",
   maxPages: number,
+  knowledgeBaseId?: string,
+  folder?: string,
 ): Promise<IngestSubmission> {
-  const body = mode === "sitemap" ? { url, mode, maxPages } : { url, mode }
+  const body = {
+    url,
+    mode,
+    ...(mode === "sitemap" ? { maxPages } : {}),
+    ...(knowledgeBaseId ? { knowledgeBaseId } : {}),
+    ...(folder ? { folder } : {}),
+  }
   const response = await apiFetch("/ingest/url", {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(body),
+    signal: AbortSignal.timeout(60_000),
   })
   if (!response.ok) {
     const err = (await response.json().catch(() => ({}))) as { error?: string }
@@ -846,7 +919,9 @@ export async function submitUrlImport(
 }
 
 export async function fetchIngestStatus(docId: string): Promise<IngestStatus> {
-  const response = await apiFetch(`/ingest/${encodeURIComponent(docId)}/status`)
+  const response = await apiFetch(`/ingest/${encodeURIComponent(docId)}/status`, {
+    signal: AbortSignal.timeout(10_000),
+  })
   if (!response.ok) throw new Error(`状态查询失败 HTTP ${response.status}`)
   return (await response.json()) as IngestStatus
 }
@@ -925,7 +1000,7 @@ export async function uploadSessionAttachment(
       method: "POST",
       headers: {
         "content-type": "application/octet-stream",
-        "x-file-name": file.name,
+        "x-file-name": encodeURIComponent(file.name),
         "x-file-mime-type": file.type || guessMimeFromExt(file.name),
       },
       body: bytes,
@@ -987,6 +1062,20 @@ export interface KnowledgeBasePayload {
   description: string
   status: "active" | "archived"
   embeddingProfile: string
+  /** The folder this base is filed under, or null when ungrouped. */
+  folderId: string | null
+  createdAt: string
+  updatedAt: string
+}
+
+/**
+ * A knowledge-base folder. Grouping only: a folder is never sent as a retrieval
+ * scope, and deleting one releases its members rather than touching them.
+ */
+export interface KnowledgeBaseFolderPayload {
+  id: string
+  tenantId: string
+  name: string
   createdAt: string
   updatedAt: string
 }
@@ -1016,7 +1105,7 @@ async function knowledgeBaseCommand(
       response.status,
     )
   }
-  return (await response.json()) as KnowledgeBasePayload
+  return ((await response.json()) as { knowledgeBase: KnowledgeBasePayload }).knowledgeBase
 }
 
 export async function fetchKnowledgeBases(): Promise<KnowledgeBasePayload[]> {
@@ -1040,6 +1129,204 @@ export function archiveKnowledgeBase(id: string): Promise<KnowledgeBasePayload> 
 
 export function restoreKnowledgeBase(id: string): Promise<KnowledgeBasePayload> {
   return knowledgeBaseCommand(`/${encodeURIComponent(id)}/restore`, "POST")
+}
+
+/** What one knowledge-base-wide wipe did. */
+export interface KnowledgeBaseContentWipeResult {
+  knowledgeBaseId: string
+  sources: number
+  retired: number
+  alreadyRetired: number
+  cleanupTasksQueued: number
+}
+
+/**
+ * Retire every source of a knowledge base. Irreversible: the ES chunks, graph
+ * relations, page-index nodes and unreferenced image assets are destroyed by the
+ * background cleanup queue. The knowledge base itself, its metadata rows and the
+ * retirement tombstones survive, so past citations stay traceable.
+ *
+ * A 200 means the cleanup was QUEUED, not that it finished.
+ */
+export async function retireKnowledgeBaseContents(
+  id: string,
+  reason: string,
+): Promise<KnowledgeBaseContentWipeResult> {
+  const response = await apiFetch(`/knowledge-bases/${encodeURIComponent(id)}/retire-contents`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ reason }),
+  })
+  if (!response.ok) {
+    const payload = (await response.json().catch(() => ({}))) as { error?: string }
+    throw new KnowledgeBaseCommandError(
+      payload.error || `清空知识库内容失败 (${response.status})`,
+      response.status,
+    )
+  }
+  return (await response.json()) as KnowledgeBaseContentWipeResult
+}
+
+/**
+ * The folder workspace client. One helper for the whole surface because the
+ * move route lives under `/knowledge-bases/:id/folder` (the server-side
+ * operation needs both repositories) while the folder CRUD lives under its own
+ * prefix — the caller passes the full path.
+ */
+async function folderRequest<T>(
+  path: string,
+  method: "GET" | "POST" | "PATCH" | "DELETE",
+  body?: unknown,
+  fallbackMessage = "知识库分类操作失败",
+): Promise<T> {
+  const response = await apiFetch(path, {
+    method,
+    headers: { "Content-Type": "application/json" },
+    ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+  })
+  if (!response.ok) {
+    const payload = (await response.json().catch(() => ({}))) as { error?: string }
+    throw new KnowledgeBaseCommandError(
+      payload.error || `${fallbackMessage} (${response.status})`,
+      response.status,
+    )
+  }
+  return (await response.json()) as T
+}
+
+/**
+ * One directory inside a knowledge base. `documents` is how many catalog-visible
+ * documents carry its name, so an unfiled directory reads as 0 rather than
+ * disappearing.
+ */
+export interface DocumentFolderPayload {
+  id: string
+  tenantId: string
+  knowledgeBaseId: string
+  name: string
+  documents: number
+  createdAt: string
+  updatedAt: string
+}
+
+const DOCUMENT_FOLDER_FALLBACK = "文档分类操作失败"
+
+export async function fetchDocumentFolders(
+  knowledgeBaseId: string,
+): Promise<DocumentFolderPayload[]> {
+  const body = await folderRequest<{ folders?: DocumentFolderPayload[] }>(
+    `/knowledge-bases/${encodeURIComponent(knowledgeBaseId)}/document-folders`,
+    "GET",
+    undefined,
+    DOCUMENT_FOLDER_FALLBACK,
+  )
+  return Array.isArray(body.folders) ? body.folders : []
+}
+
+/** Creating a name that already exists returns that folder rather than failing. */
+export async function createDocumentFolder(
+  knowledgeBaseId: string,
+  name: string,
+): Promise<DocumentFolderPayload> {
+  const body = await folderRequest<{ folder: DocumentFolderPayload }>(
+    `/knowledge-bases/${encodeURIComponent(knowledgeBaseId)}/document-folders`,
+    "POST",
+    { name },
+    DOCUMENT_FOLDER_FALLBACK,
+  )
+  return body.folder
+}
+
+/** Renaming moves every document inside it. */
+export async function renameDocumentFolder(
+  id: string,
+  name: string,
+): Promise<DocumentFolderPayload> {
+  const body = await folderRequest<{ folder: DocumentFolderPayload }>(
+    `/document-folders/${encodeURIComponent(id)}`,
+    "PATCH",
+    { name },
+    DOCUMENT_FOLDER_FALLBACK,
+  )
+  return body.folder
+}
+
+/** What one cascade delete did. The cleanup it queues is still asynchronous. */
+export interface DocumentFolderRemovalPayload {
+  folderId: string
+  documents: number
+  sources: number
+  retired: number
+  alreadyRetired: number
+  cleanupTasksQueued: number
+}
+
+/**
+ * Delete a directory AND every document inside it. Irreversible: the documents
+ * go through the same per-source retirement the catalog's delete button uses, so
+ * the caller must have put a confirmation dialog in front of this already.
+ */
+export async function deleteDocumentFolder(
+  id: string,
+  reason: string,
+): Promise<DocumentFolderRemovalPayload> {
+  return folderRequest<DocumentFolderRemovalPayload>(
+    `/document-folders/${encodeURIComponent(id)}`,
+    "DELETE",
+    { reason },
+    DOCUMENT_FOLDER_FALLBACK,
+  )
+}
+
+export async function fetchKnowledgeBaseFolders(): Promise<KnowledgeBaseFolderPayload[]> {
+  const body = await folderRequest<{ folders?: KnowledgeBaseFolderPayload[] }>(
+    "/knowledge-base-folders",
+    "GET",
+  )
+  return Array.isArray(body.folders) ? body.folders : []
+}
+
+export async function createKnowledgeBaseFolder(name: string): Promise<KnowledgeBaseFolderPayload> {
+  const body = await folderRequest<{ folder: KnowledgeBaseFolderPayload }>(
+    "/knowledge-base-folders",
+    "POST",
+    { name },
+  )
+  return body.folder
+}
+
+export async function renameKnowledgeBaseFolder(
+  id: string,
+  name: string,
+): Promise<KnowledgeBaseFolderPayload> {
+  const body = await folderRequest<{ folder: KnowledgeBaseFolderPayload }>(
+    `/knowledge-base-folders/${encodeURIComponent(id)}`,
+    "PATCH",
+    { name },
+  )
+  return body.folder
+}
+
+/** Deletes the folder; its members become ungrouped and stay active. */
+export async function deleteKnowledgeBaseFolder(id: string): Promise<number> {
+  const body = await folderRequest<{ ungrouped?: number }>(
+    `/knowledge-base-folders/${encodeURIComponent(id)}`,
+    "DELETE",
+  )
+  return body.ungrouped ?? 0
+}
+
+/** `null` takes the knowledge base out of every folder. */
+export async function moveKnowledgeBaseToFolder(
+  id: string,
+  folderId: string | null,
+): Promise<KnowledgeBasePayload> {
+  const body = await folderRequest<{ knowledgeBase: KnowledgeBasePayload }>(
+    `/knowledge-bases/${encodeURIComponent(id)}/folder`,
+    "PATCH",
+    { folderId },
+  )
+  return body.knowledgeBase
 }
 
 // ---------------------------------------------------------------------------
@@ -1139,7 +1426,11 @@ export function reprocessDocument(docId: string): Promise<void> {
   return documentCommand(docId, "reprocess")
 }
 
-/** Retire a whole source (all its versions) with a required reason. */
+/**
+ * The document catalog's delete, named for the server command it runs: retiring
+ * a whole source (all its versions) is what removes it from the knowledge base.
+ * The reason is mandatory server-side because it lands in the tombstone.
+ */
 export async function retireSource(sourceId: string, reason: string): Promise<void> {
   const response = await apiFetch(`/sources/${encodeURIComponent(sourceId)}/retire`, {
     method: "POST",
@@ -1148,7 +1439,7 @@ export async function retireSource(sourceId: string, reason: string): Promise<vo
   })
   if (!response.ok) {
     const body = (await response.json().catch(() => ({}))) as { error?: string }
-    throw new DocumentOperationError(body.error || `退役失败 (${response.status})`, response.status)
+    throw new DocumentOperationError(body.error || `删除失败 (${response.status})`, response.status)
   }
 }
 
@@ -1395,6 +1686,8 @@ export interface AssistantPayload {
   name: string
   description: string
   status: "active" | "archived"
+  /** Sidebar curation; absent on stale payloads = shown (pre-column behavior). */
+  sidebarVisible?: boolean
   currentVersion: number
   createdAt: string
   updatedAt: string
@@ -1461,6 +1754,29 @@ export async function restoreAssistant(id: string): Promise<AssistantPayload> {
   if (!response.ok) {
     const body = (await response.json().catch(() => ({}))) as { error?: string }
     throw new DocumentOperationError(body.error || `恢复失败 (${response.status})`, response.status)
+  }
+  return (await response.json()) as { assistant: AssistantPayload }["assistant"]
+}
+
+/** Physical delete — custom assistants only; the server refuses the default with 409. */
+export async function deleteAssistant(id: string): Promise<void> {
+  const response = await apiFetch(`/assistants/${encodeURIComponent(id)}`, { method: "DELETE" })
+  if (!response.ok && response.status !== 404) {
+    const body = (await response.json().catch(() => ({}))) as { error?: string }
+    throw new DocumentOperationError(body.error || `删除失败 (${response.status})`, response.status)
+  }
+}
+
+/** Sidebar curation toggle — server refuses the default assistant with 409. */
+export async function setAssistantSidebarVisible(id: string, visible: boolean): Promise<AssistantPayload> {
+  const response = await apiFetch(`/assistants/${encodeURIComponent(id)}/sidebar-visible`, {
+    method: "PUT",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ visible }),
+  })
+  if (!response.ok) {
+    const body = (await response.json().catch(() => ({}))) as { error?: string }
+    throw new DocumentOperationError(body.error || `更新侧边栏显示失败 (${response.status})`, response.status)
   }
   return (await response.json()) as { assistant: AssistantPayload }["assistant"]
 }
@@ -1713,91 +2029,159 @@ export async function fetchGraphRelations(
 }
 
 // ---------------------------------------------------------------------------
-// Ticket 38 (WIKI-01): generate, validate, publish and restore Wiki pages
+// Knowledge-base Wiki pages, revisions and background generation jobs.
 // ---------------------------------------------------------------------------
 
-export interface WikiSourceCandidatePayload {
-  documentId: string
-  title: string
-  version: number
-  updatedAt: string
-}
-
-export interface WikiSourceStalenessPayload {
-  documentId: string
-  version: number
-  title: string
-  stale: "missing" | "updated" | "retired" | null
-  currentVersion?: number
-}
-
 export interface WikiPagePayload {
-  documentId: string
+  id: string
+  tenantId: string
+  knowledgeBaseId: string
+  slug: string
   title: string
+  pageType: string
+  status: "draft" | "published" | "archived"
+  content: string
+  summary: string
+  aliases: string[]
+  folderId: string
+  sourceRefs: string[]
+  chunkRefs: string[]
+  inLinks: string[]
+  outLinks: string[]
   version: number
-  active: boolean
+  lastEditSource: "pipeline" | "user" | "agent" | "revert"
+  createdAt: string
   updatedAt: string
-  sources: WikiSourceStalenessPayload[]
-  versions: Array<{ documentId: string; version: number; createdAt: string; active: boolean }>
 }
 
-export interface WikiPublishedPayload {
-  status: "published"
-  documentId: string
-  ingestion: string
+export interface WikiRevisionPayload {
+  pageId: string
   version: number
   title: string
-  sources: Array<{ documentId: string; version: number; title: string }>
+  content: string
+  summary: string
+  status: WikiPagePayload["status"]
+  sourceRefs: string[]
+  chunkRefs: string[]
+  editSource: WikiPagePayload["lastEditSource"]
+  createdAt: string
 }
 
-export async function fetchWikiSources(kbId: string): Promise<WikiSourceCandidatePayload[]> {
-  const response = await apiFetch(`/knowledge-bases/${encodeURIComponent(kbId)}/wiki/sources`)
-  if (!response.ok) throw new Error(`Wiki 来源读取失败 (${response.status})`)
-  const body = (await response.json()) as { sources?: WikiSourceCandidatePayload[] }
-  return Array.isArray(body.sources) ? body.sources : []
+export interface WikiProposalPayload {
+  pageId: string
+  baseVersion: number
+  title: string
+  content: string
+  summary: string
+  sourceRefs: string[]
+  chunkRefs: string[]
+  createdAt: string
 }
 
-export async function fetchWikiPages(kbId: string): Promise<WikiPagePayload[]> {
-  const response = await apiFetch(`/knowledge-bases/${encodeURIComponent(kbId)}/wiki/pages`)
-  if (!response.ok) throw new Error(`Wiki 页面读取失败 (${response.status})`)
-  const body = (await response.json()) as { pages?: WikiPagePayload[] }
-  return Array.isArray(body.pages) ? body.pages : []
+export interface WikiFolderPayload {
+  id: string
+  parentId: string
+  name: string
+  sortOrder: number
 }
 
-export async function generateWikiPage(
-  kbId: string,
-  title: string,
-  documentIds: string[],
-): Promise<WikiPublishedPayload> {
-  const response = await apiFetch(`/knowledge-bases/${encodeURIComponent(kbId)}/wiki/generate`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ title, documentIds }),
-  })
-  const body = (await response.json().catch(() => ({}))) as {
-    status?: string
-    reasons?: string[]
-    error?: string
-  }
-  if (!response.ok) {
-    if (response.status === 422 && Array.isArray(body.reasons)) {
-      throw new Error(`生成结果未通过校验：${body.reasons.join("；")}`)
-    }
-    throw new Error(body.error || `Wiki 生成失败 (${response.status})`)
-  }
-  return body as unknown as WikiPublishedPayload
+export interface WikiJobPayload {
+  id: number
+  documentId: string
+  op: "ingest" | "retract"
+  status: "pending" | "running" | "completed" | "failed"
+  attempts: number
+  error: string | null
+  updatedAt: string
 }
 
-export async function restoreWikiPage(kbId: string, docId: string): Promise<{ version: number }> {
+export interface WikiIssuePayload {
+  id: string
+  pageId: string
+  kind: string
+  message: string
+  status: string
+}
+
+async function wikiRequest<T>(kbId: string, path: string, method = "GET",
+  payload?: unknown): Promise<T> {
   const response = await apiFetch(
-    `/knowledge-bases/${encodeURIComponent(kbId)}/wiki/pages/${encodeURIComponent(docId)}/restore`,
-    { method: "POST" },
+    `/knowledge-bases/${encodeURIComponent(kbId)}/wiki${path}`,
+    { method, ...(payload === undefined ? {} : {
+      headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload),
+    }) },
   )
+  const body = (await response.json().catch(() => ({}))) as { error?: string }
   if (!response.ok) {
-    const body = (await response.json().catch(() => ({}))) as { error?: string }
-    throw new Error(body.error || `Wiki 页面恢复失败 (${response.status})`)
+    throw new Error(body.error || `Wiki 请求失败 (${response.status})`)
   }
-  return (await response.json()) as { version: number }
+  return body as T
+}
+
+export const wikiApi = {
+  agent: (kbId: string, message: string) => wikiRequest<{
+    reply: string; toolCalls: Array<{ tool: string; outcome: string }>; stoppedBy: string
+  }>(kbId, "/agent", "POST", { message }),
+  settings: (kbId: string) => wikiRequest<{ enabled: boolean }>(kbId, "/settings"),
+  setEnabled: (kbId: string, enabled: boolean) =>
+    wikiRequest<{ enabled: boolean }>(kbId, "/settings", "PUT", { enabled }),
+  rebuild: (kbId: string) =>
+    wikiRequest<{ enqueued: number }>(kbId, "/rebuild", "POST"),
+  pages: (kbId: string, query = "", includeArchived = false, offset = 0, limit = 100) =>
+    wikiRequest<{ pages: WikiPagePayload[]; total: number; offset: number; limit: number }>(kbId,
+      `/pages?q=${encodeURIComponent(query)}&includeArchived=${includeArchived}&offset=${offset}&limit=${limit}`),
+  index: (kbId: string) => wikiRequest<{ groups: Array<{ type: string; pages: Array<{
+    slug: string; title: string; summary: string; folderId: string
+  }> }> }>(kbId, "/index"),
+  page: (kbId: string, slug: string) =>
+    wikiRequest<{ page: WikiPagePayload; proposal: WikiProposalPayload | null;
+      sources: Array<{ id: string; title: string }> }>(
+      kbId, `/pages/${encodeURIComponent(slug)}`),
+  createPage: (kbId: string, data: { slug: string; title: string; content: string }) =>
+    wikiRequest<{ page: WikiPagePayload }>(kbId, "/pages", "POST", data),
+  updatePage: (kbId: string, slug: string, data: Partial<WikiPagePayload> & {
+    expectedVersion: number
+  }) => wikiRequest<{ page: WikiPagePayload }>(
+    kbId, `/pages/${encodeURIComponent(slug)}`, "PATCH", data),
+  archivePage: (kbId: string, slug: string) =>
+    wikiRequest<{ page: WikiPagePayload }>(kbId, `/pages/${encodeURIComponent(slug)}`, "DELETE"),
+  revisions: (kbId: string, slug: string) =>
+    wikiRequest<{ revisions: WikiRevisionPayload[] }>(kbId,
+      `/pages/${encodeURIComponent(slug)}/revisions`),
+  revert: (kbId: string, slug: string, version: number) =>
+    wikiRequest<{ page: WikiPagePayload }>(kbId,
+      `/pages/${encodeURIComponent(slug)}/revert`, "POST", { version }),
+  acceptProposal: (kbId: string, slug: string) =>
+    wikiRequest<{ page: WikiPagePayload }>(kbId,
+      `/pages/${encodeURIComponent(slug)}/accept-proposal`, "POST"),
+  folders: (kbId: string) =>
+    wikiRequest<{ folders: WikiFolderPayload[] }>(kbId, "/folders"),
+  createFolder: (kbId: string, name: string, parentId = "") =>
+    wikiRequest<{ folder: WikiFolderPayload }>(kbId, "/folders", "POST", { name, parentId }),
+  updateFolder: (kbId: string, id: string, name: string, parentId = "") =>
+    wikiRequest<{ status: string }>(kbId, `/folders/${encodeURIComponent(id)}`,
+      "PATCH", { name, parentId }),
+  deleteFolder: (kbId: string, id: string) =>
+    wikiRequest<{ status: string }>(kbId, `/folders/${encodeURIComponent(id)}`, "DELETE"),
+  movePage: (kbId: string, slug: string, folderId: string) =>
+    wikiRequest<{ status: string }>(kbId,
+      `/pages/${encodeURIComponent(slug)}/move`, "POST", { folderId }),
+  graph: (kbId: string) => wikiRequest<{ nodes: Array<{
+    slug: string; title: string; pageType: string
+  }>; edges: Array<{ source: string; target: string }> }>(kbId, "/graph"),
+  lint: (kbId: string) => wikiRequest<{ findings: Array<{
+    slug: string; kind: string; target?: string
+  }> }>(kbId, "/lint"),
+  issues: (kbId: string) => wikiRequest<{ issues: WikiIssuePayload[] }>(kbId, "/issues"),
+  createIssue: (kbId: string, slug: string, message: string, kind = "content") =>
+    wikiRequest<{ issue: WikiIssuePayload }>(kbId,
+      `/pages/${encodeURIComponent(slug)}/issues`, "POST", { message, kind }),
+  updateIssue: (kbId: string, id: string, status: string) =>
+    wikiRequest<{ status: string }>(kbId, `/issues/${encodeURIComponent(id)}`,
+      "PATCH", { status }),
+  jobs: (kbId: string) => wikiRequest<{ jobs: WikiJobPayload[] }>(kbId, "/jobs"),
+  retryJob: (kbId: string, id: number) =>
+    wikiRequest<{ status: string }>(kbId, `/jobs/${id}/retry`, "POST"),
 }
 
 // ---------------------------------------------------------------------------

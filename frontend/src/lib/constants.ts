@@ -2,39 +2,15 @@ import type { TraceEvent } from "@core/conversation"
 
 export const MAX_ATTACHMENT_BYTES = 128 * 1024
 export const MAX_ATTACHMENTS = 4
-export const STATUS_REFRESH_MS = 30_000
 
-/** The five answer-path stages shared by the trace panel and the insight dialog. */
-export const INSIGHT_PATH_STEPS = [
+/** The five answer-path stages the 执行链路 panel draws. */
+export const TRACE_PATH_STEPS = [
   { stage: "route", label: "理解问题" },
   { stage: "retrieval", label: "查找资料" },
   { stage: "context", label: "整理证据" },
   { stage: "validation", label: "核对答案" },
   { stage: "done", label: "完成回答" },
 ] as const
-
-export const CHANNEL_LABELS: Record<string, { name: string; short: string }> = {
-  elasticsearch: { name: "Elasticsearch 检索", short: "ES" },
-  neo4j: { name: "Neo4j 知识图谱", short: "Neo4j" },
-  chat: { name: "Chat 对话模型", short: "Chat" },
-  embedding: { name: "Embedding 向量模型", short: "向量" },
-  rerank: { name: "Rerank 重排模型（可选）", short: "重排" },
-  parsers: { name: "文档解析器", short: "解析" },
-  mcp: { name: "MCP 能力服务器（可选）", short: "MCP" },
-  webSearch: { name: "网络搜索（可选）", short: "网络" },
-  langfuse: { name: "Langfuse 追踪（可选）", short: "追踪" },
-}
-
-export const STATUS_LABELS: Record<string, { text: string; dot: "green" | "amber" | "red" | "gray" }> = {
-  connected: { text: "已连接", dot: "green" },
-  degraded: { text: "部分降级", dot: "amber" },
-  disconnected: { text: "未连接", dot: "red" },
-  // Ticket 44: an optional capability the deployment deliberately did not
-  // configure is NEITHER failed nor successful — it is simply not there.
-  unconfigured: { text: "未配置", dot: "gray" },
-  // Configured but not probed live by this page — no liveness claim either way.
-  configured: { text: "已配置", dot: "gray" },
-}
 
 export const TRACE_STATUS_LABELS: Record<string, string> = {
   completed: "已完成",
@@ -54,6 +30,9 @@ export const SUGGESTIONS = [
   { label: "解决思路", prompt: "请围绕这个客户需求提供几个解决思路：" },
 ] as const
 
+/** Mirrors the backend parser router (src/ingestion/parser/router.ts): this
+ * set is the single format source of truth for the import flow — no component
+ * keeps a second whitelist. */
 export const IMPORT_FILE_EXTENSIONS = new Set([
   ".pdf",
   ".doc",
@@ -66,10 +45,43 @@ export const IMPORT_FILE_EXTENSIONS = new Set([
   ".xlsx",
   ".ppt",
   ".pptx",
+  ".csv",
+  ".epub",
+  ".rtf",
+  ".json",
+  ".xml",
+  ".bmp",
+  ".heic",
+  ".jpeg",
+  ".jpg",
+  ".png",
+  ".tif",
+  ".tiff",
 ])
 export const IMPORT_CONCURRENCY = 3
 export const IMPORT_POLL_MS = 1500
 export const IMPORT_MAX_FILES_HINT = 500
+/** Mirrors the server's RAW_FILE_LIMIT (src/api/ingest.ts) — oversized files
+ * fail at queue time so the upload never leaves the browser. */
+export const IMPORT_MAX_FILE_BYTES = 20 * 1024 * 1024
+
+/** Dropzone copy: formats grouped the way the parser router groups them, so
+ * the limits are visible BEFORE a failed upload teaches them. */
+export const IMPORT_FORMAT_GROUPS = [
+  { label: "文档", items: "PDF · Word · Markdown · TXT · HTML · EPUB · RTF · JSON · XML" },
+  { label: "表格", items: "Excel · CSV" },
+  { label: "图片", items: "JPG · PNG · BMP · HEIC · TIFF（自动 OCR）" },
+] as const
+
+/** PDF parser overrides the backend accepts on `x-parser`; empty = auto
+ * routing (the header is not sent). Mirrors src/api/ingest.ts:370. */
+export const IMPORT_PARSER_OPTIONS = [
+  { value: "", label: "默认（自动路由）" },
+  { value: "markitdown", label: "markitdown" },
+  { value: "marker", label: "marker（扫描件）" },
+  { value: "mineru", label: "mineru（扫描件）" },
+  { value: "builtin-pdf", label: "builtin-pdf" },
+] as const
 
 /** Evaluation task polling interval (ticket 04). */
 export const EVALUATION_POLL_MS = 1000
@@ -85,7 +97,19 @@ export const MIME_BY_EXTENSION: Record<string, string> = {
   ".xls": "application/vnd.ms-excel",
   ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
   ".ppt": "application/vnd.ms-powerpoint",
-  ".pptx": "application/vnd.openxmlformats-officedocument.presentation.presentation",
+  ".pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+  ".csv": "text/csv",
+  ".epub": "application/epub+zip",
+  ".rtf": "application/rtf",
+  ".json": "application/json",
+  ".xml": "application/xml",
+  ".bmp": "image/bmp",
+  ".heic": "image/heic",
+  ".jpeg": "image/jpeg",
+  ".jpg": "image/jpeg",
+  ".png": "image/png",
+  ".tif": "image/tiff",
+  ".tiff": "image/tiff",
 }
 
 export function traceStatusLabel(status?: string): string {
@@ -96,9 +120,14 @@ export function traceStatusLabel(status?: string): string {
 export function traceEventLabel(event: TraceEvent): string {
   const data = event.data ?? {}
   if (event.stage === "route") {
+    // The route event is emitted as `running` before any decision exists, so an
+    // absent decision must not be read as "direct" — that invented a confident
+    // route label for a question the router had not classified yet.
     if (data.decision === "complex") return "识别为复杂问题"
     if (data.decision === "ambiguous") return "需要补充问题信息"
-    return "识别为直接问答"
+    if (data.decision === "simple") return "识别为知识问答"
+    if (data.decision === "direct") return "识别为直接问答"
+    return "分析问题…"
   }
   if (event.stage === "retrieval") {
     const prefix = data.correction ? "补充检索" : "检索知识库"

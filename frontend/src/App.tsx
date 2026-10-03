@@ -8,7 +8,6 @@ import { EvaluationDialog } from "./components/panels/EvaluationDialog"
 import { FaqDialog } from "./components/panels/FaqDialog"
 import { FeedbackDialog } from "./components/panels/FeedbackDialog"
 import { ImportDialog } from "./components/panels/ImportDialog"
-import { InsightDialog } from "./components/panels/InsightDialog"
 import { KnowledgeDialog } from "./components/panels/KnowledgeDialog"
 import { MemoryDialog } from "./components/panels/MemoryDialog"
 import { SettingsDialog } from "./components/panels/SettingsDialog"
@@ -19,12 +18,11 @@ import {
   listSessionAttachments,
   promoteSessionAttachment,
   removeSessionAttachment,
-  uploadSessionAttachment,
   type SessionAttachmentPayload,
 } from "./lib/api"
 import { knowledgeStore } from "./runtime/knowledgeStore"
 import { useTheme } from "./lib/theme"
-import { AppShellProvider, type AppShellActions } from "./runtime/AppShellContext"
+import { AppShellProvider, type AppShellActions, type AppShellState } from "./runtime/AppShellContext"
 import { MemoryProvider } from "./runtime/MemoryContext"
 import { PromptComposerProvider } from "./runtime/PromptComposerContext"
 import { ConversationRuntimeProvider } from "./runtime/ConversationRuntimeProvider"
@@ -63,7 +61,7 @@ function SessionGate() {
       <div className="grid min-h-dvh place-items-center bg-canvas px-4">
         <div
           role="alert"
-          className="w-full max-w-sm rounded-xl border border-line bg-surface p-6 shadow-card"
+          className="w-full max-w-sm rounded-xl border border-line bg-surface p-6 "
         >
           <p className="text-sm font-medium text-ink">无法进入应用</p>
           <p className="mt-2 text-xs leading-relaxed text-muted">{state.message}</p>
@@ -98,6 +96,8 @@ function AppRoot() {
   const [toast, setToast] = useState<ToastMessage | null>(null)
   const [memoryOpen, setMemoryOpen] = useState(false)
   const [importOpen, setImportOpen] = useState(false)
+  // Ticket 08: import rows still owing an outcome — the sidebar 导入中 N badge.
+  const [activeImportCount, setActiveImportCount] = useState(0)
   const [evaluationOpen, setEvaluationOpen] = useState(false)
   const [knowledgeOpen, setKnowledgeOpen] = useState(false)
   const [settingsOpen, setSettingsOpen] = useState(false)
@@ -108,17 +108,20 @@ function AppRoot() {
     open: false,
     target: null,
   })
-  const [insight, setInsight] = useState<{ open: boolean; messageId: string | null }>({
+  const [trace, setTrace] = useState<{ open: boolean; messageId: string | null }>({
     open: false,
     messageId: null,
   })
-  const [traceOpen, setTraceOpen] = useState(false)
 
   const showToast = useCallback((text: string) => setToast({ text, key: Date.now() }), [])
-  const openInsight = useCallback(
-    (messageId?: string) => setInsight({ open: true, messageId: messageId ?? null }),
-    [],
-  )
+  const openTrace = useCallback((messageId: string) => {
+    setTrace((previous) =>
+      previous.open && previous.messageId === messageId
+        ? { open: false, messageId: null }
+        : { open: true, messageId },
+    )
+  }, [])
+  const closeTrace = useCallback(() => setTrace({ open: false, messageId: null }), [])
   const openMemory = useCallback(() => setMemoryOpen(true), [])
   const openImport = useCallback(() => setImportOpen(true), [])
   const openEvaluation = useCallback(() => setEvaluationOpen(true), [])
@@ -132,9 +135,9 @@ function AppRoot() {
     [],
   )
 
-  const shellActions = useMemo<AppShellActions>(
-    () => ({ openInsight, openMemory, openImport, openEvaluation, openKnowledge, openSettings, openAssistants, openFeedback, openFaqs, openDocument, showToast }),
-    [openInsight, openMemory, openImport, openEvaluation, openKnowledge, openSettings, openAssistants, openFeedback, openFaqs, openDocument, showToast],
+  const shellActions = useMemo<AppShellActions & AppShellState>(
+    () => ({ activeImportCount, openTrace, openMemory, openImport, openEvaluation, openKnowledge, openSettings, openAssistants, openFeedback, openFaqs, openDocument, showToast }),
+    [activeImportCount, openTrace, openMemory, openImport, openEvaluation, openKnowledge, openSettings, openAssistants, openFeedback, openFaqs, openDocument, showToast],
   )
 
   // Replay server-side trace history for runs persisted before this page load.
@@ -142,7 +145,16 @@ function AppRoot() {
     void conversationStore.restoreTraceHistories()
   }, [])
 
-  const activeThreadId = useConversation().activeThreadId
+  const { activeThreadId, messages } = useConversation()
+
+  // A pin is a look back at one past answer, not a filter that hides the answer
+  // currently streaming: whenever the newest assistant message changes (a new run
+  // opens, or the thread switches) the panel drops back to the live chain.
+  const latestAssistantId =
+    [...messages].reverse().find((message) => message.role === "assistant")?.id ?? null
+  useEffect(() => {
+    setTrace((previous) => (previous.messageId ? { ...previous, messageId: null } : previous))
+  }, [latestAssistantId])
 
   // Ticket 22 (ATT-01): attachments are SERVER-owned rows of the current
   // conversation. The list is re-read whenever the conversation changes, so
@@ -181,28 +193,6 @@ function AppRoot() {
   const composePrompt = useCallback(
     (displayText: string) => displayText,
     [],
-  )
-
-  const handleAddAttachments = useCallback(
-    async (files: File[]) => {
-      const sessionId = conversationStore.getActiveThread()?.id
-      if (!sessionId) {
-        showToast("请先新建一个对话，再添加附件")
-        return
-      }
-      for (const file of files) {
-        try {
-          const attachment = await uploadSessionAttachment(sessionId, file)
-          if (attachment.status === "failed") {
-            showToast(`${file.name} 解析失败：${attachment.error ?? "未知原因"}`)
-          }
-        } catch (error) {
-          showToast(error instanceof Error ? error.message : `${file.name} 上传失败`)
-        }
-      }
-      await refreshAttachments()
-    },
-    [refreshAttachments, showToast],
   )
 
   const handleRemoveAttachment = useCallback(
@@ -250,17 +240,21 @@ function AppRoot() {
           <AppShell
             isDark={isDark}
             onToggleTheme={toggleTheme}
-            traceOpen={traceOpen}
-            onToggleTrace={() => setTraceOpen((previous) => !previous)}
+            traceOpen={trace.open}
+            traceMessageId={trace.messageId}
+            onCloseTrace={closeTrace}
             attachmentsProps={{
               attachments,
-              onAdd: handleAddAttachments,
               onRemove: handleRemoveAttachment,
               onPromote: handlePromoteAttachment,
             }}
           />
           <MemoryDialog open={memoryOpen} onClose={() => setMemoryOpen(false)} />
-          <ImportDialog open={importOpen} onClose={() => setImportOpen(false)} />
+          <ImportDialog
+            open={importOpen}
+            onClose={() => setImportOpen(false)}
+            onActiveCountChange={setActiveImportCount}
+          />
           <EvaluationDialog open={evaluationOpen} onClose={() => setEvaluationOpen(false)} />
           <KnowledgeDialog open={knowledgeOpen} onClose={() => setKnowledgeOpen(false)} />
           <SettingsDialog open={settingsOpen} onClose={() => setSettingsOpen(false)} />
@@ -271,11 +265,6 @@ function AppRoot() {
             open={documentView.open}
             target={documentView.target}
             onClose={() => setDocumentView((previous) => ({ ...previous, open: false }))}
-          />
-          <InsightDialog
-            open={insight.open}
-            messageId={insight.messageId}
-            onClose={() => setInsight((previous) => ({ ...previous, open: false }))}
           />
           <Toast toast={toast} />
         </ConversationRuntimeProvider>

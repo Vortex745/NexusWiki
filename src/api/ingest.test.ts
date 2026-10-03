@@ -101,6 +101,120 @@ test("raw file ingestion accepts bounded bytes and file metadata before JSON par
   }
 })
 
+test("an oversized upload is refused with a JSON 413 instead of the default HTML error page", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "kefu-rag-api-"))
+  process.env.OPENAI_API_KEY = process.env.OPENAI_API_KEY || "test-key"
+  process.env.SQLITE_PATH = join(directory, "ingestion.db")
+  const server = createApp({ eventsSource, ingestAccessMiddleware: tenantAccessMiddleware }).listen(0)
+
+  try {
+    await new Promise<void>((resolve) => server.once("listening", resolve))
+    const address = server.address()
+    assert.ok(address && typeof address === "object")
+    // One byte past RAW_FILE_LIMIT ("20mb") — the raw parser must bail before
+    // the route handler and the error must surface as the mapped JSON body,
+    // not Express's PayloadTooLargeError HTML page.
+    const response = await fetch(`http://127.0.0.1:${address.port}/api/ingest/file`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/octet-stream",
+        "x-file-name": "too-large.bin",
+        "x-source-kind": "file",
+        "x-source-id": "C:/knowledge/too-large.bin",
+        "x-source-namespace": "local",
+      },
+      body: Buffer.alloc(21 * 1024 * 1024, 0x41),
+    })
+
+    assert.equal(response.status, 413)
+    assert.match(response.headers.get("content-type") || "", /application\/json/)
+    const body = await response.json() as { error: { kind: string; message: string } }
+    assert.equal(body.error.kind, "file_size")
+    assert.ok(body.error.message.includes("20MB"))
+  } finally {
+    await new Promise<void>((resolve, reject) => {
+      server.close((error) => error ? reject(error) : resolve())
+    })
+    closeDb()
+    rmSync(directory, { recursive: true, force: true })
+  }
+})
+
+test("a percent-encoded UTF-8 file name survives the header round-trip", async () => {
+  // Browser clients must percent-encode header values: raw Chinese in
+  // x-file-name makes the fetch Headers constructor throw before the request
+  // is ever sent, so every locally imported Chinese-named file failed.
+  const directory = mkdtempSync(join(tmpdir(), "kefu-rag-api-utf8-"))
+  process.env.OPENAI_API_KEY = process.env.OPENAI_API_KEY || "test-key"
+  process.env.SQLITE_PATH = join(directory, "ingestion.db")
+  const server = createApp({ eventsSource, ingestAccessMiddleware: tenantAccessMiddleware }).listen(0)
+
+  try {
+    await new Promise<void>((resolve) => server.once("listening", resolve))
+    const address = server.address()
+    assert.ok(address && typeof address === "object")
+    const response = await fetch(`http://127.0.0.1:${address.port}/api/ingest/file`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/octet-stream",
+        "x-file-name": encodeURIComponent("产品手册.pdf"),
+        "x-file-mime-type": "application/pdf",
+        "x-source-kind": "file",
+        "x-source-id": encodeURIComponent("本地资料/产品手册.pdf"),
+        "x-source-namespace": "local-folder",
+      },
+      body: Buffer.from("%PDF-1.4 fixture"),
+    })
+
+    assert.equal(response.status, 200)
+    const submitted = await response.json() as { docId: string; status: string }
+    assert.equal(submitted.status, "pending")
+    const document = new DocumentRepo(openDb()).get(submitted.docId)
+    assert.equal(document?.fileName, "产品手册.pdf")
+  } finally {
+    await new Promise<void>((resolve, reject) => {
+      server.close((error) => error ? reject(error) : resolve())
+    })
+    closeDb()
+    rmSync(directory, { recursive: true, force: true })
+  }
+})
+
+test("a raw header value that is not valid percent-encoding is kept verbatim", async () => {
+  // Older callers may send unencoded names; decode failures must not 500.
+  const directory = mkdtempSync(join(tmpdir(), "kefu-rag-api-rawname-"))
+  process.env.OPENAI_API_KEY = process.env.OPENAI_API_KEY || "test-key"
+  process.env.SQLITE_PATH = join(directory, "ingestion.db")
+  const server = createApp({ eventsSource, ingestAccessMiddleware: tenantAccessMiddleware }).listen(0)
+
+  try {
+    await new Promise<void>((resolve) => server.once("listening", resolve))
+    const address = server.address()
+    assert.ok(address && typeof address === "object")
+    const response = await fetch(`http://127.0.0.1:${address.port}/api/ingest/file`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/octet-stream",
+        "x-file-name": "50% off policy.md",
+        "x-file-mime-type": "text/markdown",
+        "x-source-kind": "file",
+      },
+      body: Buffer.from("# policy"),
+    })
+
+    assert.equal(response.status, 200)
+    const submitted = await response.json() as { docId: string }
+    const document = new DocumentRepo(openDb()).get(submitted.docId)
+    assert.equal(document?.fileName, "50% off policy.md")
+  } finally {
+    await new Promise<void>((resolve, reject) => {
+      server.close((error) => error ? reject(error) : resolve())
+    })
+    closeDb()
+    rmSync(directory, { recursive: true, force: true })
+  }
+})
+
 test("an admin-scope import is tenant-wide instead of admin-private (KB-05B)", async () => {
   const directory = mkdtempSync(join(tmpdir(), "kefu-rag-api-admin-import-"))
   process.env.OPENAI_API_KEY = process.env.OPENAI_API_KEY || "test-key"
@@ -652,6 +766,7 @@ function seedKnowledgeBase(db: DB, id: string, tenantId: string): void {
     description: "",
     status: "active",
     embeddingProfile: knowledgeBaseEmbeddingProfile(cfg.embeddingModel, cfg.embeddingDimensions),
+    folderId: null,
     createdAt: "2026-01-01T00:00:00.000Z",
     updatedAt: "2026-01-01T00:00:00.000Z",
   })
@@ -813,6 +928,7 @@ test("Ticket 17 MODEL-01B: an import into a knowledge base with a different embe
     description: "",
     status: "active",
     embeddingProfile: "old-model:2",
+    folderId: null,
     createdAt: "2026-01-01T00:00:00.000Z",
     updatedAt: "2026-01-01T00:00:00.000Z",
   })
@@ -1239,6 +1355,25 @@ test("Ticket 11 DOC-01A: imports carry tags and folder into the document metadat
     const fileDoc = repo.get(fileSubmitted.docId)
     assert.deepEqual(fileDoc?.metadata.tags, ["notes", "draft"])
     assert.equal(fileDoc?.metadata.folder, "Meetings")
+
+    // Header values are Latin-1 on the wire: the client percent-encodes tags
+    // and folders, so the server decodes them back to the original values.
+    const encodedRes = await fetch(`http://127.0.0.1:${address.port}/api/ingest/file`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/octet-stream",
+        "x-file-name": "chinese.md",
+        "x-knowledge-base-id": "kb-catalog",
+        "x-document-tags": encodeURIComponent("合同, 2026"),
+        "x-document-folder": encodeURIComponent("会议"),
+      },
+      body: Buffer.from("chinese metadata"),
+    })
+    assert.equal(encodedRes.status, 200)
+    const encodedSubmitted = await encodedRes.json() as { docId: string }
+    const encodedDoc = repo.get(encodedSubmitted.docId)
+    assert.deepEqual(encodedDoc?.metadata.tags, ["合同", "2026"])
+    assert.equal(encodedDoc?.metadata.folder, "会议")
 
     // Malformed catalog metadata is a 400 and files nothing.
     const badRes = await fetch(`http://127.0.0.1:${address.port}/api/ingest`, {
