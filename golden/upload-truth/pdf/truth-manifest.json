@@ -1,0 +1,336 @@
+{
+  "manifestVersion": "ut02-pdf-truth-v1",
+  "annotationMethod": "designed",
+  "designNote": "逐页真值由 generate.py 逐字设计，与被测提取完全独立；扫描页的文本先渲染为图像再插入，因此图像页同样拥有独立设计的真值。复杂样本（分栏/重叠表格/扫描）以正确待校验为预期，页数或标记命中不能代替全文证据。",
+  "samples": [
+    {
+      "id": "simple-body",
+      "file": "simple-body.pdf",
+      "fileSha256": "9c6f31e2a293004ec9eac46eae2e569a936058887467b485f470d40a8980328a",
+      "fileBytes": 3389,
+      "pageCount": 3,
+      "expectation": "exact",
+      "pages": [
+        {
+          "page": 1,
+          "truthLines": [
+            "上传完整性验收样本",
+            "第一页：本样本用于逐页真值核对。",
+            "订单编号：A-2026-1004，金额 50 元。"
+          ]
+        },
+        {
+          "page": 2,
+          "truthLines": [
+            "第二页：勾股定理 a^2+b^2=c^2 与 3.14。",
+            "不支持跨店抵扣，也不支持过期后补办。",
+            "Order two: quantity 3, unit price 12.5。"
+          ]
+        },
+        {
+          "page": 3,
+          "truthLines": [
+            "第三页：顺序校验 甲、乙、丙。",
+            "结尾校验词：终线-PDF-77。",
+            "Support email: support@example.com。"
+          ]
+        }
+      ],
+      "mustPreserve": [
+        "per-page-position",
+        "order",
+        "numbers",
+        "negation",
+        "formula-as-text"
+      ]
+    },
+    {
+      "id": "footnotes",
+      "file": "footnotes.pdf",
+      "fileSha256": "4a71ecbef8e2ce450ff0d13a0d512ab00c2e0c18c237657c7d19e1865603bbaa",
+      "fileBytes": 2234,
+      "pageCount": 1,
+      "expectation": "exact",
+      "pages": [
+        {
+          "page": 1,
+          "truthLines": [
+            "脚注样本标题",
+            "正文一：退款申请需在七天内提交。",
+            "正文二：不支持口头申请。",
+            "正文三：审核时限为三个工作日。",
+            "※ 脚注：本条款不适用于 2026-01-01 之前的订单。"
+          ],
+          "note": "脚注为小字号，必须与正文同页保留"
+        }
+      ],
+      "mustPreserve": [
+        "footnote-text",
+        "per-page-position"
+      ]
+    },
+    {
+      "id": "two-columns",
+      "file": "two-columns.pdf",
+      "fileSha256": "a512de3f004ec575c4ea23e2abbcc71228a97d672c0b56a9380716c76a729d4d",
+      "fileBytes": 2426,
+      "pageCount": 1,
+      "expectation": "pending_review_allowed",
+      "pages": [
+        {
+          "page": 1,
+          "truthLines": [
+            "左栏一：退货时限为七天。",
+            "左栏二：需保留原始包装。",
+            "左栏三：运费由买家承担。",
+            "右栏一：发票需在三十天内开具。",
+            "右栏二：金额上限 500 元。",
+            "右栏三：不支持口头承诺。"
+          ],
+          "note": "真值按左栏-右栏阅读顺序登记；提取顺序无法确认时必须待校验"
+        }
+      ],
+      "mustPreserve": [
+        "column-order",
+        "numbers"
+      ],
+      "notes": "分栏属于结构风险：页数或标记命中不能代替全文证据。"
+    },
+    {
+      "id": "table-overlap",
+      "file": "table-overlap.pdf",
+      "fileSha256": "edf032c33d02026544cd2afb82a7561cf85b974c4c79ad3c240b0a366d459ecb",
+      "fileBytes": 4461,
+      "pageCount": 1,
+      "expectation": "pending_review_allowed",
+      "pages": [
+        {
+          "page": 1,
+          "truthLines": [
+            "重叠表格样本",
+            "表格上方说明：以下为费率表。",
+            "手续费 比例 说明",
+            "线上 1% 默认",
+            "线下 2% 需审批",
+            "覆盖校验行：本行与表格区域重叠，必须作为正文保留。"
+          ],
+          "note": "重叠行必须作为正文保留；落入空表格行被拆碎也算损失"
+        }
+      ],
+      "mustPreserve": [
+        "overlap-body-line",
+        "table-content"
+      ],
+      "notes": "表格与正文重叠是已知风险：不能因表格提取成功就宣布该页完整。"
+    },
+    {
+      "id": "pure-table",
+      "file": "pure-table.pdf",
+      "fileSha256": "a7c6f11fa57e206a4bdde00ba2b51ee60001b1ed7d17073dc95f29ed03ac0e28",
+      "fileBytes": 3718,
+      "pageCount": 1,
+      "expectation": "exact",
+      "pages": [
+        {
+          "page": 1,
+          "truthLines": []
+        }
+      ],
+      "relations": [
+        {
+          "kind": "header",
+          "values": [
+            "姓名",
+            "金额",
+            "是否退款"
+          ]
+        },
+        {
+          "kind": "row",
+          "values": [
+            "张三",
+            "50元",
+            "是"
+          ]
+        },
+        {
+          "kind": "row",
+          "values": [
+            "李四",
+            "30元",
+            "否"
+          ]
+        }
+      ],
+      "mustPreserve": [
+        "header-value-relations"
+      ],
+      "notes": "纯表格页以表头-值关系为真值：每个数据行的值必须共同出现在同一表格块内。"
+    },
+    {
+      "id": "empty-page",
+      "file": "empty-page.pdf",
+      "fileSha256": "1c2b293caa31b7148629c12c39f59b32b5eb729a0d5623651b1db300585f913d",
+      "fileBytes": 1943,
+      "pageCount": 3,
+      "expectation": "exact",
+      "pages": [
+        {
+          "page": 1,
+          "truthLines": [
+            "空页样本第一页：校验词 甲-1。"
+          ]
+        },
+        {
+          "page": 2,
+          "truthLines": [],
+          "note": "设计上的空页：无内容，但其存在必须可从后续页的页位推断"
+        },
+        {
+          "page": 3,
+          "truthLines": [
+            "空页样本第三页：页位必须保持为第三页，校验词 丙-3。"
+          ]
+        }
+      ],
+      "mustPreserve": [
+        "page-position"
+      ]
+    },
+    {
+      "id": "image-figure",
+      "file": "image-figure.pdf",
+      "fileSha256": "a363aafb8752ac2d56ef3cac6bc348247affb0746230120ca924704ead36f289",
+      "fileBytes": 4561,
+      "pageCount": 1,
+      "expectation": "exact",
+      "pages": [
+        {
+          "page": 1,
+          "truthLines": [
+            "图片样本：下方是一张有效图片。",
+            "图 1：架构示意图（有效图片；图片语义是当前能力缺口）。"
+          ],
+          "note": "图片本身无文本语义；图片存在性当前没有证据通道，登记为能力缺口"
+        }
+      ],
+      "mustPreserve": [
+        "caption",
+        "image-presence-gap"
+      ],
+      "capabilityGaps": [
+        "image semantics/asset evidence channel is absent from the builtin parser"
+      ]
+    },
+    {
+      "id": "mixed-scan",
+      "file": "mixed-scan.pdf",
+      "fileSha256": "3106c50a19d79055a087f6a45663d68db4744dac063012809a115a4c4eb6d72c",
+      "fileBytes": 25089,
+      "pageCount": 3,
+      "expectation": "pending_review_allowed",
+      "pages": [
+        {
+          "page": 1,
+          "truthLines": [
+            "混合样本第一页：文本层存在，校验词 混-1。"
+          ]
+        },
+        {
+          "page": 2,
+          "truthLines": [
+            "扫描页设计文本：这一页没有文本层，",
+            "当前解析会静默丢失本页，校验词 扫-2。"
+          ],
+          "note": "扫描页：真值为设计文本；无文本层时必须待校验，不得假成功"
+        },
+        {
+          "page": 3,
+          "truthLines": [
+            "混合样本第三页：文本层存在，校验词 混-3。"
+          ]
+        }
+      ],
+      "mustPreserve": [
+        "no-false-success",
+        "per-page-position"
+      ],
+      "notes": "文本层覆盖率 2/3 ≥ 0.5，脚本不会发出低覆盖警告——部分提取假成功必须由逐页真值揭示。"
+    },
+    {
+      "id": "scan-majority",
+      "file": "scan-majority.pdf",
+      "fileSha256": "66ef6decddd12a148c6b7b0b8e98b8ca6b15db484b951a0542af04e65a123bcf",
+      "fileBytes": 30155,
+      "pageCount": 3,
+      "expectation": "pending_review_allowed",
+      "pages": [
+        {
+          "page": 1,
+          "truthLines": [
+            "扫描为主样本：仅本页有文本层，覆盖警告必须可见，校验词 主-1。"
+          ]
+        },
+        {
+          "page": 2,
+          "truthLines": [
+            "扫描页乙：无文本层，校验词 主-2。"
+          ],
+          "note": "扫描页：真值为设计文本"
+        },
+        {
+          "page": 3,
+          "truthLines": [
+            "扫描页丙：无文本层，校验词 主-3。"
+          ],
+          "note": "扫描页：真值为设计文本"
+        }
+      ],
+      "mustPreserve": [
+        "warning-visibility",
+        "no-false-success"
+      ],
+      "notes": "文本层覆盖率 1/3 < 0.5，脚本发出低覆盖警告；警告在 TypeScript 归一化中被丢弃。"
+    },
+    {
+      "id": "encrypted",
+      "file": "encrypted.pdf",
+      "fileSha256": "36994574731a6b6e78f5316c5dfde5a1f7d0544070910f68341796ca35050ec6",
+      "fileBytes": 2628,
+      "pageCount": 1,
+      "expectation": "parse_failure_allowed",
+      "pages": [
+        {
+          "page": 1,
+          "truthLines": [
+            "加密样本：本文件设置了口令，解析必须显式失败而非假成功。校验词 密-1。"
+          ]
+        }
+      ],
+      "mustPreserve": [
+        "honest-failure"
+      ],
+      "notes": "加密文件必须显式失败或待校验，不得静默产出空内容。"
+    },
+    {
+      "id": "corrupted",
+      "file": "corrupted.pdf",
+      "fileSha256": "b1b2430158207783e4a96c301b030b21da23b51b0ebe469acd31fbf1a359737c",
+      "fileBytes": 872,
+      "pageCount": 1,
+      "expectation": "parse_failure_allowed",
+      "pages": [
+        {
+          "page": 1,
+          "truthLines": [
+            "损坏样本：本文件被截断，解析必须显式失败。校验词 损-1。"
+          ]
+        }
+      ],
+      "mustPreserve": [
+        "honest-failure"
+      ],
+      "notes": "损坏文件必须显式失败，不得静默产出部分内容后宣布成功。"
+    }
+  ]
+}
