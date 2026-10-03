@@ -1,4 +1,4 @@
-export type ParserType = "markitdown" | "marker" | "mineru"
+export type ParserType = "markitdown" | "marker" | "mineru" | "builtin-pdf" | "direct-txt"
 
 export type NormalizedBlockType =
   | "heading"
@@ -10,7 +10,7 @@ export type NormalizedBlockType =
 
 export interface ParserProvenance {
   parser: ParserType
-  adapter: "cli"
+  adapter: "cli" | "script" | "in-process"
 }
 
 export interface NormalizedBlock {

@@ -17,6 +17,7 @@ import {
 } from "./lifecycle"
 import {
   BuiltinPdfParser,
+  DirectTextParser,
   MarkItDownParser,
   MarkerParser,
   MinerUParser,
@@ -73,6 +74,10 @@ function isParserUnavailableError(error: unknown): boolean {
 
 function configuredParser(type: ParserType): Parser {
   const config = loadConfig()
+  // UT-10: the faithful TXT path decodes in-process — no runtime to configure.
+  if (type === "direct-txt") {
+    return new DirectTextParser()
+  }
   if (type === "builtin-pdf") {
     return new BuiltinPdfParser({
       command: config.pythonCommand ?? "python",
@@ -114,14 +119,17 @@ function configuredParser(type: ParserType): Parser {
  */
 function parserConfigFingerprint(type: ParserType): string {
   const config = loadConfig()
+  // UT-10: direct-txt decodes in-process — no command participates.
   const command =
-    type === "builtin-pdf"
-      ? (config.pythonCommand ?? "python")
-      : type === "marker"
-        ? (config.markerCommand ?? "marker_single")
-        : type === "mineru"
-          ? (config.mineruCommand ?? "mineru")
-          : (config.markitdownCommand ?? "markitdown")
+    type === "direct-txt"
+      ? null
+      : type === "builtin-pdf"
+        ? (config.pythonCommand ?? "python")
+        : type === "marker"
+          ? (config.markerCommand ?? "marker_single")
+          : type === "mineru"
+            ? (config.mineruCommand ?? "mineru")
+            : (config.markitdownCommand ?? "markitdown")
   return createHash("sha256")
     .update(
       JSON.stringify({
@@ -140,7 +148,8 @@ function recordParserMetadata(
   document: Document,
   parser: ParserType | null,
   reason: string,
-  blocks?: NormalizedBlock[]
+  blocks?: NormalizedBlock[],
+  extractionMetadata?: Record<string, unknown>
 ): void {
   const existingSystem = document.metadata.system
   const system = existingSystem && typeof existingSystem === "object" && !Array.isArray(existingSystem)
@@ -150,6 +159,10 @@ function recordParserMetadata(
     ...document.metadata,
     system: {
       ...system,
+      // UT-10: extraction-level provenance (e.g. the faithful TXT path's
+      // decode evidence) lands beside the parser decision, keyed by the
+      // producer ("decode" for direct-txt).
+      ...(extractionMetadata ?? {}),
       source: document.source,
       fileName: document.fileName,
       mimeType: document.mimeType,
@@ -261,6 +274,7 @@ export class PipelineStageRunner implements IngestionStageRunner {
           let blocks: NormalizedBlock[] | null = null
           let rawExtraction: string | null = null
           let usedParser: ParserType | null = null
+          let usedParserInstance: Parser | null = null
           let parserReason = parserRoute.reason
           const attempts: string[] = []
           for (const candidate of parserRoute.candidates) {
@@ -288,6 +302,7 @@ export class PipelineStageRunner implements IngestionStageRunner {
                 })
               }
               usedParser = candidate
+              usedParserInstance = parser
               if (attempts.length > 0) {
                 parserReason = `${parserRoute.reason}; ${attempts.join("; ")}; fell back to ${candidate}`
               }
@@ -312,9 +327,14 @@ export class PipelineStageRunner implements IngestionStageRunner {
           // reviewer can audit the exact bytes the parser produced even after
           // a restart. Parsers without a raw seam (mineru) leave no evidence
           // row: absent capability is never fabricated. Coverage warnings come
-          // from the extraction payload itself (builtin-pdf emits them).
+          // from the extraction payload itself (builtin-pdf emits them), decode
+          // warnings from the parser's own extraction provenance (UT-10).
           if (rawExtraction !== null) {
-            let warnings: string[] = []
+            const provenance =
+              typeof usedParserInstance?.extractionProvenance === "function"
+                ? usedParserInstance.extractionProvenance()
+                : null
+            let warnings = provenance?.warnings ?? []
             let pageCount: number | null = null
             if (usedParser === "builtin-pdf") {
               try {
@@ -362,7 +382,10 @@ export class PipelineStageRunner implements IngestionStageRunner {
             document,
             usedParser,
             parserReason,
-            blocks
+            blocks,
+            typeof usedParserInstance?.extractionProvenance === "function"
+              ? usedParserInstance.extractionProvenance()?.metadata
+              : undefined
           )
           return {
             chunks,

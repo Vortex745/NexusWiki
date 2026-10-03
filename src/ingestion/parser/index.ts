@@ -12,6 +12,14 @@ export interface Parser {
    */
   parseRaw?(input: Omit<ParseDocumentInput, "documentId">): Promise<string>
   normalizeRaw?(raw: string, documentId: string): NormalizedBlock[]
+  /**
+   * Ticket UT-10: extraction-level provenance (decode evidence, allowed
+   * transforms, review flags) captured by the last parseRaw. The pipeline
+   * merges `metadata` into document metadata.system and `warnings` into the
+   * durable evidence record. Optional — parsers without decode decisions
+   * omit it.
+   */
+  extractionProvenance?(): { metadata: Record<string, unknown>; warnings: string[] } | null
 }
 
 export type { ParserType } from "../../types"
@@ -28,6 +36,8 @@ export type {
 } from "./markitdown"
 export { normalizeMarkItDown } from "./normalize"
 export { runBoundedProcess } from "./process"
+export { DirectTextParser, decodeTextBytes } from "./direct_text"
+export type { TextDecodeProvenance } from "./direct_text"
 export type { BoundedProcessInput } from "./process"
 export { isParserOverride, selectParser, selectParserRoute } from "./router"
 export type {

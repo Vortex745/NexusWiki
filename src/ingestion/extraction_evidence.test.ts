@@ -23,6 +23,7 @@ import { IngestionLifecycle } from "./lifecycle"
 import { PipelineStageRunner } from "./pipeline"
 import {
   BuiltinPdfParser,
+  DirectTextParser,
   MarkItDownParser,
   MarkerParser,
 } from "./parser"
@@ -76,6 +77,10 @@ function makeFakeStore() {
 function makeResolveParser() {
   const config = loadConfig()
   return (type: string) => {
+    if (type === "direct-txt") {
+      // UT-10：TXT 的类型匹配路径是进程内保真解码。
+      return new DirectTextParser()
+    }
     if (type === "builtin-pdf") {
       return new BuiltinPdfParser({
         command: config.pythonCommand || "python",
@@ -133,7 +138,7 @@ async function ingest(
   return submitted.docId
 }
 
-test("UT-09 a) TXT 原始提取保留缩进而清洗结果不覆盖原提取", async () => {
+test("UT-09 a) TXT 证据行记录原始提取，清洗与证据互不覆盖", async () => {
   const { fakeStore, storedChunks } = makeFakeStore()
   const db = openDb()
   const lifecycle = new IngestionLifecycle(
@@ -149,32 +154,59 @@ test("UT-09 a) TXT 原始提取保留缩进而清洗结果不覆盖原提取", a
     sourceIdentity: { kind: "file", uriOrExternalId: "C:/truth/utf8-baseline.txt", namespace: "ut09" },
   })
   const result = await lifecycle.runNext()
-  assert.ok(result?.success, "TXT 必须经真实 markitdown 完成解析")
+  assert.ok(result?.success, "TXT 必须经保真文本路径完成解析")
 
   const evidence = new ExtractionEvidenceRepository(db).get(submitted.docId)
   assert.ok(evidence, "证据行必须存在")
   assert.equal(evidence.valid, true, `完整提交应有效：${evidence.invalidReason ?? ""}`)
   const { artifact } = evidence
-  assert.equal(artifact.parserType, "markitdown")
+  // UT-10：TXT 的类型匹配路径是 direct-txt（进程内解码）。
+  assert.equal(artifact.parserType, "direct-txt")
   assert.match(artifact.parserConfigVersion, /^[0-9a-f]{64}$/, "配置指纹是 sha256")
-  // 原始提取（清洗前）保留行首缩进。
+  // 原始提取（清洗前）与文件解码输出逐字一致（无 BOM、LF 样本无变换）。
+  assert.equal(artifact.rawExtraction, readFileSync(join(TXT_TRUTH_DIR, "utf8-baseline.txt")).toString("utf8"))
   assert.ok(
     artifact.rawExtraction.includes("\n    retry_limit = 3"),
-    "原提取必须保留 4 空格缩进"
+    "原提取保留 4 空格缩进"
   )
   assert.equal(artifact.rawExtractionSha256,
     createHash("sha256").update(Buffer.from(artifact.rawExtraction, "utf8")).digest("hex"))
   assert.equal(artifact.pageCount, null)
   assert.deepEqual(artifact.warnings, [])
 
-  // 清洗结果（切块文本）不保留缩进——但原提取仍在，清洗从未覆盖它。
+  // 清洗（UT-10 保守清洗）不再剥缩进——但证据与清洗仍是两份数据：
+  // 证据行是解码原输出，清洗结果进切块，互不覆盖。
   const joined = storedChunks
     .filter((chunk) => chunk.documentId === submitted.docId)
     .map((chunk) => chunk.content)
     .join("\n")
-  assert.ok(joined.includes("retry_limit"), "清洗后内容仍进入切块")
-  assert.ok(!joined.includes("    retry_limit"), "清洗剥掉缩进——原提取是唯一保留缩进的副本")
+  assert.ok(joined.includes("    retry_limit"), "保守清洗保留缩进进入切块")
   evidenceDocIds.txt = submitted.docId
+})
+
+test("UT-09 a2) markitdown 路径（.md）仍产出证据行", async () => {
+  const { fakeStore } = makeFakeStore()
+  const db = openDb()
+  const lifecycle = new IngestionLifecycle(
+    db,
+    new PipelineStageRunner(db, makeResolveParser() as never, fakeStore)
+  )
+  const submitted = lifecycle.submit({
+    title: "证据真值 Markdown",
+    content: "",
+    rawContent: Buffer.from("# 证据标题\n\n正文段落，校验词：md-ev-77。\n", "utf8"),
+    fileName: "evidence.md",
+    mimeType: "text/markdown",
+    sourceIdentity: { kind: "file", uriOrExternalId: "C:/truth/evidence.md", namespace: "ut09" },
+  })
+  const result = await lifecycle.runNext()
+  assert.ok(result?.success, ".md 必须经 markitdown 完成解析")
+
+  const evidence = new ExtractionEvidenceRepository(db).get(submitted.docId)
+  assert.ok(evidence, "markitdown 路径的证据行必须存在")
+  assert.equal(evidence.valid, true, `完整提交应有效：${evidence.invalidReason ?? ""}`)
+  assert.equal(evidence.artifact.parserType, "markitdown")
+  assert.ok(evidence.artifact.rawExtraction.includes("md-ev-77"), "原始提取含校验词")
 })
 
 test("UT-09 b) 简单 PDF：页 1..3 extracted、pageCount 3、无警告", async () => {

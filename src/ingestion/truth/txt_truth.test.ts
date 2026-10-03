@@ -211,9 +211,11 @@ test("UT-01 比较规则：切块覆盖按词元判定缺口且能发现伪造�
   assert.deepEqual(tokenizeForCoverage("A-2026 不支持"), ["a", "2026", "不", "支", "持"])
 })
 
-test("UT-01 路由对照：无 override 的 TXT 按类型匹配到 markitdown", () => {
+test("UT-01 路由对照：无 override 的 TXT 按类型匹配路由", () => {
   const route = selectParserRoute({ fileName: "样本.txt", mimeType: "text/plain" })
-  assert.deepEqual(route.candidates, ["markitdown"])
+  // UT-10 更新：TXT 的类型匹配路径改为保真 direct-txt（进程内解码），
+  // 不再经 markitdown CLI——CLI 在提取边界剥行尾空格、清洗边界解释字面语法。
+  assert.deepEqual(route.candidates, ["direct-txt"])
   assert.equal(route.authoritative, false)
   report.routeControl = {
     txtNoOverride: { candidates: route.candidates, authoritative: route.authoritative },
@@ -272,7 +274,8 @@ test("UT-01 缺陷复现：TXT 携带 PDF 专用 override 被原样接受且只�
       mimeType: "text/plain",
       override: "marker",
     })
-    assert.deepEqual(normalizedRoute.candidates, ["markitdown"])
+    // UT-10 更新：类型匹配的文本路径是 direct-txt。
+    assert.deepEqual(normalizedRoute.candidates, ["direct-txt"])
     assert.equal(normalizedRoute.authoritative, false)
     assert.match(normalizedRoute.reason, /marker/, "调整原因保留原 override 意图")
     report.overrideReproduction = {

@@ -43,6 +43,7 @@ const PARSER_OVERRIDES = new Set<ParserType>([
   "marker",
   "mineru",
   "builtin-pdf",
+  "direct-txt",
 ])
 
 export interface ParserSelectionInput {
@@ -95,6 +96,9 @@ const PARSER_COMPATIBLE_CLASSES: Record<ParserType, Set<ParserFileClass>> = {
   "builtin-pdf": new Set<ParserFileClass>(["pdf"]),
   // mineru is the OCR-aware extractor for images and also handles PDFs.
   mineru: new Set<ParserFileClass>(["pdf", "image"]),
+  // UT-10: the faithful TXT path is strictly plain text — no other format may
+  // enter it (structured text like .md/.csv keeps its markdown-aware route).
+  "direct-txt": new Set<ParserFileClass>(["text"]),
 }
 
 function declaredFileClass(fileName: string, mimeType?: string): ParserFileClass | "unknown" {
@@ -155,6 +159,17 @@ export function selectParserRoute(input: ParserSelectionInput): ParserRouteInfo 
       authoritative: false,
     }
   }
+  if (extension === ".txt") {
+    return {
+      // UT-10: plain text is decoded in-process. The general CLI/Markdown
+      // route loses trailing spaces at the extraction boundary and interprets
+      // literal `#`/`**`/`|` syntax at the cleaning boundary; the faithful
+      // path preserves whitespace, indentation and literal syntax exactly.
+      candidates: ["direct-txt"],
+      reason: "plain text is decoded directly (faithful TXT path with recorded encoding evidence)",
+      authoritative: false,
+    }
+  }
   if ([".bmp", ".heic", ".jpeg", ".jpg", ".png", ".tif", ".tiff"].includes(extension)) {
     return {
       candidates: ["mineru"],
@@ -182,6 +197,15 @@ export function selectParserRoute(input: ParserSelectionInput): ParserRouteInfo 
     return {
       candidates: ["mineru"],
       reason: "image documents require OCR-aware parsing",
+      authoritative: false,
+    }
+  }
+  if (mimeType === "text/plain") {
+    return {
+      // UT-10: same faithful path as .txt — but ONLY text/plain. Structured
+      // text formats keep their MarkItDown route below.
+      candidates: ["direct-txt"],
+      reason: "text/plain is decoded directly (faithful TXT path with recorded encoding evidence)",
       authoritative: false,
     }
   }
