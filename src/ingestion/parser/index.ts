@@ -28,8 +28,8 @@ export { MarkerParser, normalizeMarker } from "./marker"
 export type { MarkerParserOptions } from "./marker"
 export { MinerUParser, normalizeMinerU } from "./mineru"
 export type { MinerUParserOptions } from "./mineru"
-export { BuiltinPdfParser, normalizeBuiltinPdf } from "./builtin_pdf"
-export type { BuiltinPdfParserOptions } from "./builtin_pdf"
+export { BuiltinPdfParser, normalizeBuiltinPdf, analyzeStructureRisks } from "./builtin_pdf"
+export type { BuiltinPdfParserOptions, StructureRiskFlags } from "./builtin_pdf"
 export type {
   MarkItDownParserOptions,
   ParseDocumentInput,

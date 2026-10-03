@@ -310,6 +310,128 @@ function boxArea(a: [number, number, number, number]): number {
   return Math.max(0, a[2] - a[0]) * Math.max(0, a[3] - a[1])
 }
 
+// ---------------------------------------------------------------------------
+// Ticket UT-12: structural risk flags — explicit pending-review reasons for
+// anything whose completeness cannot be confirmed (candidate tables, column
+// layouts, pages without a text layer), the parser's own capability gaps,
+// the detectors' miss risks, and the exclusion audit trail (empty: this path
+// excludes nothing; a future exclusion must register its rule version and a
+// reversible mapping here).
+// ---------------------------------------------------------------------------
+
+export interface StructureRiskFlags {
+  /** 存在无法确认完整性的结构风险 → 待校验。 */
+  reviewRequired: boolean
+  /** 稳定待校验理由码（供 UT-15 内容结论消费）。 */
+  reviewReasons: string[]
+  /** 检测为可能分栏的页（阅读顺序未验证）。 */
+  possibleColumnPages: number[]
+  /** 无文本块的页（真实空白 / 扫描 / 非文本内容——原因未知，不伪造）。 */
+  pagesWithoutTextBlocks: number[]
+  /** 检测到的候选表格（markdown 转换未经等价验证）。 */
+  candidateTables: number
+  /** 区域与正文块重叠的候选表格数。 */
+  tablesOverlappingText: number
+  /** 解析器能力缺口（如实声明——未检测到不等于不存在）。 */
+  capabilityGaps: string[]
+  /** 检测器边界与漏判风险记录。 */
+  detectorLimits: string[]
+  /** 排除规则审计：本路径当前无任何排除（疑似冗余一律保留）。 */
+  exclusionRules: string[]
+}
+
+export function analyzeStructureRisks(value: unknown): StructureRiskFlags {
+  const output = parseOutput(value)
+
+  const pagesWithTextBlocks = new Set(output.blocks.map((block) => block.page))
+  const pagesWithoutTextBlocks: number[] = []
+  for (let page = 1; page <= output.pageCount; page += 1) {
+    if (!pagesWithTextBlocks.has(page)) pagesWithoutTextBlocks.push(page)
+  }
+
+  // 分栏启发式：存在一条竖直分割线 s，使 ≥2 个文本块整体位于左侧、≥2 个
+  // 整体位于右侧，且左右块在竖直方向有交叠 → 可能分栏（阅读顺序未验证）。
+  // 漏判风险：跨栏通栏元素或相触的栏会漏检（记录在 detectorLimits）。
+  const possibleColumnPages: number[] = []
+  const pages = [...pagesWithTextBlocks].sort((a, b) => a - b)
+  for (const page of pages) {
+    const pageBlocks = output.blocks.filter((block) => block.page === page)
+    const edges = [
+      ...new Set([
+        ...pageBlocks.map((block) => block.bbox[0]),
+        ...pageBlocks.map((block) => block.bbox[2]),
+      ]),
+    ].sort((a, b) => a - b)
+    let flagged = false
+    const splitCandidates: number[] = []
+    for (let i = 0; i < edges.length; i += 1) {
+      splitCandidates.push(edges[i])
+      if (i + 1 < edges.length && edges[i + 1] - edges[i] > 1) {
+        splitCandidates.push((edges[i] + edges[i + 1]) / 2)
+      }
+    }
+    for (const s of splitCandidates) {
+      const strictlyLeft = pageBlocks.filter((block) => block.bbox[2] < s)
+      const strictlyRight = pageBlocks.filter((block) => block.bbox[0] > s)
+      if (strictlyLeft.length < 2 || strictlyRight.length < 2) continue
+      const verticalOverlap = strictlyLeft.some((leftBlock) =>
+        strictlyRight.some((rightBlock) =>
+          Math.min(leftBlock.bbox[3], rightBlock.bbox[3]) -
+            Math.max(leftBlock.bbox[1], rightBlock.bbox[1]) > 0
+        )
+      )
+      if (verticalOverlap) {
+        flagged = true
+        break
+      }
+    }
+    if (flagged) possibleColumnPages.push(page)
+  }
+
+  let tablesOverlappingText = 0
+  for (const table of output.tables) {
+    const overlapped = output.blocks.some(
+      (block) =>
+        boxArea(block.bbox) > 0 &&
+        intersectionArea(block.bbox, table.bbox) / boxArea(block.bbox) >= 0.5
+    )
+    if (overlapped) tablesOverlappingText += 1
+  }
+
+  const reviewReasons: string[] = []
+  if (possibleColumnPages.length > 0) {
+    reviewReasons.push("columns_reading_order_unverified")
+  }
+  if (pagesWithoutTextBlocks.length > 0) {
+    reviewReasons.push("pages_without_text_layer_or_empty")
+  }
+  if (output.tables.length > 0) {
+    reviewReasons.push("candidate_table_conversion_unverified")
+  }
+  if (tablesOverlappingText > 0) {
+    reviewReasons.push("table_text_overlap_preserved_for_review")
+  }
+
+  return {
+    reviewRequired: reviewReasons.length > 0,
+    reviewReasons,
+    possibleColumnPages,
+    pagesWithoutTextBlocks,
+    candidateTables: output.tables.length,
+    tablesOverlappingText,
+    capabilityGaps: [
+      "formula/equation content is not extracted (no equation evidence channel)",
+      "image semantics and asset evidence are not captured (image presence has no evidence channel)",
+      "no OCR: pages without a text layer are not read",
+    ],
+    detectorLimits: [
+      "column detection needs a real gutter: a multi-column layout whose column x-ranges touch (or a full-width element bridging them) is merged and NOT flagged",
+      "a page without text blocks is recorded without a cause — genuinely empty pages and non-text (scanned/drawn) content cannot be distinguished without OCR",
+    ],
+    exclusionRules: [],
+  }
+}
+
 export function normalizeBuiltinPdf(
   value: unknown,
   documentId: string
@@ -463,6 +585,7 @@ export class BuiltinPdfParser {
     pageCount: number | null
     textChars: number | null
     pagesWithText: number | null
+    risks?: StructureRiskFlags
   } | null = null
 
   constructor(private options: BuiltinPdfParserOptions) {}
@@ -560,6 +683,20 @@ export class BuiltinPdfParser {
       throw new Error(
         `malformed builtin-pdf output: ${error instanceof Error ? error.message : String(error)}`
       )
+    }
+    // UT-12: structural risk flags ride the same provenance channel —
+    // computed from the validated payload, stored for extractionProvenance.
+    try {
+      this.lastSummary = this.lastSummary ?? {
+        warnings: [],
+        pageCount: null,
+        textChars: null,
+        pagesWithText: null,
+      }
+      this.lastSummary.risks = analyzeStructureRisks(parsed)
+    } catch {
+      // malformed payload — normalizeBuiltinPdf below fails loudly; no
+      // fabricated risk record.
     }
     return normalizeBuiltinPdf(parsed, documentId)
   }
