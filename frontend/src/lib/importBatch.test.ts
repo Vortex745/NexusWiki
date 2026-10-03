@@ -17,6 +17,7 @@ import {
   sanitizeKnowledgeBaseName,
   settleWavePrecheck,
   type FolderNode,
+  type PrecheckSettleRow,
 } from "./importBatch"
 
 function fakeFile(name: string, size = 10): File {
@@ -301,7 +302,7 @@ describe("UT-23 PDF-only parser override", () => {
 })
 
 describe("UT-24 wave pre-flight settlement", () => {
-  const row = (id: string, waveId: string, extra: Record<string, unknown> = {}) => ({
+  const row = (id: string, waveId: string, extra: Partial<PrecheckSettleRow> = {}): PrecheckSettleRow => ({
     id, waveId, status: "queued", fileName: `${id}.pdf`, precheckSettled: false, ...extra,
   })
 

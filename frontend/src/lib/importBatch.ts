@@ -315,6 +315,9 @@ export interface RetryGateInput {
   sourceUrl?: string
   docId?: string | null
   admissionKind?: ImportAdmissionKind
+  /** Rides along on real ImportItems; the gate deliberately ignores it —
+   * only admission state and server acceptance decide re-upload (UT-23). */
+  errorKind?: string | null
 }
 
 /** Whether a failed row may retry, and which recovery that retry means
