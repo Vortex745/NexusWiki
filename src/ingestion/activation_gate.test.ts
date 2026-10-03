@@ -15,6 +15,7 @@ import {
   type StageExecution,
 } from "./lifecycle"
 import {
+  ACTIVATION_BLOCKED_CONTENT_PROOF_PENDING_REVIEW,
   ACTIVATION_BLOCKED_CONTENT_PROOF_MISSING,
   ACTIVATION_BLOCKED_EVIDENCE_RECORD_MISSING,
   ACTIVATION_BLOCKED_EVIDENCE_SCHEMA_MISMATCH,
@@ -48,25 +49,38 @@ test("UT-04 门槛判定：缺记录/畸形/缺任一凭证都以稳定理由码
     assert.deepEqual(decision.reasonCodes, [ACTIVATION_BLOCKED_EVIDENCE_SCHEMA_MISMATCH])
   }
 
+  // UT-15 更新：内容核验先于索引核验——记录缺失时首先报内容凭证缺失。
   const empty = evaluateActivationGate({ schemaVersion: 1, contentProof: null, indexProof: null })
-  assert.deepEqual(empty.reasonCodes, [
-    ACTIVATION_BLOCKED_CONTENT_PROOF_MISSING,
-    ACTIVATION_BLOCKED_INDEX_PROOF_MISSING,
-  ])
+  assert.deepEqual(empty.reasonCodes, [ACTIVATION_BLOCKED_CONTENT_PROOF_MISSING])
 
-  const half = evaluateActivationGate({ schemaVersion: 1, contentProof: { hash: "x" }, indexProof: null })
+  // 内容凭证 malformed → schema mismatch；内容 pass 而索引缺失 → 索引理由码。
+  const malformedContent = evaluateActivationGate({ schemaVersion: 1, contentProof: { hash: "x" }, indexProof: null })
+  assert.deepEqual(malformedContent.reasonCodes, [ACTIVATION_BLOCKED_EVIDENCE_SCHEMA_MISMATCH])
+  const half = evaluateActivationGate({ schemaVersion: 1, contentProof: { verdict: "pass", reasonCodes: [] }, indexProof: null })
   assert.deepEqual(half.reasonCodes, [ACTIVATION_BLOCKED_INDEX_PROOF_MISSING])
 
   const wrongSchema = evaluateActivationGate({ schemaVersion: 2, contentProof: {}, indexProof: {} })
   assert.deepEqual(wrongSchema.reasonCodes, [ACTIVATION_BLOCKED_EVIDENCE_SCHEMA_MISMATCH])
 })
 
-test("UT-04 门槛判定：即便两类凭证齐备，核验语义实现前也不放行", () => {
-  // 本票不产出真实凭证；即使记录形状完整，联合核验属于 UT-17——
+test("UT-04/UT-15 门槛判定：内容待校验带明细码；两类凭证齐备且内容 pass 时核验语义实现前仍不放行", () => {
+  // UT-15：内容凭证结论非 pass → 附内容凭证自身的明细码（漏页/乱码/风险）。
+  const pending = evaluateActivationGate({
+    schemaVersion: 1,
+    contentProof: { verdict: "pending_review", reasonCodes: ["pages_without_text_layer_or_empty: 2"] },
+    indexProof: null,
+  })
+  assert.equal(pending.passed, false)
+  assert.deepEqual(pending.reasonCodes, [
+    ACTIVATION_BLOCKED_CONTENT_PROOF_PENDING_REVIEW,
+    "pages_without_text_layer_or_empty: 2",
+  ])
+
+  // UT-04 保留：内容 pass 且索引凭证存在时，联合核验属于 UT-17——
   // 显式拒绝而不是提前放行，保证中间票无法临时绕过保护。
   const decision = evaluateActivationGate({
     schemaVersion: 1,
-    contentProof: { any: "shape" },
+    contentProof: { verdict: "pass", reasonCodes: [] },
     indexProof: { any: "shape" },
   })
   assert.equal(decision.passed, false)
@@ -186,10 +200,10 @@ test("UT-04 凭证齐备仍不放行（核验未实现）且取消约束保留",
     const lifecycle = new IngestionLifecycle(db, completingRunner())
     const docRepo = new DocumentRepo(db)
     const submitted = lifecycle.submit({ title: "带证据候选", content: "正文", source: "evidence-test" })
-    // 生产者侧写入（UT-15/16 之后由管线产出）：记录形状完整。
+    // 生产者侧写入（UT-15 起由管线产出）：记录形状完整、内容 pass。
     docRepo.setCandidateEvidence(submitted.docId, {
       schemaVersion: 1,
-      contentProof: { some: "content proof" },
+      contentProof: { verdict: "pass", reasonCodes: [] },
       indexProof: { some: "index proof" },
     })
     await lifecycle.runNext()

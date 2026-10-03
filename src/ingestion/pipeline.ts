@@ -32,6 +32,8 @@ import {
 } from "./storage"
 import { evaluateBlockCoverage } from "./chunk_coverage"
 import { findOversizedChunks, resolveEmbeddingLimits } from "./limits"
+import { produceContentProof } from "./content_proof"
+import { ACTIVATION_EVIDENCE_SCHEMA_VERSION } from "./activation_gate"
 import { buildPageIndex } from "./page_index_builder"
 import type { DB } from "./tracking/db"
 import { DocumentRepo } from "./tracking/doc_repo"
@@ -61,6 +63,11 @@ interface ChunkStageResult {
   blocks: NormalizedBlock[]
   parser: ParserType | null
   parserReason: string | null
+  /** UT-15: proof inputs captured during the stage (null for content-only docs). */
+  rawExtractionSha256?: string | null
+  parserConfigVersion?: string | null
+  /** 解码/结构层的待校验理由码（UT-10 decode + UT-12 risks）。 */
+  reviewReasons?: string[]
 }
 
 interface ChunkStoreStageResult {
@@ -332,6 +339,8 @@ export class PipelineStageRunner implements IngestionStageRunner {
           // row: absent capability is never fabricated. Coverage warnings come
           // from the extraction payload itself (builtin-pdf emits them), decode
           // warnings from the parser's own extraction provenance (UT-10).
+          let stageRawExtractionSha256: string | null = null
+          const stageReviewReasons: string[] = []
           if (rawExtraction !== null) {
             const provenance =
               typeof usedParserInstance?.extractionProvenance === "function"
@@ -358,6 +367,22 @@ export class PipelineStageRunner implements IngestionStageRunner {
                 // failure cannot happen for a successfully normalized payload.
               }
             }
+            stageRawExtractionSha256 = createHash("sha256")
+              .update(Buffer.from(rawExtraction, "utf8"))
+              .digest("hex")
+            // UT-15: collect the decode (UT-10) and structural (UT-12) review
+            // reasons the parser recorded — they are upstream gaps the content
+            // proof must carry; downstream coverage can never clear them.
+            const decodeInfo = provenance?.metadata.decode as
+              | { reviewRequired?: boolean; reviewReason?: string }
+              | undefined
+            if (decodeInfo?.reviewRequired && decodeInfo.reviewReason) {
+              stageReviewReasons.push(decodeInfo.reviewReason)
+            }
+            const extractionRisks = provenance?.metadata.extraction as
+              | { risks?: { reviewReasons?: string[] } }
+              | undefined
+            stageReviewReasons.push(...(extractionRisks?.risks?.reviewReasons ?? []))
             new ExtractionEvidenceRepository(this.db).record({
               docId: document.id,
               version: document.version,
@@ -365,9 +390,7 @@ export class PipelineStageRunner implements IngestionStageRunner {
               parserType: usedParser,
               parserConfigVersion: parserConfigFingerprint(usedParser),
               rawExtraction,
-              rawExtractionSha256: createHash("sha256")
-                .update(Buffer.from(rawExtraction, "utf8"))
-                .digest("hex"),
+              rawExtractionSha256: stageRawExtractionSha256,
               warnings,
               pages: buildPageEvidence(blocks, pageCount, warnings),
               pageCount,
@@ -395,6 +418,9 @@ export class PipelineStageRunner implements IngestionStageRunner {
             blocks,
             parser: usedParser,
             parserReason,
+            rawExtractionSha256: stageRawExtractionSha256,
+            parserConfigVersion: parserConfigFingerprint(usedParser),
+            reviewReasons: stageReviewReasons,
           }
         },
         (result) => ({
@@ -420,18 +446,19 @@ export class PipelineStageRunner implements IngestionStageRunner {
       // the index), then verify block coverage independently. A coverage gap
       // is a loud stage failure, never a silent partial index expectation.
       const indexChunks = chunks.filter((chunk) => chunk.metadata.kind !== "parent")
+      const manifestEntries = indexChunks.map((chunk, position) => ({
+        chunkId: chunk.id,
+        kind: String(chunk.metadata.kind ?? "child"),
+        position,
+        contentSha256: ExpectedChunkRepository.contentSha256(chunk.content),
+        blockIds: ((chunk.metadata.normalizedBlocks as Array<{ id?: string }> | undefined) ?? [])
+          .map((block) => block.id)
+          .filter((id): id is string => typeof id === "string"),
+      }))
       new ExpectedChunkRepository(this.db).replaceAll(
         document.id,
         document.version,
-        indexChunks.map((chunk, position) => ({
-          chunkId: chunk.id,
-          kind: String(chunk.metadata.kind ?? "child"),
-          position,
-          contentSha256: ExpectedChunkRepository.contentSha256(chunk.content),
-          blockIds: ((chunk.metadata.normalizedBlocks as Array<{ id?: string }> | undefined) ?? [])
-            .map((block) => block.id)
-            .filter((id): id is string => typeof id === "string"),
-        }))
+        manifestEntries
       )
       if (chunkResult.blocks.length > 0) {
         const coverage = evaluateBlockCoverage(chunkResult.blocks, indexChunks)
@@ -456,6 +483,31 @@ export class PipelineStageRunner implements IngestionStageRunner {
             "lower the chunker size limits or raise EMBEDDING_INPUT_TOKEN_LIMIT; no silent provider truncation"
         )
       }
+
+      // Ticket UT-15: the content integrity proof — the joint verdict over
+      // extraction evidence, decode/structural review reasons and chunk
+      // coverage, BOUND to the same raw extraction, manifest and parser
+      // configuration. Recorded ALWAYS (pass or pending_review) so the
+      // activation gate and the uploader see precise reasons. A pass never
+      // activates anything by itself: it only qualifies the candidate for
+      // index verification (UT-16) — the gate's index half stays fail-closed.
+      const extractionEvidence = new ExtractionEvidenceRepository(this.db).get(
+        document.id,
+        document.version
+      )
+      const contentProof = produceContentProof({
+        extractionEvidence: extractionEvidence?.artifact ?? null,
+        reviewReasons: chunkResult.reviewReasons ?? [],
+        blocks: chunkResult.blocks,
+        indexChunks,
+        manifestEntries,
+        parserConfigVersion: chunkResult.parserConfigVersion ?? null,
+      })
+      this.documentRepo.setCandidateEvidence(document.id, {
+        schemaVersion: ACTIVATION_EVIDENCE_SCHEMA_VERSION,
+        contentProof,
+        indexProof: null,
+      })
 
       const wikified = await execution.runStage(
         "wikify",

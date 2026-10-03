@@ -22,6 +22,12 @@ export const ACTIVATION_BLOCKED_CONTENT_PROOF_MISSING =
 export const ACTIVATION_BLOCKED_INDEX_PROOF_MISSING =
   "activation_index_proof_missing"
 /**
+ * 理由码：内容完整性待校验（UT-15）。内容凭证存在但其结论不是 pass——
+ * 理由码数组随后附内容凭证自身的明细码（漏页/乱码/结构风险等）。
+ */
+export const ACTIVATION_BLOCKED_CONTENT_PROOF_PENDING_REVIEW =
+  "activation_content_proof_pending_review"
+/**
  * 理由码：凭证核验语义尚未实现（UT-17 引入联合核验）。即使两类凭证都在，
  * 本票也不放行——拒绝路径先行、正向路径由后续票提供，是用户确认的批次设计。
  */
@@ -69,16 +75,36 @@ export function evaluateActivationGate(evidence: unknown): ActivationGateDecisio
   if (record.schemaVersion !== ACTIVATION_EVIDENCE_SCHEMA_VERSION) {
     return denied([ACTIVATION_BLOCKED_EVIDENCE_SCHEMA_MISMATCH])
   }
-  const reasonCodes: string[] = []
+  // Ticket UT-15: content verification comes FIRST so the reported reasons
+  // stay precise — a pending_review content verdict is the uploader's real
+  // blocker, not the (still always-missing) index proof.
+  const contentProof = record.contentProof as {
+    verdict?: unknown
+    reasonCodes?: unknown
+  }
   if (record.contentProof === null || record.contentProof === undefined) {
-    reasonCodes.push(ACTIVATION_BLOCKED_CONTENT_PROOF_MISSING)
+    return denied([ACTIVATION_BLOCKED_CONTENT_PROOF_MISSING])
   }
+  if (
+    typeof contentProof !== "object" ||
+    (contentProof.verdict !== "pass" && contentProof.verdict !== "pending_review")
+  ) {
+    return denied([ACTIVATION_BLOCKED_EVIDENCE_SCHEMA_MISMATCH])
+  }
+  if (contentProof.verdict !== "pass") {
+    const detailCodes = Array.isArray(contentProof.reasonCodes)
+      ? (contentProof.reasonCodes as unknown[]).filter(
+          (code): code is string => typeof code === "string"
+        )
+      : []
+    return denied([ACTIVATION_BLOCKED_CONTENT_PROOF_PENDING_REVIEW, ...detailCodes])
+  }
+
+  // 内容凭证为 pass：只有进入索引核验资格，绝不直接激活。索引凭证缺失
+  // （UT-16 之前恒缺）→ fail-closed；都存在时 UT-17 加入凭证内部核验语义
+  // （哈希匹配、探针通过）——当前不可达，保持显式拒绝而不是提前放行。
   if (record.indexProof === null || record.indexProof === undefined) {
-    reasonCodes.push(ACTIVATION_BLOCKED_INDEX_PROOF_MISSING)
+    return denied([ACTIVATION_BLOCKED_INDEX_PROOF_MISSING])
   }
-  if (reasonCodes.length > 0) return denied(reasonCodes)
-  // 内容凭证与索引凭证同时存在：UT-17 将在此加入凭证内部的核验语义
-  // （哈希匹配、探针通过）。当前没有任何凭证产出者，因此该分支不可达；
-  // 保持显式 fail-closed 而不是提前放行。
   return denied([ACTIVATION_BLOCKED_VERIFICATION_NOT_IMPLEMENTED])
 }
