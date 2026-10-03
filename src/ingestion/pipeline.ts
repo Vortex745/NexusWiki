@@ -296,7 +296,49 @@ export class PipelineStageRunner implements IngestionStageRunner {
           let usedParserInstance: Parser | null = null
           let parserReason = parserRoute.reason
           const attempts: string[] = []
-          for (const candidate of parserRoute.candidates) {
+
+          // Ticket UT-19: verified-extraction reuse. A resume/reprocess may
+          // reuse the durable extraction ONLY when the recorded evidence is
+          // valid (hash-checked), produced by the SAME parser type under the
+          // SAME configuration fingerprint, and the parser can re-derive
+          // blocks from the raw output. Anything else — half-written rows,
+          // hash mismatches, config drift, unknown compatibility — falls
+          // through to a full re-run from the retained original. Embedding
+          // or index config changes do NOT participate here, so an embedding
+          // change never needlessly invalidates the extraction.
+          let reusedExtraction = false
+          const reuseEvidence = new ExtractionEvidenceRepository(this.db).get(
+            document.id,
+            document.version
+          )
+          const reuseCandidate = parserRoute.candidates[0]
+          const reuseFingerprint = parserConfigFingerprint(reuseCandidate)
+          if (
+            reuseEvidence &&
+            reuseEvidence.valid &&
+            reuseEvidence.artifact.parserType === reuseCandidate &&
+            reuseEvidence.artifact.parserConfigVersion === reuseFingerprint
+          ) {
+            const reuseParser = this.resolveParser(reuseCandidate)
+            if (typeof reuseParser.normalizeRaw === "function") {
+              try {
+                rawExtraction = reuseEvidence.artifact.rawExtraction
+                blocks = reuseParser.normalizeRaw(rawExtraction, document.id)
+                usedParser = reuseCandidate
+                usedParserInstance = reuseParser
+                reusedExtraction = true
+              } catch {
+                // Cannot confirm the reuse (malformed persisted output?) —
+                // fall through to a full re-run from the retained original.
+                rawExtraction = null
+                blocks = null
+                usedParser = null
+                usedParserInstance = null
+              }
+            }
+          }
+
+          for (const candidate of reusedExtraction ? [] : parserRoute.candidates) {
             const parser = this.resolveParser(candidate)
             try {
               if (typeof parser.parseRaw === "function" && typeof parser.normalizeRaw === "function") {
@@ -351,60 +393,79 @@ export class PipelineStageRunner implements IngestionStageRunner {
           let stageRawExtractionSha256: string | null = null
           const stageReviewReasons: string[] = []
           if (rawExtraction !== null) {
-            const provenance =
-              typeof usedParserInstance?.extractionProvenance === "function"
-                ? usedParserInstance.extractionProvenance()
-                : null
-            let warnings = provenance?.warnings ?? []
-            let pageCount: number | null = null
-            if (usedParser === "builtin-pdf") {
-              try {
-                const rawJson = JSON.parse(rawExtraction) as {
-                  warnings?: unknown
-                  pageCount?: unknown
-                }
-                if (Array.isArray(rawJson.warnings)) {
-                  warnings = rawJson.warnings.filter(
-                    (warning): warning is string => typeof warning === "string"
-                  )
-                }
-                if (Number.isInteger(rawJson.pageCount)) {
-                  pageCount = rawJson.pageCount as number
-                }
-              } catch {
-                // normalizeRaw already validated this exact JSON; a re-parse
-                // failure cannot happen for a successfully normalized payload.
-              }
-            }
             stageRawExtractionSha256 = createHash("sha256")
               .update(Buffer.from(rawExtraction, "utf8"))
               .digest("hex")
-            // UT-15: collect the decode (UT-10) and structural (UT-12) review
-            // reasons the parser recorded — they are upstream gaps the content
-            // proof must carry; downstream coverage can never clear them.
-            const decodeInfo = provenance?.metadata.decode as
-              | { reviewRequired?: boolean; reviewReason?: string }
-              | undefined
-            if (decodeInfo?.reviewRequired && decodeInfo.reviewReason) {
-              stageReviewReasons.push(decodeInfo.reviewReason)
+            if (reusedExtraction) {
+              // UT-19: the persisted evidence row stays untouched on reuse.
+              // The decode/structural review reasons from the ORIGINAL run are
+              // still in the document's system metadata — carry them into this
+              // run's content proof (a reuse never clears a pending review).
+              const persistedSystem = (
+                document.metadata as {
+                  system?: {
+                    decode?: { reviewRequired?: boolean; reviewReason?: string }
+                    extraction?: { risks?: { reviewReasons?: string[] } }
+                  }
+                }
+              ).system
+              if (persistedSystem?.decode?.reviewRequired && persistedSystem.decode.reviewReason) {
+                stageReviewReasons.push(persistedSystem.decode.reviewReason)
+              }
+              stageReviewReasons.push(...(persistedSystem?.extraction?.risks?.reviewReasons ?? []))
+            } else {
+              const provenance =
+                typeof usedParserInstance?.extractionProvenance === "function"
+                  ? usedParserInstance.extractionProvenance()
+                  : null
+              let warnings = provenance?.warnings ?? []
+              let pageCount: number | null = null
+              if (usedParser === "builtin-pdf") {
+                try {
+                  const rawJson = JSON.parse(rawExtraction) as {
+                    warnings?: unknown
+                    pageCount?: unknown
+                  }
+                  if (Array.isArray(rawJson.warnings)) {
+                    warnings = rawJson.warnings.filter(
+                      (warning): warning is string => typeof warning === "string"
+                    )
+                  }
+                  if (Number.isInteger(rawJson.pageCount)) {
+                    pageCount = rawJson.pageCount as number
+                  }
+                } catch {
+                  // normalizeRaw already validated this exact JSON; a re-parse
+                  // failure cannot happen for a successfully normalized payload.
+                }
+              }
+              // UT-15: collect the decode (UT-10) and structural (UT-12) review
+              // reasons the parser recorded — they are upstream gaps the content
+              // proof must carry; downstream coverage can never clear them.
+              const decodeInfo = provenance?.metadata.decode as
+                | { reviewRequired?: boolean; reviewReason?: string }
+                | undefined
+              if (decodeInfo?.reviewRequired && decodeInfo.reviewReason) {
+                stageReviewReasons.push(decodeInfo.reviewReason)
+              }
+              const extractionRisks = provenance?.metadata.extraction as
+                | { risks?: { reviewReasons?: string[] } }
+                | undefined
+              stageReviewReasons.push(...(extractionRisks?.risks?.reviewReasons ?? []))
+              new ExtractionEvidenceRepository(this.db).record({
+                docId: document.id,
+                version: document.version,
+                schemaVersion: EXTRACTION_EVIDENCE_SCHEMA_VERSION,
+                parserType: usedParser,
+                parserConfigVersion: parserConfigFingerprint(usedParser),
+                rawExtraction,
+                rawExtractionSha256: stageRawExtractionSha256,
+                warnings,
+                pages: buildPageEvidence(blocks, pageCount, warnings),
+                pageCount,
+                completedAt: new Date().toISOString(),
+              })
             }
-            const extractionRisks = provenance?.metadata.extraction as
-              | { risks?: { reviewReasons?: string[] } }
-              | undefined
-            stageReviewReasons.push(...(extractionRisks?.risks?.reviewReasons ?? []))
-            new ExtractionEvidenceRepository(this.db).record({
-              docId: document.id,
-              version: document.version,
-              schemaVersion: EXTRACTION_EVIDENCE_SCHEMA_VERSION,
-              parserType: usedParser,
-              parserConfigVersion: parserConfigFingerprint(usedParser),
-              rawExtraction,
-              rawExtractionSha256: stageRawExtractionSha256,
-              warnings,
-              pages: buildPageEvidence(blocks, pageCount, warnings),
-              pageCount,
-              completedAt: new Date().toISOString(),
-            })
           }
 
           const parsedDocument: Document = {
