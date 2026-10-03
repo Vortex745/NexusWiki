@@ -221,6 +221,17 @@ export function ImportDialog({
   const resumingRef = useRef(new Set<string>())
   // UT-28: rows with a cancellation request in flight — duplicate clicks are no-ops.
   const cancellingRef = useRef(new Set<string>())
+  // UT-29: per-row operation generation. Every command (resume / cancel /
+  // cancel-intent) bumps the row's epoch; async flows capture the epoch when
+  // they start and DISCARD their result if it moved — a stale poll or a late
+  // upload response can never override a newer operation.
+  const epochRef = useRef(new Map<string, number>())
+  const bumpEpoch = useCallback((id: string): number => {
+    const next = (epochRef.current.get(id) ?? 0) + 1
+    epochRef.current.set(id, next)
+    return next
+  }, [])
+  const epochOf = useCallback((id: string): number => epochRef.current.get(id) ?? 0, [])
   const pollTimer = useRef<number | null>(null)
   const pollingRef = useRef(false)
   const completionNotifiedRef = useRef(false)
@@ -332,6 +343,9 @@ export function ImportDialog({
   const pollSingle = useCallback(
     async (item: ImportItem) => {
       if (!item.docId) return
+      // UT-29: this poll's generation — a resume/cancel that lands while the
+      // fetch is in flight owns the row; the stale response is discarded.
+      const gen = epochOf(item.id)
       try {
         const progress = deriveIngestProgress(await fetchIngestStatus(item.docId))
         const now = Date.now()
@@ -342,6 +356,9 @@ export function ImportDialog({
         const lastProgressAt = changed ? now : item.lastProgressAt ?? now
         const stalled = now - lastProgressAt >= IMPORT_STALL_MS && !item.timeoutWarned
         if (stalled) showToast(`${item.fileName} 处理超时，请查看文档状态或稍后重试`)
+        // UT-29: a newer operation (resume/cancel) owns the row now — this
+        // stale poll response must not overwrite it.
+        if (epochOf(item.id) !== gen) return
         updateItem(item.id, {
           status: progress.status, progress, error: progress.status === "failed" ? progress.error : null,
           checkedAt: new Date().toISOString(), syncError: stalled || item.timeoutWarned ? "处理时间超过预期，服务器可能仍在运行" : null,
@@ -391,6 +408,7 @@ export function ImportDialog({
   const uploadOne = useCallback(
     async (item: ImportItem) => {
       const wave = wavesRef.current.find((candidate) => candidate.id === item.waveId)
+      const gen = epochOf(item.id)
       updateItem(item.id, {
         status: "uploading",
         error: null,
@@ -412,13 +430,71 @@ export function ImportDialog({
             tags: wave?.params.tags,
           },
         )
+        // UT-29: a cancel intent landed while the upload was in flight. The
+        // late identity is LINKED to the row and the backend is asked to
+        // cancel the just-accepted task — a running task is never left
+        // behind; if the server refuses, the row syncs to its truth.
+        if (epochOf(item.id) !== gen) {
+          if (!docId) {
+            updateItem(item.id, {
+              status: "failed",
+              error: "上传失败，且取消结果未知（未能确认服务端是否已接收）",
+              errorKind: "resume_refused",
+            })
+            return
+          }
+          updateItem(item.id, { docId, status: "pending", lastProgressAt: Date.now() })
+          try {
+            const result = await cancelIngest(docId)
+            // UT-29: polls that started while this cancel was in flight carry
+            // the older generation — invalidate them before writing the
+            // terminal state so the cancel is never clobbered.
+            bumpEpoch(item.id)
+            if (result.changed) {
+              updateItem(item.id, {
+                status: "cancelled",
+                progress: initialImportProgress("cancelled"),
+                lastProgressAt: Date.now(),
+              })
+            } else {
+              const server = deriveIngestProgress(await fetchIngestStatus(docId))
+              bumpEpoch(item.id)
+              updateItem(item.id, {
+                status: server.status,
+                progress: server,
+                error: `服务端拒绝取消：${result.reason ?? result.status}`,
+                errorKind: "resume_refused",
+                lastProgressAt: Date.now(),
+              })
+            }
+          } catch {
+            bumpEpoch(item.id)
+            updateItem(item.id, {
+              status: "failed",
+              error: "上传已完成但取消结果未知，请查看文档状态",
+              errorKind: "resume_refused",
+              syncError: "取消结果未知",
+            })
+          }
+          stopPollingIfDone()
+          return
+        }
         if (!docId) throw new ImportUploadError("invalid_response", "上传响应缺少文档 ID")
         updateItem(item.id, { status: "pending", docId, lastProgressAt: Date.now() })
         // The first poll fires immediately so the row shows real stage
         // progress instead of sitting on the upload-done placeholder.
         startPolling()
       } catch (err) {
-        if (err instanceof ImportUploadError) {
+        if (epochOf(item.id) !== gen) {
+          // The transfer itself failed after a cancel intent: whether the
+          // server received anything is unknowable from here — an honest
+          // unknown, never a silent local cancel.
+          updateItem(item.id, {
+            status: "failed",
+            error: errorMessageOf(err),
+            syncError: "取消结果未知，请查看文档状态",
+          })
+        } else if (err instanceof ImportUploadError) {
           updateItem(item.id, {
             status: "failed",
             error: err.message,
@@ -430,7 +506,7 @@ export function ImportDialog({
         }
       }
     },
-    [updateItem, startPolling],
+    [updateItem, startPolling, stopPollingIfDone, epochOf],
   )
 
   const ensureWorkers = useCallback(() => {
@@ -638,14 +714,27 @@ export function ImportDialog({
     async (item: ImportItem) => {
       if (cancellingRef.current.has(item.id)) return
       if (!item.docId) {
-        // Local-only cancel: the server has never seen this row.
-        updateItem(item.id, { status: "cancelled" })
-        stopPollingIfDone()
+        // Local-only cancel: the server has never seen this row. An UPLOADING
+        // row has a request in flight — its late response carries a possible
+        // identity and is reconciled in uploadOne (UT-29); other rows without
+        // a server identity cancel locally outright.
+        bumpEpoch(item.id)
+        if (item.status !== "uploading") {
+          updateItem(item.id, { status: "cancelled" })
+          stopPollingIfDone()
+        } else {
+          updateItem(item.id, { syncError: "取消已请求，等待上传结果确认" })
+        }
         return
       }
+      // UT-29: the cancel owns the row from this moment — in-flight polls or
+      // a late resume response cannot override the cancellation.
+      bumpEpoch(item.id)
       cancellingRef.current.add(item.id)
       try {
         const result = await cancelIngest(item.docId)
+        // UT-29: polls started while this cancel was in flight are stale now.
+        bumpEpoch(item.id)
         if (result.changed) {
           updateItem(item.id, {
             status: "cancelled",
@@ -758,6 +847,9 @@ export function ImportDialog({
     (item: ImportItem) => {
       const docId = item.docId
       if (!docId || resumingRef.current.has(item.id)) return
+      // UT-29: the resume owns the row from this moment — in-flight polls
+      // carry an older generation and their results are discarded.
+      bumpEpoch(item.id)
       resumingRef.current.add(item.id)
       void resumeIngest(docId)
         .then((result) => {
@@ -1276,7 +1368,11 @@ export function ImportDialog({
                         : null
                       const retryGate = retryDecision(item)
                       const canRetry = retryGate.retryable
-                      const canCancel = item.status === "queued" || item.status === "pending" || item.status === "processing"
+                      const canCancel =
+                        item.status === "queued" ||
+                        item.status === "uploading" ||
+                        item.status === "pending" ||
+                        item.status === "processing"
                       // UT-27: resume requeues the ORIGINAL server task — only
                       // for admin sessions, only on failed rows, and only when
                       // the server's allowed operations include a resume

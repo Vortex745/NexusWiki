@@ -347,6 +347,8 @@ function dialogHarness() {
   let cancelFailure: string | null = null
   let cancelResult: Record<string, unknown> = { docId: "doc-1", taskId: 7, status: "cancelled", changed: true }
   const parkedCancels: Array<() => void> = []
+  let statusHold = false
+  const parkedStatus: Array<{ resolve: (value: unknown) => void; reject: (error: Error) => void }> = []
   let scopes: string[] = ["ingest"]
   const toasts: string[] = []
   const timers = new Map<number, () => Promise<void>>()
@@ -404,12 +406,21 @@ function dialogHarness() {
             throw new Error("upload rejected")
           }
           // UT-24: hold() parks the upload so a worker stays visibly busy
-          // while a later wave is appended.
-          if (uploadHold) return new Promise<void>((resolve) => parkedUploads.push(() => { done(); resolve() }))
+          // while a later wave is appended. The late response still carries
+          // the accepted identity ("doc-1") — releases must resolve with it.
+          if (uploadHold) return new Promise<string>((resolve) => parkedUploads.push(() => { done(); resolve("doc-1") }))
           done()
           return "doc-1"
         },
-        async fetchIngestStatus() { if (unavailable) throw new Error("HTTP 503"); return status },
+        async fetchIngestStatus() {
+          // UT-29: park the status query so a stale poll response can be
+          // released after a newer operation has landed.
+          if (statusHold) {
+            return new Promise((resolve, reject) => parkedStatus.push({ resolve, reject }))
+          }
+          if (unavailable) throw new Error("HTTP 503")
+          return status
+        },
         async fetchDocumentFolders() { return [] },
         async fetchKnowledgeBaseDocuments() {
           // UT-24: the pre-check's catalog read is the interleaved network
@@ -552,6 +563,12 @@ function dialogHarness() {
     setCancelResult(result: Record<string, unknown>) { cancelResult = result },
     /** Swap the served status WITHOUT firing polls (requeue semantics). */
     stageStatus(next: IngestStatus) { status = next },
+    deferStatus() { statusHold = true },
+    releaseStatus() {
+      statusHold = false
+      for (const parked of parkedStatus.splice(0)) parked.resolve(status)
+    },
+    firePoll() { for (const callback of timers.values()) void callback() },
     toasts, timers, get refreshed() { return refreshed }, get uploadedTo() { return uploadedTo },
     get uploadCalls() { return uploadCalls }, get uploadedTos() { return [...uploadedTos] },
     get maxInFlight() { return maxInFlight },
@@ -963,4 +980,49 @@ test("UT-28: repeated cancel clicks are idempotent", async () => {
   host.releaseCancel()
   await settle()
   assert.equal(host.progress().progress.status, "cancelled")
+})
+
+// ---------------------------------------------------------------------------
+// UT-29: late identities and stale responses converge by operation order.
+// ---------------------------------------------------------------------------
+
+test("UT-29: a late upload identity honors the cancel intent", async () => {
+  const host = dialogHarness()
+  host.holdUpload()
+  await host.upload() // wave 1 settles, upload A parks (worker busy)
+  // Upload a second file and request cancellation WHILE it is in flight.
+  host.pick(["late.pdf"])
+  await settle()
+  host.clickButton("取消") // uploading row: cancel intent, no docId yet
+  await settle()
+  assert.equal(host.hasText("取消已请求"), true, "the pending intent is visible")
+
+  // The late upload response arrives with an identity: the row must link it
+  // and ask the backend to cancel the just-accepted task.
+  host.releaseUpload()
+  await settle()
+  assert.equal(host.cancelCalls, 1, "the backend is asked to cancel the accepted task")
+  assert.equal(host.progress().progress.status, "cancelled", "the intent converges to a confirmed cancellation")
+  assert.equal(host.uploadCalls, 2, "no re-upload — the late identity was reused, not resent")
+})
+
+test("UT-29: a stale poll response cannot undo a newer cancellation", async () => {
+  const host = dialogHarness()
+  await host.upload() // row pending, polling active
+  // A status query starts NOW and its response is held in the network.
+  host.deferStatus()
+  host.firePoll()
+  await settle()
+  // The user cancels while that stale poll is still in flight: the cancel
+  // bumps the row's generation, so the stale response must be discarded.
+  host.clickButton("取消")
+  await settle()
+  assert.equal(host.progress().progress.status, "cancelled", "the cancellation took effect")
+  host.releaseStatus() // the stale 「processing」 response finally lands
+  await settle()
+  assert.equal(
+    host.progress().progress.status,
+    "cancelled",
+    "the stale poll cannot undo the newer cancellation",
+  )
 })
