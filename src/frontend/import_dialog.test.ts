@@ -1026,3 +1026,76 @@ test("UT-29: a stale poll response cannot undo a newer cancellation", async () =
     "the stale poll cannot undo the newer cancellation",
   )
 })
+
+// ---------------------------------------------------------------------------
+// UT-30: stable timing origins, ETA honesty (controlled clock).
+// ---------------------------------------------------------------------------
+
+test("UT-30: upload ETA stays honest at zero progress, tiny samples, stalls and completion", () => {
+  const upload = (loaded: number, total: number, startedAt: number, updatedAt: number) =>
+    ({ loaded, total, startedAt, updatedAt })
+  const now = 60_000
+  // 零进度：无法推导速率 — 绝不显示虚假倒计时。
+  assert.equal(estimateUploadRemainingMs(upload(0, 1_000_000, 0, now), now), null)
+  // 样本不足（<800ms 观测窗口）：不给精确数字。
+  assert.equal(estimateUploadRemainingMs(upload(250_000, 1_000_000, now - 500, now), now), null)
+  // 停滞（>5s 无更新）：估算作废。
+  assert.equal(estimateUploadRemainingMs(upload(500_000, 1_000_000, 0, now - 6_000), now), null)
+  // 已完成/超总量：不再倒计时，也不出现负数。
+  assert.equal(estimateUploadRemainingMs(upload(1_000_000, 1_000_000, 0, now - 2_000), now), null)
+  assert.equal(estimateUploadRemainingMs(upload(1_100_000, 1_000_000, 0, now - 2_000), now), null)
+  // 正常情形给出有界的正数估算。
+  const healthy = estimateUploadRemainingMs(upload(250_000, 1_000_000, now - 2_000, now), now)
+  assert.ok(healthy !== null && healthy > 0 && Number.isFinite(healthy))
+})
+
+test("UT-30: import ETA excludes non-processing states and never goes negative", () => {
+  // 处理中：有估算。
+  const processing = deriveIngestProgress(payload([stage("chunk", "done"), stage("wikify", "running")]))
+  assert.ok(estimateImportRemainingMs(processing, 1_000, 2_000, 100_000) > 0)
+  // 处理时长已超过估算 → null（绝不出现负数倒计时）。
+  assert.equal(estimateImportRemainingMs(processing, 1_000, 60_000, 100_000), null)
+  // fileSize 为 0（冷启动/未知大小）不产生 NaN/Infinity。
+  const zeroSize = estimateImportRemainingMs(processing, 1_000, 2_000, 0)
+  assert.ok(zeroSize === null || (zeroSize > 0 && Number.isFinite(zeroSize)))
+})
+
+test("UT-30: unknown, pending-review and capability states never show an ETA", () => {
+  const review = payload(allDone())
+  review.documentStatus = "completed"
+  review.task = { status: "completed", failCount: 0, nextAttemptAt: null }
+  review.activationBlockReason = "activation_content_proof_pending_review"
+  const states = [
+    deriveIngestProgress(review),                                    // 待校验
+    deriveIngestProgress({ ...payload(), documentStatus: "pending", task: null }), // 未知/排队
+    deriveIngestProgress(failedPayload()),                           // 待能力（失败）
+  ]
+  for (const progress of states) {
+    assert.equal(
+      estimateImportRemainingMs(progress, 1_000, 60_000, 100_000),
+      null,
+      `state ${progress.status} must not carry a countdown`,
+    )
+  }
+})
+
+test("UT-30: consecutive polls keep the attempt start; a resume records a new one", async () => {
+  const host = dialogHarness()
+  await host.upload()
+  const processing = payload([stage("chunk", "running")])
+  await host.poll(processing)
+  const first = host.progress().processingStartedAt
+  assert.ok(first, "the attempt start is recorded on the first processing poll")
+  await host.poll(processing) // another poll of the SAME attempt
+  assert.equal(host.progress().processingStartedAt, first, "polls never reset the original start")
+  // 失败后经原任务恢复：新尝试另有起点。（服务端 requeue 后状态即为处理中
+  // ——先 stage 服务端状态再点恢复，与后端事务先于响应的顺序一致。）
+  await host.poll(failedPayload())
+  host.setScopes(["ingest", "admin"])
+  host.stageStatus(payload([stage("chunk", "running")]))
+  host.clickButton("恢复")
+  await settle()
+  await host.poll(payload([stage("chunk", "running")]))
+  const second = host.progress().processingStartedAt
+  assert.ok(second !== undefined && second > (first as number), "a resume records a NEW attempt start")
+})
