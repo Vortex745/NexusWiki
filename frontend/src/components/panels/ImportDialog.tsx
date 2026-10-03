@@ -242,14 +242,13 @@ export function ImportDialog({
     [],
   )
 
-  /** Every queue write goes through here so queueRef stays consistent in the
-   * same tick: workers and row actions read the ref before React re-renders. */
+  /** Every queue write goes through here. The REF is the source of truth and
+   * is written EAGERLY — React defers state updaters until render, but workers
+   * and row actions read the ref in the same tick as the mutation, so the
+   * updater form silently starved the upload scheduler (found in live testing). */
   const mutateQueue = useCallback((mutate: (current: ImportItem[]) => ImportItem[]) => {
-    setQueue((current) => {
-      const next = mutate(current)
-      queueRef.current = next
-      return next
-    })
+    queueRef.current = mutate(queueRef.current)
+    setQueue(queueRef.current)
   }, [])
 
   const updateItem = useCallback((id: string, patch: Partial<ImportItem>) => {
@@ -470,34 +469,33 @@ export function ImportDialog({
       appendWave(wave)
       appendQueue(items)
       completionNotifiedRef.current = false
-      // Rows upload immediately; the pre-check runs alongside and only marks
-      // rows that are STILL queued — anything already claimed just imports,
-      // and the server's 409 remains the safety net for misses.
-      ensureWorkers()
 
-      // Bounded duplicate pre-check: mark rows, never block the batch.
+      // Bounded duplicate pre-check BEFORE the first upload: the point of the
+      // mark is to let the user decide, so workers must not outrun it (live
+      // testing showed millisecond uploads beating the catalog read). The read
+      // is bounded and best-effort — a failure here proceeds straight to
+      // upload, with the server's 409 as the safety net.
       const folderName = precheckFolderName(wave.params)
       if (folderName !== null) {
-        void (async () => {
-          try {
-            const entries = await collectCatalogEntries(wave.params.knowledgeBaseId, folderName)
-            const hits = matchExistingFileNames(
-              entries.map((entry) => entry.fileName ?? ""),
-              items.map((item) => item.fileName),
-            )
-            if (hits.size > 0) {
-              mutateQueue((current) => current.map((item) =>
-                item.waveId === wave.id && item.status === "queued" && hits.has(item.fileName)
-                  ? { ...item, precheckHit: true }
-                  : item,
-              ))
-              showToast(`${hits.size} 个文件在目标库中已存在，请在队列中确认`)
-            }
-          } catch {
-            // Best-effort: the server's 409 covers whatever the pre-check missed.
+        try {
+          const entries = await collectCatalogEntries(wave.params.knowledgeBaseId, folderName)
+          const hits = matchExistingFileNames(
+            entries.map((entry) => entry.fileName ?? ""),
+            items.map((item) => item.fileName),
+          )
+          if (hits.size > 0) {
+            mutateQueue((current) => current.map((item) =>
+              item.waveId === wave.id && item.status === "queued" && hits.has(item.fileName)
+                ? { ...item, precheckHit: true }
+                : item,
+            ))
+            showToast(`${hits.size} 个文件在目标库中已存在，请在队列中确认`)
           }
-        })()
+        } catch {
+          // Best-effort: the server's 409 covers whatever the pre-check missed.
+        }
       }
+      ensureWorkers()
     },
     [
       bases, knowledgeBaseId, pendingCategoryName, documentFolderId, parser, tagsText,
@@ -1095,7 +1093,7 @@ export function ImportDialog({
 
       {open && queue.length > 0 ? (
         <div className="max-h-52 flex-none overflow-y-auto border-t border-line px-5 py-3 max-md:px-4">
-          <ol className="flex flex-col gap-2.5">
+          <ol className="flex min-w-0 flex-col gap-2.5">
             {waves.map((wave) => {
               const waveItems = queue.filter((item) => item.waveId === wave.id)
               if (waveItems.length === 0) return null
@@ -1105,7 +1103,10 @@ export function ImportDialog({
                     {wave.label}
                     <span className="ml-1.5 text-faint">{waveItems.length} 项</span>
                   </p>
-                  <ul className="grid gap-1.5">
+                  {/* grid-cols-1 pins the single track to minmax(0,1fr): an
+                      implicit auto track sizes to the widest max-content (a
+                      long nowrap error line) and blows out the 520px dialog. */}
+                  <ul className="grid grid-cols-1 gap-1.5">
                     {waveItems.map((item) => {
                       const errorView = item.error ? describeImportError(item.error) : null
                       const canRetry = item.status === "failed" && (item.file !== undefined || item.sourceUrl !== undefined)
