@@ -12,6 +12,7 @@ import { dirname, join, resolve } from "node:path"
 import test from "node:test"
 import { loadConfig } from "../../config"
 import { closeDb, openDb } from "../tracking"
+import { DocumentRepo } from "../tracking/doc_repo"
 import { IngestionLifecycle } from "../lifecycle"
 import { PipelineStageRunner } from "../pipeline"
 import {
@@ -299,12 +300,19 @@ test("UT-02 逐页真值核对：builtin-pdf 路径逐样本记录并落盘报�
   assert.ok((majority.rawWarnings ?? []).length >= 1, "脚本必须发出低覆盖警告")
   assert.match((majority.rawWarnings ?? [])[0], /low text-layer coverage/)
   assert.deepEqual(majority.pageNumbers, [1])
-  // 6) 重叠表格：正文行被表格抑制，仅以拆碎的片段活在表格 markdown 里。
+  // 6) 重叠表格（UT-11 修复后）：重叠正文行不再缺失；表格 markdown 与
+  //    正文行并存，重复内容以 fabrication 如实记录——保守保留而非猜测删除。
   const overlap = byId.get("table-overlap") as { parseStatus: string; pageResults: Array<{ page: number; verdict: string; findings: Array<{ kind: string; detail: string }> }> }
   assert.equal(overlap.parseStatus, "succeeded")
   const overlapPage = overlap.pageResults[0]
-  assert.equal(overlapPage.verdict, "loss")
-  assert.ok(overlapPage.findings.some((f) => f.kind === "content" && f.detail.includes("覆盖校验行")))
+  assert.ok(
+    !overlapPage.findings.some((f) => f.kind === "content" && f.detail.includes("覆盖校验行")),
+    "重叠正文行不再缺失（UT-11 保守保留）"
+  )
+  assert.ok(
+    overlapPage.findings.some((f) => f.kind === "fabrication"),
+    "表格 markdown 与正文行并存——重复如实记录为 fabrication"
+  )
   // 7) 纯表格：表头-值关系整体保留在同一个表格块内。
   const pure = report.samples.find((entry) => entry.id === "pure-table") as { parseStatus: string }
   assert.equal(pure.parseStatus, "succeeded")
@@ -325,7 +333,7 @@ test("UT-02 逐页真值核对：builtin-pdf 路径逐样本记录并落盘报�
   assert.match(corrupted.parseError, /code 1|builtin-pdf failed|malformed/)
 })
 
-test("UT-02 表格关系真值：纯表格表头-值关系保留，重叠行被拆碎进表格", async () => {
+test("UT-02 表格关系真值：表头-值关系保留；UT-11 修复后重叠行作为正文保留", async () => {
   const config = loadConfig()
   const builtin = new BuiltinPdfParser(parserOptions(config))
 
@@ -337,8 +345,8 @@ test("UT-02 表格关系真值：纯表格表头-值关系保留，重叠行被�
   })
   const tableBlocks = pure.filter((block) => block.type === "table")
   const paragraphBlocks = pure.filter((block) => block.type === "paragraph")
-  // 全部行块被表格 bbox 覆盖并抑制——只剩表格 markdown。
-  assert.equal(paragraphBlocks.length, 0)
+  // UT-11 更新：表格区域内的文本块不再被抑制（保守保留），原提取行与
+  // 表格 markdown 并存，重叠关系记录在两侧 metadata 中。
   assert.equal(tableBlocks.length, 1)
   const tableText = tableBlocks[0].text
   for (const relation of [["姓名", "金额", "是否退款"], ["张三", "50元", "是"], ["李四", "30元", "否"]]) {
@@ -354,22 +362,24 @@ test("UT-02 表格关系真值：纯表格表头-值关系保留，重叠行被�
     documentId: "table-overlap-relations",
   })
   const overlapParagraphs = overlap.filter((block) => block.type === "paragraph")
-  // 重叠行作为独立正文块消失。
-  assert.ok(
-    !overlapParagraphs.some((block) => block.text.includes("覆盖校验行")),
-    "重叠正文行应被表格抑制（当前缺陷复现）"
+  // UT-11 修复：重叠正文行作为正文保留（UT-02 复现时它被表格抑制，
+  // 只以跨列拆碎的片段活在表格 markdown 中）。
+  const overlapBody = overlapParagraphs.find((block) => block.text.includes("覆盖校验行"))
+  assert.ok(overlapBody, "重叠正文行必须作为正文保留")
+  assert.equal(
+    overlapBody.text,
+    "覆盖校验行：本行与表格区域重叠，必须作为正文保留。",
+    "重叠行逐字保留，不接受跨列拆碎"
   )
-  // 它只以跨列拆碎的片段活在表格 markdown 中。
+  assert.ok(overlapBody.metadata.overlapsTable, "重叠关系记录在正文块 metadata")
+  // 表格本身必须被提取，且 overlap 关系在表格侧同样可核对。
   const overlapTable = overlap.find((block) => block.type === "table")
   assert.ok(overlapTable, "表格本身必须被提取")
-  assert.ok(
-    overlapTable.text.includes("覆盖校验行：本行与表格") &&
-      overlapTable.text.includes("区域重叠，必须作为正文保"),
-    "重叠行被拆碎进表格单元格（记录为关系损坏）"
-  )
+  assert.ok(overlapTable.metadata.overlappedByText === true, "重叠关系记录在表格块 metadata")
+  assert.ok(overlapTable.text.includes("手续费"), "表头在表格 markdown 中")
 })
 
-test("UT-02 不完整激活复现：缺页候选在 auto 模式下替换完整旧版本", async () => {
+test("UT-02 不完整激活复现：UT-04 修复后缺页候选不再替换激活身份", async () => {
   const config = loadConfig()
   const db = openDb()
   try {
@@ -421,7 +431,7 @@ test("UT-02 不完整激活复现：缺页候选在 auto 模式下替换完整�
     const stageRunner = new PipelineStageRunner(db, resolveParser as never, fakeStore)
     const lifecycle = new IngestionLifecycle(db, stageRunner)
 
-    // v1：完整的三页样本 → 完成并激活。
+    // v1：完整的三页样本 → 完成，但被 UT-04 激活门槛拒绝（无完整性证据）。
     const v1 = lifecycle.submit({
       title: "逐页真值 v1（完整）",
       content: "",
@@ -433,8 +443,10 @@ test("UT-02 不完整激活复现：缺页候选在 auto 模式下替换完整�
     assert.equal(v1.status, "pending")
     const run1 = await lifecycle.runNext()
     assert.ok(run1?.success, "完整样本必须完成")
-    const sourceRow = db.prepare("SELECT active_doc_id FROM sources WHERE source_id = (SELECT source_id FROM documents WHERE doc_id = ?)").get(v1.docId) as { active_doc_id: string }
-    assert.equal(sourceRow.active_doc_id, v1.docId, "v1 完成后应激活")
+    // UT-04 更新：激活门槛 fail-closed——没有完整性/索引凭证的候选不再
+    // 自动激活（UT-02 首次记录时 v1 完成即自动激活，那是缺陷基线）。
+    const sourceRow = db.prepare("SELECT active_doc_id FROM sources WHERE source_id = (SELECT source_id FROM documents WHERE doc_id = ?)").get(v1.docId) as { active_doc_id: string | null }
+    assert.equal(sourceRow.active_doc_id, null, "无凭证候选不得激活（UT-04 门槛）")
 
     // v2：同一来源的混合扫描样本（第 2 页无文本层）→ 解析"成功"但缺页。
     const v2 = lifecycle.submit({
@@ -448,11 +460,18 @@ test("UT-02 不完整激活复现：缺页候选在 auto 模式下替换完整�
     })
     assert.equal(v2.status, "pending")
     const run2 = await lifecycle.runNext()
-    assert.ok(run2?.success, "当前行为：缺页候选照样完成（假成功复现）")
-    const sourceAfter = db.prepare("SELECT active_doc_id FROM sources WHERE source_id = (SELECT source_id FROM documents WHERE doc_id = ?)").get(v1.docId) as { active_doc_id: string }
-    assert.equal(sourceAfter.active_doc_id, v2.docId, "缺页候选替换了完整旧版本（不完整激活复现）")
+    assert.ok(run2?.success, "缺页候选照样完成（假成功在 UT-15+ 由内容凭证拦截）")
+    const sourceAfter = db.prepare("SELECT active_doc_id FROM sources WHERE source_id = (SELECT source_id FROM documents WHERE doc_id = ?)").get(v1.docId) as { active_doc_id: string | null }
+    assert.equal(sourceAfter.active_doc_id, null, "缺页候选不再替换激活身份（旧版本保护）")
+    const documentRepo = new DocumentRepo(db)
+    assert.match(
+      documentRepo.getActivationBlockReason(v1.docId) ?? "",
+      /activation_evidence_record_missing/,
+      "激活阻碍原因可核对"
+    )
 
-    // v2 的块里没有扫描页设计文本——缺页内容从未进入管线。
+    // v2 的块里没有扫描页设计文本——缺页内容从未进入管线（该损失由
+    // UT-09 逐页证据揭示，不再靠激活兜底）。
     const v2Chunks = storedChunks.filter((chunk) => chunk.documentId === v2.docId)
     assert.ok(v2Chunks.length > 0)
     const joined = v2Chunks.map((chunk) => chunk.content).join("\n")
@@ -463,10 +482,12 @@ test("UT-02 不完整激活复现：缺页候选在 auto 模式下替换完整�
     report.incompleteActivationReproduction = {
       v1DocId: v1.docId,
       v2DocId: v2.docId,
-      v1Activated: true,
-      v2ReplacedActiveVersion: true,
+      v1Activated: false,
+      v2ReplacedActiveVersion: false,
+      activationBlockReason: documentRepo.getActivationBlockReason(v1.docId),
       scannedPageTokensInChunks: false,
-      note: "同一来源：完整 v1 激活后，缺页 v2 解析'成功'即被激活替换——内容完整性未参与激活判定（UT-04 的失败基线）。",
+      note: "UT-04 修复：无凭证候选完成但不激活，缺页 v2 不再替换激活身份；" +
+        "缺页本身由 UT-09 逐页证据诚实记录，正向激活路径由 UT-15/16/17 交付。",
     }
     writeReport()
   } finally {
