@@ -22,6 +22,7 @@ import {
   describeImportError,
   findReusableKnowledgeBase,
   freezeWaveParams,
+  IMPORT_TERMINAL_STATUSES,
   matchExistingFileNames,
   sanitizeKnowledgeBaseName,
   type ImportWaveParams,
@@ -113,6 +114,10 @@ function parseTags(tagsText: string): string[] {
   return tagsText.split(",").map((tag) => tag.trim()).filter(Boolean)
 }
 
+function errorMessageOf(error: unknown): string {
+  return error instanceof Error ? error.message : String(error)
+}
+
 /** Paged catalog read for the pre-check and conflict lookups. */
 async function collectCatalogEntries(
   knowledgeBaseId: string,
@@ -164,7 +169,7 @@ export function ImportDialog({
   const [parser, setParser] = useState("")
   const [tagsText, setTagsText] = useState("")
 
-  const [tab, setTab] = useState<"folder" | "url">("folder")
+  const [tab, setTab] = useState<"local" | "url">("local")
   const [urlMode, setUrlMode] = useState<"single" | "sitemap">("single")
   const [url, setUrl] = useState("")
   const [maxPages, setMaxPages] = useState(50)
@@ -237,21 +242,23 @@ export function ImportDialog({
     [],
   )
 
-  const updateItem = useCallback((id: string, patch: Partial<ImportItem>) => {
+  /** Every queue write goes through here so queueRef stays consistent in the
+   * same tick: workers and row actions read the ref before React re-renders. */
+  const mutateQueue = useCallback((mutate: (current: ImportItem[]) => ImportItem[]) => {
     setQueue((current) => {
-      const next = current.map((item) => (item.id === id ? { ...item, ...patch } : item))
+      const next = mutate(current)
       queueRef.current = next
       return next
     })
   }, [])
 
+  const updateItem = useCallback((id: string, patch: Partial<ImportItem>) => {
+    mutateQueue((current) => current.map((item) => (item.id === id ? { ...item, ...patch } : item)))
+  }, [mutateQueue])
+
   const appendQueue = useCallback((items: ImportItem[]) => {
-    setQueue((current) => {
-      const next = [...current, ...items]
-      queueRef.current = next
-      return next
-    })
-  }, [])
+    mutateQueue((current) => [...current, ...items])
+  }, [mutateQueue])
 
   /** Registers a wave in BOTH the state and its ref: workers read the ref in
    * the same tick as enqueue, before React re-renders. */
@@ -261,12 +268,8 @@ export function ImportDialog({
   }, [])
 
   const removeItem = useCallback((id: string) => {
-    setQueue((current) => {
-      const next = current.filter((item) => item.id !== id)
-      queueRef.current = next
-      return next
-    })
-  }, [])
+    mutateQueue((current) => current.filter((item) => item.id !== id))
+  }, [mutateQueue])
 
   const stopPollingIfDone = useCallback(() => {
     const hasPending = queueRef.current.some(
@@ -276,8 +279,9 @@ export function ImportDialog({
       window.clearInterval(pollTimer.current)
       pollTimer.current = null
     }
+    const terminal = new Set<string>(IMPORT_TERMINAL_STATUSES)
     const settled = queueRef.current.length > 0 && !workersRunningRef.current &&
-      queueRef.current.every((item) => ["completed", "failed", "cancelled"].includes(item.status))
+      queueRef.current.every((item) => terminal.has(item.status))
     if (settled && !completionNotifiedRef.current) {
       completionNotifiedRef.current = true
       const completed = queueRef.current.filter((item) => item.status === "completed").length
@@ -310,7 +314,7 @@ export function ImportDialog({
         const timedOut = Date.now() - (item.lastProgressAt ?? Date.now()) >= IMPORT_STALL_MS && !item.timeoutWarned
         if (timedOut) showToast(`${item.fileName} 状态查询超时，请检查服务连接`)
         updateItem(item.id, {
-          syncError: timedOut ? "状态查询持续超时，请检查服务连接" : err instanceof Error ? err.message : String(err),
+          syncError: timedOut ? "状态查询持续超时，请检查服务连接" : errorMessageOf(err),
           timeoutWarned: timedOut || item.timeoutWarned,
         })
       }
@@ -364,9 +368,12 @@ export function ImportDialog({
               loaded, total, startedAt: item.uploadProgress?.startedAt ?? Date.now(), updatedAt: Date.now(),
             } })
           },
-          wave?.params.knowledgeBaseId,
-          item.folderName ?? wave?.params.folder,
-          { parser: wave?.params.parser, tags: wave?.params.tags },
+          {
+            knowledgeBaseId: wave?.params.knowledgeBaseId,
+            folder: item.folderName ?? wave?.params.folder,
+            parser: wave?.params.parser,
+            tags: wave?.params.tags,
+          },
         )
         if (!docId) throw new Error("上传响应缺少文档 ID")
         updateItem(item.id, { status: "pending", docId, lastProgressAt: Date.now() })
@@ -376,7 +383,7 @@ export function ImportDialog({
       } catch (err) {
         updateItem(item.id, {
           status: "failed",
-          error: err instanceof Error ? err.message : String(err),
+          error: errorMessageOf(err),
         })
       }
     },
@@ -479,15 +486,11 @@ export function ImportDialog({
               items.map((item) => item.fileName),
             )
             if (hits.size > 0) {
-              setQueue((current) => {
-                const next = current.map((item) =>
-                  item.waveId === wave.id && item.status === "queued" && hits.has(item.fileName)
-                    ? { ...item, precheckHit: true }
-                    : item,
-                )
-                queueRef.current = next
-                return next
-              })
+              mutateQueue((current) => current.map((item) =>
+                item.waveId === wave.id && item.status === "queued" && hits.has(item.fileName)
+                  ? { ...item, precheckHit: true }
+                  : item,
+              ))
               showToast(`${hits.size} 个文件在目标库中已存在，请在队列中确认`)
             }
           } catch {
@@ -498,7 +501,7 @@ export function ImportDialog({
     },
     [
       bases, knowledgeBaseId, pendingCategoryName, documentFolderId, parser, tagsText,
-      oversizeItems, appendQueue, showToast, precheckFolderName, ensureWorkers,
+      oversizeItems, appendQueue, showToast, precheckFolderName, ensureWorkers, mutateQueue,
     ],
   )
 
@@ -527,7 +530,7 @@ export function ImportDialog({
           await knowledgeStore.refresh()
           showToast(`已创建知识库「${created.name}」`)
         } catch (error) {
-          showToast(`知识库「${baseName}」创建失败：${error instanceof Error ? error.message : String(error)}，未导入任何文件`)
+          showToast(`知识库「${baseName}」创建失败：${errorMessageOf(error)}，未导入任何文件`)
           return
         }
       }
@@ -587,8 +590,38 @@ export function ImportDialog({
     [updateItem, stopPollingIfDone],
   )
 
+  /** A failed URL row re-submits its page: single-page fetches fail transiently
+   * (502) and the row carries the URL it needs. The wave's frozen target
+   * params keep the retry on the same knowledge base and folder. */
+  const resubmitUrlItem = useCallback(
+    async (item: ImportItem) => {
+      const wave = wavesRef.current.find((candidate) => candidate.id === item.waveId)
+      if (!item.sourceUrl || !wave) return
+      updateItem(item.id, { status: "pending", error: null, lastProgressAt: Date.now() })
+      try {
+        const data = await submitUrlImport(item.sourceUrl, "single", 50, wave.params.knowledgeBaseId, wave.params.folder)
+        updateItem(item.id, {
+          status: data.docId ? "pending" : "failed",
+          docId: data.docId ?? null,
+          error: data.docId ? null : "提交失败",
+          lastProgressAt: Date.now(),
+        })
+        startPolling()
+      } catch (err) {
+        updateItem(item.id, { status: "failed", error: errorMessageOf(err) })
+      }
+    },
+    [updateItem, startPolling],
+  )
+
   const retryItem = useCallback(
     (item: ImportItem) => {
+      // URL rows re-submit their URL (a transient fetch failure is retryable);
+      // file rows re-upload from the still-held File handle.
+      if (!item.file && item.sourceUrl) {
+        void resubmitUrlItem(item)
+        return
+      }
       updateItem(item.id, {
         status: "queued",
         error: null,
@@ -601,7 +634,7 @@ export function ImportDialog({
       })
       ensureWorkers()
     },
-    [updateItem, ensureWorkers],
+    [updateItem, ensureWorkers, resubmitUrlItem],
   )
 
   const deleteItem = useCallback(
@@ -614,7 +647,7 @@ export function ImportDialog({
         removeItem(item.id)
         showToast(`已删除「${item.fileName}」，文档已退役且不可恢复`)
       } catch (error) {
-        showToast(`删除失败：${error instanceof Error ? error.message : String(error)}`)
+        showToast(`删除失败：${errorMessageOf(error)}`)
       }
     },
     [removeItem, showToast],
@@ -662,7 +695,7 @@ export function ImportDialog({
       showToast(`已创建知识库「${base.name}」`)
     } catch (error) {
       await knowledgeStore.refresh()
-      showToast(error instanceof Error ? error.message : "知识库创建失败")
+      showToast(errorMessageOf(error) || "知识库创建失败")
     } finally {
       setCreating(false)
     }
@@ -749,7 +782,7 @@ export function ImportDialog({
       showToast(urlMode === "single" ? "已提交，正在处理…" : `已提交 ${data.submitted} 个页面`)
       startPolling()
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err)
+      const message = errorMessageOf(err)
       const view = describeImportError(message)
       if (view.kind === "conflict") {
         // A rejected duplicate is not a failure: surface it as a row the user
@@ -941,15 +974,6 @@ export function ImportDialog({
                 </select>
               )}
             </div>
-            <div className="mt-2">
-              <ImportAdvancedOptions
-                hasPdf
-                parser={parser}
-                onParserChange={setParser}
-                tagsText={tagsText}
-                onTagsChange={setTagsText}
-              />
-            </div>
           </>
         )}
       </div>
@@ -958,7 +982,7 @@ export function ImportDialog({
         <div className="flex items-center gap-4">
           {(
             [
-              { id: "folder", label: "本地文档" },
+              { id: "local", label: "本地文档" },
               { id: "url", label: "在线网页 (URL)" },
             ] as const
           ).map((item) => (
@@ -981,11 +1005,19 @@ export function ImportDialog({
         </div>
       </div>
 
-      {tab === "folder" ? (
-        <section className="flex min-h-0 flex-1 flex-col overflow-y-auto px-5 py-4 max-md:px-4" role="tabpanel">
+      {tab === "local" ? (
+        <section className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto px-5 py-4 max-md:px-4" role="tabpanel">
           <ImportDropzone
             filesDisabled={!knowledgeBaseId}
             onPick={handlePick}
+          />
+          {/* Advanced options belong to the FILE path only (ticket 04) — the
+              URL tab never reads them. */}
+          <ImportAdvancedOptions
+            parser={parser}
+            onParserChange={setParser}
+            tagsText={tagsText}
+            onTagsChange={setTagsText}
           />
         </section>
       ) : (
@@ -1076,7 +1108,7 @@ export function ImportDialog({
                   <ul className="grid gap-1.5">
                     {waveItems.map((item) => {
                       const errorView = item.error ? describeImportError(item.error) : null
-                      const canRetry = item.status === "failed" && item.file !== undefined
+                      const canRetry = item.status === "failed" && (item.file !== undefined || item.sourceUrl !== undefined)
                       const canCancel = item.status === "queued" || item.status === "pending" || item.status === "processing"
                       return (
                         <li
@@ -1135,7 +1167,7 @@ export function ImportDialog({
                                   移除
                                 </button>
                               ) : null}
-                              {canCancel && item.docId ? (
+                              {canCancel ? (
                                 <button
                                   type="button"
                                   onClick={() => void cancelItem(item)}
@@ -1161,7 +1193,7 @@ export function ImportDialog({
                                       onClick={() => void deleteItem(item)}
                                       className="rounded-md bg-danger-subtle px-1.5 py-0.5 text-[10px] font-medium text-danger"
                                     >
-                                      确认删除
+                                      不可恢复，确认删除
                                     </button>
                                     <button
                                       type="button"

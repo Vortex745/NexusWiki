@@ -100,11 +100,16 @@ export function ImportDropzone({
         typeof item.webkitGetAsEntry === "function" ? item.webkitGetAsEntry() : null,
       )
       .filter((entry): entry is FileSystemEntry => Boolean(entry))
+    // Plain-file fallback, captured before the transfer is cleared below.
+    const fallbackFiles = Array.from(dataTransfer.files ?? [])
+    // Drop data is cleared once captured so a re-drop of the same payload
+    // always fires a fresh change/drop cycle.
+    dataTransfer.clearData()
 
     if (entries.length === 0) {
       // No entry API (or plain OS shortcut drag): files only.
       const { files, skipped } = partitionLooseFiles(
-        Array.from(dataTransfer.files ?? []).map((file) => ({ file })),
+        fallbackFiles.map((file) => ({ file })),
       )
       onPick({ files, folders: [], skipped })
       return

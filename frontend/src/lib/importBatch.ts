@@ -191,10 +191,12 @@ export interface ImportErrorView {
 }
 
 /** The server's messages differ per failure class; rows show a curated line
- * plus the actions each class enables (conflict → 查看文档). */
+ * plus the actions each class enables (conflict → 查看文档). The conflict
+ * pattern matches the backend's real 409 text ("this source already exists
+ * with different content — …", src/ingestion/lifecycle.ts). */
 export function describeImportError(raw: string): ImportErrorView {
   const message = raw ?? ""
-  if (/已存在|重复|duplicate|conflict/i.test(message)) {
+  if (/已存在|重复|duplicate|conflict|already exists/i.test(message)) {
     return { kind: "conflict", text: "文档已存在或内容冲突" }
   }
   if (/embedding|向量化|profile/i.test(message)) {
@@ -208,6 +210,9 @@ export function describeImportError(raw: string): ImportErrorView {
 // ---------------------------------------------------------------------------
 
 export const IMPORT_ACTIVE_STATUSES = ["queued", "uploading", "pending", "processing"] as const
+
+/** Rows whose outcome the user has seen; the batch summary waits for these. */
+export const IMPORT_TERMINAL_STATUSES = ["completed", "failed", "cancelled"] as const
 
 /** The sidebar badge counts every row that still owes the user an outcome. */
 export function countActiveImports(items: ReadonlyArray<{ status: string }>): number {

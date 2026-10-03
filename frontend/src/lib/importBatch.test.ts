@@ -127,6 +127,11 @@ describe("duplicate pre-check", () => {
 
 describe("error copy mapping", () => {
   it("maps conflicts, profile mismatches and keeps generic messages", () => {
+    // The backend's real 409 text (src/ingestion/lifecycle.ts).
+    assert.equal(
+      describeImportError("this source already exists with different content — specify an explicit intent: new_version or new_document").kind,
+      "conflict",
+    )
     assert.equal(describeImportError("HTTP 409: duplicate source").kind, "conflict")
     assert.equal(describeImportError("来源已存在").kind, "conflict")
     assert.equal(describeImportError("embedding profile mismatch").text, "知识库向量化配置与服务端不一致，无法导入")

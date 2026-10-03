@@ -842,9 +842,16 @@ export function uploadFileToIngest(
   file: File,
   relativePath: string,
   onProgress?: (loaded: number, total: number) => void,
-  knowledgeBaseId?: string,
-  folder?: string,
-  options?: { parser?: string; tags?: string[] },
+  options?: {
+    /** Target knowledge base; the server rejects unknown ids. */
+    knowledgeBaseId?: string
+    /** Document folder name or registered id — unknown names self-register. */
+    folder?: string
+    /** PDF parser override: markitdown | marker | mineru | builtin-pdf. */
+    parser?: string
+    /** Catalog tags; comma-joined into one header. */
+    tags?: string[]
+  },
 ): Promise<string> {
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest()
@@ -858,12 +865,12 @@ export function uploadFileToIngest(
     xhr.setRequestHeader("x-source-kind", "file")
     xhr.setRequestHeader("x-source-id", encodeURIComponent(relativePath || file.name))
     xhr.setRequestHeader("x-source-namespace", "local-folder")
-    if (knowledgeBaseId) xhr.setRequestHeader("x-knowledge-base-id", knowledgeBaseId)
+    if (options?.knowledgeBaseId) xhr.setRequestHeader("x-knowledge-base-id", options.knowledgeBaseId)
     // Header values must be Latin-1, and a folder name is usually Chinese: the
     // server decodes this the same way it decodes the file name.
-    if (folder) xhr.setRequestHeader("x-document-folder", encodeURIComponent(folder))
-    // Same Latin-1 constraint for the advanced options (ticket 04): the parser
-    // value is ASCII, tags go percent-encoded like the file name.
+    if (options?.folder) xhr.setRequestHeader("x-document-folder", encodeURIComponent(options.folder))
+    // Same Latin-1 constraint for the advanced options: the parser value is
+    // ASCII, tags go percent-encoded like the file name.
     if (options?.parser) xhr.setRequestHeader("x-parser", options.parser)
     if (options?.tags?.length) {
       xhr.setRequestHeader("x-document-tags", encodeURIComponent(options.tags.join(",")))
