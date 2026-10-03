@@ -15,6 +15,17 @@ type IngestStatus = {
   lifecycleOutcome: string | null
   task: Pick<IngestionTask, "status" | "failCount" | "nextAttemptAt"> | null
   spanTree: IngestSpanNode[]
+  activationBlockReason?: string | null
+  candidateState?: string | null
+  documentVersion?: { version: number; contentHash: string; active: boolean }
+  failure?: {
+    category: string
+    reasonCode: string
+    retryable: boolean
+    allowedOperations: string[]
+    message: string
+    failedAt: string
+  } | null
 }
 
 function loadFrontendModule(path: string): any {
@@ -25,7 +36,7 @@ function loadFrontendModule(path: string): any {
   return exports
 }
 
-const { deriveIngestProgress, initialImportProgress, buildImportSteps, estimateUploadRemainingMs, estimateImportRemainingMs } = loadFrontendModule("frontend/src/lib/ingestProgress.ts")
+const { deriveIngestProgress, initialImportProgress, buildImportSteps, estimateUploadRemainingMs, estimateImportRemainingMs, describeActivationReasons, describeAllowedOperations } = loadFrontendModule("frontend/src/lib/ingestProgress.ts")
 const constants = loadFrontendModule("frontend/src/lib/constants.ts")
 
 /** The REAL decision-layer module — hand-mocking it drifted (a missing export
@@ -411,7 +422,7 @@ function dialogHarness() {
       if (name.endsWith("/SessionContext")) return { useSignedInSession: () => ({ scopes: ["ingest"] }) }
       if (name.endsWith("/constants")) return constants
       if (name.endsWith("/cn")) return { cn: (...parts: unknown[]) => parts.filter(Boolean).join(" ") }
-      if (name.endsWith("/ingestProgress")) return { deriveIngestProgress, initialImportProgress }
+      if (name.endsWith("/ingestProgress")) return { deriveIngestProgress, initialImportProgress, describeActivationReasons, describeAllowedOperations }
       if (name.endsWith("/AppShellContext")) return { useAppShell: () => ({ showToast: (message: string) => toasts.push(message) }) }
       if (name.endsWith("/icons")) return { Database: {}, X: {} }
       if (name.endsWith("/Icon")) return { Icon: "icon" }
@@ -456,6 +467,10 @@ function dialogHarness() {
       )
       assert.ok(button, `button 「${label}」 rendered`)
       button.props.onClick()
+    },
+    /** UT-26: does the rendered dialog tree contain this text anywhere? */
+    hasText(label: string): boolean {
+      return find(render(), (node) => JSON.stringify(node.props?.children ?? "").includes(label)) !== null
     },
     holdUpload() { uploadHold = true },
     releaseUpload() {
@@ -641,4 +656,98 @@ test("UT-25: one failed transfer neither leaks a slot nor blocks the other ready
   assert.equal(host.uploadCalls, 3, "the failure did not stall the worker — later rows still upload")
   assert.ok(host.maxInFlight <= 3)
   assert.equal(host.maxInFlight >= 1, true, "a slot was actually used")
+})
+
+// ---------------------------------------------------------------------------
+// UT-26: pending-review vs business-review vs capability states.
+// ---------------------------------------------------------------------------
+
+const allDone = () => [
+  stage("chunk", "done"), stage("wikify", "done"),
+  stage("storeChunks", "done"), stage("storeGraph", "done"),
+]
+
+test("UT-26: a gate-blocked candidate renders as 待校验 with reasons and the old-version note", () => {
+  const blocked = payload(allDone())
+  blocked.documentStatus = "completed"
+  blocked.task = { status: "completed", failCount: 0, nextAttemptAt: null }
+  blocked.activationBlockReason = "activation_content_proof_pending_review"
+  blocked.documentVersion = { version: 2, contentHash: "hash", active: false }
+  const progress = deriveIngestProgress(blocked)
+  // A gate denial is NOT completion — no 100 percent, no success copy.
+  assert.equal(progress.status, "pending_review")
+  assert.match(progress.summary, /待校验/)
+  assert.notEqual(progress.percent, 100)
+  assert.equal(progress.outcome?.state, "pending_review")
+  // The module runs in a VM realm: compare arrays structurally via JSON.
+  assert.equal(
+    JSON.stringify(progress.outcome?.blockReasons),
+    JSON.stringify(["activation_content_proof_pending_review"]),
+  )
+  assert.equal(progress.outcome?.oldVersionUsable, true, "v2 blocked while v1 stays active")
+})
+
+test("UT-26: unknown activation reasons are never mapped to completion", () => {
+  const unknown = payload(allDone())
+  unknown.documentStatus = "completed"
+  unknown.task = { status: "completed", failCount: 0, nextAttemptAt: null }
+  unknown.activationBlockReason = "activation_some_future_reason"
+  const progress = deriveIngestProgress(unknown)
+  assert.equal(progress.status, "pending_review")
+  assert.equal(
+    JSON.stringify(progress.outcome?.blockReasons),
+    JSON.stringify(["activation_some_future_reason"]),
+    "unmapped codes pass through verbatim",
+  )
+})
+
+test("UT-26: business review hold (candidate pending_review) renders as 待审中", () => {
+  const review = payload(allDone())
+  review.documentStatus = "completed"
+  review.task = { status: "completed", failCount: 0, nextAttemptAt: null }
+  review.candidateState = "pending_review"
+  review.documentVersion = { version: 1, contentHash: "hash", active: false }
+  const progress = deriveIngestProgress(review)
+  assert.equal(progress.status, "business_review")
+  assert.match(progress.summary, /业务审批/)
+  assert.equal(progress.outcome?.state, "business_review")
+  // First upload (version 1): there IS no old version to point at.
+  assert.equal(progress.outcome?.oldVersionUsable, false)
+})
+
+test("UT-26: capability missing surfaces the machine-readable allowed operations", () => {
+  const missing = payload([stage("chunk", "failed")])
+  missing.documentStatus = "failed"
+  missing.task = { status: "failed", failCount: 1, nextAttemptAt: null }
+  missing.failure = {
+    category: "capability_missing",
+    reasonCode: "configure_parser_then_retry",
+    retryable: false,
+    allowedOperations: ["configure_parser_then_retry", "cancel"],
+    message: "Parser executable is unavailable. Configure MARKITDOWN_COMMAND.",
+    failedAt: "2026-10-04T08:00:00.000Z",
+  }
+  const progress = deriveIngestProgress(missing)
+  assert.equal(progress.status, "failed")
+  assert.equal(progress.outcome?.state, "capability_missing")
+  assert.equal(
+    JSON.stringify(progress.outcome?.allowedOperations),
+    JSON.stringify(["configure_parser_then_retry", "cancel"]),
+  )
+})
+
+test("UT-26: the row shows the 待校验 badge, the reason copy and the old-version note", async () => {
+  const host = dialogHarness()
+  await host.upload()
+  const blocked = payload(allDone())
+  blocked.documentStatus = "completed"
+  blocked.task = { status: "completed", failCount: 0, nextAttemptAt: null }
+  blocked.activationBlockReason = "activation_content_proof_pending_review"
+  blocked.documentVersion = { version: 2, contentHash: "hash", active: false }
+  await host.poll(blocked)
+  assert.equal(host.progress().progress.status, "pending_review")
+  assert.equal(host.hasText("待校验"), true, "the badge renders the hold state")
+  assert.equal(host.hasText("内容完整性待校验"), true, "the human-readable reason renders")
+  assert.equal(host.hasText("现有版本仍可正常使用"), true, "the old-version note renders")
+  assert.equal(host.hasText("重试"), false, "no meaningless retry on an unproven candidate")
 })

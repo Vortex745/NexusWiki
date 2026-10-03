@@ -149,6 +149,24 @@ export interface IngestStatus {
     nextAttemptAt: string | null
   } | null
   spanTree: IngestSpanNode[]
+  /** UT-26: which version this document is — active=false means a blocked
+   * candidate did NOT replace the currently usable version. */
+  documentVersion?: { version: number; contentHash: string; active: boolean }
+  /** UT-26: activation-gate denial reason codes joined by ";" (null = active
+   * or never attempted). A completed candidate can still be blocked. */
+  activationBlockReason?: string | null
+  /** UT-26: candidate pipeline state ('pending_review' = held for business
+   * approval under ACTIVATION_MODE=review). */
+  candidateState?: string | null
+  /** UT-26: machine-readable failure classification with allowed operations. */
+  failure?: {
+    category: string
+    reasonCode: string
+    retryable: boolean
+    allowedOperations: string[]
+    message: string
+    failedAt: string
+  } | null
 }
 
 async function readError(response: Response): Promise<string> {

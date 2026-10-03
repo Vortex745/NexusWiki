@@ -129,6 +129,13 @@ export interface IngestionStatus {
    */
   activationBlockReason: string | null
   /**
+   * Ticket UT-26: the candidate pipeline state ('pending_review' while
+   * ACTIVATION_MODE=review holds a completed candidate for business
+   * approval). Null on legacy rows — distinct from activationBlockReason,
+   * which records gate denials.
+   */
+  candidateState: string | null
+  /**
    * Ticket UT-07/UT-08: machine-readable failure classification (category,
    * stable reason code, allowed operations) recorded when a run failed.
    * Null while the document has no recorded failure.
@@ -492,6 +499,7 @@ export class IngestionLifecycle {
       documentVersion,
       spanTree: buildSpanTree(this.spanRepo.listByDoc(docId)),
       activationBlockReason: this.docRepo.getActivationBlockReason(docId),
+      candidateState: this.docRepo.getOperationalState(docId)?.candidateState ?? null,
       failure: readFailureRecord(this.docRepo.get(docId)),
     }
   }

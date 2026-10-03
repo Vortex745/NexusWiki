@@ -386,8 +386,10 @@ export function settleWavePrecheck<T extends PrecheckSettleRow>(
 
 export const IMPORT_ACTIVE_STATUSES = ["queued", "uploading", "pending", "processing"] as const
 
-/** Rows whose outcome the user has seen; the batch summary waits for these. */
-export const IMPORT_TERMINAL_STATUSES = ["completed", "failed", "cancelled"] as const
+/** Rows whose outcome the user has seen; the batch summary waits for these.
+ * UT-26: 待校验（pending_review）与业务待审（business_review）也是终态——
+ * 处理已结束，等待的是人，不是轮询。 */
+export const IMPORT_TERMINAL_STATUSES = ["completed", "failed", "cancelled", "pending_review", "business_review"] as const
 
 /** The sidebar badge counts every row that still owes the user an outcome. */
 export function countActiveImports(items: ReadonlyArray<{ status: string }>): number {

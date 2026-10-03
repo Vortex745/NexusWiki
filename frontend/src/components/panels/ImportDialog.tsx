@@ -38,7 +38,7 @@ import { useAppShell } from "../../runtime/AppShellContext"
 import { knowledgeStore, useKnowledgeBases } from "../../runtime/knowledgeStore"
 import { useSignedInSession } from "../../runtime/SessionContext"
 import { Icon } from "../ui/Icon"
-import { deriveIngestProgress, initialImportProgress, type ImportProgress as Progress, type ImportStatus, type UploadProgress } from "../../lib/ingestProgress"
+import { deriveIngestProgress, describeActivationReasons, describeAllowedOperations, initialImportProgress, type ImportProgress as Progress, type ImportStatus, type UploadProgress } from "../../lib/ingestProgress"
 import { ImportProgress } from "./ImportProgress"
 import { ImportDropzone, type DropzonePick } from "./ImportDropzone"
 import { ImportAdvancedOptions } from "./ImportAdvancedOptions"
@@ -110,8 +110,21 @@ const STATUS_TEXT: Record<ImportStatus, string> = {
   pending: "处理中",
   processing: "处理中",
   completed: "已完成",
+  // UT-26: integrity holds and business approval are their own visible
+  // states — neither reads as success nor as a failure to retry away.
+  pending_review: "待校验",
+  business_review: "待审中",
   failed: "失败",
   cancelled: "已取消",
+}
+
+/** UT-26: badge treatment per status — review holds render as warnings, not
+ * success (they are NOT completions) and not danger (nothing to retry). */
+function statusBadgeClass(status: ImportStatus): string {
+  if (status === "completed") return "bg-success-subtle text-success"
+  if (status === "failed") return "bg-danger-subtle text-danger"
+  if (status === "pending_review" || status === "business_review") return "bg-warning-subtle text-warning"
+  return "bg-surface text-muted"
 }
 
 function createId(prefix: string): string {
@@ -303,7 +316,10 @@ export function ImportDialog({
       const completed = queueRef.current.filter((item) => item.status === "completed").length
       const failed = queueRef.current.filter((item) => item.status === "failed").length
       const cancelled = queueRef.current.filter((item) => item.status === "cancelled").length
-      showToast(`处理结束：${completed} 成功${failed ? `，${failed} 失败` : ""}${cancelled ? `，${cancelled} 已取消` : ""}`)
+      // UT-26: review holds are terminal for polling but not "success" — they
+      // get their own bucket in the summary line.
+      const held = queueRef.current.filter((item) => item.status === "pending_review" || item.status === "business_review").length
+      showToast(`处理结束：${completed} 成功${failed ? `，${failed} 失败` : ""}${cancelled ? `，${cancelled} 已取消` : ""}${held ? `，${held} 待确认` : ""}`)
       if (completed > 0) onIngested?.()
     }
   }, [onIngested, showToast])
@@ -1162,6 +1178,15 @@ export function ImportDialog({
                       const retryGate = retryDecision(item)
                       const canRetry = retryGate.retryable
                       const canCancel = item.status === "queued" || item.status === "pending" || item.status === "processing"
+                      // UT-26: structured end-state details — reasons and
+                      // allowed operations come from the backend's own fields.
+                      const outcome = item.progress?.outcome ?? null
+                      const outcomeReasons = outcome?.state === "pending_review"
+                        ? describeActivationReasons(outcome.blockReasons)
+                        : []
+                      const outcomeOperations = outcome?.state === "capability_missing"
+                        ? describeAllowedOperations(outcome.allowedOperations)
+                        : []
                       return (
                         <li
                           key={item.id}
@@ -1185,6 +1210,25 @@ export function ImportDialog({
                                 </div>
                               ) : item.size > 0 ? (
                                 <div className="text-[11px] text-muted/70">{formatBytes(item.size)}</div>
+                              ) : null}
+                              {outcomeReasons.length > 0 ? (
+                                <div
+                                  className="truncate text-[11px] text-warning"
+                                  title={outcomeReasons.join("；")}
+                                >
+                                  {outcomeReasons.join("；")}
+                                </div>
+                              ) : null}
+                              {outcomeOperations.length > 0 ? (
+                                <div
+                                  className="truncate text-[11px] text-warning"
+                                  title={outcomeOperations.join("；")}
+                                >
+                                  {outcomeOperations.join("；")}
+                                </div>
+                              ) : null}
+                              {outcome?.oldVersionUsable ? (
+                                <div className="truncate text-[11px] text-muted/70">现有版本仍可正常使用</div>
                               ) : null}
                             </div>
                             <div className="flex flex-none items-center gap-1">
@@ -1286,11 +1330,7 @@ export function ImportDialog({
                               <span
                                 className={cn(
                                   "rounded-full px-2 py-0.5 text-[10px] font-medium",
-                                  item.status === "completed"
-                                    ? "bg-success-subtle text-success"
-                                    : item.status === "failed"
-                                      ? "bg-danger-subtle text-danger"
-                                      : "bg-surface text-muted",
+                                  statusBadgeClass(item.status),
                                 )}
                               >
                                 {STATUS_TEXT[item.status]}
