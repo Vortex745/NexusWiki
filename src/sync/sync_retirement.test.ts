@@ -24,6 +24,7 @@ import {
 } from "../ingestion/lifecycle"
 import { createIngestionLifecycle } from "../ingestion/pipeline"
 import { ActiveVersionRepository } from "../ingestion/tracking/active_version_repo"
+import { DocumentRepo } from "../ingestion/tracking/doc_repo"
 import { SqliteKnowledgeBaseRepo } from "../knowledge/knowledge_base_repo"
 import { KnowledgeBaseServiceImpl } from "../knowledge/knowledge_base_service"
 import {
@@ -46,6 +47,34 @@ const STAGE_RUNNER_STUB: IngestionStageRunner = {
       await execution.runStage(stage, {}, async () => undefined, () => ({ stage }))
     }
   },
+}
+
+// Ticket UT-04: the joint activation gate keeps lifecycle completions
+// inactive. Sync tests verify sync-run semantics (claiming, failure
+// retention, pausing, retirement) against ACTIVE documents, so this test
+// wrapper constructs the active state directly after all four stages
+// complete. No candidate_evidence is written and the production gate is
+// untouched — explicit test-state construction.
+function activatingStageRunner(db: DB, inner: IngestionStageRunner): IngestionStageRunner {
+  return {
+    close: () => inner.close(),
+    async run(document, execution) {
+      let completedStages = 0
+      const tracked: StageExecution = {
+        signal: execution.signal,
+        runStage: async (name, input, operation, summarize) => {
+          const result = await execution.runStage(name, input, operation, summarize)
+          completedStages += 1
+          return result
+        },
+      }
+      const result = await inner.run(document, tracked)
+      if (completedStages === 4) {
+        new DocumentRepo(db).activate(document.id)
+      }
+      return result
+    },
+  }
 }
 
 interface RouteState {
@@ -93,7 +122,7 @@ function buildSetup(
 ): Setup {
   const db = openDb(":memory:")
   const lifecycle = createIngestionLifecycle(db, {
-    stageRunner: STAGE_RUNNER_STUB,
+    stageRunner: activatingStageRunner(db, STAGE_RUNNER_STUB),
     activationMode: "auto",
   })
   const fetchOptions = {

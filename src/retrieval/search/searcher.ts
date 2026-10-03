@@ -34,6 +34,31 @@ import { rrf } from "./rrf"
 const INDEX_NAME = "kefu-rag-chunks"
 const CHANNEL_TOP_K = 5
 const RESULT_TOP_K = 10
+
+/**
+ * Ticket UT-04: documentId value that can never match a real document, used
+ * when the active-version filter is wired but ZERO documents are active. The
+ * previous behavior dropped the filter entirely on an empty active set, which
+ * let the first unverified (never-activated) candidates leak into retrieval —
+ * exactly the leak this fail-closed filter closes.
+ */
+export const NO_ACTIVE_DOCUMENT_SENTINEL = "__no_active_document__"
+
+/**
+ * UT-04: the active-version terms filter is fail-closed — an empty active set
+ * hides everything instead of disabling the filter. Pure helper so the
+ * contract is unit-testable without Elasticsearch.
+ */
+export function activeTermsFilterFor(activeDocIds: readonly string[]): Array<Record<string, unknown>> {
+  return [{
+    terms: {
+      documentId: activeDocIds.length > 0
+        ? [...activeDocIds]
+        : [NO_ACTIVE_DOCUMENT_SENTINEL],
+    },
+  }]
+}
+
 /**
  * Eval refactor Ticket 03 — explicit small-candidate policy: a single
  * candidate has no ordering to decide, so the fused order is published with
@@ -299,8 +324,7 @@ export class RuntimeSearchOperations implements SearchOperations {
   private activeTermsFilter(): Array<Record<string, unknown>> {
     const repo = this.dependencies.activeVersionRepo
     if (!repo) return []
-    const docIds = repo.getActiveDocIds()
-    return docIds.length > 0 ? [{ terms: { documentId: docIds } }] : []
+    return activeTermsFilterFor(repo.getActiveDocIds())
   }
 
   async vectorSearch(query: Query, topK: number, hypothesis?: string, accessContext?: AccessContext, retrievalScope?: RetrievalScope, signal?: AbortSignal): Promise<RetrievalResult[]> {

@@ -13,6 +13,9 @@ import { DocumentRepo } from "./tracking/doc_repo"
 import type { DocumentVersionInfo } from "./tracking/doc_repo"
 import { SpanRepo } from "./tracking/span_repo"
 import { TaskRepo } from "./tracking/task_repo"
+import { WikiStore } from "../wiki/store"
+import { ArtifactCleanupService, isCleanupOperation } from "../knowledge/cleanup"
+import { evaluateActivationGate } from "./activation_gate"
 import {
   resolveSourceIdentity,
   sourceIdentityKey,
@@ -112,6 +115,13 @@ export interface IngestionStatus {
   lifecycleOutcome: DocumentStatus | "unchanged" | null
   documentVersion: DocumentVersionInfo
   spanTree: SpanNode[]
+  /**
+   * Ticket UT-04: why the joint activation gate denied this candidate, as
+   * stable reason codes joined by ";" (null = active or never attempted).
+   * The candidate's own status can be "completed" while this is set — stage
+   * success and activation are independent since the gate.
+   */
+  activationBlockReason: string | null
 }
 
 export interface IngestionExecutionResult {
@@ -245,7 +255,8 @@ export class IngestionLifecycle {
     private db: DB,
     private stageRunner: IngestionStageRunner,
     private now: () => Date = () => new Date(),
-    private activationMode: ActivationMode = "auto"
+    private activationMode: ActivationMode = "auto",
+    private cleanup: Pick<ArtifactCleanupService, "run"> = new ArtifactCleanupService(db)
   ) {
     this.docRepo = new DocumentRepo(db)
     this.spanRepo = new SpanRepo(db)
@@ -370,6 +381,22 @@ export class IngestionLifecycle {
         }
       }
 
+      // Ticket UT-04: while the joint activation gate keeps candidates
+      // inactive, identity semantics must reference the LATEST submission and
+      // not only the active version — an identical re-submission of a blocked
+      // candidate is still a no-op, never a silent new version.
+      const latest = this.docRepo.getLatestDocument(source.sourceId)
+      if (latest && latest.contentHash === contentHash) {
+        this.docRepo.recordOutcome(source.sourceId, latest.id, "unchanged")
+        return {
+          docId: latest.id,
+          taskId: null,
+          status: "unchanged",
+          version: latest.version,
+          knowledgeBaseId: identity.knowledgeBaseId,
+        }
+      }
+
       // Ticket 12 (DOC-01B): same source + different content + no explicit
       // intent = refused BEFORE any document row exists. Identical content
       // (active or in-flight) has already returned above without intent.
@@ -428,6 +455,7 @@ export class IngestionLifecycle {
       lifecycleOutcome: this.docRepo.getLifecycleOutcome(docId),
       documentVersion,
       spanTree: buildSpanTree(this.spanRepo.listByDoc(docId)),
+      activationBlockReason: this.docRepo.getActivationBlockReason(docId),
     }
   }
 
@@ -625,6 +653,8 @@ export class IngestionLifecycle {
     const task = this.taskRepo.claimNext()
     if (!task) return null
 
+    if (task.op !== "ingest") return this.runCleanup(task)
+
     const document = this.docRepo.get(task.docId)
     if (!document) {
       this.taskRepo.finalize(task.id, "failed", task.claimedAt)
@@ -714,7 +744,28 @@ export class IngestionLifecycle {
         if (this.activationMode === "review") {
           this.docRepo.markPendingReview(task.docId)
         } else {
-          this.docRepo.activate(task.docId)
+          // Ticket UT-04 (UP-08): the joint activation gate. A candidate
+          // without complete content-integrity and index evidence must not
+          // switch the active identity — the stages succeeded, so the task
+          // still completes, but the candidate stays inactive with a recorded
+          // reason. The positive path arrives with UT-15/16/17; no
+          // intermediate ticket may bypass this gate.
+          const decision = evaluateActivationGate(
+            this.docRepo.getCandidateEvidence(task.docId)
+          )
+          if (decision.passed) {
+            this.docRepo.activate(task.docId)
+            this.docRepo.clearActivationBlock(task.docId)
+            if (this.docRepo.getActive(document.sourceId)?.id === document.id) {
+              const wiki = new WikiStore(this.db, this.now)
+              if (wiki.enabled(document.tenantId ?? "default", document.knowledgeBaseId ?? "")) {
+                wiki.enqueue(document.tenantId ?? "default", document.knowledgeBaseId ?? "",
+                  document.id, document.sourceId, "ingest")
+              }
+            }
+          } else {
+            this.docRepo.recordActivationBlock(task.docId, decision.reason ?? "activation_gate_denied")
+          }
         }
       })()
       return { taskId: task.id, docId: task.docId, rootSpanId, success: true }
@@ -773,6 +824,31 @@ export class IngestionLifecycle {
       if (RUNNING_ABORT_CONTROLLERS.get(task.docId) === abortController) {
         RUNNING_ABORT_CONTROLLERS.delete(task.docId)
       }
+    }
+  }
+
+  private async runCleanup(task: IngestionTask): Promise<IngestionExecutionResult> {
+    const document = this.docRepo.get(task.docId)
+    if (!isCleanupOperation(task.op) || !document ||
+      this.docRepo.getSourceLifecycleState(document.sourceId) !== "retired") {
+      this.taskRepo.finalize(task.id, "failed", task.claimedAt)
+      return { taskId: task.id, docId: task.docId, rootSpanId: "", success: false,
+        error: `Unsafe or unsupported cleanup operation: ${task.op}` }
+    }
+    try {
+      await this.cleanup.run(task.op, document)
+      if (!this.taskRepo.finalize(task.id, "completed", task.claimedAt)) {
+        throw new Error("cleanup task claim expired")
+      }
+      return { taskId: task.id, docId: task.docId, rootSpanId: "", success: true }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      const delay = RETRY_DELAYS_MS[task.failCount]
+      const nextAttemptAt = delay === undefined ? null
+        : new Date(this.now().getTime() + delay).toISOString()
+      this.taskRepo.recordFailure(task.id, nextAttemptAt, task.claimedAt)
+      return { taskId: task.id, docId: task.docId, rootSpanId: "", success: false,
+        error: message }
     }
   }
 }

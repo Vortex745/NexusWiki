@@ -65,7 +65,7 @@ function deferred(): { promise: Promise<void>; resolve: () => void } {
   return { promise, resolve }
 }
 
-test("P6.1 auto mode (default): completed doc activates immediately with default approved candidate_state", async () => {
+test("P6.1+UT-04 auto mode (default): completed doc stays inactive under the joint activation gate", async () => {
   const db = openDb(":memory:")
   const lifecycle = new IngestionLifecycle(db, noopRunner(), () => new Date(), "auto")
 
@@ -81,7 +81,8 @@ test("P6.1 auto mode (default): completed doc activates immediately with default
     assert.equal(readCandidateState(db, submitted.docId), "approved")
     const status = lifecycle.getStatus(submitted.docId)
     assert.equal(status?.documentStatus, "completed")
-    assert.equal(status?.documentVersion.active, true)
+    assert.equal(status?.documentVersion.active, false)
+    assert.ok(status?.activationBlockReason, "the gate records why activation was denied")
   } finally {
     db.close()
   }
@@ -120,9 +121,10 @@ test("P6.1 review mode: completed doc is marked pending_review and does NOT acti
 test("P6.1 review mode: previous active version is preserved when a new version completes", async () => {
   const db = openDb(":memory:")
   try {
-    // Start in auto mode to establish an initial active v1, then switch to
-    // review mode for v2 — this mirrors the real upgrade path where an
-    // operator enables review mode after content already exists.
+    // Establish the initial active v1 by direct repo command (state
+    // construction — Ticket UT-04 keeps lifecycle completions inactive),
+    // then run review mode for v2 — this mirrors a tenant that already has a
+    // verified active version.
     const autoLifecycle = new IngestionLifecycle(db, noopRunner(), () => new Date(), "auto")
     const initial = autoLifecycle.submit({
       title: "Policy",
@@ -130,8 +132,9 @@ test("P6.1 review mode: previous active version is preserved when a new version 
       source: "policy:review-preserve",
     })
     await autoLifecycle.runNext()
+    new DocumentRepo(db).activate(initial.docId)
     const initialActive = autoLifecycle.getStatus(initial.docId)?.documentVersion.active
-    assert.equal(initialActive, true, "precondition: v1 active under auto mode")
+    assert.equal(initialActive, true, "precondition: v1 active")
 
     const reviewLifecycle = new IngestionLifecycle(db, noopRunner(), () => new Date(), "review")
     const replacement = reviewLifecycle.submit({
@@ -167,7 +170,7 @@ test("P6.1 review mode: previous active version is preserved when a new version 
   }
 })
 
-test("P6.1 review mode: approve via CandidateReviewStore activates the pending_review doc", async () => {
+test("P6.1+UT-04 review mode: approve records the business approval but cannot activate without evidence", async () => {
   const db = openDb(":memory:")
   const lifecycle = new IngestionLifecycle(db, noopRunner(), () => new Date(), "review")
   const documentRepo = new DocumentRepo(db)
@@ -195,13 +198,18 @@ test("P6.1 review mode: approve via CandidateReviewStore activates the pending_r
     )
 
     assert.equal(result?.candidateState, "approved")
-    assert.equal(result?.activatedAsActive, true)
+    assert.equal(
+      result?.activatedAsActive,
+      false,
+      "Ticket UT-04: approval cannot bypass the joint activation gate"
+    )
     assert.equal(readCandidateState(db, submitted.docId), "approved")
     assert.equal(
       lifecycle.getStatus(submitted.docId)?.documentVersion.active,
-      true,
-      "approve must activate the previously pending_review doc"
+      false,
+      "approve must NOT activate a candidate without activation evidence"
     )
+    assert.ok(lifecycle.getStatus(submitted.docId)?.activationBlockReason)
   } finally {
     db.close()
   }
@@ -209,7 +217,8 @@ test("P6.1 review mode: approve via CandidateReviewStore activates the pending_r
 
 test("P6.1 review mode: reject via CandidateReviewStore does NOT activate and preserves previous active", async () => {
   const db = openDb(":memory:")
-  // Establish v1 as active under auto mode first.
+  // Establish v1 as active by direct repo command (state construction —
+  // Ticket UT-04 keeps lifecycle completions inactive).
   const autoLifecycle = new IngestionLifecycle(db, noopRunner(), () => new Date(), "auto")
   const initial = autoLifecycle.submit({
     title: "Policy",
@@ -217,6 +226,7 @@ test("P6.1 review mode: reject via CandidateReviewStore does NOT activate and pr
     source: "policy:reject",
   })
   await autoLifecycle.runNext()
+  new DocumentRepo(db).activate(initial.docId)
 
   const reviewLifecycle = new IngestionLifecycle(db, noopRunner(), () => new Date(), "review")
   const documentRepo = new DocumentRepo(db)
@@ -260,7 +270,7 @@ test("P6.1 review mode: reject via CandidateReviewStore does NOT activate and pr
   }
 })
 
-test("P6.1 backward compat: IngestionLifecycle without activationMode defaults to auto (activates on completion)", async () => {
+test("P6.1+UT-04 backward compat: IngestionLifecycle without activationMode defaults to auto (gate still applies)", async () => {
   const db = openDb(":memory:")
   // No fourth argument — matches every pre-P6.1 caller in the codebase.
   const lifecycle = new IngestionLifecycle(db, noopRunner())
@@ -281,9 +291,10 @@ test("P6.1 backward compat: IngestionLifecycle without activationMode defaults t
     )
     assert.equal(
       lifecycle.getStatus(submitted.docId)?.documentVersion.active,
-      true,
-      "default mode preserves pre-P6.1 behavior (activates immediately)"
+      false,
+      "Ticket UT-04: even the default auto mode cannot activate without evidence"
     )
+    assert.ok(lifecycle.getStatus(submitted.docId)?.activationBlockReason)
   } finally {
     db.close()
   }

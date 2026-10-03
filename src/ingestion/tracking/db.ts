@@ -236,11 +236,157 @@ const SCHEMA = [
     description TEXT NOT NULL DEFAULT '',
     status TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active', 'archived')),
     embedding_profile TEXT NOT NULL,
+    folder_id TEXT,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
   )`,
   `CREATE INDEX IF NOT EXISTS idx_knowledge_bases_tenant
     ON knowledge_bases(tenant_id, status)`,
+  // The folder_id index is created in openDb() rather than here: on an existing
+  // database the column only exists after the additive ALTER has run.
+  //
+  // Knowledge-base folders: ONE level (a folder holds knowledge bases, folders
+  // never nest), owned by `src/knowledge/knowledge_base_folder_repo.ts`. A
+  // folder is a naming aid for a set, not an ownership boundary — the knowledge
+  // base's own tenant_id stays the only isolation axis, and deleting a folder
+  // ungroups its members without touching them.
+  `CREATE TABLE IF NOT EXISTS knowledge_base_folders (
+    id TEXT PRIMARY KEY,
+    tenant_id TEXT NOT NULL,
+    name TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_knowledge_base_folders_tenant
+    ON knowledge_base_folders(tenant_id, created_at)`,
+  // Document folders: the per-knowledge-base directory the document catalog
+  // browses by. Owned by `src/knowledge/document_folder_repo.ts`.
+  //
+  // This table is only the REGISTRY — membership still lives in
+  // `documents.metadata.folder` (the name), which is what the catalog filter and
+  // the folder facets already read. The registry exists so a folder the user
+  // created but has not filled yet is still a folder, and so rename/delete have
+  // an id to address. `UNIQUE(knowledge_base_id, name)` is what makes the name a
+  // valid membership key inside one knowledge base.
+  //
+  // Deleting a row here does NOT release members: a document folder holds
+  // documents, and removing the directory removes what is in it (through the
+  // same per-source retirement the document catalog uses).
+  `CREATE TABLE IF NOT EXISTS document_folders (
+    id TEXT PRIMARY KEY,
+    tenant_id TEXT NOT NULL,
+    knowledge_base_id TEXT NOT NULL,
+    name TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    UNIQUE(knowledge_base_id, name)
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_document_folders_scope
+    ON document_folders(tenant_id, knowledge_base_id, created_at)`,
+  `CREATE TABLE IF NOT EXISTS wiki_settings (
+    knowledge_base_id TEXT PRIMARY KEY,
+    tenant_id TEXT NOT NULL,
+    enabled INTEGER NOT NULL DEFAULT 0 CHECK(enabled IN (0, 1)),
+    updated_at TEXT NOT NULL
+  )`,
+  `CREATE TABLE IF NOT EXISTS wiki_pages (
+    id TEXT PRIMARY KEY,
+    tenant_id TEXT NOT NULL,
+    knowledge_base_id TEXT NOT NULL,
+    slug TEXT NOT NULL,
+    title TEXT NOT NULL,
+    page_type TEXT NOT NULL,
+    status TEXT NOT NULL CHECK(status IN ('draft', 'published', 'archived')),
+    content TEXT NOT NULL,
+    summary TEXT NOT NULL DEFAULT '',
+    aliases TEXT NOT NULL DEFAULT '[]',
+    folder_id TEXT NOT NULL DEFAULT '',
+    source_refs TEXT NOT NULL DEFAULT '[]',
+    chunk_refs TEXT NOT NULL DEFAULT '[]',
+    in_links TEXT NOT NULL DEFAULT '[]',
+    out_links TEXT NOT NULL DEFAULT '[]',
+    version INTEGER NOT NULL DEFAULT 1,
+    last_edit_source TEXT NOT NULL DEFAULT 'pipeline',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    UNIQUE(knowledge_base_id, slug)
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_wiki_pages_scope
+    ON wiki_pages(tenant_id, knowledge_base_id, status, page_type)`,
+  `CREATE TABLE IF NOT EXISTS wiki_revisions (
+    page_id TEXT NOT NULL,
+    version INTEGER NOT NULL,
+    title TEXT NOT NULL,
+    content TEXT NOT NULL,
+    summary TEXT NOT NULL,
+    status TEXT NOT NULL,
+    source_refs TEXT NOT NULL,
+    chunk_refs TEXT NOT NULL,
+    edit_source TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    PRIMARY KEY(page_id, version)
+  )`,
+  `CREATE TABLE IF NOT EXISTS wiki_contributions (
+    page_id TEXT NOT NULL,
+    document_id TEXT NOT NULL,
+    source_id TEXT NOT NULL,
+    content TEXT NOT NULL,
+    chunk_refs TEXT NOT NULL DEFAULT '[]',
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY(page_id, document_id)
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_wiki_contributions_source
+    ON wiki_contributions(source_id, document_id)`,
+  `CREATE TABLE IF NOT EXISTS wiki_proposals (
+    page_id TEXT PRIMARY KEY,
+    base_version INTEGER NOT NULL,
+    title TEXT NOT NULL,
+    content TEXT NOT NULL,
+    summary TEXT NOT NULL,
+    source_refs TEXT NOT NULL,
+    chunk_refs TEXT NOT NULL,
+    created_at TEXT NOT NULL
+  )`,
+  `CREATE TABLE IF NOT EXISTS wiki_folders (
+    id TEXT PRIMARY KEY,
+    tenant_id TEXT NOT NULL,
+    knowledge_base_id TEXT NOT NULL,
+    parent_id TEXT NOT NULL DEFAULT '',
+    name TEXT NOT NULL,
+    sort_order INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  )`,
+  `CREATE TABLE IF NOT EXISTS wiki_issues (
+    id TEXT PRIMARY KEY,
+    tenant_id TEXT NOT NULL,
+    knowledge_base_id TEXT NOT NULL,
+    page_id TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    message TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'open',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  )`,
+  `CREATE TABLE IF NOT EXISTS wiki_jobs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    tenant_id TEXT NOT NULL,
+    knowledge_base_id TEXT NOT NULL,
+    document_id TEXT NOT NULL,
+    source_id TEXT NOT NULL,
+    op TEXT NOT NULL CHECK(op IN ('ingest', 'retract')),
+    status TEXT NOT NULL DEFAULT 'pending',
+    attempts INTEGER NOT NULL DEFAULT 0,
+    error TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_wiki_jobs_status ON wiki_jobs(status, id)`,
+  `CREATE TABLE IF NOT EXISTS cleanup_image_assets (
+    document_id TEXT NOT NULL,
+    asset_path TEXT NOT NULL,
+    PRIMARY KEY(document_id, asset_path)
+  )`,
   // Ticket 16 (MODEL-01A): the admin-toggleable enabled state of the three
   // built-in model profiles. The table deliberately holds ONLY the toggle —
   // model ids, base URLs and dimensions always derive from the live config
@@ -261,6 +407,7 @@ const SCHEMA = [
     name TEXT NOT NULL,
     description TEXT NOT NULL DEFAULT '',
     status TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active', 'archived')),
+    sidebar_visible INTEGER NOT NULL DEFAULT 1,
     allowed_groups TEXT NOT NULL DEFAULT '[]',
     current_version INTEGER NOT NULL,
     created_at TEXT NOT NULL,
@@ -587,6 +734,16 @@ export function openDb(dbPath?: string): DB {
   if (!documentColumns.some(({ name }) => name === "review_reason")) {
     db.exec("ALTER TABLE documents ADD COLUMN review_reason TEXT")
   }
+  // Ticket UT-04: additive migration — the joint activation gate. Evidence is
+  // written only by the integrity producers introduced in UT-15/UT-16; until
+  // then the column stays NULL and every new candidate is denied activation
+  // with a recorded reason. Existing active rows are never re-evaluated.
+  if (!documentColumns.some(({ name }) => name === "candidate_evidence")) {
+    db.exec("ALTER TABLE documents ADD COLUMN candidate_evidence TEXT")
+  }
+  if (!documentColumns.some(({ name }) => name === "activation_block_reason")) {
+    db.exec("ALTER TABLE documents ADD COLUMN activation_block_reason TEXT")
+  }
   // Ticket 03 (KB-02A): additive migration — knowledge-base ownership.
   if (!documentColumns.some(({ name }) => name === "knowledge_base_id")) {
     db.exec("ALTER TABLE documents ADD COLUMN knowledge_base_id TEXT NOT NULL DEFAULT ''")
@@ -749,6 +906,25 @@ export function openDb(dbPath?: string): DB {
   db.exec(
     "CREATE UNIQUE INDEX IF NOT EXISTS idx_documents_source_version ON documents(source_id, version)"
   )
+  // Knowledge-base folders: additive migration — the grouping column. Existing
+  // rows are deliberately NOT backfilled into a synthetic folder: an ungrouped
+  // knowledge base is the honest reading of the old data, and NULL is exactly
+  // what the read path already treats as 未分类.
+  const knowledgeBaseColumns = db.pragma("table_info(knowledge_bases)") as Array<{ name: string }>
+  if (!knowledgeBaseColumns.some(({ name }) => name === "folder_id")) {
+    db.exec("ALTER TABLE knowledge_bases ADD COLUMN folder_id TEXT")
+  }
+  db.exec(
+    "CREATE INDEX IF NOT EXISTS idx_knowledge_bases_folder ON knowledge_bases(tenant_id, folder_id)"
+  )
+  // Sidebar curation: admins uncheck assistants to hide them from the
+  // sidebar selector. Default 1 keeps every existing row visible (the
+  // pre-column behavior). The tenant default assistant is always visible —
+  // that refusal lives in AssistantService.setSidebarVisible, not here.
+  const assistantColumns = db.pragma("table_info(assistants)") as Array<{ name: string }>
+  if (!assistantColumns.some(({ name }) => name === "sidebar_visible")) {
+    db.exec("ALTER TABLE assistants ADD COLUMN sidebar_visible INTEGER NOT NULL DEFAULT 1")
+  }
   if (!dbPath) _db = db
   return db
 }

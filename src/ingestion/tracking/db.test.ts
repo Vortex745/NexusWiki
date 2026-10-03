@@ -343,7 +343,11 @@ test("a canonical CLI submission consolidates aliases before an in-flight versio
       1
     )
     assert.equal((await lifecycle.runNext())?.success, true)
-    assert.equal(lifecycle.getStatus(pending.docId)?.documentVersion.active, true)
+    // Ticket UT-04: the joint activation gate keeps the replacement inactive
+    // (no activation evidence yet); identity/alias consolidation above is
+    // unchanged.
+    assert.equal(lifecycle.getStatus(pending.docId)?.documentVersion.active, false)
+    assert.ok(lifecycle.getStatus(pending.docId)?.activationBlockReason)
     assert.equal(
       (db.prepare(
         "SELECT COUNT(*) AS count FROM sources WHERE canonical_source_id IS NOT NULL"

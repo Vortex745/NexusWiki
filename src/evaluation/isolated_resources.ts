@@ -55,9 +55,9 @@ import {
 import type { IngestionLifecycle } from "../ingestion/lifecycle"
 import { openDb, type DB } from "../ingestion/tracking/db"
 import { PageIndexRepository } from "../ingestion/tracking/page_index_repo"
-import { ActiveVersionRepository } from "../ingestion/tracking/active_version_repo"
 import {
   IngestionStoreImpl,
+  type ChunkStoreMetrics,
   type KnowledgeAccessMetadata,
   type KnowledgePersistenceDependencies,
 } from "../ingestion/storage/store"
@@ -246,11 +246,12 @@ class ScopeIngestionStore extends IngestionStoreImpl {
   override async storeChunks(
     chunks: Chunk[],
     accessMetadata: KnowledgeAccessMetadata
-  ): Promise<void> {
-    await super.storeChunks(chunks, accessMetadata)
+  ): Promise<ChunkStoreMetrics> {
+    const metrics = await super.storeChunks(chunks, accessMetadata)
     for (const chunk of chunks) {
       this.chunkKeys.add(`${chunk.documentId}:${chunk.id}`)
     }
+    return metrics
   }
 
   override async close(): Promise<void> {
@@ -812,7 +813,11 @@ export function createIsolatedEvalResources(
         embeddingModel: config.embeddingModel,
         graphDriver: clients.graphDriver,
         pageIndexRepo: new PageIndexRepository(db),
-        activeVersionRepo: new ActiveVersionRepository(db),
+        // Ticket UT-04: NO activeVersionRepo here. The eval scope owns a
+        // dedicated ephemeral index whose only contents are this scope's
+        // corpus, so production active-version filtering has no meaning; the
+        // joint activation gate keeps eval candidates inactive, and the
+        // fail-closed active filter would otherwise hide the whole corpus.
         indexName: esIndex,
         ...(reranker ? { reranker } : {}),
       }),

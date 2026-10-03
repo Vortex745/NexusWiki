@@ -172,7 +172,9 @@ test("P6.3 review-mode smoke: approve → reject → retry (re-ingest) → appro
       "reviewer-alice"
     )
     assert.equal(approveResult?.candidateState, "approved")
-    assert.equal(approveResult?.activatedAsActive, true)
+    // Ticket UT-04: approval is recorded but cannot activate without the
+    // joint activation evidence (positive path arrives with UT-15/16/17).
+    assert.equal(approveResult?.activatedAsActive, false)
     assert.equal(approveResult?.reviewedBy, "reviewer-alice")
     assert.equal(approveResult?.reviewedAt, "2026-07-22T09:00:00.000Z")
     assert.equal(approveResult?.reviewReason, "LGTM — initial release")
@@ -184,9 +186,10 @@ test("P6.3 review-mode smoke: approve → reject → retry (re-ingest) → appro
     assert.equal(v1AuditAfter.review_reason, "LGTM — initial release")
     assert.equal(
       lifecycle.getStatus(v1.docId)?.documentVersion.active,
-      true,
-      "approved v1 must be the active version"
+      false,
+      "UT-04: approved v1 stays inactive without activation evidence"
     )
+    assert.ok(lifecycle.getStatus(v1.docId)?.activationBlockReason)
 
     // Operator replay: getCandidate now returns audit fields.
     const v1CandidateAfter = reviewStore.getCandidate(v1.docId, "default")
@@ -213,8 +216,8 @@ test("P6.3 review-mode smoke: approve → reject → retry (re-ingest) → appro
     )
     assert.equal(
       lifecycle.getStatus(v1.docId)?.documentVersion.active,
-      true,
-      "v1 must remain active while v2 awaits review"
+      false,
+      "UT-04: no candidate of this source is active while v2 awaits review"
     )
 
     // ---- Step 4: reject v2 → rejected + audit fields, v1 still active ----
@@ -244,8 +247,8 @@ test("P6.3 review-mode smoke: approve → reject → retry (re-ingest) → appro
     )
     assert.equal(
       lifecycle.getStatus(v1.docId)?.documentVersion.active,
-      true,
-      "reject must preserve the previous active version (v1)"
+      false,
+      "UT-04: rejection must not activate anything"
     )
 
     // ---- Step 5: retry = re-ingest v3 (same source, new content) ----
@@ -274,8 +277,8 @@ test("P6.3 review-mode smoke: approve → reject → retry (re-ingest) → appro
     )
     assert.equal(
       lifecycle.getStatus(v1.docId)?.documentVersion.active,
-      true,
-      "v1 must remain active while v3 awaits review"
+      false,
+      "UT-04: no candidate of this source is active while v3 awaits review"
     )
     // v2 stays rejected — retry creates a NEW candidate; it does not
     // mutate the rejected v2 row.
@@ -295,16 +298,16 @@ test("P6.3 review-mode smoke: approve → reject → retry (re-ingest) → appro
       "reviewer-alice"
     )
     assert.equal(approveV3?.candidateState, "approved")
-    assert.equal(approveV3?.activatedAsActive, true)
+    assert.equal(approveV3?.activatedAsActive, false)
     assert.equal(
       lifecycle.getStatus(v3.docId)?.documentVersion.active,
-      true,
-      "approved v3 must be the new active version (newer activation_order)"
+      false,
+      "UT-04: approved v3 stays inactive without activation evidence"
     )
     assert.equal(
       lifecycle.getStatus(v1.docId)?.documentVersion.active,
       false,
-      "v1 must step down when v3 is approved+activated"
+      "UT-04: neither candidate becomes active in this run"
     )
     assert.equal(
       readCandidateAudit(db, v3.docId).candidate_state,

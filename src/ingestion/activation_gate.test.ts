@@ -1,0 +1,218 @@
+// UT-04：联合激活门槛——未知候选不激活与旧版本保护。
+//
+// 契约（UP-08 AC 2-5 / UT-04）：缺任一凭证的候选在阶段成功、自动激活和人工
+// 批准三条路径上都不得切换活动身份；状态给出稳定理由码；失败/未知/取消候选
+// 保留原件；既有活动版本不被批量下架；首个未验证候选不得进入活动集合。
+// 本票不产出真实凭证——正向路径属于 UT-15/16/17，任何"看起来完整"的证据
+// 记录在本票阶段同样被拒绝（verification_not_implemented）。
+import assert from "node:assert/strict"
+import test from "node:test"
+import { openDb, type DB } from "./tracking/db"
+import { DocumentRepo } from "./tracking/doc_repo"
+import {
+  IngestionLifecycle,
+  type IngestionStageRunner,
+  type StageExecution,
+} from "./lifecycle"
+import {
+  ACTIVATION_BLOCKED_CONTENT_PROOF_MISSING,
+  ACTIVATION_BLOCKED_EVIDENCE_RECORD_MISSING,
+  ACTIVATION_BLOCKED_EVIDENCE_SCHEMA_MISMATCH,
+  ACTIVATION_BLOCKED_INDEX_PROOF_MISSING,
+  ACTIVATION_BLOCKED_VERIFICATION_NOT_IMPLEMENTED,
+  evaluateActivationGate,
+} from "./activation_gate"
+import { SqliteCandidateReviewStore } from "../knowledge/candidate_review_store"
+import { activeTermsFilterFor, NO_ACTIVE_DOCUMENT_SENTINEL } from "../retrieval/search/searcher"
+
+function completingRunner(): IngestionStageRunner {
+  return {
+    close: async () => {},
+    async run(_document, execution: StageExecution): Promise<void> {
+      for (const stage of ["chunk", "wikify", "storeChunks", "storeGraph"] as const) {
+        await execution.runStage(stage, {}, async () => undefined, () => ({ stage }))
+      }
+    },
+  }
+}
+
+test("UT-04 门槛判定：缺记录/畸形/缺任一凭证都以稳定理由码拒绝", () => {
+  const missing = evaluateActivationGate(null)
+  assert.equal(missing.passed, false)
+  assert.deepEqual(missing.reasonCodes, [ACTIVATION_BLOCKED_EVIDENCE_RECORD_MISSING])
+  assert.equal(missing.reason, ACTIVATION_BLOCKED_EVIDENCE_RECORD_MISSING)
+
+  for (const malformed of ["evidence", [], 42]) {
+    const decision = evaluateActivationGate(malformed)
+    assert.equal(decision.passed, false)
+    assert.deepEqual(decision.reasonCodes, [ACTIVATION_BLOCKED_EVIDENCE_SCHEMA_MISMATCH])
+  }
+
+  const empty = evaluateActivationGate({ schemaVersion: 1, contentProof: null, indexProof: null })
+  assert.deepEqual(empty.reasonCodes, [
+    ACTIVATION_BLOCKED_CONTENT_PROOF_MISSING,
+    ACTIVATION_BLOCKED_INDEX_PROOF_MISSING,
+  ])
+
+  const half = evaluateActivationGate({ schemaVersion: 1, contentProof: { hash: "x" }, indexProof: null })
+  assert.deepEqual(half.reasonCodes, [ACTIVATION_BLOCKED_INDEX_PROOF_MISSING])
+
+  const wrongSchema = evaluateActivationGate({ schemaVersion: 2, contentProof: {}, indexProof: {} })
+  assert.deepEqual(wrongSchema.reasonCodes, [ACTIVATION_BLOCKED_EVIDENCE_SCHEMA_MISMATCH])
+})
+
+test("UT-04 门槛判定：即便两类凭证齐备，核验语义实现前也不放行", () => {
+  // 本票不产出真实凭证；即使记录形状完整，联合核验属于 UT-17——
+  // 显式拒绝而不是提前放行，保证中间票无法临时绕过保护。
+  const decision = evaluateActivationGate({
+    schemaVersion: 1,
+    contentProof: { any: "shape" },
+    indexProof: { any: "shape" },
+  })
+  assert.equal(decision.passed, false)
+  assert.deepEqual(decision.reasonCodes, [ACTIVATION_BLOCKED_VERIFICATION_NOT_IMPLEMENTED])
+})
+
+test("UT-04 自动激活：阶段成功的候选保持未激活并记录缺失原因", async () => {
+  const db = openDb(":memory:")
+  try {
+    const lifecycle = new IngestionLifecycle(db, completingRunner())
+    const submitted = lifecycle.submit({ title: "首个候选", content: "正文内容", source: "gate-test" })
+    assert.equal(submitted.status, "pending")
+    const result = await lifecycle.runNext()
+    assert.equal(result?.success, true, "阶段成功")
+
+    const status = lifecycle.getStatus(submitted.docId)
+    assert.equal(status?.task?.status, "completed")
+    assert.equal(status?.documentStatus, "completed")
+    assert.ok(status?.activationBlockReason?.includes(ACTIVATION_BLOCKED_EVIDENCE_RECORD_MISSING))
+
+    const source = db.prepare(
+      "SELECT active_doc_id, last_outcome FROM sources WHERE source_id = (SELECT source_id FROM documents WHERE doc_id = ?)"
+    ).get(submitted.docId) as { active_doc_id: string | null; last_outcome: string }
+    assert.equal(source.active_doc_id, null, "首个未验证候选不得成为活动身份")
+    assert.equal(source.last_outcome, "completed", "生命周期结论如实记录阶段成功")
+  } finally {
+    db.close()
+  }
+})
+
+test("UT-04 旧版本保护：新候选被拒后既有活动版本身份与原件不变", async () => {
+  const db = openDb(":memory:")
+  try {
+    const lifecycle = new IngestionLifecycle(db, completingRunner())
+    const docRepo = new DocumentRepo(db)
+
+    // v1：直接以仓库命令构造"既有活动版本"（状态构造，非激活决策）；
+    // 其任务照常运行一次以清空队列。
+    const v1 = lifecycle.submit({ title: "v1", content: "旧版本正文", source: "protect-test" })
+    docRepo.activate(v1.docId)
+    await lifecycle.runNext()
+    assert.equal(
+      (db.prepare("SELECT active_doc_id FROM sources WHERE source_id = (SELECT source_id FROM documents WHERE doc_id = ?)").get(v1.docId) as { active_doc_id: string }).active_doc_id,
+      v1.docId
+    )
+    const v1RawBefore = (db.prepare("SELECT length(raw_content) AS n FROM documents WHERE doc_id = ?").get(v1.docId) as { n: number | null }).n
+
+    // v2：不同内容的新候选 → 阶段成功但被门槛拒绝。
+    const v2 = lifecycle.submit({
+      title: "v2",
+      content: "新候选正文（缺凭证）",
+      versionIntent: "new_version",
+      source: "protect-test",
+    })
+    assert.notEqual(v2.docId, v1.docId)
+    const result = await lifecycle.runNext()
+    assert.equal(result?.success, true)
+
+    const after = db.prepare(
+      "SELECT active_doc_id FROM sources WHERE source_id = (SELECT source_id FROM documents WHERE doc_id = ?)"
+    ).get(v1.docId) as { active_doc_id: string }
+    assert.equal(after.active_doc_id, v1.docId, "旧正常版本持续作为活动身份")
+    assert.equal(
+      lifecycle.getStatus(v2.docId)?.activationBlockReason,
+      ACTIVATION_BLOCKED_EVIDENCE_RECORD_MISSING,
+      "新候选状态给出缺失原因"
+    )
+    const v1RawAfter = (db.prepare("SELECT length(raw_content) AS n FROM documents WHERE doc_id = ?").get(v1.docId) as { n: number | null }).n
+    assert.equal(v1RawAfter, v1RawBefore, "旧版本原件不被触碰")
+
+    // 重处理被拒候选：再次运行仍被拒，活动身份仍不变。
+    const reprocess = lifecycle.reprocess(v2.docId)
+    assert.equal(reprocess?.changed, true)
+    await lifecycle.runNext()
+    assert.equal(
+      lifecycle.getStatus(v2.docId)?.activationBlockReason,
+      ACTIVATION_BLOCKED_EVIDENCE_RECORD_MISSING
+    )
+    assert.equal(
+      (db.prepare("SELECT active_doc_id FROM sources WHERE source_id = (SELECT source_id FROM documents WHERE doc_id = ?)").get(v1.docId) as { active_doc_id: string }).active_doc_id,
+      v1.docId
+    )
+  } finally {
+    db.close()
+  }
+})
+
+test("UT-04 人工批准不绕过门槛：approved 但不激活，理由可见", async () => {
+  const db: DB = openDb(":memory:")
+  try {
+    const lifecycle = new IngestionLifecycle(db, completingRunner(), () => new Date(), "review")
+    const submitted = lifecycle.submit({ title: "待审候选", content: "正文", source: "review-gate" })
+    await lifecycle.runNext()
+    assert.equal(lifecycle.getStatus(submitted.docId)?.documentStatus, "completed")
+
+    const review = new SqliteCandidateReviewStore(db, new DocumentRepo(db))
+    const result = review.review(submitted.docId, "default", "approve", "业务批准", "reviewer-1")
+    assert.ok(result)
+    assert.equal(result.candidateState, "approved")
+    assert.equal(result.activatedAsActive, false, "批准不得切换活动身份（缺联合凭证）")
+    assert.equal(
+      lifecycle.getStatus(submitted.docId)?.activationBlockReason,
+      ACTIVATION_BLOCKED_EVIDENCE_RECORD_MISSING
+    )
+    const source = db.prepare(
+      "SELECT active_doc_id FROM sources WHERE source_id = (SELECT source_id FROM documents WHERE doc_id = ?)"
+    ).get(submitted.docId) as { active_doc_id: string | null }
+    assert.equal(source.active_doc_id, null)
+  } finally {
+    db.close()
+  }
+})
+
+test("UT-04 凭证齐备仍不放行（核验未实现）且取消约束保留", async () => {
+  const db = openDb(":memory:")
+  try {
+    const lifecycle = new IngestionLifecycle(db, completingRunner())
+    const docRepo = new DocumentRepo(db)
+    const submitted = lifecycle.submit({ title: "带证据候选", content: "正文", source: "evidence-test" })
+    // 生产者侧写入（UT-15/16 之后由管线产出）：记录形状完整。
+    docRepo.setCandidateEvidence(submitted.docId, {
+      schemaVersion: 1,
+      contentProof: { some: "content proof" },
+      indexProof: { some: "index proof" },
+    })
+    await lifecycle.runNext()
+    assert.equal(
+      lifecycle.getStatus(submitted.docId)?.activationBlockReason,
+      ACTIVATION_BLOCKED_VERIFICATION_NOT_IMPLEMENTED,
+      "核验语义属于 UT-17；本票显式拒绝"
+    )
+
+    // 取消约束保留：pending 任务仍可取消（既有生命周期语义不变）。
+    const second = lifecycle.submit({ title: "取消候选", content: "另一段待取消正文", source: "evidence-test" })
+    assert.equal(second.status, "pending")
+    const cancellation = lifecycle.cancel(second.docId)
+    assert.equal(cancellation?.status, "cancelled")
+    assert.equal(cancellation?.changed, true)
+  } finally {
+    db.close()
+  }
+})
+
+test("UT-04 检索过滤器 fail-closed：零活跃文档时隐藏全部而非放开过滤", () => {
+  const empty = activeTermsFilterFor([])
+  assert.deepEqual(empty, [{ terms: { documentId: [NO_ACTIVE_DOCUMENT_SENTINEL] } }])
+  const some = activeTermsFilterFor(["doc-1", "doc-2"])
+  assert.deepEqual(some, [{ terms: { documentId: ["doc-1", "doc-2"] } }])
+})

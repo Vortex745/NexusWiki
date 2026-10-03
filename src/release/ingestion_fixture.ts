@@ -22,7 +22,9 @@
 //     release resources) → db.close() (releases the in-memory database).
 
 import type { IngestionLifecycle, IngestionStageRunner, IngestionSubmission } from "../ingestion/lifecycle"
+import { INGESTION_STAGE_NAMES, type StageExecution } from "../ingestion/lifecycle"
 import { createIngestionLifecycle } from "../ingestion/pipeline"
+import { DocumentRepo } from "../ingestion/tracking/doc_repo"
 import { openDb, type DB } from "../ingestion/tracking/db"
 import type { ActivationMode } from "../types/governance"
 import { defaultKnowledgeBaseId } from "../types/knowledge_base"
@@ -185,7 +187,38 @@ export function createIngestionFixture(input: CreateIngestionFixtureInput): Inge
   const tenantId = deriveTenantId(input.revision)
   const searchNamespace = deriveSearchNamespace(input.revision)
   const activationMode: ActivationMode = input.activationMode ?? "auto"
-  const stageRunner = input.stageRunner ?? DEFAULT_STAGE_RUNNER
+  const innerRunner = input.stageRunner ?? DEFAULT_STAGE_RUNNER
+  // Ticket UT-04: the joint activation gate keeps every lifecycle completion
+  // inactive until the integrity producers (UT-15/16/17) supply real evidence.
+  // Acceptance retrieval probes verify retrieval machinery — they need ACTIVE
+  // documents, which this fixture constructs DIRECTLY via DocumentRepo.activate
+  // once the real stage runner succeeds (auto mode only; review-mode fixtures
+  // keep the review contract). No candidate_evidence is written anywhere and
+  // the production gate is untouched — this is explicit test-state
+  // construction, not a bypass of the gate's decision path.
+  const stageRunner: IngestionStageRunner = activationMode === "auto"
+    ? {
+        close: () => innerRunner.close(),
+        async run(document, execution) {
+          let completedStages = 0
+          const tracked: StageExecution = {
+            signal: execution.signal,
+            runStage: async (name, input, operation, summarize) => {
+              const result = await execution.runStage(name, input, operation, summarize)
+              completedStages += 1
+              return result
+            },
+          }
+          const result = await innerRunner.run(document, tracked)
+          // Activate only when every stage completed — a runner that bails
+          // early (failed replacement) must not promote its document.
+          if (completedStages === INGESTION_STAGE_NAMES.length) {
+            new DocumentRepo(db).activate(document.id)
+          }
+          return result
+        },
+      }
+    : innerRunner
 
   const db = openDb(":memory:")
   // Go through the factory (not direct construction) so the P6.2 caller audit

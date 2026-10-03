@@ -161,6 +161,22 @@ export interface DocumentCatalogPage {
   folders: string[]
 }
 
+/**
+ * The catalog's delete action retires the owning source. A retired document is
+ * gone from the knowledge base, so it must stop being listed, counted, or
+ * offered as a tag/folder facet — a facet only a deleted document carried
+ * answers "no documents match" every time someone picks it.
+ *
+ * Written as NOT EXISTS(... = 'retired') rather than a join or a lifecycle
+ * equality, for two reasons: the catalog LEFT JOINs sources, so a document
+ * whose source row is missing has always read as live and this keeps that; and
+ * the tag facet's `FROM documents d, json_each(...)` cannot take a trailing
+ * LEFT JOIN without SQLite rebinding it to the table-valued function. It also
+ * carries no parameter, so the same clause drops into all four catalog queries.
+ */
+const NOT_DELETED_BY_CATALOG =
+  "NOT EXISTS (SELECT 1 FROM sources s WHERE s.source_id = d.source_id AND s.lifecycle_state = 'retired')"
+
 export class DocumentRepo {
   constructor(private db: DB) {}
 
@@ -387,6 +403,20 @@ export class DocumentRepo {
     return row ? rowToDocument(row) : null
   }
 
+  /**
+   * Ticket UT-04: the source's most recent document regardless of activation.
+   * While the joint activation gate keeps candidates inactive, the active
+   * version alone can no longer anchor identity semantics (the "unchanged"
+   * no-op and in-flight dedupe must reference the latest submission).
+   */
+  getLatestDocument(sourceId: string): Document | null {
+    const row = this.db.prepare(
+      `SELECT d.* FROM documents d WHERE d.source_id = ?
+       ORDER BY d.version DESC LIMIT 1`
+    ).get(sourceId) as DocumentRow | undefined
+    return row ? rowToDocument(row) : null
+  }
+
   updateMetadata(docId: string, metadata: Record<string, unknown>): void {
     const info = this.db.prepare(
       "UPDATE documents SET metadata = ?, updated_at = ? WHERE doc_id = ?"
@@ -478,6 +508,65 @@ export class DocumentRepo {
       `SELECT status FROM documents WHERE doc_id = ?`
     ).get(docId) as { status: string } | undefined
     return (row?.status as DocumentStatus | undefined) ?? null
+  }
+
+  // ---- Ticket UT-04: joint activation gate -------------------------------
+
+  /**
+   * Read the candidate's joint activation evidence
+   * (documents.candidate_evidence, JSON). NULL when no integrity producer has
+   * recorded evidence yet — which is the universal case until UT-15/UT-16
+   * introduce them.
+   */
+  getCandidateEvidence(docId: string): unknown {
+    const row = this.db.prepare(
+      "SELECT candidate_evidence FROM documents WHERE doc_id = ?"
+    ).get(docId) as { candidate_evidence: string | null } | undefined
+    if (!row?.candidate_evidence) return null
+    try {
+      return JSON.parse(row.candidate_evidence)
+    } catch {
+      return null
+    }
+  }
+
+  /**
+   * Record the joint activation evidence for a candidate. Called by the
+   * integrity producers (UT-15 content proof, UT-16 index proof) once they
+   * exist; nothing in the current pipeline writes it, so every activation
+   * attempt fails closed.
+   */
+  setCandidateEvidence(docId: string, evidence: Record<string, unknown>): void {
+    this.db.prepare(
+      `UPDATE documents SET candidate_evidence = ?, updated_at = ?
+       WHERE doc_id = ?`
+    ).run(JSON.stringify(evidence), new Date().toISOString(), docId)
+  }
+
+  /**
+   * Record why activation was denied (stable reason codes joined by ";", from
+   * evaluateActivationGate). The next attempt overwrites the previous reason;
+   * a successful activation clears it.
+   */
+  recordActivationBlock(docId: string, reason: string): void {
+    this.db.prepare(
+      `UPDATE documents SET activation_block_reason = ?, updated_at = ?
+       WHERE doc_id = ?`
+    ).run(reason, new Date().toISOString(), docId)
+  }
+
+  clearActivationBlock(docId: string): void {
+    this.db.prepare(
+      `UPDATE documents SET activation_block_reason = NULL, updated_at = ?
+       WHERE doc_id = ?`
+    ).run(new Date().toISOString(), docId)
+  }
+
+  getActivationBlockReason(docId: string): string | null {
+    const row = this.db.prepare(
+      "SELECT activation_block_reason FROM documents WHERE doc_id = ?"
+    ).get(docId) as { activation_block_reason: string | null } | undefined
+    return row?.activation_block_reason ?? null
   }
 
   getLifecycleOutcome(docId: string): DocumentStatus | "unchanged" | null {
@@ -590,7 +679,11 @@ export class DocumentRepo {
    * is never returned — catalog rows are metadata only.
    */
   listCatalog(query: DocumentCatalogQuery): DocumentCatalogPage {
-    const conditions: string[] = ["d.tenant_id = ?", "d.knowledge_base_id = ?"]
+    const conditions: string[] = [
+      "d.tenant_id = ?",
+      "d.knowledge_base_id = ?",
+      NOT_DELETED_BY_CATALOG,
+    ]
     const params: Array<string | number> = [query.tenantId, query.knowledgeBaseId]
     if (query.status) {
       conditions.push("d.status = ?")
@@ -691,7 +784,7 @@ export class DocumentRepo {
 
   /** Distinct tag values / folder names over the visible rows of the KB. */
   private listFacets(query: DocumentCatalogQuery, kind: "tags" | "folder"): string[] {
-    const conditions = ["d.tenant_id = ?", "d.knowledge_base_id = ?"]
+    const conditions = ["d.tenant_id = ?", "d.knowledge_base_id = ?", NOT_DELETED_BY_CATALOG]
     const params: Array<string | number> = [query.tenantId, query.knowledgeBaseId]
     if (!query.admin) {
       const groups = query.viewerGroups ?? []
@@ -723,5 +816,57 @@ export class DocumentRepo {
       )
       .all(...params) as Array<{ v: unknown }>
     return rows.map((row) => row.v).filter((v): v is string => typeof v === "string")
+  }
+
+  /**
+   * What one document folder holds inside a knowledge base: the catalog-visible
+   * rows — so the number is the one the admin is looking at — and the distinct
+   * sources behind them, which is what a cascade retirement actually moves.
+   * Retired sources drop out through the same clause the catalog uses, so a
+   * folder whose contents are already gone reads as empty instead of offering
+   * them up a second time.
+   */
+  folderContents(
+    knowledgeBaseId: string,
+    tenantId: string,
+    folderName: string
+  ): { documents: number; sourceIds: string[] } {
+    const rows = this.db
+      .prepare(
+        `SELECT d.doc_id, d.source_id
+         FROM documents d
+         WHERE d.tenant_id = ? AND d.knowledge_base_id = ?
+           AND json_extract(d.metadata, '$.folder') = ?
+           AND ${NOT_DELETED_BY_CATALOG}`
+      )
+      .all(tenantId, knowledgeBaseId, folderName) as Array<{ doc_id: string; source_id: string | null }>
+    const sourceIds = [
+      ...new Set(rows.map((row) => row.source_id).filter((id): id is string => Boolean(id))),
+    ]
+    return { documents: rows.length, sourceIds }
+  }
+
+  /**
+   * Move every catalog row labelled `from` onto `to`. Membership is the folder's
+   * NAME inside `documents.metadata`, so a folder rename has to rewrite its
+   * members; the registry row itself is updated by the caller in the same
+   * synchronous turn. Returns the rows rewritten.
+   */
+  renameFolderMembers(
+    tenantId: string,
+    knowledgeBaseId: string,
+    from: string,
+    to: string,
+    updatedAt: string
+  ): number {
+    const result = this.db
+      .prepare(
+        `UPDATE documents
+         SET metadata = json_set(metadata, '$.folder', ?), updated_at = ?
+         WHERE tenant_id = ? AND knowledge_base_id = ?
+           AND json_extract(metadata, '$.folder') = ?`
+      )
+      .run(to, updatedAt, tenantId, knowledgeBaseId, from)
+    return result.changes
   }
 }

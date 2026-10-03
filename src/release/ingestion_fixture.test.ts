@@ -87,7 +87,7 @@ test("Ticket 18 #1b: review mode — ingest reaches completed + pending_review (
   }
 })
 
-test("Ticket 18 #1c: review mode — human approve activates the candidate", async () => {
+test("Ticket 18+UT-04 #1c: review mode — human approve records the decision but the gate keeps the candidate inactive", async () => {
   const fixture = createIngestionFixture({
     revision: REVISION_A,
     activationMode: "review",
@@ -111,10 +111,15 @@ test("Ticket 18 #1c: review mode — human approve activates the candidate", asy
 
     assert.ok(reviewResult, "review() must return a result for an existing pending_review doc")
     assert.equal(reviewResult!.candidateState, "approved")
-    assert.equal(reviewResult!.activatedAsActive, true)
+    assert.equal(
+      reviewResult!.activatedAsActive,
+      false,
+      "Ticket UT-04: approval cannot bypass the joint activation gate",
+    )
 
     const status = fixture.lifecycle.getStatus(submission.docId)
-    assert.equal(status?.documentVersion.active, true, "approve MUST activate")
+    assert.equal(status?.documentVersion.active, false, "no evidence → approve MUST NOT activate")
+    assert.ok(status?.activationBlockReason)
   } finally {
     await fixture.cleanup()
   }

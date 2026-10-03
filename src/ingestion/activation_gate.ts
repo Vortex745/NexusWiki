@@ -1,0 +1,84 @@
+// UT-04：联合激活门槛（fail-closed）。
+//
+// 规格契约（UP-08 / UT-04）：新候选只有在内容完整性凭证与索引核验凭证同时
+// 存在且匹配时才允许切换活动身份；缺任一凭证时——阶段成功、自动激活和人工
+// 批准都不得激活。凭证由后续票（UT-15 内容凭证、UT-16 索引核验、UT-17 联合
+// 激活）产出；本票只安装拒绝路径，不允许伪造凭证让正向路径提前变绿。
+//
+// 理由码是稳定契约（UT-26 的状态呈现会消费），不得改动语义只可新增。
+
+export const ACTIVATION_EVIDENCE_SCHEMA_VERSION = 1
+
+/** 理由码：缺联合激活证据记录本身。 */
+export const ACTIVATION_BLOCKED_EVIDENCE_RECORD_MISSING =
+  "activation_evidence_record_missing"
+/** 理由码：证据记录的 schema 版本不被当前代码识别。 */
+export const ACTIVATION_BLOCKED_EVIDENCE_SCHEMA_MISMATCH =
+  "activation_evidence_schema_mismatch"
+/** 理由码：缺内容完整性凭证（UT-15 产出）。 */
+export const ACTIVATION_BLOCKED_CONTENT_PROOF_MISSING =
+  "activation_content_proof_missing"
+/** 理由码：缺索引核验凭证（UT-16 产出）。 */
+export const ACTIVATION_BLOCKED_INDEX_PROOF_MISSING =
+  "activation_index_proof_missing"
+/**
+ * 理由码：凭证核验语义尚未实现（UT-17 引入联合核验）。即使两类凭证都在，
+ * 本票也不放行——拒绝路径先行、正向路径由后续票提供，是用户确认的批次设计。
+ */
+export const ACTIVATION_BLOCKED_VERIFICATION_NOT_IMPLEMENTED =
+  "activation_gate_verification_not_implemented"
+
+export interface ActivationEvidenceRecord {
+  schemaVersion: number
+  /** 内容完整性凭证（提取/清洗/切块证据的联合结论）——UT-15 的产出。 */
+  contentProof: unknown
+  /** 索引核验凭证（期望条目/哈希/可见性/探针的联合结论）——UT-16 的产出。 */
+  indexProof: unknown
+}
+
+export interface ActivationGateDecision {
+  passed: boolean
+  /** 机器可读理由码（稳定契约）。 */
+  reasonCodes: string[]
+  /** 单条可读摘要（全部理由码拼接）。 */
+  reason: string | null
+}
+
+function denied(reasonCodes: string[]): ActivationGateDecision {
+  return {
+    passed: false,
+    reasonCodes,
+    reason: reasonCodes.join(";"),
+  }
+}
+
+/**
+ * 评估联合激活门槛。evidence 是 documents.candidate_evidence 的解析值
+ * （未设置时为 null）。本函数绝不产出"通过"——在 UT-15/16/17 引入真实
+ * 凭证产出者之前，一切候选都被拒绝；这是用户已确认的早期护栏顺序
+ * （early_guard_then_proofs）：中间票不得临时放开激活。
+ */
+export function evaluateActivationGate(evidence: unknown): ActivationGateDecision {
+  if (evidence === null || evidence === undefined) {
+    return denied([ACTIVATION_BLOCKED_EVIDENCE_RECORD_MISSING])
+  }
+  if (typeof evidence !== "object" || Array.isArray(evidence)) {
+    return denied([ACTIVATION_BLOCKED_EVIDENCE_SCHEMA_MISMATCH])
+  }
+  const record = evidence as Record<string, unknown>
+  if (record.schemaVersion !== ACTIVATION_EVIDENCE_SCHEMA_VERSION) {
+    return denied([ACTIVATION_BLOCKED_EVIDENCE_SCHEMA_MISMATCH])
+  }
+  const reasonCodes: string[] = []
+  if (record.contentProof === null || record.contentProof === undefined) {
+    reasonCodes.push(ACTIVATION_BLOCKED_CONTENT_PROOF_MISSING)
+  }
+  if (record.indexProof === null || record.indexProof === undefined) {
+    reasonCodes.push(ACTIVATION_BLOCKED_INDEX_PROOF_MISSING)
+  }
+  if (reasonCodes.length > 0) return denied(reasonCodes)
+  // 内容凭证与索引凭证同时存在：UT-17 将在此加入凭证内部的核验语义
+  // （哈希匹配、探针通过）。当前没有任何凭证产出者，因此该分支不可达；
+  // 保持显式 fail-closed 而不是提前放行。
+  return denied([ACTIVATION_BLOCKED_VERIFICATION_NOT_IMPLEMENTED])
+}
