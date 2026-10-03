@@ -17,6 +17,12 @@ import { WikiStore } from "../wiki/store"
 import { ArtifactCleanupService, isCleanupOperation } from "../knowledge/cleanup"
 import { evaluateActivationGate } from "./activation_gate"
 import {
+  allowedOperationsFor,
+  classifyIngestionError,
+  redactedFailureMessage,
+  type IngestionFailureCategory,
+} from "./error_classification"
+import {
   resolveSourceIdentity,
   sourceIdentityKey,
   type SourceIdentityInput,
@@ -122,6 +128,21 @@ export interface IngestionStatus {
    * success and activation are independent since the gate.
    */
   activationBlockReason: string | null
+  /**
+   * Ticket UT-07/UT-08: machine-readable failure classification (category,
+   * stable reason code, allowed operations) recorded when a run failed.
+   * Null while the document has no recorded failure.
+   */
+  failure: IngestionFailureRecord | null
+}
+
+export interface IngestionFailureRecord {
+  category: IngestionFailureCategory
+  reasonCode: string
+  retryable: boolean
+  allowedOperations: string[]
+  message: string
+  failedAt: string
 }
 
 export interface IngestionExecutionResult {
@@ -173,6 +194,16 @@ function buildSpanTree(spans: ProcessingSpan[]): SpanNode[] {
   }
 
   return roots
+}
+
+/** Ticket UT-07/UT-08: read the persisted failure record from doc metadata. */
+function readFailureRecord(document: Document | null): IngestionFailureRecord | null {
+  const system = (document?.metadata as { system?: { failure?: IngestionFailureRecord } } | undefined)?.system
+  const failure = system?.failure
+  if (!failure || typeof failure !== "object" || typeof failure.category !== "string") {
+    return null
+  }
+  return failure
 }
 
 class TrackedStageExecution implements StageExecution {
@@ -456,6 +487,7 @@ export class IngestionLifecycle {
       documentVersion,
       spanTree: buildSpanTree(this.spanRepo.listByDoc(docId)),
       activationBlockReason: this.docRepo.getActivationBlockReason(docId),
+      failure: readFailureRecord(this.docRepo.get(docId)),
     }
   }
 
@@ -703,7 +735,6 @@ export class IngestionLifecycle {
 
     const abortController = new AbortController()
     RUNNING_ABORT_CONTROLLERS.set(task.docId, abortController)
-    let retryable = true
     try {
       const execution = new TrackedStageExecution(
         this.spanRepo,
@@ -715,7 +746,6 @@ export class IngestionLifecycle {
         document,
         execution
       )
-      retryable = false
       execution.assertComplete()
       this.db.transaction(() => {
         const finishedAt = this.now()
@@ -770,10 +800,15 @@ export class IngestionLifecycle {
       })()
       return { taskId: task.id, docId: task.docId, rootSpanId, success: true }
     } catch (error) {
+      // Ticket UT-07/UT-08: classify before deciding whether the failure may
+      // retry. Capability-missing and permanent-input errors terminate
+      // immediately; only evidence-backed transient errors enter the bounded
+      // 2s/4s/8s budget; cancellation keeps its own semantics.
+      const classification = classifyIngestionError(error)
       const message = error instanceof Error ? error.message : String(error)
       const errorStack = error instanceof Error ? error.stack ?? null : null
       const finishedAt = this.now()
-      const retryDelay = retryable ? RETRY_DELAYS_MS[task.failCount] : undefined
+      const retryDelay = classification.retryable ? RETRY_DELAYS_MS[task.failCount] : undefined
       const nextAttemptAt = retryDelay === undefined
         ? null
         : new Date(finishedAt.getTime() + retryDelay).toISOString()
@@ -786,7 +821,7 @@ export class IngestionLifecycle {
           finishedAt.getTime() - rootStartedAt.getTime(),
           errorStack
         )
-        const recorded = retryable && retryDelay === undefined
+        const recorded = classification.retryable && retryDelay === undefined
           ? this.taskRepo.deadLetter(
               task,
               message,
@@ -801,6 +836,29 @@ export class IngestionLifecycle {
         if (nextAttemptAt === null) {
           this.docRepo.updateStatus(task.docId, "failed")
         }
+        // Ticket UT-07/UT-08: persist the machine-readable failure
+        // classification so the status API can explain the reason and the
+        // allowed operations without exposing credentials or content.
+        const currentDocument = this.docRepo.get(task.docId)
+        const currentMetadata = currentDocument?.metadata ?? {}
+        const currentSystem = typeof (currentMetadata as { system?: unknown }).system === "object" &&
+            !Array.isArray((currentMetadata as { system?: unknown }).system)
+          ? (currentMetadata as { system: Record<string, unknown> }).system
+          : {}
+        this.docRepo.updateMetadata(task.docId, {
+          ...currentMetadata,
+          system: {
+            ...currentSystem,
+            failure: {
+              category: classification.category,
+              reasonCode: classification.reasonCode,
+              retryable: classification.retryable,
+              allowedOperations: allowedOperationsFor(classification.category),
+              message: redactedFailureMessage(error),
+              failedAt: finishedAt.toISOString(),
+            },
+          },
+        })
         return false
       })()
       if (cancellationWon) {

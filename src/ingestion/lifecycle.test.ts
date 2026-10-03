@@ -593,7 +593,10 @@ test("a failed ingestion job leaves no open stage spans", async () => {
         "chunk",
         {},
         async () => {
-          throw new Error("chunk failed")
+          // UT-08: a transient-classified failure keeps the task retryable;
+          // this test's subject is span bookkeeping on failure, not retry
+          // classification.
+          throw new Error("temporary provider failure: chunk failed")
         },
         () => ({})
       )
