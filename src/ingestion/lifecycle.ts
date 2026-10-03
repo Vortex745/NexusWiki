@@ -160,6 +160,11 @@ export interface IngestionCancellationResult {
   /** "retired" reports a refused retry/reprocess on a retired source. */
   status: IngestionTask["status"] | "retired"
   changed: boolean
+  /**
+   * Ticket UT-18: 可解释拒绝原因（changed:false 时）——例如文件型文档缺
+   * 保留原件（恢复不能凭空造出原件，应重新上传）。成功/无操作时不填。
+   */
+  reason?: string
 }
 
 /**
@@ -548,6 +553,23 @@ export class IngestionLifecycle {
       if (document && this.docRepo.getSourceLifecycleState(document.sourceId) === "retired") {
         return { docId, taskId: task?.id ?? 0, status: "retired", changed: false }
       }
+      // Ticket UT-18: a file-based resume re-processes the RETAINED original.
+      // Without the original bytes a resume cannot invent them — refuse with
+      // an explainable reason instead of silently running without the source.
+      if (
+        document &&
+        document.fileName &&
+        (!document.rawContent || document.rawContent.length === 0)
+      ) {
+        return {
+          docId,
+          taskId: task?.id ?? 0,
+          status: task?.status ?? documentStatus ?? "pending",
+          changed: false,
+          reason:
+            "original file content is not retained for this document; a resume re-processes the retained original — upload the file again instead",
+        }
+      }
       let taskId: number
       if (task) {
         if (!this.taskRepo.requeue(task.id)) {
@@ -592,6 +614,22 @@ export class IngestionLifecycle {
       const document = this.docRepo.get(docId)
       if (document && this.docRepo.getSourceLifecycleState(document.sourceId) === "retired") {
         return { docId, taskId: task?.id ?? 0, status: "retired", changed: false }
+      }
+      // Ticket UT-18: same retained-original rule as retry() — reprocess runs
+      // from the stored original bytes, never without them.
+      if (
+        document &&
+        document.fileName &&
+        (!document.rawContent || document.rawContent.length === 0)
+      ) {
+        return {
+          docId,
+          taskId: task?.id ?? 0,
+          status: task?.status ?? documentStatus ?? "pending",
+          changed: false,
+          reason:
+            "original file content is not retained for this document; a reprocess re-runs from the retained original — upload the file again instead",
+        }
       }
       let taskId: number
       if (task) {
