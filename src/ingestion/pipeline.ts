@@ -31,6 +31,7 @@ import {
   type ChunkStoreMetrics,
 } from "./storage"
 import { evaluateBlockCoverage } from "./chunk_coverage"
+import { findOversizedChunks, resolveEmbeddingLimits } from "./limits"
 import { buildPageIndex } from "./page_index_builder"
 import type { DB } from "./tracking/db"
 import { DocumentRepo } from "./tracking/doc_repo"
@@ -439,6 +440,21 @@ export class PipelineStageRunner implements IngestionStageRunner {
             `chunk coverage gaps: ${coverage.missingBlockIds.length}/${coverage.totalBlocks} normalized blocks missing from index chunks`
           )
         }
+      }
+
+      // Ticket UT-14: enforce the explicit embedding input token limit with a
+      // conservative character-based estimate (never inferred from bytes). A
+      // chunk over the provider limit fails LOUDLY here instead of being
+      // silently truncated (or rejected) by the provider during embedding.
+      const embeddingLimits = resolveEmbeddingLimits()
+      const oversized = findOversizedChunks(indexChunks, embeddingLimits)
+      if (oversized.length > 0) {
+        const first = oversized[0]
+        throw new Error(
+          `embedding input token limit exceeded: ${oversized.length} chunk(s) over ${embeddingLimits.inputTokenLimit} tokens ` +
+            `(first: ${first.chunkId}, est. ${first.estimatedTokens} tokens / ${first.chars} chars) — ` +
+            "lower the chunker size limits or raise EMBEDDING_INPUT_TOKEN_LIMIT; no silent provider truncation"
+        )
       }
 
       const wikified = await execution.runStage(
