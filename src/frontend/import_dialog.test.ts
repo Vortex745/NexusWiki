@@ -342,6 +342,11 @@ function dialogHarness() {
   let resumeFailure: string | null = null
   const resumeDocIds: string[] = []
   const parkedResumes: Array<() => void> = []
+  let cancelCalls = 0
+  let cancelHold = false
+  let cancelFailure: string | null = null
+  let cancelResult: Record<string, unknown> = { docId: "doc-1", taskId: 7, status: "cancelled", changed: true }
+  const parkedCancels: Array<() => void> = []
   let scopes: string[] = ["ingest"]
   const toasts: string[] = []
   const timers = new Map<number, () => Promise<void>>()
@@ -415,7 +420,17 @@ function dialogHarness() {
           return { documents: [], total: 0, page: 1, pageSize: 100, tags: [], folders: [] }
         },
         async createKnowledgeBase() { throw new Error("not expected in this test") },
-        async cancelIngest() {},
+        // UT-28: the server's cancellation confirmation.
+        async cancelIngest(docId: string) {
+          cancelCalls += 1
+          if (cancelFailure) {
+            const message = cancelFailure
+            cancelFailure = null
+            throw new Error(message)
+          }
+          if (cancelHold) return new Promise((resolve) => parkedCancels.push(() => resolve(cancelResult)))
+          return cancelResult
+        },
         async fetchDocumentDetail() { throw new Error("not expected in this test") },
         async retireSource() {},
         async submitUrlImport() { throw new Error("not expected in this test") },
@@ -528,12 +543,20 @@ function dialogHarness() {
       for (const release of parkedResumes.splice(0)) release()
     },
     failResume(message: string) { resumeFailure = message },
+    holdCancel() { cancelHold = true },
+    releaseCancel() {
+      cancelHold = false
+      for (const release of parkedCancels.splice(0)) release()
+    },
+    failCancel(message: string) { cancelFailure = message },
+    setCancelResult(result: Record<string, unknown>) { cancelResult = result },
     /** Swap the served status WITHOUT firing polls (requeue semantics). */
     stageStatus(next: IngestStatus) { status = next },
     toasts, timers, get refreshed() { return refreshed }, get uploadedTo() { return uploadedTo },
     get uploadCalls() { return uploadCalls }, get uploadedTos() { return [...uploadedTos] },
     get maxInFlight() { return maxInFlight },
     get resumeCalls() { return resumeCalls }, get resumeDocIds() { return [...resumeDocIds] },
+    get cancelCalls() { return cancelCalls },
   }
 }
 
@@ -871,4 +894,73 @@ test("UT-27: resume only renders for admin sessions and resume-capable failures"
   }
   await waiting.poll(transient)
   assert.equal(waiting.hasButton("恢复"), false, "auto-retry rows wait instead of resuming")
+})
+
+// ---------------------------------------------------------------------------
+// UT-28: server-confirmed cancellation and unknown-outcome sync.
+// ---------------------------------------------------------------------------
+
+test("UT-28: only a server-confirmed cancellation shows 已取消", async () => {
+  const host = dialogHarness()
+  await host.upload() // accepted: docId exists — the server is the authority
+  host.clickButton("取消")
+  await settle()
+  assert.equal(host.cancelCalls, 1)
+  // The batch footer always prints a 「N 已取消」 counter — assert the ROW's
+  // own progress state, not the page text.
+  assert.equal(host.progress().progress.status, "cancelled", "confirmed cancellation renders the terminal state")
+  // Polling agrees with the badge: the terminal state survives a poll.
+  const cancelled = payload([])
+  cancelled.documentStatus = "cancelled"
+  cancelled.task = { status: "cancelled", failCount: 0, nextAttemptAt: null }
+  await host.poll(cancelled)
+  assert.equal(host.progress().progress.status, "cancelled")
+})
+
+test("UT-28: a refused cancellation syncs the row to the server's terminal truth", async () => {
+  const host = dialogHarness()
+  await host.upload()
+  // The task finished BEFORE the cancel landed: the server refuses (changed=false).
+  host.setCancelResult({ docId: "doc-1", taskId: 7, status: "completed", changed: false, reason: "already completed" })
+  const completed = payload(allDone())
+  completed.documentStatus = "completed"
+  completed.task = { status: "completed", failCount: 0, nextAttemptAt: null }
+  host.stageStatus(completed)
+  host.clickButton("取消")
+  await settle()
+  assert.equal(host.hasText("服务端拒绝取消"), true, "the refusal is visible")
+  assert.equal(host.progress().progress.status, "completed", "the row synced to the server's authority")
+})
+
+test("UT-28: an unknown cancellation keeps the real state and converges via bounded polling", async () => {
+  const host = dialogHarness()
+  await host.upload()
+  host.failCancel("Failed to fetch") // network failure — outcome UNKNOWN
+  host.clickButton("取消")
+  await settle()
+  // The batch footer always prints a 「N 已取消」 counter — assert the ROW.
+  assert.equal(host.hasText("取消结果未知"), true, "the unknown state is visible to the user")
+  assert.notEqual(
+    host.progress().progress.status,
+    "cancelled",
+    "the row keeps its real pre-cancel state (still processing)",
+  )
+  // The server DID cancel eventually: the next bounded poll converges.
+  const cancelled = payload([])
+  cancelled.documentStatus = "cancelled"
+  cancelled.task = { status: "cancelled", failCount: 0, nextAttemptAt: null }
+  await host.poll(cancelled)
+  assert.equal(host.progress().progress.status, "cancelled", "polling converges to the server's truth")
+})
+
+test("UT-28: repeated cancel clicks are idempotent", async () => {
+  const host = dialogHarness()
+  await host.upload()
+  host.holdCancel()
+  host.clickButton("取消")
+  host.clickButton("取消") // duplicate while the first is in flight
+  assert.equal(host.cancelCalls, 1, "duplicate clicks never double-cancel")
+  host.releaseCancel()
+  await settle()
+  assert.equal(host.progress().progress.status, "cancelled")
 })

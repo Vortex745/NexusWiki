@@ -1027,8 +1027,32 @@ export async function fetchIngestStatus(docId: string): Promise<IngestStatus> {
   return (await response.json()) as IngestStatus
 }
 
-export async function cancelIngest(docId: string): Promise<void> {
-  await apiFetch(`/ingest/${encodeURIComponent(docId)}/cancel`, { method: "POST" })
+export interface IngestCancellationResult {
+  docId: string
+  taskId: number
+  status: string
+  changed: boolean
+  reason?: string
+}
+
+/** UT-28: cancellation is only REAL when the server confirms it
+ * (changed=true). changed=false is the server refusing — the task already
+ * settled in some other terminal state — and the caller must sync the row to
+ * the server's truth instead of claiming a cancelled result. */
+export async function cancelIngest(docId: string): Promise<IngestCancellationResult> {
+  const response = await apiFetch(`/ingest/${encodeURIComponent(docId)}/cancel`, { method: "POST" })
+  const body = await response.text().catch(() => "")
+  let parsed: IngestCancellationResult | null = null
+  try {
+    parsed = body ? (JSON.parse(body) as IngestCancellationResult) : null
+  } catch {
+    parsed = null
+  }
+  if (response.status < 200 || response.status >= 300) {
+    throw new Error(await readError(new Response(body || response.statusText, { status: response.status })))
+  }
+  if (!parsed || typeof parsed.changed !== "boolean") throw new Error("取消响应无效")
+  return parsed
 }
 
 // ---------------------------------------------------------------------------

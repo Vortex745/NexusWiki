@@ -219,6 +219,8 @@ export function ImportDialog({
   const liveWorkersRef = useRef(0)
   // UT-27: rows with a resume command in flight — duplicate clicks are no-ops.
   const resumingRef = useRef(new Set<string>())
+  // UT-28: rows with a cancellation request in flight — duplicate clicks are no-ops.
+  const cancellingRef = useRef(new Set<string>())
   const pollTimer = useRef<number | null>(null)
   const pollingRef = useRef(false)
   const completionNotifiedRef = useRef(false)
@@ -626,20 +628,69 @@ export function ImportDialog({
   // Row actions
   // ---------------------------------------------------------------------------
 
+  /** UT-28: cancellation authority lives on the SERVER once it has accepted
+   * the upload. A confirmed cancel (changed=true) is the only path to the
+   * cancelled badge; a refusal syncs the row to the server's actual terminal
+   * state; a network failure is UNKNOWN — the row keeps its real state and
+   * bounded polling converges it. No XHR abort exists in this flow, so a
+   * client-side abort can never be mistaken for a backend cancellation. */
   const cancelItem = useCallback(
     async (item: ImportItem) => {
-      if (item.docId) {
-        try {
-          await cancelIngest(item.docId)
-        } catch {
-          // The task already settled server-side; the row reflects the local
-          // cancelled state either way.
-        }
+      if (cancellingRef.current.has(item.id)) return
+      if (!item.docId) {
+        // Local-only cancel: the server has never seen this row.
+        updateItem(item.id, { status: "cancelled" })
+        stopPollingIfDone()
+        return
       }
-      updateItem(item.id, { status: "cancelled" })
-      stopPollingIfDone()
+      cancellingRef.current.add(item.id)
+      try {
+        const result = await cancelIngest(item.docId)
+        if (result.changed) {
+          updateItem(item.id, {
+            status: "cancelled",
+            error: null,
+            errorKind: null,
+            errorDetected: null,
+            progress: initialImportProgress("cancelled"),
+            uploadProgress: undefined,
+            lastProgressAt: Date.now(),
+          })
+          stopPollingIfDone()
+        } else {
+          // The server refused — the task already settled elsewhere. Sync the
+          // row to the server's terminal truth instead of claiming cancelled.
+          try {
+            const server = deriveIngestProgress(await fetchIngestStatus(item.docId))
+            updateItem(item.id, {
+              status: server.status,
+              progress: server,
+              error: server.status === "failed" ? server.error : `服务端拒绝取消：${result.reason ?? result.status}`,
+              errorKind: "resume_refused",
+              lastProgressAt: Date.now(),
+            })
+          } catch {
+            updateItem(item.id, {
+              error: `服务端拒绝取消（当前状态 ${result.status}）`,
+              errorKind: "resume_refused",
+            })
+          }
+          stopPollingIfDone()
+        }
+      } catch {
+        // Network failure / timeout: the outcome is UNKNOWN. Keep the row's
+        // real state (processing) and let bounded status polling converge it
+        // — never announce a cancellation the server has not confirmed.
+        updateItem(item.id, {
+          syncError: "取消结果未知，正在与服务端同步",
+          lastProgressAt: Date.now(),
+        })
+        startPolling()
+      } finally {
+        cancellingRef.current.delete(item.id)
+      }
     },
-    [updateItem, stopPollingIfDone],
+    [updateItem, startPolling, stopPollingIfDone],
   )
 
   /** A failed URL row re-submits its page: single-page fetches fail transiently
