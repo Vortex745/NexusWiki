@@ -1,6 +1,7 @@
 import type { RunHistory, SseEventData } from "@core/conversation"
 
 import { MIME_BY_EXTENSION } from "./constants"
+import { isPdfLike } from "./importBatch"
 
 const API_BASE = "/api"
 
@@ -838,6 +839,24 @@ export async function streamChat(
   if (buffer.trim()) processLine(buffer)
 }
 
+/** UT-23: the upload's failure taxonomy. Admission rejections carry the
+ * server's stable kind (empty_file / file_size / type_conflict /
+ * unsupported_type — src/api/ingest.ts) plus the byte-signature detection for
+ * type conflicts; transport classes (network / timeout / invalid_response)
+ * distinguish "the server never received this upload" from task failures,
+ * which is what the retry gate keys on. */
+export class ImportUploadError extends Error {
+  readonly kind: string
+  readonly detected?: string
+
+  constructor(kind: string, message: string, detected?: string) {
+    super(message)
+    this.name = "ImportUploadError"
+    this.kind = kind
+    this.detected = detected
+  }
+}
+
 export function uploadFileToIngest(
   file: File,
   relativePath: string,
@@ -847,7 +866,10 @@ export function uploadFileToIngest(
     knowledgeBaseId?: string
     /** Document folder name or registered id — unknown names self-register. */
     folder?: string
-    /** PDF parser override: markitdown | marker | mineru | builtin-pdf. */
+    /** PDF parser override: markitdown | marker | mineru | builtin-pdf.
+     * Sent ONLY for files the client confirms are PDFs — TXT never carries
+     * PDF settings, and an unconfirmed type rides without it (the server
+     * decides; UT-23). */
     parser?: string
     /** Catalog tags; comma-joined into one header. */
     tags?: string[]
@@ -861,7 +883,8 @@ export function uploadFileToIngest(
     xhr.setRequestHeader("content-type", "application/octet-stream")
     // Header values must be Latin-1; paths are decoded by the server.
     xhr.setRequestHeader("x-file-name", encodeURIComponent(file.name))
-    xhr.setRequestHeader("x-file-mime-type", file.type || guessMimeFromExt(file.name))
+    const declaredMime = file.type || guessMimeFromExt(file.name)
+    xhr.setRequestHeader("x-file-mime-type", declaredMime)
     xhr.setRequestHeader("x-source-kind", "file")
     xhr.setRequestHeader("x-source-id", encodeURIComponent(relativePath || file.name))
     xhr.setRequestHeader("x-source-namespace", "local-folder")
@@ -871,7 +894,9 @@ export function uploadFileToIngest(
     if (options?.folder) xhr.setRequestHeader("x-document-folder", encodeURIComponent(options.folder))
     // Same Latin-1 constraint for the advanced options: the parser value is
     // ASCII, tags go percent-encoded like the file name.
-    if (options?.parser) xhr.setRequestHeader("x-parser", options.parser)
+    if (options?.parser && isPdfLike(file.name, declaredMime)) {
+      xhr.setRequestHeader("x-parser", options.parser)
+    }
     if (options?.tags?.length) {
       xhr.setRequestHeader("x-document-tags", encodeURIComponent(options.tags.join(",")))
     }
@@ -880,22 +905,45 @@ export function uploadFileToIngest(
     xhr.onload = () => {
       if (xhr.status === 401 && sentToken) onUnauthorized?.()
       if (xhr.status < 200 || xhr.status >= 300) {
-        void readError(new Response(xhr.responseText, { status: xhr.status || 500 }))
-          .then((message) => reject(new Error(message)))
+        void parseUploadError(xhr.responseText, xhr.status).then(reject)
         return
       }
       try {
         const data = JSON.parse(xhr.responseText) as { docId?: string }
         resolve(data.docId ?? "")
       } catch {
-        reject(new Error("上传响应无效"))
+        reject(new ImportUploadError("invalid_response", "上传响应无效"))
       }
     }
-    xhr.onerror = () => reject(new Error("上传网络连接失败"))
-    xhr.ontimeout = () => reject(new Error("上传超时，请检查网络后重试；如已开始处理，请先查看知识库文档"))
+    xhr.onerror = () => reject(new ImportUploadError("network", "上传网络连接失败"))
+    xhr.ontimeout = () => reject(new ImportUploadError("timeout", "上传超时，请检查网络后重试；如已开始处理，请先查看知识库文档"))
     xhr.onabort = () => reject(new DOMException("上传已取消", "AbortError"))
     xhr.send(file)
   })
+}
+
+/** Parse an admission rejection into a typed error: the structured kind and
+ * byte-signature detection ride along when the body carries the contract
+ * shape ({error:{kind,detected,message}}); anything else degrades to a
+ * plain server error with the curated message. */
+async function parseUploadError(responseText: string, status: number): Promise<ImportUploadError> {
+  const fallback = await readError(new Response(responseText, { status: status || 500 })).catch(
+    () => `HTTP ${status || 500}`,
+  )
+  try {
+    const parsed = JSON.parse(responseText) as {
+      error?: { kind?: unknown; detected?: unknown; message?: unknown }
+    }
+    const nested = parsed.error
+    if (nested && typeof nested === "object" && typeof nested.kind === "string") {
+      const message = typeof nested.message === "string" ? nested.message : fallback
+      const detected = typeof nested.detected === "string" ? nested.detected : undefined
+      return new ImportUploadError(nested.kind, message, detected)
+    }
+  } catch {
+    // not JSON — fall through to the plain server error
+  }
+  return new ImportUploadError("server", fallback)
 }
 
 export async function submitUrlImport(

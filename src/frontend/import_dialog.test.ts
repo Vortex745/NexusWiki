@@ -101,7 +101,13 @@ test("file upload reports transfer bytes and keeps authentication and server err
   const exports: any = {}
   runInNewContext(compiled, {
     exports, XMLHttpRequest: FakeXHR, Response, DOMException,
-    require: (name: string) => name === "./constants" ? { MIME_BY_EXTENSION: {} } : assert.fail(`unexpected ${name}`),
+    // UT-23: api.ts now imports the real decision layer for isPdfLike.
+    require: (name: string) =>
+      name === "./constants"
+        ? { MIME_BY_EXTENSION: {} }
+        : name === "./importBatch"
+          ? importBatch
+          : assert.fail(`unexpected ${name}`),
   })
   exports.setAccessToken("session-token")
   let unauthorized = 0
@@ -139,7 +145,12 @@ test("knowledge-base creation reads the API envelope", async () => {
     exports, Headers, AbortSignal,
     fetch: async () => new Response(JSON.stringify({ knowledgeBase: { id: "kb-new", name: "新库" } }), { status: 201 }),
     Response,
-    require: (name: string) => name === "./constants" ? { MIME_BY_EXTENSION: {} } : assert.fail(`unexpected ${name}`),
+    require: (name: string) =>
+      name === "./constants"
+        ? { MIME_BY_EXTENSION: {} }
+        : name === "./importBatch"
+          ? importBatch
+          : assert.fail(`unexpected ${name}`),
   })
   assert.equal((await exports.createKnowledgeBase("新库")).id, "kb-new")
 })
@@ -331,6 +342,18 @@ function dialogHarness() {
       if (name === "react") return react
       if (name === "react/jsx-runtime") return { jsx: (type: unknown, props: unknown) => ({ type, props }), jsxs: (type: unknown, props: unknown) => ({ type, props }) }
       if (name.endsWith("/api")) return {
+        // UT-23: the dialog types upload failures with this class; the stub
+        // carries the same shape so the row's instanceof branch stays real.
+        ImportUploadError: class ImportUploadError extends Error {
+          kind: string
+          detected?: string
+          constructor(kind: string, message: string, detected?: string) {
+            super(message)
+            this.name = "ImportUploadError"
+            this.kind = kind
+            this.detected = detected
+          }
+        },
         async uploadFileToIngest(_file: unknown, _path: string, _onProgress: unknown, options: { knowledgeBaseId?: string }) {
           uploadedTo = options?.knowledgeBaseId ?? null
           if (uploadFailure) throw new Error("upload rejected")

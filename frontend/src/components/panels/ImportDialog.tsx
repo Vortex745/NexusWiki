@@ -8,6 +8,7 @@ import {
   fetchDocumentFolders,
   fetchIngestStatus,
   fetchKnowledgeBaseDocuments,
+  ImportUploadError,
   retireSource,
   submitUrlImport,
   uploadFileToIngest,
@@ -17,6 +18,7 @@ import {
 import { cn } from "../../lib/cn"
 import { formatBytes, IMPORT_CONCURRENCY, IMPORT_MAX_FILES_HINT, IMPORT_MAX_FILE_BYTES, IMPORT_POLL_MS } from "../../lib/constants"
 import {
+  buildImportRows,
   categoryForPath,
   countActiveImports,
   describeImportError,
@@ -24,7 +26,9 @@ import {
   freezeWaveParams,
   IMPORT_TERMINAL_STATUSES,
   matchExistingFileNames,
+  retryDecision,
   sanitizeKnowledgeBaseName,
+  type ImportAdmissionKind,
   type ImportWaveParams,
   type PickedFile,
   type PickedFolder,
@@ -66,6 +70,14 @@ interface ImportItem {
   status: ImportStatus
   docId: string | null
   error: string | null
+  /** UT-23: terminal client-side admission verdict (empty_file / file_size) —
+   * the same bytes can never pass, so these rows never offer upload retry. */
+  admissionKind?: ImportAdmissionKind
+  /** UT-23: structured failure kind (server admission kind or transport
+   * class) driving the explainable error copy and the retry gate. */
+  errorKind?: string | null
+  /** Byte-signature detection for type_conflict rows (e.g. "pdf"). */
+  errorDetected?: string | null
   /** Per-item folder header: folder waves map each file to a category. */
   folderName?: string
   /** Pre-check hit: the row waits for 仍要导入/跳过 and is not auto-uploaded. */
@@ -374,16 +386,22 @@ export function ImportDialog({
             tags: wave?.params.tags,
           },
         )
-        if (!docId) throw new Error("上传响应缺少文档 ID")
+        if (!docId) throw new ImportUploadError("invalid_response", "上传响应缺少文档 ID")
         updateItem(item.id, { status: "pending", docId, lastProgressAt: Date.now() })
         // The first poll fires immediately so the row shows real stage
         // progress instead of sitting on the upload-done placeholder.
         startPolling()
       } catch (err) {
-        updateItem(item.id, {
-          status: "failed",
-          error: errorMessageOf(err),
-        })
+        if (err instanceof ImportUploadError) {
+          updateItem(item.id, {
+            status: "failed",
+            error: err.message,
+            errorKind: err.kind,
+            errorDetected: err.detected ?? null,
+          })
+        } else {
+          updateItem(item.id, { status: "failed", error: errorMessageOf(err) })
+        }
       }
     },
     [updateItem, startPolling],
@@ -430,23 +448,15 @@ export function ImportDialog({
     return known?.name ?? null
   }, [pendingCategoryName, documentFolders])
 
-  const oversizeItems = useCallback((picked: PickedFile[], waveId: string): ImportItem[] => {
-    const maxMb = IMPORT_MAX_FILE_BYTES / 1024 / 1024
-    return picked.map(({ file, relativePath }) => {
-      const oversized = file.size > IMPORT_MAX_FILE_BYTES
-      return {
-        id: createId("imp"),
-        waveId,
-        fileName: file.name,
-        filePath: relativePath,
-        size: file.size,
-        status: oversized ? "failed" : "queued",
-        docId: null,
-        error: oversized ? `文件超过 ${maxMb}MB 上限` : null,
-        file,
-      }
-    })
-  }, [])
+  const buildRows = useCallback(
+    (picked: PickedFile[], waveId: string): ImportItem[] =>
+      // UT-23: client admission runs in the pure decision layer — empty and
+      // oversize files fail with an admission kind BEFORE upload, the client
+      // mirrors (never relaxes) the server's limits, and the server stays the
+      // authority for everything the client cannot confirm.
+      buildImportRows(picked, waveId, IMPORT_MAX_FILE_BYTES, () => createId("imp")),
+    [],
+  )
 
   const enqueueFileWave = useCallback(
     async (picked: PickedFile[], skippedCount: number) => {
@@ -461,7 +471,7 @@ export function ImportDialog({
           tags: parseTags(tagsText),
         }),
       }
-      const items = oversizeItems(picked, wave.id)
+      const items = buildRows(picked, wave.id)
       if (skippedCount > 0) showToast(`已跳过 ${skippedCount} 个不支持的文件`)
       if (items.length > IMPORT_MAX_FILES_HINT) {
         showToast(`共 ${items.length} 个文件，建议分批导入（单次 ≤ ${IMPORT_MAX_FILES_HINT}）`)
@@ -499,7 +509,7 @@ export function ImportDialog({
     },
     [
       bases, knowledgeBaseId, pendingCategoryName, documentFolderId, parser, tagsText,
-      oversizeItems, appendQueue, showToast, precheckFolderName, ensureWorkers, mutateQueue,
+      buildRows, appendQueue, showToast, precheckFolderName, ensureWorkers, mutateQueue,
     ],
   )
 
@@ -538,7 +548,7 @@ export function ImportDialog({
         kind: "folder",
         params: freezeWaveParams({ knowledgeBaseId: waveKnowledgeBaseId }),
       }
-      const items = oversizeItems(folder.files, wave.id).map((item) => ({
+      const items = buildRows(folder.files, wave.id).map((item) => ({
         ...item,
         folderName: categoryForPath(item.filePath, folder.name),
       }))
@@ -547,7 +557,7 @@ export function ImportDialog({
       completionNotifiedRef.current = false
       ensureWorkers()
     },
-    [bases, oversizeItems, appendQueue, showToast, ensureWorkers],
+    [bases, buildRows, appendQueue, showToast, ensureWorkers],
   )
 
   const handlePick = useCallback(
@@ -614,6 +624,13 @@ export function ImportDialog({
 
   const retryItem = useCallback(
     (item: ImportItem) => {
+      // UT-23: the retry gate decides what "retry" may mean for this row.
+      // Admission-rejected rows (empty/oversize) and server-accepted rows
+      // (docId exists — a processing failure) must NOT re-upload: the first
+      // can never pass, the second would create a NEW document dressed up as
+      // a same-document resume.
+      const gate = retryDecision(item)
+      if (!gate.retryable) return
       // URL rows re-submit their URL (a transient fetch failure is retryable);
       // file rows re-upload from the still-held File handle.
       if (!item.file && item.sourceUrl) {
@@ -623,6 +640,8 @@ export function ImportDialog({
       updateItem(item.id, {
         status: "queued",
         error: null,
+        errorKind: null,
+        errorDetected: null,
         docId: null,
         progress: initialImportProgress("queued"),
         uploadProgress: undefined,
@@ -1108,8 +1127,15 @@ export function ImportDialog({
                       long nowrap error line) and blows out the 520px dialog. */}
                   <ul className="grid grid-cols-1 gap-1.5">
                     {waveItems.map((item) => {
-                      const errorView = item.error ? describeImportError(item.error) : null
-                      const canRetry = item.status === "failed" && (item.file !== undefined || item.sourceUrl !== undefined)
+                      const errorView = item.error
+                        ? describeImportError(item.error, {
+                            kind: item.errorKind,
+                            detected: item.errorDetected,
+                            acceptedByServer: Boolean(item.docId),
+                          })
+                        : null
+                      const retryGate = retryDecision(item)
+                      const canRetry = retryGate.retryable
                       const canCancel = item.status === "queued" || item.status === "pending" || item.status === "processing"
                       return (
                         <li

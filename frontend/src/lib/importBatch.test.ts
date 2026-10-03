@@ -2,15 +2,18 @@ import assert from "node:assert/strict"
 import { describe, it } from "node:test"
 
 import {
+  buildImportRows,
   categoryForPath,
   countActiveImports,
   describeImportError,
   findReusableKnowledgeBase,
   flattenFolderNode,
   freezeWaveParams,
+  isPdfLike,
   isSupportedFileName,
   matchExistingFileNames,
   partitionLooseFiles,
+  retryDecision,
   sanitizeKnowledgeBaseName,
   type FolderNode,
 } from "./importBatch"
@@ -154,5 +157,144 @@ describe("active-count projection", () => {
     ]
     assert.equal(countActiveImports(items), 4)
     assert.equal(countActiveImports([]), 0)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// UT-23: client admission, PDF-only parser params, retry gating.
+// ---------------------------------------------------------------------------
+
+const IMPORT_MAX_FILE_BYTES = 20 * 1024 * 1024
+
+function fakePicked(name: string, size: number): { file: File; relativePath: string } {
+  // Only name/size matter: the File body is never read here.
+  const file = new File([], name)
+  Object.defineProperty(file, "size", { value: size })
+  return { file, relativePath: name }
+}
+
+describe("UT-23 client admission rows", () => {
+  it("fails empty and oversize files with an admission kind; queues the rest", () => {
+    const rows = buildImportRows(
+      [
+        fakePicked("empty.txt", 0),
+        fakePicked("huge.pdf", IMPORT_MAX_FILE_BYTES + 1),
+        fakePicked("ok.txt", 10),
+      ],
+      "wave-1",
+      IMPORT_MAX_FILE_BYTES,
+      (() => {
+        let n = 0
+        return () => `imp-${(n += 1)}`
+      })(),
+    )
+    assert.equal(rows.length, 3)
+    // Empty: rejected before upload with a stable, explainable kind.
+    assert.equal(rows[0].status, "failed")
+    assert.equal(rows[0].admissionKind, "empty_file")
+    assert.match(rows[0].error ?? "", /空文件/)
+    // Oversize: same — and the client did NOT relax the server's 20MB rule.
+    assert.equal(rows[1].status, "failed")
+    assert.equal(rows[1].admissionKind, "file_size")
+    assert.match(rows[1].error ?? "", /20MB/)
+    // Normal files still queue.
+    assert.equal(rows[2].status, "queued")
+    assert.equal(rows[2].admissionKind ?? null, null)
+  })
+
+  it("rejects one row without breaking the rest of the batch", () => {
+    // A single rejected row is terminal for THAT row only: the queued rows
+    // keep their file handles and flow into the upload workers unchanged.
+    const rows = buildImportRows(
+      [fakePicked("empty.txt", 0), fakePicked("a.pdf", 10), fakePicked("b.pdf", 10)],
+      "wave-1",
+      IMPORT_MAX_FILE_BYTES,
+      () => "imp-x",
+    )
+    assert.equal(rows.filter((row) => row.status === "queued").length, 2)
+    assert.equal(rows.filter((row) => row.status === "failed").length, 1)
+    for (const row of rows.filter((row) => row.status === "queued")) {
+      assert.ok(row.file, "queued rows keep their File handle")
+    }
+  })
+})
+
+describe("UT-23 retry gating", () => {
+  const base = { status: "failed", sourceUrl: undefined as string | undefined }
+
+  it("never offers upload retry for empty/oversize rows (无效重试)", () => {
+    const gate = retryDecision({ ...base, file: new File([], "huge.pdf"), admissionKind: "file_size" })
+    assert.equal(gate.retryable, false)
+    assert.equal(gate.reason, "file_invalid")
+    assert.equal(
+      retryDecision({ ...base, file: new File([], "empty.txt"), admissionKind: "empty_file" }).retryable,
+      false,
+    )
+  })
+
+  it("does not dress re-upload up as same-document resume after acceptance", () => {
+    // The server accepted this upload (docId exists): the failure happened in
+    // PROCESSING. Re-uploading would create a NEW document — never shown as
+    // resume (the resume command arrives with UT-27).
+    const gate = retryDecision({ ...base, file: new File([], "a.pdf"), docId: "doc-1", errorKind: "server" })
+    assert.equal(gate.retryable, false)
+    assert.equal(gate.reason, "server_accepted")
+  })
+
+  it("offers re-upload for a transfer failure the server never received", () => {
+    const gate = retryDecision({ ...base, file: new File([], "a.pdf"), docId: null, errorKind: "network" })
+    assert.equal(gate.retryable, true)
+    assert.equal(gate.reason ?? null, null)
+  })
+
+  it("keeps URL re-submission retryable on transient fetch failures", () => {
+    const gate = retryDecision({ ...base, sourceUrl: "https://example.com/a" })
+    assert.equal(gate.retryable, true)
+  })
+
+  it("ignores rows that are not failed", () => {
+    assert.equal(retryDecision({ status: "queued", file: new File([], "a.pdf") }).retryable, false)
+  })
+})
+
+describe("UT-23 server admission kind copy", () => {
+  it("maps the structured admission kinds to explainable text", () => {
+    assert.equal(describeImportError("空文件", { kind: "empty_file" }).text, "空文件无法导入：文件内容为 0 字节")
+    assert.equal(describeImportError("HTTP 413: 文件超过 20MB 单文件上限", { kind: "file_size" }).kind, "admission")
+    const conflict = describeImportError("HTTP 415: 文件类型与内容不符", { kind: "type_conflict", detected: "pdf" })
+    assert.equal(conflict.kind, "admission")
+    assert.match(conflict.text, /pdf/)
+    assert.equal(describeImportError("HTTP 415: 不支持的文件类型", { kind: "unsupported_type" }).kind, "admission")
+  })
+
+  it("keeps the legacy conflict/profile/generic mapping when no kind rides along", () => {
+    assert.equal(describeImportError("来源已存在").kind, "conflict")
+    assert.equal(describeImportError("embedding profile mismatch").kind, "profile")
+    assert.equal(describeImportError("SSRF 拒绝访问").text, "SSRF 拒绝访问")
+  })
+
+  it("appends the resume guard to task failures on accepted rows", () => {
+    const view = describeImportError("嵌入服务不可用", { acceptedByServer: true })
+    assert.equal(view.kind, "generic")
+    assert.match(view.text, /已被服务端接收/)
+    assert.match(view.text, /重新上传会创建新文档/)
+    // The guard must NOT ride on admission/transfer failures (nothing accepted).
+    assert.doesNotMatch(describeImportError("SSRF 拒绝访问").text, /已被服务端接收/)
+  })
+})
+
+describe("UT-23 PDF-only parser override", () => {
+  it("sends the override for PDF types and .pdf extensions only", () => {
+    assert.equal(isPdfLike("手册.pdf", "application/pdf"), true)
+    assert.equal(isPdfLike("手册.pdf", ""), true)
+    assert.equal(isPdfLike("手册.PDF", ""), true)
+  })
+
+  it("withholds it from TXT and any type the client cannot confirm", () => {
+    assert.equal(isPdfLike("notes.txt", "text/plain"), false)
+    assert.equal(isPdfLike("data.csv", "text/csv"), false)
+    // Unknown/octet-stream: the server decides — no PDF-only param rides.
+    assert.equal(isPdfLike("mystery.bin", "application/octet-stream"), false)
+    assert.equal(isPdfLike("noext", ""), false)
   })
 })

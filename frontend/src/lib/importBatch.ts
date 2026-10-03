@@ -182,27 +182,167 @@ function baseFileName(name: string): string {
 }
 
 // ---------------------------------------------------------------------------
-// Error copy mapping (tickets 06/07)
+// Error copy mapping (tickets 06/07, UT-23)
 // ---------------------------------------------------------------------------
 
 export interface ImportErrorView {
-  kind: "conflict" | "profile" | "generic"
+  kind: "conflict" | "profile" | "admission" | "generic"
   text: string
 }
 
+export interface ImportErrorContext {
+  /** Structured kind from the server's admission contract (empty_file /
+   * file_size / type_conflict / unsupported_type) or the transport class
+   * (network / timeout / invalid_response / server). */
+  kind?: string | null
+  /** Byte-signature detection for type_conflict rows (e.g. "pdf"). */
+  detected?: string | null
+  /** True when the server ACCEPTED this upload (docId exists): the failure
+   * happened in processing, and re-uploading would create a NEW document. */
+  acceptedByServer?: boolean
+}
+
+const ADMISSION_KIND_TEXT: Record<string, string> = {
+  empty_file: "空文件无法导入：文件内容为 0 字节",
+  file_size: "文件超过服务端单文件大小上限（20MB）",
+  unsupported_type: "文件类型不受支持",
+}
+
 /** The server's messages differ per failure class; rows show a curated line
- * plus the actions each class enables (conflict → 查看文档). The conflict
- * pattern matches the backend's real 409 text ("this source already exists
- * with different content — …", src/ingestion/lifecycle.ts). */
-export function describeImportError(raw: string): ImportErrorView {
+ * plus the actions each class enables (conflict → 查看文档). Structured
+ * admission kinds (UT-23) map to stable copy so empty/oversize/type rows
+ * explain themselves instead of pasting raw HTTP text. The conflict pattern
+ * matches the backend's real 409 text ("this source already exists with
+ * different content — …", src/ingestion/lifecycle.ts). */
+export function describeImportError(raw: string, context?: ImportErrorContext): ImportErrorView {
   const message = raw ?? ""
+  const kind = context?.kind ?? null
+  if (kind === "type_conflict") {
+    const detected = context?.detected ? `（检测到 ${context.detected} 内容）` : ""
+    return { kind: "admission", text: `文件类型与声明不符${detected}，已按服务端准入拒绝` }
+  }
+  if (kind && ADMISSION_KIND_TEXT[kind]) {
+    return { kind: "admission", text: ADMISSION_KIND_TEXT[kind] }
+  }
   if (/已存在|重复|duplicate|conflict|already exists/i.test(message)) {
     return { kind: "conflict", text: "文档已存在或内容冲突" }
   }
   if (/embedding|向量化|profile/i.test(message)) {
     return { kind: "profile", text: "知识库向量化配置与服务端不一致，无法导入" }
   }
+  // Task failure on an ACCEPTED row: the guard sentence states honestly that
+  // re-uploading is a new document, never a same-document resume (UT-23 AC4;
+  // the real resume command arrives with UT-27).
+  if (context?.acceptedByServer) {
+    const base = message || "导入失败"
+    return {
+      kind: "generic",
+      text: `${base}（文件已被服务端接收；重新上传会创建新文档，不会恢复原任务）`,
+    }
+  }
   return { kind: "generic", text: message || "导入失败" }
+}
+
+// ---------------------------------------------------------------------------
+// Row admission & retry gating (UT-23)
+// ---------------------------------------------------------------------------
+
+/** Client-side admission verdicts that are terminal for the FILE itself: the
+ * same bytes can never pass, so these rows must never offer upload retry. */
+export type ImportAdmissionKind = "empty_file" | "file_size" | null
+
+export interface ImportRowInit {
+  id: string
+  waveId: string
+  fileName: string
+  filePath: string
+  size: number
+  status: "queued" | "failed"
+  docId: null
+  error: string | null
+  admissionKind: ImportAdmissionKind
+  file: File
+}
+
+/** Build queue rows from a picked file list (UT-23): empty and oversize files
+ * are rejected BEFORE upload with an admission kind — the client mirrors the
+ * server's admission contract (never relaxes it), and the server stays the
+ * authority for everything the client cannot confirm. One rejected row is
+ * terminal for that row only; the queued rows flow into the workers unchanged. */
+export function buildImportRows(
+  picked: ReadonlyArray<PickedFile>,
+  waveId: string,
+  maxBytes: number,
+  makeId: () => string,
+): ImportRowInit[] {
+  const maxMb = Math.round(maxBytes / 1024 / 1024)
+  return picked.map(({ file, relativePath }) => {
+    if (file.size === 0) {
+      return {
+        id: makeId(), waveId, fileName: file.name, filePath: relativePath,
+        size: 0, status: "failed", docId: null,
+        error: ADMISSION_KIND_TEXT.empty_file, admissionKind: "empty_file", file,
+      }
+    }
+    if (file.size > maxBytes) {
+      return {
+        id: makeId(), waveId, fileName: file.name, filePath: relativePath,
+        size: file.size, status: "failed", docId: null,
+        error: `文件超过 ${maxMb}MB 上限`, admissionKind: "file_size", file,
+      }
+    }
+    return {
+      id: makeId(), waveId, fileName: file.name, filePath: relativePath,
+      size: file.size, status: "queued", docId: null, error: null,
+      admissionKind: null, file,
+    }
+  })
+}
+
+export interface RetryDecision {
+  retryable: boolean
+  /** Why retry is withheld — rows may render the reason:
+   * file_invalid → the same bytes can never pass (empty/oversize);
+   * server_accepted → the failure is a processing failure on an accepted
+   * upload; re-uploading would create a NEW document (UT-27 adds the real
+   * same-document resume command). */
+  reason?: "file_invalid" | "server_accepted"
+}
+
+export interface RetryGateInput {
+  status: string
+  file?: unknown
+  sourceUrl?: string
+  docId?: string | null
+  admissionKind?: ImportAdmissionKind
+}
+
+/** Whether a failed row may retry, and which recovery that retry means
+ * (UT-23): URL rows re-submit their URL; unaccepted file rows re-upload
+ * their still-held File handle; admission-rejected and server-accepted rows
+ * get NO re-upload — the first can never pass, the second would silently
+ * fabricate a "resume" that is really a new document. */
+export function retryDecision(item: RetryGateInput): RetryDecision {
+  if (item.status !== "failed") return { retryable: false }
+  if (item.admissionKind) return { retryable: false, reason: "file_invalid" }
+  if (item.docId) return { retryable: false, reason: "server_accepted" }
+  if (!item.file && item.sourceUrl) return { retryable: true }
+  if (item.file) return { retryable: true }
+  return { retryable: false }
+}
+
+// ---------------------------------------------------------------------------
+// PDF-only parser override (UT-23)
+// ---------------------------------------------------------------------------
+
+/** The advanced parser option is a PDF-adapter choice; PDF-only parameters
+ * ride only on files the client can confirm ARE PDFs (declared mime or the
+ * .pdf extension). A type the client cannot confirm (octet-stream, unknown)
+ * rides WITHOUT the override — the server decides. TXT therefore never
+ * carries PDF settings (UT-23 AC2). */
+export function isPdfLike(fileName: string, mimeType?: string): boolean {
+  if (mimeType === "application/pdf") return true
+  return extensionOf(fileName) === ".pdf"
 }
 
 // ---------------------------------------------------------------------------
