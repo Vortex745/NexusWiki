@@ -261,24 +261,30 @@ test("UT-01 缺陷复现：TXT 携带 PDF 专用 override 被原样接受且只�
     assert.equal(document?.fileName, "override-pollution.txt")
     assert.deepEqual(document?.rawContent, body)
 
-    // 路由缺陷：显式 override 使候选只剩 marker 且 authoritative，
-    // TXT 的类型匹配完全被 PDF 专用选项污染（确定性，与本机 marker 是否可用无关）。
-    const pollutedRoute = selectParserRoute({
+    // UT-06 已修复该缺陷：override 仍被持久化（原意图保留），但路由归一到
+    // 类型匹配的文本路径——不再被 PDF 专用解析器劫持。
+    assert.equal(document?.parserOverride, "marker")
+    assert.equal(document?.fileName, "override-pollution.txt")
+    assert.deepEqual(document?.rawContent, body)
+
+    const normalizedRoute = selectParserRoute({
       fileName: "override-pollution.txt",
       mimeType: "text/plain",
       override: "marker",
     })
-    assert.deepEqual(pollutedRoute.candidates, ["marker"])
-    assert.equal(pollutedRoute.authoritative, true)
+    assert.deepEqual(normalizedRoute.candidates, ["markitdown"])
+    assert.equal(normalizedRoute.authoritative, false)
+    assert.match(normalizedRoute.reason, /marker/, "调整原因保留原 override 意图")
     report.overrideReproduction = {
       admission: "accepted-with-override",
       persistedParserOverride: document?.parserOverride,
-      routeCandidates: pollutedRoute.candidates,
-      authoritative: pollutedRoute.authoritative,
+      routeCandidates: normalizedRoute.candidates,
+      authoritative: normalizedRoute.authoritative,
+      adjustmentReason: normalizedRoute.reason,
       note:
-        "marker 在本机不可用（见 environment.marker）；当前 lifecycle 以 2s/4s/8s" +
-        "有界重试后 dead-letter（src/ingestion/lifecycle.ts RETRY_DELAYS_MS），" +
-        "TXT 因此继承 PDF 解析器的失败模式。",
+        "UT-06 修复：PDF 专用 override 在 TXT 上归一到类型匹配路径并记录原意图。" +
+        "UT-01 首次记录时该路由缺陷为 candidates=[marker] authoritative=true，" +
+        "marker 缺失导致 TXT 以 2s/4s/8s 重试后 dead-letter。",
     }
   } finally {
     await new Promise<void>((resolveClose, rejectClose) => {
