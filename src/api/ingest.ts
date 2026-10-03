@@ -5,6 +5,8 @@ import { singleTenantAccessContext, type AccessContext } from "../access/context
 import { loadConfig } from "../config"
 import { decodeUtf8HeaderValue } from "./header_encoding"
 import { createIngestionLifecycle } from "../ingestion/pipeline"
+import { detectTypeConflict } from "../ingestion/admission"
+import { selectParserRoute } from "../ingestion/parser"
 import type { SourceIdentityInput } from "../ingestion/source_identity"
 import { openDb } from "../ingestion/tracking"
 import type { DB } from "../ingestion/tracking/db"
@@ -361,7 +363,9 @@ rawIngestRouter.post(
   },
   (req: Request, res: Response) => {
     if (!Buffer.isBuffer(req.body) || req.body.length === 0) {
-      return res.status(400).json({ error: "a non-empty application/octet-stream body is required" })
+      return res.status(400).json({
+        error: { kind: "empty_file", message: "a non-empty application/octet-stream body is required" },
+      })
     }
     const fileName = decodeUtf8HeaderValue(req.get("x-file-name")).trim()
     if (!fileName) {
@@ -371,6 +375,37 @@ rawIngestRouter.post(
     if (parserOverride && !PARSER_TYPES.has(parserOverride)) {
       return res.status(400).json({
         error: "x-parser must be markitdown, marker, mineru, or builtin-pdf",
+      })
+    }
+    // Ticket UT-05: admission judges the DECLARED type against the actual
+    // bytes before anything is persisted. Clear type masquerade (a .txt that
+    // is really a PDF, or text bytes declared as PDF) is refused with a
+    // stable error; generic MIME declarations never override the bytes.
+    const typeConflict = detectTypeConflict(fileName, req.body)
+    if (typeConflict) {
+      return res.status(415).json({
+        error: {
+          kind: typeConflict.kind,
+          detected: typeConflict.detected,
+          message: typeConflict.message,
+        },
+      })
+    }
+    // Ticket UT-05: an unrouteable type is refused at admission instead of
+    // consuming parse retries later — no runnable task is created for a type
+    // no parser can handle.
+    try {
+      selectParserRoute({
+        fileName,
+        mimeType: req.get("x-file-mime-type")?.trim() || undefined,
+        override: parserOverride,
+      })
+    } catch (error) {
+      return res.status(415).json({
+        error: {
+          kind: "unsupported_type",
+          message: error instanceof Error ? error.message : String(error),
+        },
       })
     }
     // Ticket 12 (DOC-01B): same-name files require an explicit intent.
