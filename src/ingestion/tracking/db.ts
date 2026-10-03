@@ -120,6 +120,25 @@ const SCHEMA = [
     PRIMARY KEY (document_id, node_id)
   )`,
   `CREATE INDEX IF NOT EXISTS idx_page_index_doc ON page_index_nodes(document_id)`,
+  // Ticket UT-09: durable extraction evidence — the RAW parser output (before
+  // any normalization/cleaning), its own hash, the parser configuration
+  // fingerprint, per-page coverage and coverage warnings. Reviewers (and the
+  // UT-19 reuse path) read the same evidence after a process restart; the
+  // cleaned form never overwrites this record.
+  `CREATE TABLE IF NOT EXISTS extraction_artifacts (
+    doc_id TEXT NOT NULL,
+    version INTEGER NOT NULL,
+    schema_version INTEGER NOT NULL DEFAULT 1,
+    parser_type TEXT NOT NULL,
+    parser_config_version TEXT NOT NULL,
+    raw_extraction TEXT NOT NULL,
+    raw_extraction_sha256 TEXT NOT NULL,
+    warnings_json TEXT NOT NULL DEFAULT '[]',
+    pages_json TEXT NOT NULL DEFAULT '[]',
+    page_count INTEGER,
+    completed_at TEXT NOT NULL,
+    PRIMARY KEY (doc_id, version)
+  )`,
   `CREATE TABLE IF NOT EXISTS clarification_pending (
     session_id TEXT PRIMARY KEY,
     original_message TEXT NOT NULL,

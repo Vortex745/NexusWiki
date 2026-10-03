@@ -29,10 +29,15 @@ export class MarkItDownParser {
   async parse(input: ParseDocumentInput): Promise<NormalizedBlock[]> {
     try {
       const markdown = await this.parseRaw(input)
-      return normalizeMarkItDown(markdown, input.documentId)
+      return this.normalizeRaw(markdown, input.documentId)
     } catch (error) {
       throw this.wrapParseError(error)
     }
+  }
+
+  /** UT-09: normalize raw MarkItDown markdown into blocks. */
+  normalizeRaw(raw: string, documentId: string): NormalizedBlock[] {
+    return normalizeMarkItDown(raw, documentId)
   }
 
   /**

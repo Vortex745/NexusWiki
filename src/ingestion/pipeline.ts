@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto"
 import { loadConfig } from "../config"
 import type {
   ActivationMode,
@@ -15,26 +16,36 @@ import {
   type StageExecution,
 } from "./lifecycle"
 import {
+  BuiltinPdfParser,
   MarkItDownParser,
   MarkerParser,
   MinerUParser,
-  selectParser,
+  selectParserRoute,
   type Parser,
+  type ParserRouteInfo,
 } from "./parser"
-import { createIngestionStore, IngestionStoreImpl } from "./storage"
+import {
+  createIngestionStore,
+  IngestionStoreImpl,
+  type ChunkStoreMetrics,
+} from "./storage"
 import { buildPageIndex } from "./page_index_builder"
 import type { DB } from "./tracking/db"
 import { DocumentRepo } from "./tracking/doc_repo"
 import { PageIndexRepository } from "./tracking/page_index_repo"
-import { LLMWikifier } from "./wikify/wikifier"
+import {
+  EXTRACTION_EVIDENCE_SCHEMA_VERSION,
+  ExtractionEvidenceRepository,
+  buildPageEvidence,
+} from "./tracking/extraction_evidence_repo"
 
 export type ParserResolver = (type: ParserType) => Parser
 
 /**
  * Eval refactor Ticket 02: the LLM boundary of the wikify stage. Extraction
  * and link building are external LLM calls — tests and isolated evaluation
- * scopes may inject a controlled implementation. Omitted → the production
- * `LLMWikifier` (config-based client), unchanged behavior.
+ * scopes may inject a controlled implementation. Production Wiki generation
+ * runs asynchronously after activation, so ordinary imports omit this stage.
  */
 export interface WikifierLike {
   extractEntities(chunks: Chunk[]): Promise<Entity[]>
@@ -48,8 +59,28 @@ interface ChunkStageResult {
   parserReason: string | null
 }
 
+interface ChunkStoreStageResult {
+  chunks: Chunk[]
+  metrics: ChunkStoreMetrics | null
+}
+
+function isParserUnavailableError(error: unknown): boolean {
+  // Every CLI-backed parser wraps a missing executable with this phrase; it
+  // is the only failure mode that justifies trying the next route candidate.
+  const message = error instanceof Error ? error.message : String(error)
+  return message.includes("executable is unavailable")
+}
+
 function configuredParser(type: ParserType): Parser {
   const config = loadConfig()
+  if (type === "builtin-pdf") {
+    return new BuiltinPdfParser({
+      command: config.pythonCommand ?? "python",
+      timeoutMs: config.parserTimeoutMs ?? 120_000,
+      inputLimitBytes: config.parserInputLimitBytes ?? 20 * 1024 * 1024,
+      outputLimitBytes: config.parserOutputLimitBytes ?? 20 * 1024 * 1024,
+    })
+  }
   if (type === "marker") {
     return new MarkerParser({
       command: config.markerCommand ?? "marker_single",
@@ -73,6 +104,35 @@ function configuredParser(type: ParserType): Parser {
     inputLimitBytes: config.parserInputLimitBytes ?? 20 * 1024 * 1024,
     outputLimitBytes: config.parserOutputLimitBytes ?? 20 * 1024 * 1024,
   })
+}
+
+/**
+ * Ticket UT-09: fingerprint of the parser configuration that produced an
+ * extraction. Two records with different fingerprints were produced under
+ * different parser settings and must never be treated as interchangeable
+ * (the UT-19 reuse path consumes this judgement).
+ */
+function parserConfigFingerprint(type: ParserType): string {
+  const config = loadConfig()
+  const command =
+    type === "builtin-pdf"
+      ? (config.pythonCommand ?? "python")
+      : type === "marker"
+        ? (config.markerCommand ?? "marker_single")
+        : type === "mineru"
+          ? (config.mineruCommand ?? "mineru")
+          : (config.markitdownCommand ?? "markitdown")
+  return createHash("sha256")
+    .update(
+      JSON.stringify({
+        parserType: type,
+        command,
+        timeoutMs: config.parserTimeoutMs ?? 120_000,
+        inputLimitBytes: config.parserInputLimitBytes ?? 20 * 1024 * 1024,
+        outputLimitBytes: config.parserOutputLimitBytes ?? 20 * 1024 * 1024,
+      })
+    )
+    .digest("hex")
 }
 
 function recordParserMetadata(
@@ -113,7 +173,6 @@ export class PipelineStageRunner implements IngestionStageRunner {
   private documentRepo: DocumentRepo
   private store: IngestionStoreImpl | null
   private readonly injectedWikifier?: WikifierLike
-  private defaultWikifier: WikifierLike | null = null
 
   constructor(
     private db: DB,
@@ -126,17 +185,7 @@ export class PipelineStageRunner implements IngestionStageRunner {
     // on first run() if not provided so construction stays cheap and tests
     // that never reach storeChunks don't need env vars.
     this.store = store ?? null
-    // Ticket 02: same laziness for the wikifier — constructing the stage
-    // runner must stay side-effect free. `LLMWikifier` loads config (and
-    // requires OPENAI_API_KEY) in its constructor, so it is only built at
-    // first wikify use when no override was injected.
     this.injectedWikifier = wikifier
-  }
-
-  private resolveWikifier(): WikifierLike {
-    if (this.injectedWikifier) return this.injectedWikifier
-    if (!this.defaultWikifier) this.defaultWikifier = new LLMWikifier()
-    return this.defaultWikifier
   }
 
   private ensureStore(): IngestionStoreImpl {
@@ -162,11 +211,11 @@ export class PipelineStageRunner implements IngestionStageRunner {
     document: Document,
     execution: StageExecution
   ): Promise<Record<string, unknown>> {
-    let parserDecision: ReturnType<typeof selectParser> | null = null
+    let parserRoute: ParserRouteInfo | null = null
     let parserRoutingError: Error | null = null
       if (document.rawContent) {
         try {
-          parserDecision = selectParser({
+          parserRoute = selectParserRoute({
             fileName: document.fileName ?? document.title,
             mimeType: document.mimeType ?? undefined,
             override: document.parserOverride ?? undefined,
@@ -177,8 +226,8 @@ export class PipelineStageRunner implements IngestionStageRunner {
         recordParserMetadata(
           this.documentRepo,
           document,
-          parserDecision?.parser ?? null,
-          parserDecision?.reason ?? parserRoutingError?.message ?? "parser routing failed"
+          parserRoute?.candidates[0] ?? null,
+          parserRoute?.reason ?? parserRoutingError?.message ?? "parser routing failed"
         )
       }
 
@@ -189,8 +238,8 @@ export class PipelineStageRunner implements IngestionStageRunner {
               contentLength: document.rawContent.length,
               fileName: document.fileName,
               mimeType: document.mimeType,
-              parser: parserDecision?.parser ?? null,
-              parserReason: parserDecision?.reason ?? parserRoutingError?.message ?? null,
+              parser: parserRoute?.candidates[0] ?? null,
+              parserReason: parserRoute?.reason ?? parserRoutingError?.message ?? null,
             }
           : { contentLength: document.content.length },
         async (): Promise<ChunkStageResult> => {
@@ -203,16 +252,106 @@ export class PipelineStageRunner implements IngestionStageRunner {
             }
           }
           if (parserRoutingError) throw parserRoutingError
-          if (!parserDecision) throw new Error("Raw document parser routing did not produce a decision")
+          if (!parserRoute) throw new Error("Raw document parser routing did not produce a decision")
 
-          const parser = this.resolveParser(parserDecision.parser)
-          const blocks = await parser.parse({
-            content: document.rawContent,
-            fileName: document.fileName ?? document.title,
-            mimeType: document.mimeType ?? undefined,
-            documentId: document.id,
-            signal: execution.signal,
-          })
+          // Walk the route candidates in preference order. A candidate whose
+          // runtime is missing falls back to the next one; every other
+          // failure (timeout, malformed output, content issues) aborts the
+          // import loudly — fallback must never mask a real parse failure.
+          let blocks: NormalizedBlock[] | null = null
+          let rawExtraction: string | null = null
+          let usedParser: ParserType | null = null
+          let parserReason = parserRoute.reason
+          const attempts: string[] = []
+          for (const candidate of parserRoute.candidates) {
+            const parser = this.resolveParser(candidate)
+            try {
+              if (typeof parser.parseRaw === "function" && typeof parser.normalizeRaw === "function") {
+                // UT-09 truth seam: capture the RAW extraction (pre-cleaning)
+                // for the durable evidence record; normalization happens on
+                // the exact same output — nothing is parsed twice.
+                rawExtraction = await parser.parseRaw({
+                  content: document.rawContent,
+                  fileName: document.fileName ?? document.title,
+                  mimeType: document.mimeType ?? undefined,
+                  signal: execution.signal,
+                })
+                blocks = parser.normalizeRaw(rawExtraction, document.id)
+              } else {
+                rawExtraction = null
+                blocks = await parser.parse({
+                  content: document.rawContent,
+                  fileName: document.fileName ?? document.title,
+                  mimeType: document.mimeType ?? undefined,
+                  documentId: document.id,
+                  signal: execution.signal,
+                })
+              }
+              usedParser = candidate
+              if (attempts.length > 0) {
+                parserReason = `${parserRoute.reason}; ${attempts.join("; ")}; fell back to ${candidate}`
+              }
+              break
+            } catch (error) {
+              const failure = error instanceof Error ? error : new Error(String(error))
+              if (parserRoute.authoritative || !isParserUnavailableError(failure)) {
+                throw failure
+              }
+              attempts.push(`${candidate} unavailable`)
+            }
+          }
+          if (!blocks || !usedParser) {
+            throw new Error(
+              `No usable parser for ${document.fileName ?? document.title}: tried ${parserRoute.candidates.join(", ")} (${parserRoute.reason}). Install one of the missing runtimes — marker (pip install marker-pdf), mineru, or the repo-bundled builtin parser (python + pymupdf).`
+            )
+          }
+
+          // Ticket UT-09: persist the durable extraction evidence — the RAW
+          // extraction (pre-cleaning), its own hash, the parser configuration
+          // fingerprint and per-page coverage — before any cleaning runs, so a
+          // reviewer can audit the exact bytes the parser produced even after
+          // a restart. Parsers without a raw seam (mineru) leave no evidence
+          // row: absent capability is never fabricated. Coverage warnings come
+          // from the extraction payload itself (builtin-pdf emits them).
+          if (rawExtraction !== null) {
+            let warnings: string[] = []
+            let pageCount: number | null = null
+            if (usedParser === "builtin-pdf") {
+              try {
+                const rawJson = JSON.parse(rawExtraction) as {
+                  warnings?: unknown
+                  pageCount?: unknown
+                }
+                if (Array.isArray(rawJson.warnings)) {
+                  warnings = rawJson.warnings.filter(
+                    (warning): warning is string => typeof warning === "string"
+                  )
+                }
+                if (Number.isInteger(rawJson.pageCount)) {
+                  pageCount = rawJson.pageCount as number
+                }
+              } catch {
+                // normalizeRaw already validated this exact JSON; a re-parse
+                // failure cannot happen for a successfully normalized payload.
+              }
+            }
+            new ExtractionEvidenceRepository(this.db).record({
+              docId: document.id,
+              version: document.version,
+              schemaVersion: EXTRACTION_EVIDENCE_SCHEMA_VERSION,
+              parserType: usedParser,
+              parserConfigVersion: parserConfigFingerprint(usedParser),
+              rawExtraction,
+              rawExtractionSha256: createHash("sha256")
+                .update(Buffer.from(rawExtraction, "utf8"))
+                .digest("hex"),
+              warnings,
+              pages: buildPageEvidence(blocks, pageCount, warnings),
+              pageCount,
+              completedAt: new Date().toISOString(),
+            })
+          }
+
           const parsedDocument: Document = {
             ...document,
             content: blocks.map((block) => block.text).join("\n\n"),
@@ -221,15 +360,15 @@ export class PipelineStageRunner implements IngestionStageRunner {
           recordParserMetadata(
             this.documentRepo,
             document,
-            parserDecision.parser,
-            parserDecision.reason,
+            usedParser,
+            parserReason,
             blocks
           )
           return {
             chunks,
             blocks,
-            parser: parserDecision.parser,
-            parserReason: parserDecision.reason,
+            parser: usedParser,
+            parserReason,
           }
         },
         (result) => ({
@@ -253,9 +392,11 @@ export class PipelineStageRunner implements IngestionStageRunner {
         "wikify",
         { chunkCount: chunks.length },
         async (): Promise<{ entities: Entity[]; wikilinks: Wikilink[] }> => {
-          const wikifier = this.resolveWikifier()
-          const entities = await wikifier.extractEntities(chunks)
-          const wikilinks = await wikifier.buildWikilinks(entities, chunks)
+          // Wiki pages are generated after document activation. The legacy
+          // graph extractor is optional and must not gate ordinary imports.
+          if (!this.injectedWikifier) return { entities: [], wikilinks: [] }
+          const entities = await this.injectedWikifier.extractEntities(chunks)
+          const wikilinks = await this.injectedWikifier.buildWikilinks(entities, chunks)
           return { entities, wikilinks }
         },
         ({ entities, wikilinks }) => ({
@@ -268,7 +409,7 @@ export class PipelineStageRunner implements IngestionStageRunner {
       await execution.runStage(
         "storeChunks",
         { chunkCount: chunks.length },
-        async (): Promise<Chunk[]> => {
+        async (): Promise<ChunkStoreStageResult> => {
           if (
             document.tenantId === undefined ||
             document.allowedGroups === undefined ||
@@ -277,11 +418,11 @@ export class PipelineStageRunner implements IngestionStageRunner {
             throw new Error("Document access metadata is required before chunk persistence")
           }
           const store = this.ensureStore()
-          await store.storeChunks(chunks, {
+          const metrics = await store.storeChunks(chunks, {
             tenantId: document.tenantId,
             allowedGroups: document.allowedGroups,
             knowledgeBaseId: document.knowledgeBaseId,
-          })
+          }, execution.signal)
           const nodes = buildPageIndex(document, chunks)
           if (nodes.length > 0) {
             new PageIndexRepository(this.db).replaceNodes(document.id, nodes, {
@@ -290,11 +431,12 @@ export class PipelineStageRunner implements IngestionStageRunner {
               knowledgeBaseId: document.knowledgeBaseId,
             })
           }
-          return chunks
+          return { chunks, metrics: metrics ?? null }
         },
-        (storedChunks) => ({
-          chunkCount: storedChunks.length,
+        (stored) => ({
+          chunkCount: stored.chunks.length,
           indexName: this.ensureStore().chunkIndexName,
+          ...(stored.metrics ?? {}),
         })
       )
 
@@ -312,6 +454,7 @@ export class PipelineStageRunner implements IngestionStageRunner {
           ) {
             throw new Error("Document access metadata is required before graph persistence")
           }
+          if (!wikified.entities.length && !wikified.wikilinks.length) return wikified
           const store = this.ensureStore()
           await store.storeEntities(wikified.entities)
           await store.storeWikilinks(wikified.wikilinks, {

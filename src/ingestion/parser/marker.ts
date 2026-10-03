@@ -296,6 +296,31 @@ export class MarkerParser {
   constructor(private options: MarkerParserOptions) {}
 
   async parse(input: ParseDocumentInput): Promise<NormalizedBlock[]> {
+    try {
+      const raw = await this.parseRaw(input)
+      return this.normalizeRaw(raw, input.documentId)
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      if (message.startsWith("Parser executable is unavailable:")) {
+        throw new Error(
+          `Marker executable is unavailable. Configure MARKER_COMMAND. ${message}`
+        )
+      }
+      if (message.startsWith("Parser artifacts exceeded ")) {
+        throw new Error(`Marker output exceeded ${this.options.outputLimitBytes} bytes`)
+      }
+      throw new Error(`Marker failed: ${message}`)
+    }
+  }
+
+  /**
+   * Ticket UT-09 truth seam: run Marker exactly like parse() but return the
+   * RAW artifact JSON so the pipeline can persist durable extraction
+   * evidence. No behavior change for parse().
+   */
+  async parseRaw(
+    input: Omit<ParseDocumentInput, "documentId">
+  ): Promise<string> {
     if (input.content.length > this.options.inputLimitBytes) {
       throw new Error(`Marker input exceeded ${this.options.inputLimitBytes} bytes`)
     }
@@ -331,28 +356,22 @@ export class MarkerParser {
         (path) => path.toLowerCase().endsWith(".json"),
         (path) => basename(path).toLowerCase() === "input.json"
       )
-      let parsed: unknown
-      try {
-        parsed = JSON.parse(await readFile(artifact, "utf8"))
-      } catch (error) {
-        throw new Error(
-          `malformed Marker output: ${error instanceof Error ? error.message : String(error)}`
-        )
-      }
-      return normalizeMarker(parsed, input.documentId)
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error)
-      if (message.startsWith("Parser executable is unavailable:")) {
-        throw new Error(
-          `Marker executable is unavailable. Configure MARKER_COMMAND. ${message}`
-        )
-      }
-      if (message.startsWith("Parser artifacts exceeded ")) {
-        throw new Error(`Marker output exceeded ${this.options.outputLimitBytes} bytes`)
-      }
-      throw new Error(`Marker failed: ${message}`)
+      return await readFile(artifact, "utf8")
     } finally {
       await rm(workspace, { recursive: true, force: true })
     }
+  }
+
+  /** UT-09: normalize a raw Marker artifact JSON string into blocks. */
+  normalizeRaw(raw: string, documentId: string): NormalizedBlock[] {
+    let parsed: unknown
+    try {
+      parsed = JSON.parse(raw)
+    } catch (error) {
+      throw new Error(
+        `malformed Marker output: ${error instanceof Error ? error.message : String(error)}`
+      )
+    }
+    return normalizeMarker(parsed, documentId)
   }
 }

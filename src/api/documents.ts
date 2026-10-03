@@ -3,6 +3,7 @@ import type { Client } from "@elastic/elasticsearch"
 import type { AccessContext } from "../access/context"
 import { singleTenantAccessContext } from "../access/context"
 import type { DocumentRepo, DocumentCatalogPage } from "../ingestion/tracking/doc_repo"
+import type { ExtractionEvidenceRepository } from "../ingestion/tracking/extraction_evidence_repo"
 import type { PageIndexRepository } from "../ingestion/tracking/page_index_repo"
 import type { KnowledgeBaseService } from "../knowledge/knowledge_base_service"
 
@@ -113,8 +114,13 @@ export function createDocumentsRouter(options: {
   pageIndexRepo: PageIndexRepository
   /** Ticket 13 (DOC-02): chunk reads; absent (bare mounts) → chunk views 503. */
   chunkReader?: ChunkReader
+  /**
+   * Ticket UT-09: durable extraction evidence reads; absent (bare mounts) →
+   * the extraction view answers 503 instead of pretending no evidence exists.
+   */
+  extractionEvidenceRepo?: ExtractionEvidenceRepository
 }): Router {
-  const { documentRepo, knowledgeBaseService, pageIndexRepo, chunkReader } = options
+  const { documentRepo, knowledgeBaseService, pageIndexRepo, chunkReader, extractionEvidenceRepo } = options
   const router = Router()
 
   router.get(
@@ -216,6 +222,56 @@ export function createDocumentsRouter(options: {
     })
   })
 
+  // ---------------------------------------------------------------------------
+  // Ticket UT-09: durable extraction evidence — the RAW extraction, its own
+  // hash, the parser configuration fingerprint, per-page coverage and parser
+  // warnings, readable after a restart. Authorization is exactly the doc-level
+  // rule of GET /documents/:docId (tenant + group visibility; an invisible
+  // document is an indistinguishable 404). The record echoes the honest parser
+  // output — the read validates it and reports valid:false for tampered or
+  // half-written rows instead of serving them as a verification cache.
+  // ---------------------------------------------------------------------------
+  router.get("/documents/:docId/extraction", (req: Request, res: Response) => {
+    const context = accessContext(res)
+    const docId = String(req.params.docId)
+    const doc = documentRepo.get(docId)
+    if (
+      !doc ||
+      (doc.tenantId ?? "default") !== context.tenantId ||
+      !groupVisible(doc.allowedGroups ?? [], context)
+    ) {
+      res.status(404).json({ error: "document not found" })
+      return
+    }
+    if (!extractionEvidenceRepo) {
+      res.status(503).json({ error: "extraction evidence unavailable" })
+      return
+    }
+    const result = extractionEvidenceRepo.get(docId)
+    if (!result) {
+      res.status(404).json({ error: "extraction evidence not found" })
+      return
+    }
+    const { artifact, valid, invalidReason } = result
+    res.json({
+      docId,
+      version: artifact.version,
+      valid,
+      ...(invalidReason ? { invalidReason } : {}),
+      evidence: {
+        schemaVersion: artifact.schemaVersion,
+        parserType: artifact.parserType,
+        parserConfigVersion: artifact.parserConfigVersion,
+        rawExtractionSha256: artifact.rawExtractionSha256,
+        rawExtraction: artifact.rawExtraction,
+        warnings: artifact.warnings,
+        pages: artifact.pages,
+        pageCount: artifact.pageCount,
+        completedAt: artifact.completedAt,
+      },
+    })
+  })
+
   router.get("/documents/:docId/preview", async (req: Request, res: Response) => {
     const context = accessContext(res)
     const docId = String(req.params.docId)
@@ -262,7 +318,7 @@ export function createDocumentsRouter(options: {
     if (!available) {
       reason = doc.mimeType === "application/pdf"
         ? "无法预览：该 PDF 没有可提取的文本层（扫描件需要 mineru 等 OCR 解析能力）。"
-        : "无法预览：该版本的文本内容不可用（可能已随退役清理，或解析未产出文本）。"
+        : "无法预览：该版本的文本内容不可用（可能已随删除清理，或解析未产出文本）。"
     }
     res.json({ available, ...(available ? { text } : { reason }) })
   })
