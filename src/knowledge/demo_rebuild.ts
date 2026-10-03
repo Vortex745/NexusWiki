@@ -35,13 +35,33 @@ import {
  */
 export const DEMO_REBUILD_SQLITE_TABLES = [
   "knowledge_bases",
+  // The folder taxonomy groups the bases above, so a rebuild that clears them
+  // must clear the folders too — otherwise a fresh tenant inherits stale names.
+  "knowledge_base_folders",
   "sources",
+  // The document directories group the documents below, so a rebuild that clears
+  // them has to clear the registry too — otherwise the names survive the content.
+  "document_folders",
   "documents",
   "task_pending_ops",
   "task_dead_letters",
   "processing_spans",
+  // Upload-integrity (UT-09/UT-13): durable extraction evidence and the
+  // expected retrieval manifest are per-document ingestion state — a rebuild
+  // clears them with the documents they describe.
+  "extraction_artifacts",
+  "expected_chunks",
   "answer_run_events",
   "page_index_nodes",
+  "cleanup_image_assets",
+  "wiki_settings",
+  "wiki_pages",
+  "wiki_revisions",
+  "wiki_contributions",
+  "wiki_proposals",
+  "wiki_folders",
+  "wiki_issues",
+  "wiki_jobs",
   "clarification_pending",
   "session_bindings",
   "conversation_turns",

@@ -382,9 +382,37 @@ class FakeEsCluster {
             target = new Map()
             cluster.indices.set(action.index._index, target)
           }
-          target.set(action.index._id, { ...doc })
+          // Real ES keys documents by _id and exposes it in queries; keep the
+          // key as a field so terms(_id) clauses (UT-17 visibility probe) work.
+          target.set(action.index._id, { ...doc, _id: action.index._id })
         }
         return { errors: false, items: [] }
+      },
+      mget: async ({
+        index,
+        ids,
+        _source,
+      }: {
+        index: string
+        ids?: string[]
+        _source?: string[]
+      }) => {
+        // UT-16 read-back verification: same shape as the real client's mget
+        // response (docs[] with _id/found/_source restricted to the request).
+        const target = cluster.indices.get(index)
+        return {
+          docs: (ids ?? []).map((id) => {
+            const doc = target?.get(id) as Record<string, unknown> | undefined
+            if (!doc) return { _id: id, found: false }
+            return {
+              _id: id,
+              found: true,
+              _source: Object.fromEntries(
+                (_source ?? []).map((field) => [field, doc[field]])
+              ),
+            }
+          }),
+        }
       },
       count: async (request: { index: string; query?: unknown }) => {
         if (cluster.countFailuresRemaining > 0) {
@@ -417,12 +445,14 @@ class FakeEsCluster {
         })
         const docs = [...(cluster.indices.get(index)?.values() ?? [])]
         let selected: Array<{ doc: Record<string, unknown>; score: number }>
+        let totalMatched: number
         if (request.knn) {
           const candidates = docs.filter((doc) =>
             request.knn!.filter
               ? evalClause(doc, request.knn!.filter as Record<string, unknown>)
               : true
           )
+          totalMatched = candidates.length
           selected = candidates
             .map((doc) => ({
               doc,
@@ -438,11 +468,15 @@ class FakeEsCluster {
           const matched = query
             ? docs.filter((doc) => evalClause(doc, query))
             : docs
+          totalMatched = matched.length
           selected = matched.map((doc) => ({ doc, score: 1 }))
         }
         const size = request.size ?? 10
         return {
           hits: {
+            // Real ES reports the pre-slice match total (track_total_hits /
+            // size:0 consumers — e.g. the UT-17 visibility probe — rely on it).
+            total: { value: totalMatched },
             hits: selected.slice(0, size).map(({ doc, score }) => ({
               _id: String(doc.id ?? ""),
               _score: score,
@@ -1023,8 +1057,10 @@ test("Ticket 02: one real question runs through the shared entry against the iso
   }
 
   // Final context candidates all resolve to corpus passages of THIS scope.
+  // Selecting the completed record: a runner announces a stage as `running`
+  // while it is in flight, and that signal carries no trace data by design.
   const retrieval = events.find(
-    (e) => e.type === "progress" && e.stage === "retrieval"
+    (e) => e.type === "progress" && e.stage === "retrieval" && e.status === "completed"
   ) as { data: { finalContextCandidates: Array<{ documentId: string }> } } | undefined
   assert.ok(retrieval, "retrieval progress event present")
   const candidates = retrieval.data.finalContextCandidates
@@ -1197,7 +1233,7 @@ test("Ticket 02: business data and two eval scopes with identical content stay i
   }
   assert.equal(doneA.status, "completed")
   const retrievalA = eventsA.find(
-    (e) => e.type === "progress" && e.stage === "retrieval"
+    (e) => e.type === "progress" && e.stage === "retrieval" && e.status === "completed"
   ) as { data: { finalContextCandidates: Array<{ documentId: string }> } }
   const docIdsA = new Set(
     CORPUS.map((p) => scopeA.resources.docIdForPassage(p.passageId)!)
@@ -1231,7 +1267,7 @@ test("Ticket 02: business data and two eval scopes with identical content stay i
   }
   assert.equal(doneB.status, "completed")
   const retrievalB = eventsB.find(
-    (e) => e.type === "progress" && e.stage === "retrieval"
+    (e) => e.type === "progress" && e.stage === "retrieval" && e.status === "completed"
   ) as { data: { finalContextCandidates: Array<{ documentId: string }> } }
   const docIdsB = new Set(
     CORPUS.map((p) => scopeB.resources.docIdForPassage(p.passageId)!)

@@ -424,14 +424,25 @@ export class ESStore {
    */
   async countVisibleIndexEntries(
     documentId: string,
-    chunkIds: string[]
+    chunkIds: string[],
+    options?: { tenantId?: string }
   ): Promise<number> {
     if (chunkIds.length === 0) return 0
     const result = await this.client.search({
       index: this.indexName,
       size: 0,
       track_total_hits: true,
-      query: { terms: { _id: chunkIds.map((chunkId) => `${documentId}:${chunkId}`) } },
+      // Every _search on the chunk index is tenant-scoped (retrieval-boundary
+      // invariant); the _id terms alone identify the document but the tenant
+      // filter keeps the probe from ever counting another tenant's entries.
+      query: {
+        bool: {
+          filter: [
+            { terms: { _id: chunkIds.map((chunkId) => `${documentId}:${chunkId}`) } },
+            ...(options?.tenantId ? [{ term: { tenantId: options.tenantId } }] : []),
+          ],
+        },
+      },
     })
     const total = (result as { hits?: { total?: { value?: number } } }).hits?.total
     return typeof total?.value === "number" ? total.value : 0
@@ -560,8 +571,12 @@ export class IngestionStoreImpl {
   }
 
   /** Ticket UT-17: 检索可见性探针（see ESStore）。 */
-  countVisibleIndexEntries(documentId: string, chunkIds: string[]): Promise<number> {
-    return this.es.countVisibleIndexEntries(documentId, chunkIds)
+  countVisibleIndexEntries(
+    documentId: string,
+    chunkIds: string[],
+    options?: { tenantId?: string }
+  ): Promise<number> {
+    return this.es.countVisibleIndexEntries(documentId, chunkIds, options)
   }
 
   async storeEntities(entities: Entity[]): Promise<void> {

@@ -419,16 +419,4 @@ export class RecursiveChunker {
   private split(text: string): string[] {
     return this.splitLongText(text.trim())
   }
-
-  private mergeSmall(chunks: string[]): string[] {
-    const result: string[] = []
-    for (const c of chunks) {
-      if (result.length > 0 && result[result.length - 1].length < MIN_CHUNK_SIZE) {
-        result[result.length - 1] += "\n\n" + c
-      } else {
-        result.push(c)
-      }
-    }
-    return result
-  }
 }

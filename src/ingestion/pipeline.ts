@@ -644,27 +644,65 @@ export class PipelineStageRunner implements IngestionStageRunner {
             documentId: string,
             chunkIds: string[]
           ) => Promise<Map<string, { content: string | null; embedding: number[] | null }>>
-          countVisibleIndexEntries?: (documentId: string, chunkIds: string[]) => Promise<number>
+          countVisibleIndexEntries?: (
+            documentId: string,
+            chunkIds: string[],
+            options?: { tenantId?: string }
+          ) => Promise<number>
         }
         if (typeof store.readIndexEntries === "function") {
           const expectedIds = manifestEntries.map((entry) => entry.chunkId)
           let searchVisibleCount: number | undefined
+          let probeError: string | null = null
           if (typeof store.countVisibleIndexEntries === "function") {
             // 有界等待索引可见性：刷新延迟/分片可见性延迟以 3×400ms 收敛；
             // 仍不可见如实记录（index_not_searchable），绝不宣布完成。
             for (let attempt = 0; attempt < 3; attempt += 1) {
-              searchVisibleCount = await store.countVisibleIndexEntries(document.id, expectedIds)
-              if (searchVisibleCount >= expectedIds.length) break
-              await new Promise((resolveWait) => setTimeout(resolveWait, 400))
+              try {
+                searchVisibleCount = await store.countVisibleIndexEntries(
+                  document.id,
+                  expectedIds,
+                  { tenantId: document.tenantId }
+                )
+                if (searchVisibleCount >= expectedIds.length) break
+              } catch (error) {
+                // 探针故障不是摄取失败：核验语义（UT-16）是"失败可观察、
+                // 由联合门槛拒绝激活"，已完成的索引工作不作废。
+                probeError = error instanceof Error ? error.message : String(error)
+                break
+              }
+              if (attempt < 2) await new Promise((resolveWait) => setTimeout(resolveWait, 400))
             }
           }
-          const entries = await store.readIndexEntries(document.id, expectedIds)
-          const indexProof = verifyIndexEntries({
-            expected: manifestEntries,
-            entries,
-            searchVisibleCount,
-            manifestSha256: manifestDigest(manifestEntries),
-          })
+          let entries: Map<string, { content: string | null; embedding: number[] | null }> = new Map()
+          try {
+            entries = await store.readIndexEntries(document.id, expectedIds)
+          } catch (error) {
+            probeError = probeError ?? (error instanceof Error ? error.message : String(error))
+          }
+          const indexProof =
+            probeError !== null
+              ? {
+                  verdict: "fail" as const,
+                  reasonCodes: ["index_verification_probe_failed"],
+                  expectedCount: manifestEntries.length,
+                  verifiedCount: 0,
+                  missingChunkIds: [] as string[],
+                  contentMismatchChunkIds: [] as string[],
+                  missingVectorChunkIds: [] as string[],
+                  extraEntryCount: 0,
+                  searchVisibleCount:
+                    typeof searchVisibleCount === "number" ? searchVisibleCount : null,
+                  manifestSha256: manifestDigest(manifestEntries),
+                  verifiedAt: new Date().toISOString(),
+                  probeError: probeError.slice(0, 300),
+                }
+              : verifyIndexEntries({
+                  expected: manifestEntries,
+                  entries,
+                  searchVisibleCount,
+                  manifestSha256: manifestDigest(manifestEntries),
+                })
           const existingEvidence = this.documentRepo.getCandidateEvidence(document.id) as {
             contentProof?: unknown
           } | null

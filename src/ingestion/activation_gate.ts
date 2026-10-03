@@ -163,7 +163,14 @@ export function evaluateActivationGate(evidence: unknown): ActivationGateDecisio
   ) {
     return denied([ACTIVATION_BLOCKED_PROOF_BINDING_MISMATCH])
   }
-  if (indexProof.searchVisibleCount !== contentBindings.expectedChunkCount) {
+  // Fail-closed count check: a hand-crafted or schema-drifted record could
+  // carry undefined on both sides (undefined !== undefined is false), so the
+  // counts must be real numbers before equality can mean "searchable".
+  if (
+    typeof indexProof.searchVisibleCount !== "number" ||
+    typeof contentBindings.expectedChunkCount !== "number" ||
+    indexProof.searchVisibleCount !== contentBindings.expectedChunkCount
+  ) {
     return denied([ACTIVATION_BLOCKED_NOT_SEARCHABLE])
   }
 
