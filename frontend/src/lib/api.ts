@@ -964,6 +964,34 @@ async function parseUploadError(responseText: string, status: number): Promise<I
   return new ImportUploadError("server", fallback)
 }
 
+export interface IngestResumeResult {
+  docId: string
+  taskId: number
+  status: string
+  changed: boolean
+}
+
+/** UT-27: resume a server-accepted document by requeueing its ORIGINAL task
+ * (POST /ingest/:docId/retry) — no re-upload, no new version, no File needed.
+ * The server owns the semantics: a non-retryable state answers 409 with an
+ * explainable message, which surfaces verbatim in the row. */
+export async function resumeIngest(docId: string): Promise<IngestResumeResult> {
+  const response = await apiFetch(`/ingest/${docId}/retry`, { method: "POST" })
+  const body = await response.text().catch(() => "")
+  let parsed: IngestResumeResult | null = null
+  try {
+    parsed = body ? (JSON.parse(body) as IngestResumeResult) : null
+  } catch {
+    parsed = null
+  }
+  if (response.status < 200 || response.status >= 300) {
+    const message = await readError(new Response(body || response.statusText, { status: response.status }))
+    throw new Error(message)
+  }
+  if (!parsed || !parsed.docId) throw new Error("恢复响应无效")
+  return parsed
+}
+
 export async function submitUrlImport(
   url: string,
   mode: "single" | "sitemap",

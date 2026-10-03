@@ -337,6 +337,12 @@ function dialogHarness() {
   const parkedUploads: Array<() => void> = []
   let catalogHold = false
   const parkedCatalog: Array<{ resolve: (value: unknown) => void; reject: (error: Error) => void }> = []
+  let resumeCalls = 0
+  let resumeHold = false
+  let resumeFailure: string | null = null
+  const resumeDocIds: string[] = []
+  const parkedResumes: Array<() => void> = []
+  let scopes: string[] = ["ingest"]
   const toasts: string[] = []
   const timers = new Map<number, () => Promise<void>>()
   const react = {
@@ -413,13 +419,26 @@ function dialogHarness() {
         async fetchDocumentDetail() { throw new Error("not expected in this test") },
         async retireSource() {},
         async submitUrlImport() { throw new Error("not expected in this test") },
+        // UT-27: the original-task resume command.
+        async resumeIngest(docId: string) {
+          resumeCalls += 1
+          resumeDocIds.push(docId)
+          const result = { docId, taskId: 7, status: "pending", changed: true }
+          if (resumeFailure) {
+            const message = resumeFailure
+            resumeFailure = null
+            throw new Error(message)
+          }
+          if (resumeHold) return new Promise((resolve) => parkedResumes.push(() => resolve(result)))
+          return result
+        },
       }
       if (name.endsWith("/importBatch")) return importBatch
       if (name.endsWith("/knowledgeStore")) return {
         useKnowledgeBases: () => ({ activeKnowledgeBases: [{ id: "kb-1", name: "测试库", folderId: null }], folders: [], status: "ready" }),
         knowledgeStore: { async refresh() {} },
       }
-      if (name.endsWith("/SessionContext")) return { useSignedInSession: () => ({ scopes: ["ingest"] }) }
+      if (name.endsWith("/SessionContext")) return { useSignedInSession: () => ({ scopes }) }
       if (name.endsWith("/constants")) return constants
       if (name.endsWith("/cn")) return { cn: (...parts: unknown[]) => parts.filter(Boolean).join(" ") }
       if (name.endsWith("/ingestProgress")) return { deriveIngestProgress, initialImportProgress, describeActivationReasons, describeAllowedOperations }
@@ -472,6 +491,11 @@ function dialogHarness() {
     hasText(label: string): boolean {
       return find(render(), (node) => JSON.stringify(node.props?.children ?? "").includes(label)) !== null
     },
+    /** UT-27: is a BUTTON with exactly this label rendered? (Text probes can
+     * false-positive on the allowed-operations copy, e.g. 「可恢复」.) */
+    hasButton(label: string): boolean {
+      return find(render(), (node) => node.type === "button" && node.props?.children === label) !== null
+    },
     holdUpload() { uploadHold = true },
     releaseUpload() {
       uploadHold = false
@@ -497,9 +521,19 @@ function dialogHarness() {
     failQuery(value: boolean) { unavailable = value },
     failUpload() { uploadFailure = true },
     failNextUpload() { failNext = true },
+    setScopes(next: string[]) { scopes = next },
+    holdResume() { resumeHold = true },
+    releaseResume() {
+      resumeHold = false
+      for (const release of parkedResumes.splice(0)) release()
+    },
+    failResume(message: string) { resumeFailure = message },
+    /** Swap the served status WITHOUT firing polls (requeue semantics). */
+    stageStatus(next: IngestStatus) { status = next },
     toasts, timers, get refreshed() { return refreshed }, get uploadedTo() { return uploadedTo },
     get uploadCalls() { return uploadCalls }, get uploadedTos() { return [...uploadedTos] },
     get maxInFlight() { return maxInFlight },
+    get resumeCalls() { return resumeCalls }, get resumeDocIds() { return [...resumeDocIds] },
   }
 }
 
@@ -750,4 +784,91 @@ test("UT-26: the row shows the 待校验 badge, the reason copy and the old-vers
   assert.equal(host.hasText("内容完整性待校验"), true, "the human-readable reason renders")
   assert.equal(host.hasText("现有版本仍可正常使用"), true, "the old-version note renders")
   assert.equal(host.hasText("重试"), false, "no meaningless retry on an unproven candidate")
+})
+
+// ---------------------------------------------------------------------------
+// UT-27: resume sends the ORIGINAL task command.
+// ---------------------------------------------------------------------------
+
+const capabilityFailure = {
+  category: "capability_missing",
+  reasonCode: "configure_parser_then_retry",
+  retryable: false,
+  allowedOperations: ["configure_parser_then_retry", "cancel"],
+  message: "Parser executable is unavailable. Configure MARKITDOWN_COMMAND.",
+  failedAt: "2026-10-04T08:00:00.000Z",
+}
+
+function failedPayload() {
+  const failed = payload([stage("chunk", "failed")])
+  failed.documentStatus = "failed"
+  failed.task = { status: "failed", failCount: 1, nextAttemptAt: null }
+  failed.failure = { ...capabilityFailure }
+  return failed
+}
+
+test("UT-27: resume requeues the original task — no re-upload, no new version, no File needed", async () => {
+  const host = dialogHarness()
+  host.setScopes(["ingest", "admin"])
+  await host.upload()
+  await host.poll(failedPayload())
+  assert.equal(host.hasButton("恢复"), true, "admin + configure_parser_then_retry offers resume")
+
+  host.holdResume()
+  host.clickButton("恢复")
+  host.clickButton("恢复") // duplicate click while in flight
+  assert.equal(host.resumeCalls, 1, "duplicate clicks never double-resume")
+
+  host.releaseResume()
+  // The server requeued the task: its status now reads pending again (the
+  // swap happens before the resume promise settles, mirroring the backend's
+  // transaction-commit-before-response ordering).
+  const requeued = payload([])
+  requeued.documentStatus = "pending"
+  requeued.task = { status: "pending", failCount: 0, nextAttemptAt: null }
+  host.stageStatus(requeued)
+  await settle()
+  // The upload stub's returned docId is "doc-1" — resume requeues THAT task.
+  assert.deepEqual(host.resumeDocIds, ["doc-1"], "the command carries the SAME docId")
+  assert.equal(host.uploadCalls, 1, "resume never re-uploads — the File handle is irrelevant")
+  assert.equal(host.progress().progress.status, "pending", "the row is processing again on the same document")
+})
+
+test("UT-27: a refused resume surfaces the server's reason without faking success", async () => {
+  const host = dialogHarness()
+  host.setScopes(["ingest", "admin"])
+  await host.upload()
+  await host.poll(failedPayload())
+  host.failResume('HTTP 409: document is not retryable in state "completed"')
+  host.clickButton("恢复")
+  await settle()
+  assert.equal(host.progress().progress.status, "failed", "the row keeps its failed state")
+  assert.equal(host.hasText("not retryable"), true, "the server's refusal is shown verbatim")
+  assert.equal(host.uploadCalls, 1, "refusal never becomes a re-upload")
+})
+
+test("UT-27: resume only renders for admin sessions and resume-capable failures", async () => {
+  // Reader scope: the backend's resume command is admin-only, so no button.
+  const reader = dialogHarness()
+  await reader.upload()
+  await reader.poll(failedPayload())
+  assert.equal(reader.hasButton("恢复"), false, "no resume without the admin scope")
+
+  // Transient failure: the server says wait_for_auto_retry — no resume.
+  const waiting = dialogHarness()
+  waiting.setScopes(["ingest", "admin"])
+  await waiting.upload()
+  const transient = payload([stage("chunk", "failed")])
+  transient.documentStatus = "failed"
+  transient.task = { status: "failed", failCount: 1, nextAttemptAt: null }
+  transient.failure = {
+    category: "transient",
+    reasonCode: "wait_for_auto_retry",
+    retryable: true,
+    allowedOperations: ["wait_for_auto_retry", "cancel"],
+    message: "429 rate limited",
+    failedAt: "2026-10-04T08:00:00.000Z",
+  }
+  await waiting.poll(transient)
+  assert.equal(waiting.hasButton("恢复"), false, "auto-retry rows wait instead of resuming")
 })

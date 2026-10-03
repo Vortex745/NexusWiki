@@ -9,6 +9,7 @@ import {
   fetchIngestStatus,
   fetchKnowledgeBaseDocuments,
   ImportUploadError,
+  resumeIngest,
   retireSource,
   submitUrlImport,
   uploadFileToIngest,
@@ -216,6 +217,8 @@ export function ImportDialog({
   const claimedRef = useRef(new Set<string>())
   // UT-25: count of LIVE worker loops — the shared upload slot accounting.
   const liveWorkersRef = useRef(0)
+  // UT-27: rows with a resume command in flight — duplicate clicks are no-ops.
+  const resumingRef = useRef(new Set<string>())
   const pollTimer = useRef<number | null>(null)
   const pollingRef = useRef(false)
   const completionNotifiedRef = useRef(false)
@@ -693,6 +696,51 @@ export function ImportDialog({
       ensureWorkers()
     },
     [updateItem, ensureWorkers, resubmitUrlItem],
+  )
+
+  /** UT-27: resume a server-accepted row by requeueing its ORIGINAL task —
+   * the retained original is re-processed under the same docId/taskId/
+   * version. The File handle is irrelevant here and the server's own
+   * allowed-operations gate decides whether the command is offered at all;
+   * refusals (409) surface verbatim instead of faking success. */
+  const resumeItem = useCallback(
+    (item: ImportItem) => {
+      const docId = item.docId
+      if (!docId || resumingRef.current.has(item.id)) return
+      resumingRef.current.add(item.id)
+      void resumeIngest(docId)
+        .then((result) => {
+          if (!result.changed) {
+            updateItem(item.id, {
+              error: `服务端拒绝恢复（当前状态 ${result.status}）`,
+              errorKind: "resume_refused",
+            })
+            return
+          }
+          updateItem(item.id, {
+            status: "pending",
+            error: null,
+            errorKind: null,
+            errorDetected: null,
+            progress: initialImportProgress("pending"),
+            uploadProgress: undefined,
+            lastProgressAt: Date.now(),
+          })
+          startPolling()
+        })
+        .catch((err) => {
+          // A refused or failed resume is NOT a success — the row keeps its
+          // failed state and shows the server's explainable refusal.
+          updateItem(item.id, {
+            error: err instanceof Error ? err.message : String(err),
+            errorKind: "resume_refused",
+          })
+        })
+        .finally(() => {
+          resumingRef.current.delete(item.id)
+        })
+    },
+    [updateItem, startPolling],
   )
 
   const deleteItem = useCallback(
@@ -1178,6 +1226,15 @@ export function ImportDialog({
                       const retryGate = retryDecision(item)
                       const canRetry = retryGate.retryable
                       const canCancel = item.status === "queued" || item.status === "pending" || item.status === "processing"
+                      // UT-27: resume requeues the ORIGINAL server task — only
+                      // for admin sessions, only on failed rows, and only when
+                      // the server's allowed operations include a resume
+                      // command (configure/fix-input-then-retry). Auto-retry
+                      // rows (wait_for_auto_retry) wait instead.
+                      const canResume = Boolean(item.docId) && item.status === "failed" && canCreate &&
+                        (item.progress?.outcome?.allowedOperations ?? []).some((operation) =>
+                          operation.endsWith("_then_retry"),
+                        )
                       // UT-26: structured end-state details — reasons and
                       // allowed operations come from the backend's own fields.
                       const outcome = item.progress?.outcome ?? null
@@ -1279,6 +1336,16 @@ export function ImportDialog({
                                   className="rounded-md px-1.5 py-0.5 text-[10px] font-medium text-brand transition-colors hover:bg-brand-subtle"
                                 >
                                   重试
+                                </button>
+                              ) : null}
+                              {canResume ? (
+                                <button
+                                  type="button"
+                                  onClick={() => resumeItem(item)}
+                                  title="用服务端保留的原件重新处理，同一文档与任务"
+                                  className="rounded-md px-1.5 py-0.5 text-[10px] font-medium text-brand transition-colors hover:bg-brand-subtle"
+                                >
+                                  恢复
                                 </button>
                               ) : null}
                               {item.status === "completed" && item.docId ? (
