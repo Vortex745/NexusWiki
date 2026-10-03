@@ -317,6 +317,12 @@ function dialogHarness() {
   let uploadFailure = false
   let refreshed = 0
   let uploadedTo: string | null = null
+  let uploadCalls = 0
+  let uploadHold = false
+  const uploadedTos: Array<string | null> = []
+  const parkedUploads: Array<() => void> = []
+  let catalogHold = false
+  const parkedCatalog: Array<{ resolve: (value: unknown) => void; reject: (error: Error) => void }> = []
   const toasts: string[] = []
   const timers = new Map<number, () => Promise<void>>()
   const react = {
@@ -355,13 +361,25 @@ function dialogHarness() {
           }
         },
         async uploadFileToIngest(_file: unknown, _path: string, _onProgress: unknown, options: { knowledgeBaseId?: string }) {
+          uploadCalls += 1
           uploadedTo = options?.knowledgeBaseId ?? null
+          uploadedTos.push(uploadedTo)
           if (uploadFailure) throw new Error("upload rejected")
+          // UT-24: hold() parks the upload so a worker stays visibly busy
+          // while a later wave is appended.
+          if (uploadHold) return new Promise<void>((resolve) => parkedUploads.push(resolve))
           return "doc-1"
         },
         async fetchIngestStatus() { if (unavailable) throw new Error("HTTP 503"); return status },
         async fetchDocumentFolders() { return [] },
-        async fetchKnowledgeBaseDocuments() { return { documents: [], total: 0, page: 1, pageSize: 100, tags: [], folders: [] } },
+        async fetchKnowledgeBaseDocuments() {
+          // UT-24: the pre-check's catalog read is the interleaved network
+          // boundary — hold() parks it so tests decide when a wave settles.
+          if (catalogHold) {
+            return new Promise((resolve, reject) => parkedCatalog.push({ resolve, reject }))
+          }
+          return { documents: [], total: 0, page: 1, pageSize: 100, tags: [], folders: [] }
+        },
         async createKnowledgeBase() { throw new Error("not expected in this test") },
         async cancelIngest() {},
         async fetchDocumentDetail() { throw new Error("not expected in this test") },
@@ -403,6 +421,41 @@ function dialogHarness() {
       dropzone.props.onPick({ files: [{ file, relativePath: "test.pdf" }], folders: [], skipped: 0 })
       await settle()
     },
+    /** UT-24: enqueue extra files WITHOUT waiting — reproduces the追加 race. */
+    pick(names: string[]) {
+      const selector = find(render(), (node) => node.type === "select" && node.props.id === "import-knowledge-base")
+      selector.props.onChange({ target: { value: "kb-1" } })
+      const dropzone = find(render(), (node) => node.type === "import-dropzone")
+      dropzone.props.onPick({
+        files: names.map((name) => ({ file: { name, size: 100 }, relativePath: name })),
+        folders: [],
+        skipped: 0,
+      })
+    },
+    clickButton(label: string) {
+      const button = find(
+        render(),
+        (node) => node.type === "button" && JSON.stringify(node.props?.children ?? "").includes(label),
+      )
+      assert.ok(button, `button 「${label}」 rendered`)
+      button.props.onClick()
+    },
+    holdUpload() { uploadHold = true },
+    releaseUpload() {
+      uploadHold = false
+      for (const release of parkedUploads.splice(0)) release()
+    },
+    deferCatalog() { catalogHold = true },
+    resolveCatalog(entries: Array<Record<string, unknown>> = []) {
+      catalogHold = false
+      for (const parked of parkedCatalog.splice(0)) {
+        parked.resolve({ documents: entries, total: entries.length, page: 1, pageSize: 100, tags: [], folders: [] })
+      }
+    },
+    failCatalog() {
+      catalogHold = false
+      for (const parked of parkedCatalog.splice(0)) parked.reject(new Error("catalog read failed"))
+    },
     async poll(next?: IngestStatus) {
       if (next) status = next
       for (const callback of timers.values()) await callback()
@@ -412,6 +465,7 @@ function dialogHarness() {
     failQuery(value: boolean) { unavailable = value },
     failUpload() { uploadFailure = true },
     toasts, timers, get refreshed() { return refreshed }, get uploadedTo() { return uploadedTo },
+    get uploadCalls() { return uploadCalls }, get uploadedTos() { return [...uploadedTos] },
   }
 }
 
@@ -455,4 +509,79 @@ test("upload rejection settles the row without starting processing polling", asy
   assert.equal(host.timers.size, 0)
   assert.equal(host.refreshed, 0)
   assert.equal(host.toasts.length, 1)
+})
+
+// ---------------------------------------------------------------------------
+// UT-24: wave pre-flight gate — old workers never race a new wave.
+// ---------------------------------------------------------------------------
+
+test("UT-24: a busy worker from an earlier wave never claims a new wave's unsettled rows", async () => {
+  const host = dialogHarness()
+  // Wave 1: pre-check settles immediately, then the upload parks — the worker
+  // is now busy for the rest of the scenario.
+  host.holdUpload()
+  await host.upload()
+  assert.equal(host.uploadCalls, 1)
+
+  // 追加 wave 2 while wave 1's upload is in flight, and its pre-check hangs
+  // on the network (interleaved slow catalog read).
+  host.deferCatalog()
+  host.pick(["追加-b.pdf"])
+  await settle()
+  assert.equal(host.uploadCalls, 1, "no upload request for the row before its pre-check settles")
+
+  // The pre-check completing — not the idle worker — is what releases the row.
+  host.resolveCatalog()
+  await settle()
+  assert.equal(host.uploadCalls, 2, "the row is claimable only after settlement")
+  assert.deepEqual(host.uploadedTos, ["kb-1", "kb-1"], "multi-wave uploads keep the wave's KB binding")
+  host.releaseUpload()
+})
+
+test("UT-24: a same-name hit waits for the user's decision and is schedulable after 确认", async () => {
+  const host = dialogHarness()
+  host.deferCatalog()
+  host.pick(["existing.pdf"])
+  await settle()
+  assert.equal(host.uploadCalls, 0)
+
+  // The catalog read comes back with the same base file name: the row must
+  // settle INTO the confirmation state, not into the worker queue.
+  host.resolveCatalog([{ fileName: "existing.pdf" }])
+  await settle()
+  assert.equal(host.uploadCalls, 0, "same-name hits never auto-upload")
+
+  // 拒绝 path first: skipping is terminal and creates no upload.
+  // (Skipped via 跳过 below only after confirming the 仍要导入 path here.)
+  host.clickButton("仍要导入")
+  await settle()
+  assert.equal(host.uploadCalls, 1, "confirmation makes exactly the confirmed row claimable")
+})
+
+test("UT-24: cancellation during a pending pre-check is terminal without an upload", async () => {
+  const host = dialogHarness()
+  host.deferCatalog()
+  host.pick(["cancel-me.pdf"])
+  await settle()
+  assert.equal(host.uploadCalls, 0)
+  host.clickButton("取消")
+  await settle()
+  host.resolveCatalog()
+  await settle()
+  assert.equal(host.uploadCalls, 0, "a cancelled row stays terminal even after its wave settles")
+})
+
+test("UT-24: a failed pre-check settles the wave with an explainable toast, never an infinite wait", async () => {
+  const host = dialogHarness()
+  host.deferCatalog()
+  host.pick(["stuck.pdf"])
+  await settle()
+  assert.equal(host.uploadCalls, 0)
+  host.failCatalog()
+  await settle()
+  assert.equal(host.uploadCalls, 1, "rows settle on pre-check failure — the server's 409 is the safety net")
+  assert.ok(
+    host.toasts.some((message) => message.includes("同名预检查不可用")),
+    "the failure is explained, not hidden behind a wait",
+  )
 })

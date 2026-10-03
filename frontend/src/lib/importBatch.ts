@@ -346,6 +346,41 @@ export function isPdfLike(fileName: string, mimeType?: string): boolean {
 }
 
 // ---------------------------------------------------------------------------
+// Wave pre-flight settlement (UT-24)
+// ---------------------------------------------------------------------------
+
+export interface PrecheckSettleRow {
+  id: string
+  waveId: string
+  status: string
+  fileName: string
+  precheckHit?: boolean
+  precheckSettled?: boolean
+}
+
+/** Mark a wave's queued rows as pre-flight-settled once its admission +
+ * same-name pre-check has finished (or failed — failure settles too, the
+ * server's 409 is the safety net; rows must never wait forever). Only THIS
+ * wave's rows are touched: a stale pre-check callback from an earlier wave
+ * must never release a later wave's rows, and terminal rows (cancelled /
+ * skipped) stay terminal. Same-name hits additionally stay flagged so the
+ * worker claim ignores them until the user decides (仍要导入/跳过). */
+export function settleWavePrecheck<T extends PrecheckSettleRow>(
+  items: ReadonlyArray<T>,
+  waveId: string,
+  hits: ReadonlySet<string>,
+): Array<T> {
+  return items.map((item) => {
+    if (item.waveId !== waveId || item.status !== "queued") return item
+    return {
+      ...item,
+      precheckSettled: true,
+      precheckHit: hits.has(item.fileName) ? true : (item.precheckHit ?? false),
+    }
+  })
+}
+
+// ---------------------------------------------------------------------------
 // Active-count projection (ticket 08)
 // ---------------------------------------------------------------------------
 

@@ -15,6 +15,7 @@ import {
   partitionLooseFiles,
   retryDecision,
   sanitizeKnowledgeBaseName,
+  settleWavePrecheck,
   type FolderNode,
 } from "./importBatch"
 
@@ -296,5 +297,42 @@ describe("UT-23 PDF-only parser override", () => {
     // Unknown/octet-stream: the server decides — no PDF-only param rides.
     assert.equal(isPdfLike("mystery.bin", "application/octet-stream"), false)
     assert.equal(isPdfLike("noext", ""), false)
+  })
+})
+
+describe("UT-24 wave pre-flight settlement", () => {
+  const row = (id: string, waveId: string, extra: Record<string, unknown> = {}) => ({
+    id, waveId, status: "queued", fileName: `${id}.pdf`, precheckSettled: false, ...extra,
+  })
+
+  it("settles only THIS wave's queued rows and marks the same-name hits", () => {
+    const hits = new Set(["b.pdf"])
+    const settled = settleWavePrecheck(
+      [
+        row("a", "wave-1"),
+        row("b", "wave-1"),
+        row("c", "wave-2"), // another wave's row: a stale callback must not touch it
+        row("d", "wave-1", { status: "cancelled" }), // terminal rows stay terminal
+        row("e", "wave-1", { precheckHit: false, precheckSettled: true }), // already settled
+      ],
+      "wave-1",
+      hits,
+    )
+    const byId = new Map(settled.map((item) => [item.id, item]))
+    assert.equal(byId.get("a")?.precheckSettled, true)
+    assert.equal(byId.get("a")?.precheckHit ?? false, false)
+    assert.equal(byId.get("b")?.precheckSettled, true)
+    assert.equal(byId.get("b")?.precheckHit, true, "same-name hits wait for the user's decision")
+    assert.equal(byId.get("c")?.precheckSettled, false, "other waves stay untouched")
+    assert.equal(byId.get("d")?.status, "cancelled")
+    assert.equal(byId.get("d")?.precheckSettled, false)
+    assert.equal(byId.get("e")?.precheckSettled, true)
+  })
+
+  it("settles a wave cleanly when the pre-check itself failed (no hits at all)", () => {
+    const settled = settleWavePrecheck([row("a", "wave-1"), row("b", "wave-2")], "wave-1", new Set())
+    assert.equal(settled[0].precheckSettled, true)
+    assert.equal(settled[0].precheckHit ?? false, false)
+    assert.equal(settled[1].precheckSettled, false)
   })
 })

@@ -28,6 +28,7 @@ import {
   matchExistingFileNames,
   retryDecision,
   sanitizeKnowledgeBaseName,
+  settleWavePrecheck,
   type ImportAdmissionKind,
   type ImportWaveParams,
   type PickedFile,
@@ -82,6 +83,9 @@ interface ImportItem {
   folderName?: string
   /** Pre-check hit: the row waits for 仍要导入/跳过 and is not auto-uploaded. */
   precheckHit?: boolean
+  /** UT-24: false until this row's wave finished its pre-flight (admission +
+   * same-name pre-check) — un-settled rows are never claimable by workers. */
+  precheckSettled?: boolean
   progress?: Progress
   uploadProgress?: UploadProgress
   checkedAt?: string
@@ -416,6 +420,10 @@ export function ImportDialog({
           const item = queueRef.current.find(
             (candidate) =>
               candidate.status === "queued" &&
+              // UT-24: an un-settled row's wave has not finished its
+              // pre-flight — a worker still running from an earlier wave must
+              // never claim it before admission/same-name confirmation lands.
+              candidate.precheckSettled !== false &&
               !candidate.precheckHit &&
               !claimedRef.current.has(candidate.id),
           )
@@ -471,7 +479,17 @@ export function ImportDialog({
           tags: parseTags(tagsText),
         }),
       }
-      const items = buildRows(picked, wave.id)
+      // Bounded duplicate pre-check BEFORE any upload of THIS wave (UT-24):
+      // rows enter the queue pre-flight-held and only SETTLE — becoming
+      // claimable for workers — once the same-name pre-check has finished.
+      // This is what stops a worker still running from an earlier wave from
+      // racing the new wave's rows before admission/confirmation completes.
+      const folderName = precheckFolderName(wave.params)
+      const needsPrecheck = folderName !== null
+      const items = buildRows(picked, wave.id).map((item) => ({
+        ...item,
+        precheckSettled: !needsPrecheck,
+      }))
       if (skippedCount > 0) showToast(`已跳过 ${skippedCount} 个不支持的文件`)
       if (items.length > IMPORT_MAX_FILES_HINT) {
         showToast(`共 ${items.length} 个文件，建议分批导入（单次 ≤ ${IMPORT_MAX_FILES_HINT}）`)
@@ -480,29 +498,23 @@ export function ImportDialog({
       appendQueue(items)
       completionNotifiedRef.current = false
 
-      // Bounded duplicate pre-check BEFORE the first upload: the point of the
-      // mark is to let the user decide, so workers must not outrun it (live
-      // testing showed millisecond uploads beating the catalog read). The read
-      // is bounded and best-effort — a failure here proceeds straight to
-      // upload, with the server's 409 as the safety net.
-      const folderName = precheckFolderName(wave.params)
       if (folderName !== null) {
+        // The read is bounded and best-effort; on failure the wave settles
+        // anyway — the server's 409 is the safety net, and rows must never be
+        // stranded unclaimable by an unfinished pre-check.
         try {
           const entries = await collectCatalogEntries(wave.params.knowledgeBaseId, folderName)
           const hits = matchExistingFileNames(
             entries.map((entry) => entry.fileName ?? ""),
             items.map((item) => item.fileName),
           )
+          mutateQueue((current) => settleWavePrecheck(current, wave.id, hits))
           if (hits.size > 0) {
-            mutateQueue((current) => current.map((item) =>
-              item.waveId === wave.id && item.status === "queued" && hits.has(item.fileName)
-                ? { ...item, precheckHit: true }
-                : item,
-            ))
             showToast(`${hits.size} 个文件在目标库中已存在，请在队列中确认`)
           }
         } catch {
-          // Best-effort: the server's 409 covers whatever the pre-check missed.
+          mutateQueue((current) => settleWavePrecheck(current, wave.id, new Set()))
+          showToast("同名预检查不可用，导入时将由服务端确认")
         }
       }
       ensureWorkers()
@@ -550,6 +562,8 @@ export function ImportDialog({
       }
       const items = buildRows(folder.files, wave.id).map((item) => ({
         ...item,
+        // Folder waves run no per-file pre-check: rows are claimable at once.
+        precheckSettled: true,
         folderName: categoryForPath(item.filePath, folder.name),
       }))
       appendWave(wave)
