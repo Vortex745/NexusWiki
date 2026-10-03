@@ -1,10 +1,10 @@
-// UT-04：联合激活门槛——未知候选不激活与旧版本保护。
+// UT-04/UT-15/UT-17：联合激活门槛——未知候选不激活与旧版本保护。
 //
-// 契约（UP-08 AC 2-5 / UT-04）：缺任一凭证的候选在阶段成功、自动激活和人工
-// 批准三条路径上都不得切换活动身份；状态给出稳定理由码；失败/未知/取消候选
-// 保留原件；既有活动版本不被批量下架；首个未验证候选不得进入活动集合。
-// 本票不产出真实凭证——正向路径属于 UT-15/16/17，任何"看起来完整"的证据
-// 记录在本票阶段同样被拒绝（verification_not_implemented）。
+// 契约（UP-08 AC 2-5 / UP-09 / UT-04/15/16/17）：缺任一凭证、内容待校验、
+// 索引核验失败、绑定不一致或检索不可见的候选，在阶段成功、自动激活和人工
+// 批准三条路径上都不得切换活动身份，状态给出稳定理由码；双凭证 pass、
+// 绑定一致且检索可见的候选由 UT-17 联合核验放行（本文件正向路径用例）。
+// 失败/未知/取消候选保留原件；既有活动版本不被批量下架。
 import assert from "node:assert/strict"
 import test from "node:test"
 import { openDb, type DB } from "./tracking/db"
@@ -21,7 +21,8 @@ import {
   ACTIVATION_BLOCKED_EVIDENCE_SCHEMA_MISMATCH,
   ACTIVATION_BLOCKED_INDEX_PROOF_FAILED,
   ACTIVATION_BLOCKED_INDEX_PROOF_MISSING,
-  ACTIVATION_BLOCKED_VERIFICATION_NOT_IMPLEMENTED,
+  ACTIVATION_BLOCKED_NOT_SEARCHABLE,
+  ACTIVATION_BLOCKED_PROOF_BINDING_MISMATCH,
   evaluateActivationGate,
 } from "./activation_gate"
 import { SqliteCandidateReviewStore } from "../knowledge/candidate_review_store"
@@ -57,14 +58,18 @@ test("UT-04 门槛判定：缺记录/畸形/缺任一凭证都以稳定理由码
   // 内容凭证 malformed → schema mismatch；内容 pass 而索引缺失 → 索引理由码。
   const malformedContent = evaluateActivationGate({ schemaVersion: 1, contentProof: { hash: "x" }, indexProof: null })
   assert.deepEqual(malformedContent.reasonCodes, [ACTIVATION_BLOCKED_EVIDENCE_SCHEMA_MISMATCH])
-  const half = evaluateActivationGate({ schemaVersion: 1, contentProof: { verdict: "pass", reasonCodes: [] }, indexProof: null })
+  const half = evaluateActivationGate({
+    schemaVersion: 1,
+    contentProof: { verdict: "pass", reasonCodes: [], bindings: { expectedChunksSha256: "d", expectedChunkCount: 1 } },
+    indexProof: null,
+  })
   assert.deepEqual(half.reasonCodes, [ACTIVATION_BLOCKED_INDEX_PROOF_MISSING])
 
   const wrongSchema = evaluateActivationGate({ schemaVersion: 2, contentProof: {}, indexProof: {} })
   assert.deepEqual(wrongSchema.reasonCodes, [ACTIVATION_BLOCKED_EVIDENCE_SCHEMA_MISMATCH])
 })
 
-test("UT-04/UT-15 门槛判定：内容待校验带明细码；两类凭证齐备且内容 pass 时核验语义实现前仍不放行", () => {
+test("UT-04/UT-15 门槛判定：内容待校验带明细码；索引 fail 带明细码", () => {
   // UT-15：内容凭证结论非 pass → 附内容凭证自身的明细码（漏页/乱码/风险）。
   const pending = evaluateActivationGate({
     schemaVersion: 1,
@@ -77,16 +82,6 @@ test("UT-04/UT-15 门槛判定：内容待校验带明细码；两类凭证齐�
     "pages_without_text_layer_or_empty: 2",
   ])
 
-  // UT-04 保留：内容 pass 且索引凭证 pass 时，联合核验属于 UT-17——
-  // 显式拒绝而不是提前放行，保证中间票无法临时绕过保护。
-  const decision = evaluateActivationGate({
-    schemaVersion: 1,
-    contentProof: { verdict: "pass", reasonCodes: [] },
-    indexProof: { verdict: "pass", reasonCodes: [] },
-  })
-  assert.equal(decision.passed, false)
-  assert.deepEqual(decision.reasonCodes, [ACTIVATION_BLOCKED_VERIFICATION_NOT_IMPLEMENTED])
-
   // UT-16：索引核验 fail → 稳定理由码 + 明细（丢块/哈希不匹配/缺向量）。
   const indexFailed = evaluateActivationGate({
     schemaVersion: 1,
@@ -98,6 +93,52 @@ test("UT-04/UT-15 门槛判定：内容待校验带明细码；两类凭证齐�
     ACTIVATION_BLOCKED_INDEX_PROOF_FAILED,
     "index_missing_chunks",
   ])
+})
+
+test("UT-17 联合核验：绑定一致且检索可见才放行；陈旧凭证/不可见均拒绝", () => {
+  const contentProof = {
+    verdict: "pass",
+    reasonCodes: [],
+    bindings: { expectedChunksSha256: "digest-1", expectedChunkCount: 3 },
+  }
+  const indexProofPass = {
+    verdict: "pass",
+    reasonCodes: [],
+    manifestSha256: "digest-1",
+    searchVisibleCount: 3,
+  }
+
+  // 双凭证 pass、绑定一致、检索可见 → 联合激活放行（UT-17 正向路径）。
+  const passed = evaluateActivationGate({ schemaVersion: 1, contentProof, indexProof: indexProofPass })
+  assert.equal(passed.passed, true)
+  assert.deepEqual(passed.reasonCodes, [])
+
+  // 绑定不一致（索引凭证是另一份产物的）→ 拒绝。
+  const staleIndex = evaluateActivationGate({
+    schemaVersion: 1,
+    contentProof,
+    indexProof: { ...indexProofPass, manifestSha256: "digest-old" },
+  })
+  assert.equal(staleIndex.passed, false)
+  assert.deepEqual(staleIndex.reasonCodes, [ACTIVATION_BLOCKED_PROOF_BINDING_MISMATCH])
+
+  // 可见数与期望数量不一致 → 不放行。
+  const countMismatch = evaluateActivationGate({
+    schemaVersion: 1,
+    contentProof,
+    indexProof: { ...indexProofPass, searchVisibleCount: 2 },
+  })
+  assert.equal(countMismatch.passed, false)
+  assert.deepEqual(countMismatch.reasonCodes, [ACTIVATION_BLOCKED_NOT_SEARCHABLE])
+
+  // 探针未运行（searchVisibleCount null，如受限存储）→ 不放行。
+  const noProbe = evaluateActivationGate({
+    schemaVersion: 1,
+    contentProof,
+    indexProof: { ...indexProofPass, searchVisibleCount: null },
+  })
+  assert.equal(noProbe.passed, false)
+  assert.deepEqual(noProbe.reasonCodes, [ACTIVATION_BLOCKED_NOT_SEARCHABLE])
 })
 
 test("UT-04 自动激活：阶段成功的候选保持未激活并记录缺失原因", async () => {
@@ -207,27 +248,35 @@ test("UT-04 人工批准不绕过门槛：approved 但不激活，理由可见",
   }
 })
 
-test("UT-04 凭证齐备仍不放行（核验未实现）且取消约束保留", async () => {
+test("UT-17 双凭证 pass 且绑定一致 → 联合激活放行；取消约束保留", async () => {
   const db = openDb(":memory:")
   try {
     const lifecycle = new IngestionLifecycle(db, completingRunner())
     const docRepo = new DocumentRepo(db)
     const submitted = lifecycle.submit({ title: "带证据候选", content: "正文", source: "evidence-test" })
-    // 生产者侧写入（UT-15 起由管线产出）：记录形状完整、内容 pass。
+    // 生产者侧（UT-15/16 起由管线产出）：双凭证 pass 且绑定一致。
     docRepo.setCandidateEvidence(submitted.docId, {
       schemaVersion: 1,
-      contentProof: { verdict: "pass", reasonCodes: [] },
-      indexProof: { verdict: "pass", reasonCodes: [] },
+      contentProof: {
+        verdict: "pass",
+        reasonCodes: [],
+        bindings: { expectedChunksSha256: "digest-1", expectedChunkCount: 1 },
+      },
+      indexProof: { verdict: "pass", reasonCodes: [], manifestSha256: "digest-1", searchVisibleCount: 1 },
     })
     await lifecycle.runNext()
     assert.equal(
       lifecycle.getStatus(submitted.docId)?.activationBlockReason,
-      ACTIVATION_BLOCKED_VERIFICATION_NOT_IMPLEMENTED,
-      "核验语义属于 UT-17；本票显式拒绝"
+      null,
+      "双凭证通过后无阻碍原因"
     )
+    const source = db.prepare(
+      "SELECT active_doc_id FROM sources WHERE source_id = (SELECT source_id FROM documents WHERE doc_id = ?)"
+    ).get(submitted.docId) as { active_doc_id: string | null }
+    assert.equal(source.active_doc_id, submitted.docId, "联合核验通过 → 活动身份切换")
 
     // 取消约束保留：pending 任务仍可取消（既有生命周期语义不变）。
-    const second = lifecycle.submit({ title: "取消候选", content: "另一段待取消正文", source: "evidence-test" })
+    const second = lifecycle.submit({ title: "取消候选", content: "另一段待取消正文", source: "evidence-test-2" })
     assert.equal(second.status, "pending")
     const cancellation = lifecycle.cancel(second.docId)
     assert.equal(cancellation?.status, "cancelled")

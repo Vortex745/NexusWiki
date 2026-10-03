@@ -417,6 +417,26 @@ export class ESStore {
     return entries
   }
 
+  /**
+   * Ticket UT-17: 检索可见性探针——走实际检索边界（_search terms(_id)）
+   * 统计期望条目中当前可被检索的数量。与 mget 回读不同，它证明条目在
+   * 检索边界可见，而不只是按 id 可取。
+   */
+  async countVisibleIndexEntries(
+    documentId: string,
+    chunkIds: string[]
+  ): Promise<number> {
+    if (chunkIds.length === 0) return 0
+    const result = await this.client.search({
+      index: this.indexName,
+      size: 0,
+      track_total_hits: true,
+      query: { terms: { _id: chunkIds.map((chunkId) => `${documentId}:${chunkId}`) } },
+    })
+    const total = (result as { hits?: { total?: { value?: number } } }).hits?.total
+    return typeof total?.value === "number" ? total.value : 0
+  }
+
   async close(): Promise<void> {
     await this.client.close()
   }
@@ -537,6 +557,11 @@ export class IngestionStoreImpl {
     chunkIds: string[]
   ): Promise<Map<string, { content: string | null; embedding: number[] | null }>> {
     return this.es.readIndexEntries(documentId, chunkIds)
+  }
+
+  /** Ticket UT-17: 检索可见性探针（see ESStore）。 */
+  countVisibleIndexEntries(documentId: string, chunkIds: string[]): Promise<number> {
+    return this.es.countVisibleIndexEntries(documentId, chunkIds)
   }
 
   async storeEntities(entities: Entity[]): Promise<void> {

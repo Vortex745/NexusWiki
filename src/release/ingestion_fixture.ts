@@ -188,14 +188,16 @@ export function createIngestionFixture(input: CreateIngestionFixtureInput): Inge
   const searchNamespace = deriveSearchNamespace(input.revision)
   const activationMode: ActivationMode = input.activationMode ?? "auto"
   const innerRunner = input.stageRunner ?? DEFAULT_STAGE_RUNNER
-  // Ticket UT-04: the joint activation gate keeps every lifecycle completion
-  // inactive until the integrity producers (UT-15/16/17) supply real evidence.
-  // Acceptance retrieval probes verify retrieval machinery — they need ACTIVE
-  // documents, which this fixture constructs DIRECTLY via DocumentRepo.activate
-  // once the real stage runner succeeds (auto mode only; review-mode fixtures
-  // keep the review contract). No candidate_evidence is written anywhere and
-  // the production gate is untouched — this is explicit test-state
-  // construction, not a bypass of the gate's decision path.
+  // Ticket UT-04（更新于 UT-17）: the joint activation gate now carries the
+  // real verification semantics (content proof + index proof + visibility
+  // probe, UT-15/16/17) on the production path. Acceptance retrieval probes,
+  // however, verify retrieval machinery against PRE-SEEDED fixtures — they
+  // need ACTIVE documents without running a real upload, which this fixture
+  // constructs DIRECTLY via DocumentRepo.activate once the stage runner
+  // succeeds (auto mode only; review-mode fixtures keep the review contract).
+  // No candidate_evidence is written anywhere and the production gate is
+  // untouched — this is explicit test-state construction, not a bypass of
+  // the gate's decision path.
   const stageRunner: IngestionStageRunner = activationMode === "auto"
     ? {
         close: () => innerRunner.close(),

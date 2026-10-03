@@ -32,7 +32,7 @@ import {
 } from "./storage"
 import { evaluateBlockCoverage } from "./chunk_coverage"
 import { findOversizedChunks, resolveEmbeddingLimits } from "./limits"
-import { produceContentProof } from "./content_proof"
+import { produceContentProof, manifestDigest } from "./content_proof"
 import { verifyIndexEntries } from "./index_verification"
 import { ACTIVATION_EVIDENCE_SCHEMA_VERSION } from "./activation_gate"
 import { buildPageIndex } from "./page_index_builder"
@@ -570,26 +570,39 @@ export class PipelineStageRunner implements IngestionStageRunner {
         })
       )
 
-      // Ticket UT-16: verify what ACTUALLY landed in the index against the
-      // expected manifest — logical identity, count, content hash and vector
-      // presence. Request success alone proves nothing. The result becomes
-      // the candidate evidence's indexProof (fail is observable and keeps the
-      // candidate inactive; pass still awaits the joint gate, UT-17).
+      // Ticket UT-16/UT-17: verify what ACTUALLY landed in the index against
+      // the expected manifest — logical identity, count, content hash, vector
+      // presence AND search visibility (a bounded-retry _search probe through
+      // the actual retrieval boundary; refresh delay, invisibility or search
+      // failure never announce completion). The result becomes the candidate
+      // evidence's indexProof; its manifest digest is compared against the
+      // content proof's binding at the joint gate (UT-17).
       if (indexChunks.length > 0) {
-        const store = this.ensureStore() as {
+        const store = this.ensureStore() as IngestionStoreImpl & {
           readIndexEntries?: (
             documentId: string,
             chunkIds: string[]
           ) => Promise<Map<string, { content: string | null; embedding: number[] | null }>>
+          countVisibleIndexEntries?: (documentId: string, chunkIds: string[]) => Promise<number>
         }
         if (typeof store.readIndexEntries === "function") {
-          const entries = await store.readIndexEntries(
-            document.id,
-            manifestEntries.map((entry) => entry.chunkId)
-          )
+          const expectedIds = manifestEntries.map((entry) => entry.chunkId)
+          let searchVisibleCount: number | undefined
+          if (typeof store.countVisibleIndexEntries === "function") {
+            // 有界等待索引可见性：刷新延迟/分片可见性延迟以 3×400ms 收敛；
+            // 仍不可见如实记录（index_not_searchable），绝不宣布完成。
+            for (let attempt = 0; attempt < 3; attempt += 1) {
+              searchVisibleCount = await store.countVisibleIndexEntries(document.id, expectedIds)
+              if (searchVisibleCount >= expectedIds.length) break
+              await new Promise((resolveWait) => setTimeout(resolveWait, 400))
+            }
+          }
+          const entries = await store.readIndexEntries(document.id, expectedIds)
           const indexProof = verifyIndexEntries({
             expected: manifestEntries,
             entries,
+            searchVisibleCount,
+            manifestSha256: manifestDigest(manifestEntries),
           })
           const existingEvidence = this.documentRepo.getCandidateEvidence(document.id) as {
             contentProof?: unknown

@@ -26,6 +26,13 @@ export interface IndexVerificationResult {
   contentMismatchChunkIds: string[]
   missingVectorChunkIds: string[]
   extraEntryCount: number
+  /**
+   * UT-17: 检索可见性探针结果——用 terms(_id) 走实际检索边界统计期望条目
+   * 的可见数。null 表示探针未运行（mget 核验仍有效，但门槛不放行）。
+   */
+  searchVisibleCount: number | null
+  /** UT-17: 期望清单绑定摘要（与内容凭证的 expectedChunksSha256 比对）。 */
+  manifestSha256: string
   verifiedAt: string
 }
 
@@ -33,6 +40,13 @@ export function verifyIndexEntries(input: {
   expected: ExpectedManifestEntry[]
   /** chunkId → ES 快照（未找到的 chunkId 不在 Map 中）。 */
   entries: Map<string, IndexEntrySnapshot>
+  /**
+   * UT-17 可见性探针：经实际检索边界（_search terms(_id)）统计的可见条目数。
+   * 提供时必须 ≥ expected 数量才算 pass；刷新延迟由调用方有界重试收敛。
+   */
+  searchVisibleCount?: number
+  /** 期望清单绑定摘要（与内容凭证比对；未提供时不参与判定）。 */
+  manifestSha256?: string
 }): IndexVerificationResult {
   const missingChunkIds: string[] = []
   const contentMismatchChunkIds: string[] = []
@@ -68,6 +82,13 @@ export function verifyIndexEntries(input: {
   if (contentMismatchChunkIds.length > 0) reasonCodes.push("index_content_hash_mismatch")
   if (missingVectorChunkIds.length > 0) reasonCodes.push("index_missing_vectors")
   if (extraEntryCount > 0) reasonCodes.push("index_extra_entries")
+  // UT-17: 可见性探针——mget 能读到的条目在检索边界未必可见（刷新延迟/
+  // 分片可见性），通过 _search terms(_id) 确认全部期望条目可被检索。
+  const searchVisibleCount =
+    input.searchVisibleCount === undefined ? null : input.searchVisibleCount
+  if (searchVisibleCount !== null && searchVisibleCount < input.expected.length) {
+    reasonCodes.push("index_not_searchable")
+  }
 
   return {
     verdict: reasonCodes.length === 0 ? "pass" : "fail",
@@ -78,6 +99,8 @@ export function verifyIndexEntries(input: {
     contentMismatchChunkIds,
     missingVectorChunkIds,
     extraEntryCount,
+    searchVisibleCount,
+    manifestSha256: input.manifestSha256 ?? "",
     verifiedAt: new Date().toISOString(),
   }
 }

@@ -34,8 +34,21 @@ export const ACTIVATION_BLOCKED_CONTENT_PROOF_PENDING_REVIEW =
 export const ACTIVATION_BLOCKED_INDEX_PROOF_FAILED =
   "activation_index_proof_failed"
 /**
- * 理由码：凭证核验语义尚未实现（UT-17 引入联合核验）。即使两类凭证都在，
- * 本票也不放行——拒绝路径先行、正向路径由后续票提供，是用户确认的批次设计。
+ * 理由码：两类凭证的绑定不一致（UT-17）。内容凭证与索引核验凭证必须绑定
+ * 同一份期望产物（expectedChunksSha256 相同）且数量一致——任何核验后变化
+ * 或陈旧凭证都被拒绝。
+ */
+export const ACTIVATION_BLOCKED_PROOF_BINDING_MISMATCH =
+  "activation_proof_binding_mismatch"
+/**
+ * 理由码：索引核验通过但检索可见性探针未通过（UT-17）。索引条目可按 id
+ * 取回不代表在检索边界可见。
+ */
+export const ACTIVATION_BLOCKED_NOT_SEARCHABLE =
+  "activation_not_searchable"
+/**
+ * 理由码（保留，自 UT-17 起不再有代码路径返回）：UT-04 引入时的占位拒绝码，
+ * 由联合核验（本票）替换。保留常量以维持理由码契约的可追溯性。
  */
 export const ACTIVATION_BLOCKED_VERIFICATION_NOT_IMPLEMENTED =
   "activation_gate_verification_not_implemented"
@@ -87,6 +100,10 @@ export function evaluateActivationGate(evidence: unknown): ActivationGateDecisio
   const contentProof = record.contentProof as {
     verdict?: unknown
     reasonCodes?: unknown
+    bindings?: {
+      expectedChunksSha256?: unknown
+      expectedChunkCount?: unknown
+    }
   }
   if (record.contentProof === null || record.contentProof === undefined) {
     return denied([ACTIVATION_BLOCKED_CONTENT_PROOF_MISSING])
@@ -117,6 +134,8 @@ export function evaluateActivationGate(evidence: unknown): ActivationGateDecisio
   const indexProof = record.indexProof as {
     verdict?: unknown
     reasonCodes?: unknown
+    searchVisibleCount?: unknown
+    manifestSha256?: unknown
   }
   if (
     typeof indexProof !== "object" ||
@@ -132,5 +151,22 @@ export function evaluateActivationGate(evidence: unknown): ActivationGateDecisio
       : []
     return denied([ACTIVATION_BLOCKED_INDEX_PROOF_FAILED, ...detailCodes])
   }
-  return denied([ACTIVATION_BLOCKED_VERIFICATION_NOT_IMPLEMENTED])
+
+  // Ticket UT-17: 联合核验——两类凭证必须绑定同一份期望产物（清单摘要与
+  // 数量一致，"匹配"判据），且检索可见性探针必须已通过。任何核验后变化、
+  // 陈旧凭证或不可见索引都在此处被拒绝；自动与人工（candidate review）
+  // 路径消费同一个 evaluateActivationGate。
+  const contentBindings = contentProof.bindings
+  if (
+    typeof contentBindings?.expectedChunksSha256 !== "string" ||
+    contentBindings.expectedChunksSha256 !== indexProof.manifestSha256
+  ) {
+    return denied([ACTIVATION_BLOCKED_PROOF_BINDING_MISMATCH])
+  }
+  if (indexProof.searchVisibleCount !== contentBindings.expectedChunkCount) {
+    return denied([ACTIVATION_BLOCKED_NOT_SEARCHABLE])
+  }
+
+  // 双凭证 pass、绑定一致、检索可见：联合激活放行。
+  return { passed: true, reasonCodes: [], reason: null }
 }

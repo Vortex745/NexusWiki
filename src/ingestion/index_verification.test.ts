@@ -34,6 +34,7 @@ dotenvConfig({ override: false })
 process.env.SQLITE_PATH = join(mkdtempSync(join(tmpdir(), "kefu-rag-ut16-")), "ingestion.db")
 
 const TRUTH_DIR_TXT = resolve(HERE, "../../golden/upload-truth/txt")
+const TRUTH_DIR_PDF = resolve(HERE, "../../golden/upload-truth/pdf")
 
 // ---------------------------------------------------------------------------
 // 单元：verifyIndexEntries
@@ -157,6 +158,8 @@ test("UT-16 集成：真实 ES 写入后核验通过，重复写入幂等且故�
     },
     readIndexEntries: (documentId: string, chunkIds: string[]) =>
       store.readIndexEntries(documentId, chunkIds),
+    countVisibleIndexEntries: (documentId: string, chunkIds: string[]) =>
+      store.countVisibleIndexEntries(documentId, chunkIds),
     storeEntities: async () => {},
     storeWikilinks: async () => {},
     chunkIndexName: store.chunkIndexName,
@@ -198,10 +201,14 @@ test("UT-16 集成：真实 ES 写入后核验通过，重复写入幂等且故�
   assert.equal(evidence.indexProof.expectedCount, manifest.length)
   assert.equal(evidence.indexProof.verifiedCount, manifest.length)
 
-  // 门槛：内容 pass + 索引 pass → 联合核验仍未实现（UT-17），绝不激活。
+  // 门槛：内容 pass + 索引 pass + 绑定一致 + 检索可见 → 联合激活放行（UT-17）。
   const gate = evaluateActivationGate(documentRepo.getCandidateEvidence(submitted.docId))
-  assert.equal(gate.passed, false)
-  assert.deepEqual(gate.reasonCodes, ["activation_gate_verification_not_implemented"])
+  assert.equal(gate.passed, true, `联合核验应放行：${JSON.stringify(gate.reasonCodes)}`)
+  assert.deepEqual(gate.reasonCodes, [])
+  const gateDoc = documentRepo.get(submitted.docId)
+  const gateSourceId = gateDoc?.sourceId ?? ""
+  const activeRow = db.prepare("SELECT active_doc_id FROM sources WHERE source_id = ?").get(gateSourceId) as { active_doc_id: string | null }
+  assert.equal(activeRow.active_doc_id, submitted.docId, "联合核验通过 → 活动身份已切换（端到端激活）")
 
   // 重复写入：确定性身份幂等，核验仍 pass 且数量不变（不造重复条目）。
   const access = {
@@ -240,6 +247,90 @@ test("UT-16 集成：真实 ES 写入后核验通过，重复写入幂等且故�
   await es.deleteByQuery({
     index: store.chunkIndexName,
     query: { term: { documentId: submitted.docId } },
+    conflicts: "proceed",
+    refresh: true,
+  })
+  await store.close()
+})
+
+test("UT-17 收尾前：旧版本保护——v2 内容待校验被拒后 v1 仍保持活动身份", async (t) => {
+  const config = loadConfig()
+  const es = createElasticsearchClient({ node: config.esNode, apiKey: config.esApiKey || undefined })
+  if (!(await esAvailable(es))) {
+    t.skip("Elasticsearch 不可达——真实索引核验未验收（如实单列）")
+    return
+  }
+
+  const store = new IngestionStoreImpl({
+    esClient: es,
+    embeddingClient: deterministicEmbeddingClient(config.embeddingDimensions),
+    embeddingModel: config.embeddingModel,
+    embeddingDimensions: config.embeddingDimensions,
+  })
+  const storeProxy = {
+    storeChunks: async (chunks: Chunk[], meta: unknown, signal?: AbortSignal) =>
+      store.storeChunks(chunks, meta as never, signal),
+    readIndexEntries: (documentId: string, chunkIds: string[]) =>
+      store.readIndexEntries(documentId, chunkIds),
+    countVisibleIndexEntries: (documentId: string, chunkIds: string[]) =>
+      store.countVisibleIndexEntries(documentId, chunkIds),
+    storeEntities: async () => {},
+    storeWikilinks: async () => {},
+    chunkIndexName: store.chunkIndexName,
+    close: async () => {},
+  } as unknown as IngestionStoreImpl
+
+  const db = openDb()
+  const documentRepo = new DocumentRepo(db)
+  const lifecycle = new IngestionLifecycle(db, new PipelineStageRunner(db, undefined as never, storeProxy))
+
+  // v1：完整样本 → 双凭证通过 → 激活。
+  const v1 = lifecycle.submit({
+    title: "UT-17 旧版本保护 v1",
+    content: "",
+    rawContent: readFileSync(join(TRUTH_DIR_PDF, "simple-body.pdf")),
+    fileName: "policy.pdf",
+    mimeType: "application/pdf",
+    sourceIdentity: { kind: "file", uriOrExternalId: "C:/truth/ut17/policy.pdf", namespace: "ut17" },
+  })
+  const run1 = await lifecycle.runNext()
+  assert.ok(run1?.success)
+  const gate1 = evaluateActivationGate(documentRepo.getCandidateEvidence(v1.docId))
+  assert.equal(gate1.passed, true, "v1 联合核验通过")
+  const activeAfterV1 = db.prepare(
+    "SELECT active_doc_id FROM sources WHERE source_id = (SELECT source_id FROM documents WHERE doc_id = ?)"
+  ).get(v1.docId) as { active_doc_id: string | null }
+  assert.equal(activeAfterV1.active_doc_id, v1.docId, "v1 已激活")
+
+  // v2：混合扫描（内容待校验）→ 被拒，v1 持续可用。
+  const v2 = lifecycle.submit({
+    title: "UT-17 旧版本保护 v2",
+    content: "",
+    rawContent: readFileSync(join(TRUTH_DIR_PDF, "mixed-scan.pdf")),
+    fileName: "policy.pdf",
+    mimeType: "application/pdf",
+    versionIntent: "new_version",
+    sourceIdentity: { kind: "file", uriOrExternalId: "C:/truth/ut17/policy.pdf", namespace: "ut17" },
+  })
+  const run2 = await lifecycle.runNext()
+  assert.ok(run2?.success, "v2 阶段完成（内容待校验在门槛层拒绝）")
+  const gate2 = evaluateActivationGate(documentRepo.getCandidateEvidence(v2.docId))
+  assert.equal(gate2.passed, false, "v2 内容待校验 → 拒绝")
+  const activeAfterV2 = db.prepare(
+    "SELECT active_doc_id FROM sources WHERE source_id = ?"
+  ).get(documentRepo.get(v1.docId)?.sourceId) as { active_doc_id: string | null }
+  assert.equal(activeAfterV2.active_doc_id, v1.docId, "被拒候选不切换活动身份，v1 持续可用")
+
+  // 清理隔离测试数据（v1+v2 同源）。
+  await es.deleteByQuery({
+    index: store.chunkIndexName,
+    query: { term: { documentId: v1.docId } },
+    conflicts: "proceed",
+    refresh: true,
+  })
+  await es.deleteByQuery({
+    index: store.chunkIndexName,
+    query: { term: { documentId: v2.docId } },
     conflicts: "proceed",
     refresh: true,
   })

@@ -32,6 +32,23 @@ export interface ManifestEntryLike {
   contentSha256: string
 }
 
+/**
+ * 期望清单的绑定摘要：排序后逐条 (chunkId, contentSha256) 的联合哈希。
+ * 内容凭证与索引核验凭证各自携带它——两者相等才证明绑定同一份产物
+ * （UT-17 联合核验的"匹配"判据）。
+ */
+export function manifestDigest(entries: ManifestEntryLike[]): string {
+  return createHash("sha256")
+    .update(
+      JSON.stringify(
+        [...entries]
+          .map((entry) => [entry.chunkId, entry.contentSha256])
+          .sort((left, right) => (left[0] < right[0] ? -1 : 1))
+      )
+    )
+    .digest("hex")
+}
+
 export interface ProduceContentProofInput {
   extractionEvidence: ExtractionEvidenceRecord | null
   /** 解码/结构层的待校验理由码（UT-10 decode + UT-12 risks）。 */
@@ -60,17 +77,8 @@ export function produceContentProof(input: ProduceContentProofInput): ContentPro
     indexChunks: input.indexChunks,
   })
 
-  // 期望清单的绑定哈希：排序后逐条 (chunkId, contentSha256) 的联合哈希，
-  // 任何一条产物内容变化都会改变凭证。
-  const manifestDigest = createHash("sha256")
-    .update(
-      JSON.stringify(
-        [...input.manifestEntries]
-          .map((entry) => [entry.chunkId, entry.contentSha256])
-          .sort((left, right) => (left[0] < right[0] ? -1 : 1))
-      )
-    )
-    .digest("hex")
+  // 期望清单的绑定哈希：任何一条产物内容变化都会改变凭证。
+  const manifestSha256 = manifestDigest(input.manifestEntries)
 
   return {
     schemaVersion: 1,
@@ -80,7 +88,7 @@ export function produceContentProof(input: ProduceContentProofInput): ContentPro
       rawExtractionSha256: input.extractionEvidence?.rawExtractionSha256 ?? null,
       parserConfigVersion: input.parserConfigVersion,
       expectedChunkCount: input.manifestEntries.length,
-      expectedChunksSha256: manifestDigest,
+      expectedChunksSha256: manifestSha256,
     },
     evaluatedAt: new Date().toISOString(),
   }
