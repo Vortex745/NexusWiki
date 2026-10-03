@@ -33,6 +33,7 @@ import {
 import { evaluateBlockCoverage } from "./chunk_coverage"
 import { findOversizedChunks, resolveEmbeddingLimits } from "./limits"
 import { produceContentProof } from "./content_proof"
+import { verifyIndexEntries } from "./index_verification"
 import { ACTIVATION_EVIDENCE_SCHEMA_VERSION } from "./activation_gate"
 import { buildPageIndex } from "./page_index_builder"
 import type { DB } from "./tracking/db"
@@ -128,7 +129,15 @@ function configuredParser(type: ParserType): Parser {
  * (the UT-19 reuse path consumes this judgement).
  */
 function parserConfigFingerprint(type: ParserType): string {
-  const config = loadConfig()
+  // loadConfig requires the full production env; restricted test environments
+  // fall back to the SAME defaults configuredParser would use — the
+  // fingerprint stays deterministic either way.
+  let config: ReturnType<typeof loadConfig>
+  try {
+    config = loadConfig()
+  } catch {
+    config = {} as ReturnType<typeof loadConfig>
+  }
   // UT-10: direct-txt decodes in-process — no command participates.
   const command =
     type === "direct-txt"
@@ -560,6 +569,38 @@ export class PipelineStageRunner implements IngestionStageRunner {
           ...(stored.metrics ?? {}),
         })
       )
+
+      // Ticket UT-16: verify what ACTUALLY landed in the index against the
+      // expected manifest — logical identity, count, content hash and vector
+      // presence. Request success alone proves nothing. The result becomes
+      // the candidate evidence's indexProof (fail is observable and keeps the
+      // candidate inactive; pass still awaits the joint gate, UT-17).
+      if (indexChunks.length > 0) {
+        const store = this.ensureStore() as {
+          readIndexEntries?: (
+            documentId: string,
+            chunkIds: string[]
+          ) => Promise<Map<string, { content: string | null; embedding: number[] | null }>>
+        }
+        if (typeof store.readIndexEntries === "function") {
+          const entries = await store.readIndexEntries(
+            document.id,
+            manifestEntries.map((entry) => entry.chunkId)
+          )
+          const indexProof = verifyIndexEntries({
+            expected: manifestEntries,
+            entries,
+          })
+          const existingEvidence = this.documentRepo.getCandidateEvidence(document.id) as {
+            contentProof?: unknown
+          } | null
+          this.documentRepo.setCandidateEvidence(document.id, {
+            schemaVersion: ACTIVATION_EVIDENCE_SCHEMA_VERSION,
+            contentProof: existingEvidence?.contentProof ?? null,
+            indexProof,
+          })
+        }
+      }
 
       await execution.runStage(
         "storeGraph",

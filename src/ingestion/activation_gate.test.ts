@@ -19,6 +19,7 @@ import {
   ACTIVATION_BLOCKED_CONTENT_PROOF_MISSING,
   ACTIVATION_BLOCKED_EVIDENCE_RECORD_MISSING,
   ACTIVATION_BLOCKED_EVIDENCE_SCHEMA_MISMATCH,
+  ACTIVATION_BLOCKED_INDEX_PROOF_FAILED,
   ACTIVATION_BLOCKED_INDEX_PROOF_MISSING,
   ACTIVATION_BLOCKED_VERIFICATION_NOT_IMPLEMENTED,
   evaluateActivationGate,
@@ -76,15 +77,27 @@ test("UT-04/UT-15 门槛判定：内容待校验带明细码；两类凭证齐�
     "pages_without_text_layer_or_empty: 2",
   ])
 
-  // UT-04 保留：内容 pass 且索引凭证存在时，联合核验属于 UT-17——
+  // UT-04 保留：内容 pass 且索引凭证 pass 时，联合核验属于 UT-17——
   // 显式拒绝而不是提前放行，保证中间票无法临时绕过保护。
   const decision = evaluateActivationGate({
     schemaVersion: 1,
     contentProof: { verdict: "pass", reasonCodes: [] },
-    indexProof: { any: "shape" },
+    indexProof: { verdict: "pass", reasonCodes: [] },
   })
   assert.equal(decision.passed, false)
   assert.deepEqual(decision.reasonCodes, [ACTIVATION_BLOCKED_VERIFICATION_NOT_IMPLEMENTED])
+
+  // UT-16：索引核验 fail → 稳定理由码 + 明细（丢块/哈希不匹配/缺向量）。
+  const indexFailed = evaluateActivationGate({
+    schemaVersion: 1,
+    contentProof: { verdict: "pass", reasonCodes: [] },
+    indexProof: { verdict: "fail", reasonCodes: ["index_missing_chunks"] },
+  })
+  assert.equal(indexFailed.passed, false)
+  assert.deepEqual(indexFailed.reasonCodes, [
+    ACTIVATION_BLOCKED_INDEX_PROOF_FAILED,
+    "index_missing_chunks",
+  ])
 })
 
 test("UT-04 自动激活：阶段成功的候选保持未激活并记录缺失原因", async () => {
@@ -204,7 +217,7 @@ test("UT-04 凭证齐备仍不放行（核验未实现）且取消约束保留",
     docRepo.setCandidateEvidence(submitted.docId, {
       schemaVersion: 1,
       contentProof: { verdict: "pass", reasonCodes: [] },
-      indexProof: { some: "index proof" },
+      indexProof: { verdict: "pass", reasonCodes: [] },
     })
     await lifecycle.runNext()
     assert.equal(

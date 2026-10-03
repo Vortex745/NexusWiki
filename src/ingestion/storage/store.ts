@@ -1,5 +1,6 @@
 import { type Client } from "@elastic/elasticsearch"
 import { type OpenAI } from "openai"
+import { setTimeout as delay } from "node:timers/promises"
 import type { Driver } from "neo4j-driver"
 import type { Chunk, Entity, Wikilink } from "../../types"
 import { loadConfig } from "../../config"
@@ -11,6 +12,97 @@ import {
 import { getDriver } from "../../graph"
 
 const INDEX_NAME = "kefu-rag-chunks"
+const DEFAULT_CHUNK_BATCH_SIZE = 64
+const DEFAULT_EMBEDDING_BATCH_MAX_BYTES = 150 * 1024
+const EMBEDDING_REQUEST_TIMEOUT_MS = 60_000
+
+export interface ChunkStoreMetrics {
+  chunkCount: number
+  passageCount: number
+  batchCount: number
+  embeddingBatchCount: number
+  embeddingRequestCount: number
+  embeddingRetryCount: number
+  embeddingRateLimitCount: number
+  embeddingDurationMs: number
+  rateLimitWaitMs: number
+  bulkRequestCount: number
+  bulkDurationMs: number
+}
+
+function emptyChunkStoreMetrics(chunkCount = 0): ChunkStoreMetrics {
+  return {
+    chunkCount,
+    passageCount: 0,
+    batchCount: 0,
+    embeddingBatchCount: 0,
+    embeddingRequestCount: 0,
+    embeddingRetryCount: 0,
+    embeddingRateLimitCount: 0,
+    embeddingDurationMs: 0,
+    rateLimitWaitMs: 0,
+    bulkRequestCount: 0,
+    bulkDurationMs: 0,
+  }
+}
+
+function isRateLimited(error: unknown): boolean {
+  return typeof error === "object" && error !== null && "status" in error && error.status === 429
+}
+
+function retryAfterMs(error: unknown): number | null {
+  if (typeof error !== "object" || error === null || !("headers" in error)) return null
+  const headers = error.headers
+  if (typeof headers !== "object" || headers === null || !("get" in headers) || typeof headers.get !== "function") return null
+  const value = headers.get("retry-after")
+  if (value === null) return null
+  const seconds = Number(value)
+  return Number.isFinite(seconds) && seconds >= 0 ? seconds * 1_000 : null
+}
+
+function waitForPrevious<T>(previous: Promise<void>, signal?: AbortSignal): Promise<T> {
+  if (!signal) return previous as Promise<T>
+  if (signal.aborted) return Promise.reject(signal.reason ?? new DOMException("The operation was aborted", "AbortError"))
+  return new Promise<T>((resolve, reject) => {
+    const onAbort = (): void => reject(
+      signal.reason ?? new DOMException("The operation was aborted", "AbortError")
+    )
+    signal.addEventListener("abort", onAbort, { once: true })
+    previous.then(
+      () => {
+        signal.removeEventListener("abort", onAbort)
+        resolve(undefined as T)
+      },
+      (error) => {
+        signal.removeEventListener("abort", onAbort)
+        reject(error)
+      }
+    )
+  })
+}
+
+/**
+ * One embedding request at a time per store. The worker may ingest multiple
+ * documents concurrently, but sending their provider calls together turns a
+ * provider-side quota into a queue of retries. The queued slot remains
+ * cancellable so stopping one document does not wait behind another request.
+ */
+class EmbeddingRequestGate {
+  private tail = Promise.resolve()
+
+  async run<T>(signal: AbortSignal | undefined, operation: () => Promise<T>): Promise<T> {
+    let release!: () => void
+    const previous = this.tail
+    this.tail = new Promise<void>((resolve) => { release = resolve })
+    try {
+      await waitForPrevious(previous, signal)
+      signal?.throwIfAborted()
+      return await operation()
+    } finally {
+      release()
+    }
+  }
+}
 const CHUNK_KEYWORD_PROPERTIES = {
   kind: { type: "keyword" as const },
   parentId: { type: "keyword" as const },
@@ -57,6 +149,11 @@ export class ESStore {
   private embeddingModel: string
   private embeddingDimensions: number
   private indexName: string
+  private chunkBatchSize: number
+  private embeddingBatchMaxBytes: number
+  private ensureIndexPromise?: Promise<void>
+  private embeddingGate?: EmbeddingRequestGate
+  private embeddingCooldownUntil = 0
 
   constructor(clients?: {
     client?: Client
@@ -64,12 +161,16 @@ export class ESStore {
     embeddingModel?: string
     embeddingDimensions?: number
     indexName?: string
+    batchMaxChunks?: number
+    batchMaxBytes?: number
   }) {
     if (clients?.client && clients.embeddingClient && clients.embeddingModel && clients.embeddingDimensions) {
       this.client = clients.client
       this.embeddingClient = clients.embeddingClient
       this.embeddingModel = clients.embeddingModel
       this.embeddingDimensions = clients.embeddingDimensions
+      this.chunkBatchSize = clients.batchMaxChunks ?? DEFAULT_CHUNK_BATCH_SIZE
+      this.embeddingBatchMaxBytes = clients.batchMaxBytes ?? DEFAULT_EMBEDDING_BATCH_MAX_BYTES
     } else {
       const cfg = loadConfig()
       this.client = clients?.client ?? createElasticsearchClient({
@@ -83,6 +184,12 @@ export class ESStore {
       })
       this.embeddingModel = clients?.embeddingModel ?? cfg.embeddingModel
       this.embeddingDimensions = clients?.embeddingDimensions ?? cfg.embeddingDimensions
+      // Production reads the config knobs so a provider that rejects large
+      // batches is dialed back via env without a code change.
+      this.chunkBatchSize = clients?.batchMaxChunks
+        ?? cfg.embeddingBatchMaxChunks ?? DEFAULT_CHUNK_BATCH_SIZE
+      this.embeddingBatchMaxBytes = clients?.batchMaxBytes
+        ?? cfg.embeddingBatchMaxBytes ?? DEFAULT_EMBEDDING_BATCH_MAX_BYTES
     }
     this.indexName = clients?.indexName ?? INDEX_NAME
   }
@@ -93,6 +200,17 @@ export class ESStore {
   }
 
   async ensureIndex(): Promise<void> {
+    // Concurrent ingestion tasks share one ESStore; memoize the in-flight
+    // verification so parallel storeChunks() calls don't race each other
+    // into a double indices.create. Cleared on failure so retries re-verify.
+    this.ensureIndexPromise ??= this.verifyOrCreateIndex().catch((error) => {
+      this.ensureIndexPromise = undefined
+      throw error
+    })
+    return this.ensureIndexPromise
+  }
+
+  private async verifyOrCreateIndex(): Promise<void> {
     const exists = await this.client.indices.exists({ index: this.indexName })
     if (exists) {
       const mapping = await this.client.indices.getMapping({ index: this.indexName })
@@ -137,9 +255,11 @@ export class ESStore {
 
   async storeChunks(
     chunks: Chunk[],
-    accessMetadata: KnowledgeAccessMetadata
-  ): Promise<void> {
-    if (chunks.length === 0) return
+    accessMetadata: KnowledgeAccessMetadata,
+    signal?: AbortSignal
+  ): Promise<ChunkStoreMetrics> {
+    const metrics = emptyChunkStoreMetrics(chunks.length)
+    if (chunks.length === 0) return metrics
     if (
       !accessMetadata?.tenantId ||
       !Array.isArray(accessMetadata.allowedGroups) ||
@@ -149,42 +269,152 @@ export class ESStore {
     }
 
     const { tenantId, allowedGroups, knowledgeBaseId } = accessMetadata
-    const passages = chunks.filter((chunk) => chunk.metadata.kind !== "parent")
-    const embeddings = new Map<string, number[]>()
-    if (passages.length > 0) {
-      const embRes = await this.embeddingClient.embeddings.create({
-        model: this.embeddingModel,
-        input: passages.map(({ content }) => content),
-      })
-      for (let index = 0; index < passages.length; index += 1) {
-        const passage = passages[index]
-        embeddings.set(`${passage.documentId}\0${passage.id}`, embRes.data[index].embedding)
+    this.embeddingGate ??= new EmbeddingRequestGate()
+    this.embeddingCooldownUntil ??= 0
+    for (let offset = 0; offset < chunks.length;) {
+      signal?.throwIfAborted()
+      let end = offset
+      let embeddingBytes = 2 // JSON array brackets
+      while (end < chunks.length && end - offset < this.chunkBatchSize) {
+        const chunk = chunks[end]
+        const nextBytes = chunk.metadata.kind === "parent"
+          ? 0 : Buffer.byteLength(JSON.stringify(chunk.content)) + 1
+        if (end > offset && embeddingBytes + nextBytes > this.embeddingBatchMaxBytes) break
+        embeddingBytes += nextBytes
+        end += 1
       }
-    }
+      // Guard: a batch must always consume at least one chunk, otherwise the
+      // outer for-loop never advances (e.g. a zero/undefined batch size from a
+      // prototype-built instance) and spins the event loop forever.
+      if (end === offset) end = offset + 1
+      const batch = chunks.slice(offset, end)
+      const passages = batch.filter((chunk) => chunk.metadata.kind !== "parent")
+      metrics.batchCount += 1
+      metrics.passageCount += passages.length
+      const embeddings = new Map<string, number[]>()
+      if (passages.length > 0) {
+        metrics.embeddingBatchCount += 1
+        const requestStarted = Date.now()
+        let embRes: { data: Array<{ embedding: number[] }> }
+        try {
+          // Keep the complete retry sequence inside the gate. Releasing the
+          // gate after a 429 but before publishing the cooldown lets another
+          // document start a request in that window and recreate the burst.
+          embRes = await this.embeddingGate.run(signal, async () => {
+            for (let attempt = 0; ; attempt += 1) {
+              const cooldown = Math.max(0, this.embeddingCooldownUntil - Date.now())
+              if (cooldown > 0) {
+                const waitStarted = Date.now()
+                await delay(cooldown, undefined, { signal })
+                metrics.rateLimitWaitMs += Date.now() - waitStarted
+              }
+              metrics.embeddingRequestCount += 1
+              try {
+                return await this.embeddingClient.embeddings.create({
+                  model: this.embeddingModel,
+                  input: passages.map(({ content }) => content),
+                }, { signal, timeout: EMBEDDING_REQUEST_TIMEOUT_MS, maxRetries: 0 })
+              } catch (error) {
+                if (isRateLimited(error) && attempt < 3) {
+                  metrics.embeddingRateLimitCount += 1
+                  metrics.embeddingRetryCount += 1
+                  const retryDelay = retryAfterMs(error) ?? Math.min(30_000, 1_000 * 2 ** attempt)
+                  this.embeddingCooldownUntil = Math.max(
+                    this.embeddingCooldownUntil,
+                    Date.now() + retryDelay
+                  )
+                  continue
+                }
+                throw error
+              }
+            }
+          })
+          metrics.embeddingDurationMs += Date.now() - requestStarted
+        } catch (error) {
+          metrics.embeddingDurationMs += Date.now() - requestStarted
+          if (signal?.aborted) throw error
+          throw new Error(
+            `Embedding batch at chunk ${offset} (${passages.length} passages, ${embeddingBytes} bytes) failed: ${error instanceof Error ? error.message : String(error)}`,
+            { cause: error }
+          )
+        }
+        for (let index = 0; index < passages.length; index += 1) {
+          const passage = passages[index]
+          embeddings.set(`${passage.documentId}\0${passage.id}`, embRes.data[index].embedding)
+        }
+      }
 
-    const body = chunks.flatMap((c) => [
-      { index: { _index: this.indexName, _id: `${c.documentId}:${c.id}` } },
-      {
-        id: c.id,
-        documentId: c.documentId,
-        tenantId,
-        allowedGroups,
-        knowledgeBaseId,
-        kind: c.metadata.kind,
-        content: c.content,
-        ...(embeddings.has(`${c.documentId}\0${c.id}`)
-          ? { embedding: embeddings.get(`${c.documentId}\0${c.id}`) }
-          : {}),
-        parentId: c.parentId,
-        childrenIds: c.childrenIds,
-        metadata: c.metadata,
-      },
-    ])
-    const result = await this.client.bulk({ body, refresh: "wait_for" })
-    if (result.errors) {
-      const failure = result.items.find((item) => item.index?.error)?.index?.error
-      throw new Error(`Elasticsearch bulk indexing failed: ${failure?.reason ?? "unknown error"}`)
+      const body = batch.flatMap((c) => [
+        { index: { _index: this.indexName, _id: `${c.documentId}:${c.id}` } },
+        {
+          id: c.id,
+          documentId: c.documentId,
+          tenantId,
+          allowedGroups,
+          knowledgeBaseId,
+          kind: c.metadata.kind,
+          content: c.content,
+          ...(embeddings.has(`${c.documentId}\0${c.id}`)
+            ? { embedding: embeddings.get(`${c.documentId}\0${c.id}`) }
+            : {}),
+          parentId: c.parentId,
+          childrenIds: c.childrenIds,
+          metadata: c.metadata,
+        },
+      ])
+      const refresh = end === chunks.length ? "wait_for" : false
+      signal?.throwIfAborted()
+      const bulkStarted = Date.now()
+      const result = await this.client.bulk({ body, refresh }, { signal })
+      metrics.bulkRequestCount += 1
+      metrics.bulkDurationMs += Date.now() - bulkStarted
+      if (result.errors) {
+        const failure = result.items.find((item) => item.index?.error)?.index?.error
+        throw new Error(`Elasticsearch bulk indexing failed: ${failure?.reason ?? "unknown error"}`)
+      }
+      offset = end
     }
+    return metrics
+  }
+
+  /**
+   * Ticket UT-16: read index entries back by logical identity so the pipeline
+   * can verify what ACTUALLY landed in Elasticsearch against the expected
+   * manifest — request success alone proves nothing. Only content and the
+   * embedding vector are fetched.
+   */
+  async readIndexEntries(
+    documentId: string,
+    chunkIds: string[]
+  ): Promise<Map<string, { content: string | null; embedding: number[] | null }>> {
+    const entries = new Map<string, { content: string | null; embedding: number[] | null }>()
+    if (chunkIds.length === 0) return entries
+    const result = await this.client.mget(
+      {
+        index: this.indexName,
+        ids: chunkIds.map((chunkId) => `${documentId}:${chunkId}`),
+        _source: ["content", "embedding"],
+      },
+      { ignore: [404] }
+    )
+    const docs = (result as {
+      docs?: Array<{
+        _id?: string
+        found?: boolean
+        _source?: { content?: unknown; embedding?: unknown }
+      }>
+    }).docs ?? []
+    const prefix = `${documentId}:`
+    for (const doc of docs) {
+      if (!doc.found || typeof doc._id !== "string" || !doc._id.startsWith(prefix)) continue
+      const chunkId = doc._id.slice(prefix.length)
+      const source = doc._source ?? {}
+      entries.set(chunkId, {
+        content: typeof source.content === "string" ? source.content : null,
+        embedding: Array.isArray(source.embedding) ? (source.embedding as number[]) : null,
+      })
+    }
+    return entries
   }
 
   async close(): Promise<void> {
@@ -294,10 +524,19 @@ export class IngestionStoreImpl {
 
   async storeChunks(
     chunks: Chunk[],
-    accessMetadata: KnowledgeAccessMetadata
-  ): Promise<void> {
+    accessMetadata: KnowledgeAccessMetadata,
+    signal?: AbortSignal
+  ): Promise<ChunkStoreMetrics> {
     await this.es.ensureIndex()
-    await this.es.storeChunks(chunks, accessMetadata)
+    return this.es.storeChunks(chunks, accessMetadata, signal)
+  }
+
+  /** Ticket UT-16: read index entries back by logical identity (see ESStore). */
+  readIndexEntries(
+    documentId: string,
+    chunkIds: string[]
+  ): Promise<Map<string, { content: string | null; embedding: number[] | null }>> {
+    return this.es.readIndexEntries(documentId, chunkIds)
   }
 
   async storeEntities(entities: Entity[]): Promise<void> {
