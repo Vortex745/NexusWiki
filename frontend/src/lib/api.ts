@@ -1,7 +1,7 @@
 import type { RunHistory, SseEventData } from "@core/conversation"
 
 import { MIME_BY_EXTENSION } from "./constants"
-import { isPdfLike } from "./importBatch"
+import { isPdfLike, serverUploadErrorKind } from "./importBatch"
 
 const API_BASE = "/api"
 
@@ -958,6 +958,11 @@ async function parseUploadError(responseText: string, status: number): Promise<I
       const detected = typeof nested.detected === "string" ? nested.detected : undefined
       return new ImportUploadError(nested.kind, message, detected)
     }
+    // UT-32: the 409 same-name guard answers { error, activeDocId } — that
+    // marker classifies the failure as a conflict (intent required, never a
+    // blind re-upload).
+    const conflictKind = serverUploadErrorKind(status, parsed)
+    if (conflictKind) return new ImportUploadError(conflictKind, fallback)
   } catch {
     // not JSON — fall through to the plain server error
   }

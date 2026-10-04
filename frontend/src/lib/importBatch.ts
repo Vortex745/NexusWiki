@@ -221,6 +221,12 @@ export function describeImportError(raw: string, context?: ImportErrorContext): 
     const detected = context?.detected ? `（检测到 ${context.detected} 内容）` : ""
     return { kind: "admission", text: `文件类型与声明不符${detected}，已按服务端准入拒绝` }
   }
+  // UT-32: the 409 same-name body arrives classified — don't depend on the
+  // server message wording to keep the conflict view (and its 查看文档
+  // recovery) stable.
+  if (kind === "conflict") {
+    return { kind: "conflict", text: "文档已存在或内容冲突" }
+  }
   if (kind && ADMISSION_KIND_TEXT[kind]) {
     return { kind: "admission", text: ADMISSION_KIND_TEXT[kind] }
   }
@@ -306,8 +312,17 @@ export interface RetryDecision {
    * server_accepted → the failure is a processing failure on an accepted
    * upload; re-uploading would create a NEW document (UT-27 adds the real
    * same-document resume command). */
-  reason?: "file_invalid" | "server_accepted"
+  reason?: "file_invalid" | "server_accepted" | "conflict"
 }
+
+/** UT-32: structured server kinds whose bytes can never pass — the upload is
+ * terminal for this file, so the retry entry is invalid, not helpful. */
+const PERMANENT_UPLOAD_ERROR_KINDS = new Set([
+  "type_conflict",
+  "unsupported_type",
+  "empty_file",
+  "file_size",
+])
 
 export interface RetryGateInput {
   status: string
@@ -315,9 +330,23 @@ export interface RetryGateInput {
   sourceUrl?: string
   docId?: string | null
   admissionKind?: ImportAdmissionKind
-  /** Rides along on real ImportItems; the gate deliberately ignores it —
-   * only admission state and server acceptance decide re-upload (UT-23). */
+  /** UT-32: the structured upload-error kind decides the recovery entry —
+   * permanent admission classes (the same bytes can never pass) and the
+   * same-name conflict (needs a user intent, not a blind re-upload) close
+   * the retry entry; transport/unknown kinds keep it. */
   errorKind?: string | null
+}
+
+/** Server body classifier (UT-32): the 409 same-name guard answers with a
+ * plain `{ error, activeDocId }` body — activeDocId marks a same-name
+ * conflict, which needs the user's intent (查看文档), never a blind
+ * re-upload. Everything else stays with its own classification. */
+export function serverUploadErrorKind(status: number, body: unknown): string | null {
+  if (typeof body !== "object" || body === null) return null
+  const record = body as Record<string, unknown>
+  if (typeof record.error !== "string") return null
+  if (status === 409 && record.activeDocId) return "conflict"
+  return null
 }
 
 /** Whether a failed row may retry, and which recovery that retry means
@@ -328,6 +357,12 @@ export interface RetryGateInput {
 export function retryDecision(item: RetryGateInput): RetryDecision {
   if (item.status !== "failed") return { retryable: false }
   if (item.admissionKind) return { retryable: false, reason: "file_invalid" }
+  // UT-32: server-side permanent classes — the same bytes can never pass —
+  // and the same-name conflict (needs the user's intent) close the entry.
+  if (item.errorKind && PERMANENT_UPLOAD_ERROR_KINDS.has(item.errorKind)) {
+    return { retryable: false, reason: "file_invalid" }
+  }
+  if (item.errorKind === "conflict") return { retryable: false, reason: "conflict" }
   if (item.docId) return { retryable: false, reason: "server_accepted" }
   if (!item.file && item.sourceUrl) return { retryable: true }
   if (item.file) return { retryable: true }

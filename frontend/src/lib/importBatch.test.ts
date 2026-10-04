@@ -15,6 +15,7 @@ import {
   partitionLooseFiles,
   retryDecision,
   sanitizeKnowledgeBaseName,
+  serverUploadErrorKind,
   settleWavePrecheck,
   type FolderNode,
   type PrecheckSettleRow,
@@ -335,5 +336,57 @@ describe("UT-24 wave pre-flight settlement", () => {
     assert.equal(settled[0].precheckSettled, true)
     assert.equal(settled[0].precheckHit ?? false, false)
     assert.equal(settled[1].precheckSettled, false)
+  })
+})
+
+describe("UT-32 invalid recovery entries", () => {
+  const base = { status: "failed", sourceUrl: undefined as string | undefined }
+
+  it("never offers upload retry for server-side permanent admission kinds", () => {
+    // The server rejected THESE bytes by admission (structured 415/413 kinds):
+    // the same bytes can never pass, so the retry entry would be invalid.
+    for (const kind of ["type_conflict", "unsupported_type", "empty_file", "file_size"]) {
+      const gate = retryDecision({ ...base, file: new File([], "a.pdf"), errorKind: kind })
+      assert.equal(gate.retryable, false, kind)
+      assert.equal(gate.reason, "file_invalid", kind)
+    }
+  })
+
+  it("never offers upload retry for same-name conflict rows", () => {
+    // A same-name conflict needs a user intent (查看文档 / replace) that a
+    // blind re-upload cannot supply — the row keeps 查看文档, loses 重试.
+    const gate = retryDecision({ ...base, file: new File([], "a.pdf"), errorKind: "conflict" })
+    assert.equal(gate.retryable, false)
+    assert.equal(gate.reason, "conflict")
+  })
+
+  it("keeps transport and unknown-server failures retryable", () => {
+    // Regression guard: only PERMANENT classes lose the retry entry.
+    for (const kind of ["network", "timeout", "server", "invalid_response"]) {
+      assert.equal(
+        retryDecision({ ...base, file: new File([], "a.pdf"), errorKind: kind }).retryable,
+        true,
+        kind,
+      )
+    }
+  })
+
+  it("classifies the server's 409 same-name body as a conflict", () => {
+    assert.equal(
+      serverUploadErrorKind(409, { error: "this source already exists", activeDocId: "doc-1" }),
+      "conflict",
+    )
+    // 409 without the conflict marker is NOT a same-name conflict.
+    assert.equal(serverUploadErrorKind(409, { error: "some other 409" }) ?? null, null)
+    // Structured admission bodies ride their own kind elsewhere — not ours.
+    assert.equal(serverUploadErrorKind(415, { error: { kind: "type_conflict" } }) ?? null, null)
+    assert.equal(serverUploadErrorKind(500, { error: "boom", activeDocId: "doc-1" }) ?? null, null)
+    assert.equal(serverUploadErrorKind(409, "not json") ?? null, null)
+  })
+
+  it("maps the conflict kind to the stable conflict view", () => {
+    const view = describeImportError("this source already exists", { kind: "conflict" })
+    assert.equal(view.kind, "conflict")
+    assert.equal(view.text, "文档已存在或内容冲突")
   })
 })
