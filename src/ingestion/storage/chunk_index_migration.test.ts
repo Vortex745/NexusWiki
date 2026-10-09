@@ -3,7 +3,7 @@ import assert from "node:assert/strict"
 import type { Client } from "@elastic/elasticsearch"
 import { migrateChunkIndex } from "./chunk_index_migration"
 
-function cluster(options: { corrupt?: boolean; targetExists?: boolean; reindexFails?: boolean; kind?: string; noVector?: boolean } = {}) {
+function cluster(options: { corrupt?: boolean; targetExists?: boolean; reindexFails?: boolean; kind?: string; noVector?: boolean; barrierResponseFails?: boolean } = {}) {
   const source = [{ _id: "one", _routing: "tenant", _source: {
     text: "preserve this exact body", tenantId: "tenant", embedding: [0.25, 0.5],
     metadata: { normalizedBlocks: [{ metadata: { fontSize: 12.5 }, boundingBox: [0.5, 2, 3, 4] }] },
@@ -23,6 +23,12 @@ function cluster(options: { corrupt?: boolean; targetExists?: boolean; reindexFa
         else state.targetLocked = settings["index.blocks.write"]
       },
       refresh: async () => ({}),
+      addBlock: async ({ index }: { index: string }) => {
+        if (index === "source") state.sourceLocked = true
+        else state.targetLocked = true
+        if (options.barrierResponseFails) throw new Error("Write barrier response lost")
+        return { acknowledged: true, shards_acknowledged: true }
+      },
       create: async ({ mappings: targetMapping, settings }: any) => {
         assert.equal(targetMapping.properties.metadata.properties.normalizedBlocks.properties.metadata.properties.fontSize.type, "float")
         assert.equal(settings.uuid, undefined)
@@ -100,4 +106,11 @@ test("parent chunks legitimately without vectors survive full-source verificatio
 test("a child missing its required vector is not declared migratable", async () => {
   const { client } = cluster({ kind: "child", noVector: true })
   await assert.rejects(migrateChunkIndex(client, base), /Incomplete source vector/)
+})
+
+test("a lost write-barrier response restores original state after the cluster applied the lock", async () => {
+  const { client, state } = cluster({ barrierResponseFails: true })
+  await assert.rejects(migrateChunkIndex(client, { ...base, apply: true }), /response lost/)
+  assert.equal(state.sourceLocked, false)
+  assert.equal(state.created, false)
 })
