@@ -3,11 +3,13 @@ import assert from "node:assert/strict"
 import type { Client } from "@elastic/elasticsearch"
 import { migrateChunkIndex } from "./chunk_index_migration"
 
-function cluster(options: { corrupt?: boolean; targetExists?: boolean; reindexFails?: boolean } = {}) {
+function cluster(options: { corrupt?: boolean; targetExists?: boolean; reindexFails?: boolean; kind?: string; noVector?: boolean } = {}) {
   const source = [{ _id: "one", _routing: "tenant", _source: {
     text: "preserve this exact body", tenantId: "tenant", embedding: [0.25, 0.5],
     metadata: { normalizedBlocks: [{ metadata: { fontSize: 12.5 }, boundingBox: [0.5, 2, 3, 4] }] },
   } }]
+  if (options.kind) Object.assign(source[0]._source, { kind: options.kind })
+  if (options.noVector) delete (source[0]._source as Partial<typeof source[0]["_source"]>).embedding
   const state = { sourceLocked: false, targetLocked: false, target: [] as typeof source, created: false }
   const mappings = { properties: { embedding: { type: "dense_vector", dims: 2 }, metadata: { type: "object", properties: { normalizedBlocks: { properties: { metadata: { properties: { fontSize: { type: "long" } } } } } } } } }
   const client = {
@@ -87,4 +89,15 @@ test("pre-existing target, remote cluster, wildcard and dimension mismatch are r
   await assert.rejects(migrateChunkIndex(client, { ...base, apply: true, target: "target*" }), /physical/)
   await assert.rejects(migrateChunkIndex(client, { ...base, apply: true, embeddingDimensions: 3 }), /dimensions differ/)
   assert.equal(state.sourceLocked, false)
+})
+
+test("parent chunks legitimately without vectors survive full-source verification", async () => {
+  const { client } = cluster({ kind: "parent", noVector: true })
+  const result = await migrateChunkIndex(client, { ...base, apply: true })
+  assert.equal(result.phase, "verified")
+})
+
+test("a child missing its required vector is not declared migratable", async () => {
+  const { client } = cluster({ kind: "child", noVector: true })
+  await assert.rejects(migrateChunkIndex(client, base), /Incomplete source vector/)
 })
