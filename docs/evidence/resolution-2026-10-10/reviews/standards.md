@@ -1,0 +1,11 @@
+# Standards review
+
+Scope: git diff 36b8faad...HEAD, pinned HEAD 3f4014a. Reviewed the task changes against the user-provided AGENTS.md navigation, surgical-change and privacy rules, dependency direction, and Fowler smell baseline. No code changes made.
+
+- **P2 — documented privacy boundary is not enforced for external errors**, scripts/migrate-chunk-index.ts:35–38 (also stderr at line 44). The comment promises diagnostics omit credentials and document source, but `const message = error instanceof Error ? error.message : "Migration failed"` copies arbitrary Elasticsearch/transport errors into the saved report and console. An external error can contain echoed document values or credential-bearing URLs; removing Error metadata does not sanitize its message. User-provided AGENTS.md §8 forbids persisting credentials/sensitive configuration or logs. Emit fixed safe codes for external failures, retaining structured safe phase/index/status fields, and explicitly allow only locally constructed diagnostic messages. This is a missing privacy safeguard; no actual secret leakage was observed.
+
+- **P3 — possible Duplicated Code (judgment)**, src/ingestion/storage/chunk_index_migration.ts:4 and :34. `FLOAT_PATHS` repeats the three field declarations already exported by store.ts, while `validateIndex` separately repeats config/index.ts physical-index validation. Future updates can let store creation and migration diverge or admit different names. Derive the migration field paths from the shared export, and reuse a shared legal-name check while retaining migration's strict explicit-argument policy. AGENTS.md §6 simplicity/consistency supports sharing these real repeated shapes; the broad routing edits themselves are necessary and are not flagged as shotgun surgery.
+
+No new reverse dependency, deletion of repository files or old business indices, unrequested service/provider, or unsupported confidence-threshold approval was identified. PDF joint probabilities remain distinct from legacy independent observations, and diagnostic persistence uses a separate nonreusable channel. Existing legacy module layering violations were left outside scope as AGENTS.md requires.
+
+Standards: 2 findings; highest severity P2 external-error diagnostic privacy safeguard.

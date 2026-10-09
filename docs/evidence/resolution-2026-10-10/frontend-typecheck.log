@@ -1,0 +1,2 @@
+npm notice run kefu-rag-main@1.0.0 typecheck:web
+npm notice run tsc -p tsconfig.web.json --noEmit

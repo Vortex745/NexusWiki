@@ -1,0 +1,19 @@
+✔ migration preview checks prerequisites without creating or locking indexes (3.0724ms)
+✔ migration verifies original body, vector, routing and fractional docvalues before cutover (1.9916ms)
+✔ inconsistent copy restores the source lock and never reports cutover ready (1.3788ms)
+✔ reindex failures preserve originals and restore their write state (0.6171ms)
+✔ pre-existing target, remote cluster, wildcard and dimension mismatch are refused before writes (0.6087ms)
+✔ parent chunks legitimately without vectors survive full-source verification (0.7808ms)
+✔ a child missing its required vector is not declared migratable (0.4083ms)
+✔ a lost write-barrier response restores original state after the cluster applied the lock (0.379ms)
+✔ migration diagnostics expose only trusted local errors, never external messages (1.4573ms)
+✔ write-lock restore failure is prominent without exposing either underlying failure (0.3538ms)
+✔ transport failure and malformed endpoint remain safe at the public migration seam (8.4327ms)
+ℹ tests 11
+ℹ suites 0
+ℹ pass 11
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 1099.674
