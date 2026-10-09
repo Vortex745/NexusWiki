@@ -179,6 +179,18 @@ function required(key: string): string {
 
 let _config: AppConfig | null = null
 
+export const DEFAULT_ES_CHUNK_INDEX = "kefu-rag-chunks"
+
+/** Validate a single physical index, never a wildcard or multi-index target. */
+export function resolveChunkIndexName(indexName?: string, config?: Pick<AppConfig, "esChunkIndexName">): string {
+  const name = indexName?.trim() || config?.esChunkIndexName?.trim() || DEFAULT_ES_CHUNK_INDEX
+  if (name !== name.toLowerCase() || name === "." || name === ".." ||
+    /^[\-+_]/.test(name) || /[\\/*?"<>|\s,#:]/.test(name) || Buffer.byteLength(name, "utf8") > 255) {
+    throw new Error("ES_CHUNK_INDEX must be a valid single lowercase physical index name")
+  }
+  return name
+}
+
 /**
  * WD-05: `ACTIVATION_MODE` and `PDF_OCR_FALLBACK_ENABLED` are retired; new
  * imports follow `weknora-technical-v1` and activate on technical completion.
