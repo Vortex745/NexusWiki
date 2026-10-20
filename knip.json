@@ -1,0 +1,24 @@
+{
+  "$schema": "./node_modules/knip/schema.json",
+  "entry": [
+    "src/index.ts",
+    "src/ingestion/cli.ts",
+    "src/mcp/server_main.ts",
+    "src/**/*.test.ts",
+    "frontend/src/**/*.test.ts",
+    "scripts/**/*.ts"
+  ],
+  "project": ["src/**/*", "frontend/src/**/*", "scripts/**/*"],
+  "ignoreDependencies": ["lucide"],
+  "ignore": [
+    "src/api/models.ts",
+    "src/mastra/stop_conditions.ts",
+    "src/answer/clarification_store.ts"
+  ],
+  "rules": {
+    "exports": "warn",
+    "types": "warn",
+    "duplicates": "warn",
+    "nsExports": "warn"
+  }
+}

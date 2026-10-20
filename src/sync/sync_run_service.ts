@@ -403,7 +403,15 @@ export class SyncRunService {
     // The whole run — provider fetches, derived ingestion submissions and the
     // drain — executes with the run scope active, so every nested task and
     // model call joins the same trace (LG-06-AC01).
-    const settled = scope ? await scope.runInContext(execute) : await execute()
+    let settled: SyncRun
+    try {
+      settled = scope ? await scope.runInContext(execute) : await execute()
+    } catch (error) {
+      // `execute` normally converts every failure into a `failed` run, but a
+      // throwing `finalize` (e.g. the DB going away) must not leak the span.
+      scope?.end({ outcome: "error", message: "sync run threw" })
+      throw error
+    }
     scope?.end(
       settled.status === "failed"
         ? { outcome: "error", message: "sync run failed" }

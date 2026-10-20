@@ -134,7 +134,7 @@ export function createChatRouter(
     res: Response,
   ): AnswerEventsSource =>
     tracing
-      ? tracedAnswerSource(eventsSource, tracing, () => requestScope(res))
+      ? tracedAnswerSource(eventsSource, () => requestScope(res))
       : eventsSource
 
   // Ticket 21 (CONV-01B): one active run per session, per process. A second

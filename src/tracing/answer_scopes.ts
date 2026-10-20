@@ -1,6 +1,6 @@
 import type { AnswerRunEvent } from "../types/answer"
 import type { AnswerEventsSource } from "../api/chat"
-import type { OperationScope, OperationOutcome, TracingRuntime } from "./contract"
+import type { OperationScope, OperationOutcome } from "./contract"
 
 /**
  * LO-09: real round / tool / stage scopes for one Answer run.
@@ -170,7 +170,6 @@ export function outcomeForTerminal(status: string): AnswerScopeOutcome {
  */
 export function tracedAnswerSource(
   source: AnswerEventsSource,
-  tracing: TracingRuntime,
   resolveParent: () => OperationScope | undefined,
 ): AnswerEventsSource {
   return async function* traced(message, options) {
