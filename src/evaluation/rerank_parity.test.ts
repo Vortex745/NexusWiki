@@ -111,8 +111,12 @@ test("the dedicated reranker keeps one adapter and one config surface", () => {
     "src/api/server.ts",
     "src/evaluation/isolated_resources.ts",
   ].map(read)
+  // LO-12 added an OPTIONAL `tracing` seam to the adapter; it is not part of
+  // the RERANK_* config surface, so it is excluded from the parity shape.
   const shapes = new Set(
-    sources.flatMap(rerankerCallArgNames).map((names) => names.join(","))
+    sources
+      .flatMap(rerankerCallArgNames)
+      .map((names) => names.filter((name) => name !== "tracing").join(","))
   )
   assert.ok(
     rerankerCallArgNames(read("src/mastra/answer_retrieval_stack.ts")).length >= 1,
