@@ -93,15 +93,27 @@ export function createRunBudgetedOpenAIClient(client: OpenAI, tracing?: TracingR
         const create = target.create.bind(target) as CreateMethod
         return async (...args: unknown[]): Promise<unknown> => {
           const ctx = getCurrentRunContext()
-          if (!ctx) return create(...args)
           const request = asRecord(args[0])
-          const reservation = reserveModelCall(ctx, {
-            kind: "embedding",
-            model: stringField(request, "model"),
-          })
-          const result = await create(...args)
-          recordModelUsage(ctx, reservation, extractUsage(result))
-          return result
+          const model = stringField(request, "model")
+          const observation = startEmbeddingObservation(tracing, model, request)
+          if (!ctx) {
+            try {
+              const result = await create(...args)
+              return finishEmbeddingObservation(result, observation)
+            } catch (error) {
+              observation?.end({ status: "error", message: messageOf(error) })
+              throw error
+            }
+          }
+          const reservation = reserveModelCall(ctx, { kind: "embedding", model })
+          try {
+            const result = await create(...args)
+            recordModelUsage(ctx, reservation, extractUsage(result))
+            return finishEmbeddingObservation(result, observation)
+          } catch (error) {
+            observation?.end({ status: "error", message: messageOf(error) })
+            throw error
+          }
         }
       },
     })
@@ -296,6 +308,65 @@ function messageOutput(result: unknown): unknown {
 
 function messageOf(error: unknown): string {
   return error instanceof Error ? error.message.slice(0, 200) : "model call failed"
+}
+
+/**
+ * LO-11 content rules: a single embedding keeps its full text; a batch keeps
+ * the count plus the first five previews, and a token-id batch keeps only
+ * counts/dimensions. Vectors are never recorded.
+ */
+function startEmbeddingObservation(
+  tracing: TracingRuntime | undefined,
+  model: string,
+  request: UnknownRecord,
+): ModelCallScope | undefined {
+  if (!tracing) return undefined
+  try {
+    return tracing.observeModel({
+      name: "embeddings",
+      model,
+      provider: "openai",
+      type: "embedding",
+      input: embeddingInputPreview(request["input"]),
+      stream: false,
+    })
+  } catch {
+    return undefined
+  }
+}
+
+function embeddingInputPreview(input: unknown): unknown {
+  if (typeof input === "string") return input
+  if (Array.isArray(input)) {
+    if (input.every((entry) => typeof entry === "string")) {
+      return {
+        count: input.length,
+        preview: input.slice(0, 5).map((entry) => (entry as string).slice(0, 160)),
+      }
+    }
+    return { count: input.length, tokens: true }
+  }
+  return null
+}
+
+function finishEmbeddingObservation(result: unknown, observation: ModelCallScope | undefined): unknown {
+  if (!observation) return result
+  try {
+    const data = asRecord(result)["data"]
+    const vectors = Array.isArray(data) ? data : []
+    const first = asRecord(vectors[0])["embedding"]
+    observation.end({
+      output: {
+        count: vectors.length,
+        dimensions: Array.isArray(first) ? first.length : undefined,
+      },
+      ...(extractUsage(result) ? { usage: extractUsage(result) } : {}),
+      status: "ok",
+    })
+  } catch {
+    // ignore observation failures
+  }
+  return result
 }
 
 function proxyResource<T extends object>(

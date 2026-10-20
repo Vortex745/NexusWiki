@@ -350,7 +350,7 @@ export class OtelTracingRuntime implements TracingRuntime {
       {
         kind: SpanKind.CLIENT,
         attributes: {
-          "langfuse.observation.type": "generation",
+          "langfuse.observation.type": input.type ?? "generation",
           "langfuse.observation.model.name": input.model,
           "gen_ai.request.model": input.model,
           "gen_ai.system": input.provider ?? "openai",

@@ -74,6 +74,8 @@ export interface ModelCallInput {
   /** Full messages/prompt as sent to the provider. */
   input: unknown
   stream: boolean
+  /** Langfuse observation type; embeddings are not generations (LO-11). */
+  type?: "generation" | "embedding"
   attributes?: TracingAttributes
 }
 
