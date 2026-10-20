@@ -1,6 +1,6 @@
 import assert from "node:assert/strict"
 import test from "node:test"
-import { NoopLangfuseExporter } from "../answer/langfuse_exporter"
+import { NoopLangfuseExporter, type LangfuseExporter } from "../answer/langfuse_exporter"
 import { shouldAttachLangfuseObserver } from "./shared_answer_entry"
 
 /**
@@ -13,9 +13,10 @@ import { shouldAttachLangfuseObserver } from "./shared_answer_entry"
  * always attached, and this flag only governs the soft Langfuse observer.
  */
 
-const realLike = { export: async () => undefined, close: async () => undefined } as unknown as ConstructorParameters<
-  typeof shouldAttachLangfuseObserver
->[1]
+const realLike = {
+  export: async () => undefined,
+  close: async () => undefined,
+} as unknown as LangfuseExporter
 
 test("LO-06-AC10: the legacy observer attaches only when OTel has not taken over", () => {
   assert.equal(shouldAttachLangfuseObserver(undefined, realLike), true, "default keeps today's behaviour")

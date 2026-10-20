@@ -684,7 +684,7 @@ export async function startServer(
   const config = loadConfig()
   const logger = options.logger ?? createServerLogger(process.env)
   const tracing = options.tracing ?? createTracingRuntime(process.env).runtime
-  const processRuntime = createProcessRuntime(config)
+  const processRuntime = createProcessRuntime(config, undefined, { tracing })
   // Ticket 05 follow-up wiring + P5.2: in single_tenant mode (default), mount
   // the access middleware and session binder so every chat request gets a
   // deterministic AccessContext and sessionId → (tenantId, subjectId)

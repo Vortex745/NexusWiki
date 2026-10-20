@@ -37,7 +37,70 @@ export interface OperationScope {
   setAttributes(attributes: TracingAttributes): void
   /** Child step of this operation. Never starts a new root. */
   startChild(name: string, attributes?: TracingAttributes): OperationScope
+  /**
+   * Run `fn` with this operation as the active tracing parent, so provider
+   * calls made inside it (model observation) attach to the right span without
+   * business code touching a global context.
+   */
+  runInContext<T>(fn: () => T): T
   end(options?: OperationEndOptions): void
+}
+
+/**
+ * LO-07/LO-08: model observation.
+ *
+ * A model call is not a business step: it carries a prompt, a reply, provider
+ * usage and a streaming lifecycle. The contract keeps that shape neutral — the
+ * adapter decides how it becomes a Generation span, and business code never
+ * learns which vendor received it.
+ *
+ * Rules encoded here rather than at the call site:
+ *   - usage is only what the provider reported (`undefined` stays unknown);
+ *   - content is the caller's real content, never a log-line-sized excerpt
+ *     (the 8 KiB runtime-log ceiling does not apply);
+ *   - `end` is idempotent so success/error/cancel races cannot double-record.
+ */
+export interface ModelUsage {
+  promptTokens?: number
+  completionTokens?: number
+  totalTokens?: number
+}
+
+export interface ModelCallInput {
+  /** Observation name, e.g. "chat.completions" or "answer.stream". */
+  name: string
+  model: string
+  provider?: string
+  /** Full messages/prompt as sent to the provider. */
+  input: unknown
+  stream: boolean
+  attributes?: TracingAttributes
+}
+
+export type ModelCallStatus = "ok" | "error" | "cancelled"
+
+export interface ModelCallOutcome {
+  /** Complete reply (or assembled stream) as received, plus allowed extras. */
+  output?: unknown
+  reasoning?: string
+  toolCalls?: unknown
+  /** Only provider-reported usage; omit when the provider said nothing. */
+  usage?: ModelUsage
+  status: ModelCallStatus
+  /** Short failure/cancel reason (no stack traces). */
+  message?: string
+}
+
+export interface ModelCallScope {
+  readonly sampled: boolean
+  readonly traceId: string | undefined
+  /** Replace the recorded output (e.g. after assembling a stream). */
+  setOutput(output: unknown): void
+  setUsage(usage: ModelUsage): void
+  /** Extra attributes known mid-flight (e.g. completion start time). */
+  setAttributes(attributes: TracingAttributes): void
+  /** Idempotent: the first outcome wins. */
+  end(outcome: ModelCallOutcome): void
 }
 
 export interface TracingDiagnostics {
@@ -80,6 +143,12 @@ export interface TracingRuntime {
     attributes: TracingAttributes | undefined,
     fn: (scope: OperationScope) => Promise<T>,
   ): Promise<T>
+  /**
+   * Observe one real provider call. Returns undefined when nothing should be
+   * recorded (tracing off, not sampled, runtime closing) — callers must still
+   * perform the call normally.
+   */
+  observeModel(input: ModelCallInput): ModelCallScope | undefined
   /** True when everything queued so far left the process within the budget. */
   flush(timeoutMs?: number): Promise<boolean>
   shutdown(timeoutMs?: number): Promise<ShutdownResult>
@@ -92,6 +161,7 @@ const NOOP_SCOPE: OperationScope = {
   sampled: false,
   setAttributes: () => undefined,
   startChild: () => NOOP_SCOPE,
+  runInContext: (fn) => fn(),
   end: () => undefined,
 }
 
@@ -112,6 +182,10 @@ export class NoopTracingRuntime implements TracingRuntime {
     fn: (scope: OperationScope) => Promise<T>,
   ): Promise<T> {
     return fn(NOOP_SCOPE)
+  }
+
+  observeModel(): ModelCallScope | undefined {
+    return undefined
   }
 
   async flush(): Promise<boolean> {

@@ -105,6 +105,15 @@ async function main() {
     process.env[MASTRA_PROMOTION_ARTIFACT_ENV]
   )
 
+  // LO-05/LO-06: one tracing runtime for the whole process, built before the
+  // model clients so their observation seam can use it.
+  const { runtime: tracingRuntime, config: tracingConfig } = createTracingRuntime(process.env)
+  console.log(
+    tracingConfig.enabled
+      ? `[kefu-RAG] tracing enabled (sampleRate=${tracingConfig.sampleRate}) → OTLP ${process.env.LANGFUSE_BASE_URL}`
+      : `[kefu-RAG] tracing off (${tracingConfig.reason})`,
+  )
+
   // createAnswerRuntime owns shared SQLite, ES, Neo4j and OpenAI adapters.
   // Langfuse export activates only when both LANGFUSE_* keys are set —
   // createRealLangfuseClient returns undefined otherwise (Noop disabled mode).
@@ -116,6 +125,7 @@ async function main() {
       secretKey: cfg.langfuseSecretKey,
       ...(cfg.langfuseBaseUrl ? { baseUrl: cfg.langfuseBaseUrl } : {}),
     }),
+    tracingRuntime,
   )
 
   // Ticket 02 (KB-01, spec §8.1 L241): every tenant owns exactly one default
@@ -164,18 +174,6 @@ async function main() {
   const suggestionStore = new MemorySuggestionStore({
     db: answerRuntime.processRuntime.db,
   })
-
-  // LO-05/LO-06: one tracing runtime for the whole process. Built here (before
-  // the Answer entry) so the entry knows whether OTel has taken over the run
-  // and the legacy Langfuse trace出口 must stay silent (LG-05-AC10).
-  const { runtime: tracingRuntime, config: tracingConfig } = createTracingRuntime(process.env)
-  if (tracingConfig.enabled) {
-    console.log(
-      `[kefu-RAG] tracing enabled (sampleRate=${tracingConfig.sampleRate}) → OTLP ${process.env.LANGFUSE_BASE_URL}`,
-    )
-  } else {
-    console.log(`[kefu-RAG] tracing off (${tracingConfig.reason})`)
-  }
 
   const sharedAnswerEntry = await createSharedAnswerEntry({
     config: cfg,

@@ -1,8 +1,16 @@
-import { Client } from "@elastic/elasticsearch"
+import { type Client } from "@elastic/elasticsearch"
 import neo4j, { type Driver } from "neo4j-driver"
-import OpenAI from "openai"
+import { type OpenAI } from "openai"
 import { type AppConfig } from "../config"
+import { type TracingRuntime } from "../tracing/contract"
 import { type DB, closeDb, openDb } from "../ingestion/tracking/db"
+import {
+  createElasticsearchClient,
+  createOpenAIClient,
+  openaiClientOptions,
+  type ElasticsearchNodeOptions,
+  type OpenAIClientOptions,
+} from "../clients"
 import { createRunBudgetedOpenAIClient } from "./openai_budget_client"
 
 /**
@@ -29,19 +37,9 @@ export interface ProcessRuntime {
 }
 
 export interface RuntimeClientFactory {
-  createChatClient(options: {
-    apiKey: string
-    baseURL?: string
-    timeout?: number
-    maxRetries?: number
-  }): OpenAI
-  createEmbeddingClient(options: {
-    apiKey: string
-    baseURL?: string
-    timeout?: number
-    maxRetries?: number
-  }): OpenAI
-  createElasticsearchClient(options: { node: string; apiKey?: string }): Client
+  createChatClient(options: OpenAIClientOptions): OpenAI
+  createEmbeddingClient(options: OpenAIClientOptions): OpenAI
+  createElasticsearchClient(options: ElasticsearchNodeOptions): Client
   createNeo4jDriver(options: {
     uri: string
     user: string
@@ -49,58 +47,32 @@ export interface RuntimeClientFactory {
   }): Driver
 }
 
-/**
- * OpenAI SDK per-request options bound from config: a finite timeout so a
- * hung provider cannot occupy a connection for the SDK default 10 minutes,
- * and a bounded retry count (SDK default 2). Applied at every client
- * construction site so every chat/embedding call in the Answer + ingestion
- * chains inherits the same bound.
- */
-export function openaiClientOptions(cfg: {
-  openaiRequestTimeoutMs: number
-  openaiMaxRetries: number
-}): { timeout: number; maxRetries: number } {
-  return {
-    timeout: cfg.openaiRequestTimeoutMs,
-    maxRetries: cfg.openaiMaxRetries,
-  }
-}
+export { openaiClientOptions }
 
 const defaultClientFactory: RuntimeClientFactory = {
-  createChatClient: (options) => new OpenAI(options),
-  createEmbeddingClient: (options) => new OpenAI(options),
-  createElasticsearchClient: ({ node, apiKey }) =>
-    new Client({
-      node,
-      ...(apiKey ? { auth: { apiKey } } : {}),
-      // ES client v9 defaults to compatible-with=9 media type headers, but
-      // deployed server is v8/v7 — without these headers the server rejects
-      // every request with media_type_header_exception. Pin to 8 for
-      // forward-compat with v8 servers (v9 client → v8 server is supported
-      // when the Accept/Content-Type advertise compatible-with=8).
-      headers: {
-        accept: "application/vnd.elasticsearch+json; compatible-with=8",
-        "content-type": "application/vnd.elasticsearch+json; compatible-with=8",
-      },
-    }),
+  createChatClient: (options) => createOpenAIClient(options),
+  createEmbeddingClient: (options) => createOpenAIClient(options),
+  createElasticsearchClient: (options) =>
+    createElasticsearchClient(options),
   createNeo4jDriver: ({ uri, user, password }) =>
     neo4j.driver(uri, neo4j.auth.basic(user, password)),
 }
 
 export function createProcessRuntime(
   config: AppConfig,
-  clientFactory: RuntimeClientFactory = defaultClientFactory
+  clientFactory: RuntimeClientFactory = defaultClientFactory,
+  options: { tracing?: TracingRuntime } = {}
 ): ProcessRuntime {
   const chatClient = createRunBudgetedOpenAIClient(clientFactory.createChatClient({
     apiKey: config.openaiApiKey,
     baseURL: config.openaiBaseUrl || undefined,
     ...openaiClientOptions(config),
-  }))
+  }), options.tracing)
   const embeddingClient = createRunBudgetedOpenAIClient(clientFactory.createEmbeddingClient({
     apiKey: config.embeddingApiKey,
     baseURL: config.embeddingBaseUrl || undefined,
     ...openaiClientOptions(config),
-  }))
+  }), options.tracing)
   const elasticsearch = clientFactory.createElasticsearchClient({
     node: config.esNode,
     apiKey: config.esApiKey || undefined,

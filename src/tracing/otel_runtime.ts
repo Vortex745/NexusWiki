@@ -10,6 +10,10 @@ import {
 } from "./bounded_processor"
 import {
   noopOperationScope,
+  type ModelCallInput,
+  type ModelCallOutcome,
+  type ModelCallScope,
+  type ModelUsage,
   type OperationEndOptions,
   type OperationScope,
   type ShutdownResult,
@@ -17,6 +21,7 @@ import {
   type TracingDiagnostics,
   type TracingRuntime,
 } from "./contract"
+import { scrubModelContent, scrubText } from "./content_policy"
 
 /**
  * LO-05: the real runtime. This file and `bounded_processor.ts` are the only
@@ -57,6 +62,27 @@ function truncateUtf8(value: string, limitBytes: number): { text: string; trunca
     text = text.slice(0, Math.max(0, Math.floor(text.length * ratio) - 1))
   }
   return { text: text + TRUNCATION_SUFFIX, truncated: true }
+}
+
+function sanitiseAttributes(
+  attributes: TracingAttributes,
+  limitBytes: number,
+): Record<string, string | number | boolean> {
+  const sanitized: Record<string, string | number | boolean> = {}
+  for (const [key, value] of Object.entries(attributes)) {
+    if (value === undefined) continue
+    if (typeof value === "number") {
+      if (!Number.isFinite(value)) continue
+      sanitized[key] = value
+      continue
+    }
+    if (typeof value === "boolean") {
+      sanitized[key] = value
+      continue
+    }
+    sanitized[key] = truncateUtf8(value, limitBytes).text
+  }
+  return sanitized
 }
 
 export interface OtelRuntimeOptions {
@@ -114,6 +140,11 @@ class OtelOperationScope implements OperationScope {
     return new OtelOperationScope(this.tracer, span, this.childContext, this.limits, this.onTruncate)
   }
 
+  runInContext<T>(fn: () => T): T {
+    if (this.ended) return fn()
+    return context.with(this.childContext, fn)
+  }
+
   end(options: OperationEndOptions = {}): void {
     if (this.ended) return
     this.ended = true
@@ -147,6 +178,100 @@ class OtelOperationScope implements OperationScope {
       sanitized[key] = text
     }
     return sanitized
+  }
+}
+
+/**
+ * LO-07/LO-08: one provider call → one Generation span.
+ *
+ * The span is created as a child of whatever operation is active (the HTTP
+ * root or the Answer run), so a sampled request keeps its model calls inside
+ * the same trace. `end` is idempotent: a streaming cancellation racing a
+ * terminal chunk records exactly one outcome.
+ */
+class OtelModelCallScope implements ModelCallScope {
+  private ended = false
+  private output: unknown
+  private usage: ModelUsage | undefined
+
+  constructor(
+    private readonly span: Span,
+    private readonly limits: { attributeBytes: number; contentBytes: number },
+    private readonly onTruncate: () => void,
+  ) {}
+
+  get sampled(): boolean {
+    return (this.span.spanContext().traceFlags & 0x1) === 0x1
+  }
+
+  get traceId(): string | undefined {
+    if (!this.sampled) return undefined
+    const traceId = this.span.spanContext().traceId
+    return traceId.length > 0 ? traceId : undefined
+  }
+
+  setOutput(output: unknown): void {
+    if (this.ended) return
+    this.output = output
+  }
+
+  setUsage(usage: ModelUsage): void {
+    if (this.ended) return
+    this.usage = usage
+  }
+
+  setAttributes(attributes: TracingAttributes): void {
+    if (this.ended) return
+    this.span.setAttributes(sanitiseAttributes(attributes, this.limits.attributeBytes))
+  }
+
+  end(outcome: ModelCallOutcome): void {
+    if (this.ended) return
+    this.ended = true
+    const output = outcome.output !== undefined ? outcome.output : this.output
+    if (output !== undefined) {
+      this.span.setAttribute(
+        "langfuse.observation.output",
+        this.clip("langfuse.observation.output", scrubModelContent(output)),
+      )
+    }
+    if (outcome.reasoning) {
+      this.span.setAttribute("langfuse.observation.reasoning", this.clip("langfuse.observation.output", outcome.reasoning))
+    }
+    if (outcome.toolCalls !== undefined) {
+      this.span.setAttribute("langfuse.observation.tool_calls", this.clip("langfuse.observation.output", scrubModelContent(outcome.toolCalls)))
+    }
+    const usage = outcome.usage ?? this.usage
+    if (usage) {
+      // Only provider-reported numbers reach this point; never a character or
+      // delta estimate (LG-07-AC08 / LG-08-AC03).
+      const usageDetails: Record<string, number> = {}
+      if (usage.promptTokens !== undefined) usageDetails["input"] = usage.promptTokens
+      if (usage.completionTokens !== undefined) usageDetails["output"] = usage.completionTokens
+      if (usage.totalTokens !== undefined) usageDetails["total"] = usage.totalTokens
+      this.span.setAttribute("langfuse.observation.usage_details", JSON.stringify(usageDetails))
+      if (usage.promptTokens !== undefined) this.span.setAttribute("gen_ai.usage.input_tokens", usage.promptTokens)
+      if (usage.completionTokens !== undefined) this.span.setAttribute("gen_ai.usage.output_tokens", usage.completionTokens)
+    }
+    if (outcome.status === "ok") {
+      this.span.setStatus({ code: SpanStatusCode.OK })
+    } else {
+      this.span.setAttribute("langfuse.observation.level", outcome.status === "error" ? "ERROR" : "WARNING")
+      this.span.setStatus({
+        code: SpanStatusCode.ERROR,
+        // Short, and scrubbed: an error message can echo SQL parameters or a
+        // key that leaked into the driver error (LG-07-AC06).
+        ...(outcome.message ? { message: scrubText(outcome.message).slice(0, 200) } : {}),
+      })
+    }
+    this.span.end()
+  }
+
+  private clip(key: string, text: string): string {
+    const { text: clipped, truncated } = truncateUtf8(text, this.limits.contentBytes)
+    if (truncated) this.onTruncate()
+    void key
+    return clipped
   }
 }
 
@@ -208,13 +333,45 @@ export class OtelTracingRuntime implements TracingRuntime {
   ): Promise<T> {
     const scope = this.startOperation(name, attributes)
     try {
-      const result = await fn(scope)
+      const result = await scope.runInContext(() => fn(scope))
       scope.end({ outcome: "ok" })
       return result
     } catch (error) {
       scope.end({ outcome: "error", message: error instanceof Error ? error.message.slice(0, 200) : "error" })
       throw error
     }
+  }
+
+  observeModel(input: ModelCallInput): ModelCallScope | undefined {
+    if (this.closing) return undefined
+    const parent = context.active()
+    const span = this.tracer.startSpan(
+      input.name,
+      {
+        kind: SpanKind.CLIENT,
+        attributes: {
+          "langfuse.observation.type": "generation",
+          "langfuse.observation.model.name": input.model,
+          "gen_ai.request.model": input.model,
+          "gen_ai.system": input.provider ?? "openai",
+          "gen_ai.request.stream": input.stream,
+          "langfuse.observation.input": truncateUtf8(
+            scrubModelContent(input.input),
+            this.contentBytes,
+          ).text,
+          ...(input.attributes ? sanitiseAttributes(input.attributes, this.attributeBytes) : {}),
+        },
+      },
+      parent,
+    )
+    // Not sampled → the span is non-recording; skip the bookkeeping entirely.
+    if ((span.spanContext().traceFlags & 0x1) !== 0x1) {
+      span.end()
+      return undefined
+    }
+    return new OtelModelCallScope(span, { attributeBytes: this.attributeBytes, contentBytes: this.contentBytes }, () => {
+      this.truncatedAttributes += 1
+    })
   }
 
   async flush(timeoutMs = DEFAULT_FLUSH_TIMEOUT_MS): Promise<boolean> {
