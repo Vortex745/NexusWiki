@@ -29,6 +29,7 @@ import {
   type FetchOptions,
 } from "../ingestion/url_fetcher"
 import type { IngestionLifecycle, IngestionSubmission } from "../ingestion/lifecycle"
+import type { TaskTraceContext } from "../tracing/contract"
 import { htmlToText } from "../web/web_evidence"
 import { TaskRepo } from "../ingestion/tracking/task_repo"
 import {
@@ -450,7 +451,7 @@ export class SyncDataSourceService {
   async runOnce(
     tenantId: string,
     id: string,
-    runOptions: { signal?: AbortSignal } = {}
+    runOptions: { signal?: AbortSignal; trace?: TaskTraceContext } = {}
   ): Promise<SyncRunReport> {
     const source = this.get(tenantId, id)
     if (source.state !== "active") {
@@ -489,6 +490,8 @@ export class SyncDataSourceService {
           return
         }
         const submission: IngestionSubmission = this.options.lifecycle.submit({
+          // LO-15: derived ingestion continues the sync run's trace.
+          ...(runOptions.trace ? { trace: runOptions.trace } : {}),
           title: fetched.title ?? fetched.url.hostname,
           content,
           mimeType: isHtml ? "text/plain" : mimeType,

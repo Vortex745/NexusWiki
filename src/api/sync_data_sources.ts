@@ -4,6 +4,8 @@ import { singleTenantAccessContext } from "../access/context"
 import type { KnowledgeBaseService } from "../knowledge/knowledge_base_service"
 import type { DB } from "../ingestion/tracking/db"
 import { createIngestionLifecycle } from "../ingestion/pipeline"
+import { taskTraceFromScope, type TracingRuntime } from "../tracing/contract"
+import { requestScope } from "../tracing/express"
 import type { FetchOptions } from "../ingestion/url_fetcher"
 import {
   InvalidSyncSourceError,
@@ -76,15 +78,17 @@ export function createSyncDataSourcesRouter(options: {
   db: DB
   /** Safe-fetch overrides (tests inject synthetic resolvers/fetches). */
   fetchOptions?: FetchOptions
+  /** LO-15: the runtime the run and its derived ingestion tasks execute under. */
+  tracing?: TracingRuntime
 }): Router {
-  const { knowledgeBaseService, db, fetchOptions } = options
+  const { knowledgeBaseService, db, fetchOptions, tracing } = options
   const router = Router()
 
   const serviceFor = (): SyncDataSourceService =>
     new SyncDataSourceService({
       db,
       // Same per-request lifecycle pattern as the ingest routes.
-      lifecycle: createIngestionLifecycle(db),
+      lifecycle: createIngestionLifecycle(db, tracing ? { tracing } : undefined),
       ...(fetchOptions ? { fetchOptions } : {}),
     })
 
@@ -187,10 +191,19 @@ export function createSyncDataSourcesRouter(options: {
     // source loses the single-active-run claim with an explicit 409.
     const runService = new SyncRunService({
       db,
-      lifecycle: createIngestionLifecycle(db),
+      // LO-15: the derived ingestion tasks drain through this lifecycle, so it
+      // must carry the runtime or manual sync output would lose the trace.
+      lifecycle: createIngestionLifecycle(db, tracing ? { tracing } : undefined),
+      ...(tracing ? { tracing } : {}),
     })
     try {
-      const run = await runService.runNow(guard.context.tenantId, String(req.params.id))
+      // The manual trigger continues THIS request's trace; a scheduled run
+      // has no source and opens its own root at execution time.
+      const run = await runService.runNow(
+        guard.context.tenantId,
+        String(req.params.id),
+        taskTraceFromScope(requestScope(res)),
+      )
       res.json({ run })
     } catch (error) {
       if (error instanceof SyncRunConflictError) {

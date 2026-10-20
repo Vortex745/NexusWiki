@@ -425,6 +425,7 @@ export function createApp(options: {
     createSyncDataSourcesRouter({
       knowledgeBaseService: workspaceKnowledgeBaseService,
       db,
+      ...(options.tracing ? { tracing: options.tracing } : {}),
     })
   )
   if (options.managementAccessMiddleware) {

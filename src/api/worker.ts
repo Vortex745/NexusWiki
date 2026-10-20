@@ -70,7 +70,11 @@ export function startWorker(options: {
     // most one claimed run per tick. No new permanent service.
     if (!sweeping) {
       sweeping = true
-      const syncRuns = new SyncRunService({ db, lifecycle })
+      const syncRuns = new SyncRunService({
+        db,
+        lifecycle,
+        ...(options.tracing ? { tracing: options.tracing } : {}),
+      })
       void syncRuns.sweep()
         .catch((error) => console.error("[worker] sync sweep failed:", error))
         .finally(() => {

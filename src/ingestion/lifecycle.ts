@@ -592,7 +592,7 @@ export class IngestionLifecycle {
    * document back to 'pending' so the worker pipeline picks it up again —
    * the same stages, the same activation gate as any other run.
    */
-  retry(docId: string): IngestionCancellationResult | null {
+  retry(docId: string, trace?: TaskTraceContext): IngestionCancellationResult | null {
     if (!this.docRepo.exists(docId)) return null
     const documentStatus = this.docRepo.getStatus(docId)
     const task = this.taskRepo.getByDocId(docId)
@@ -633,7 +633,7 @@ export class IngestionLifecycle {
       }
       let taskId: number
       if (task) {
-        if (!this.taskRepo.requeue(task.id)) {
+        if (!this.taskRepo.requeue(task.id, trace)) {
           // Lost a race (another worker/call moved the task out of a terminal
           // state) — report the current state instead of throwing.
           const current = this.taskRepo.getByDocId(docId)
@@ -641,7 +641,11 @@ export class IngestionLifecycle {
         }
         taskId = task.id
       } else {
-        taskId = this.taskRepo.enqueue({ docId, op: "ingest", payload: { retried: true } })
+        taskId = this.taskRepo.enqueue({
+          docId,
+          op: "ingest",
+          payload: { retried: true, ...(trace ? { trace } : {}) },
+        })
       }
       this.docRepo.updateStatus(docId, "pending")
       return { docId, taskId, status: "pending", changed: true }
@@ -659,7 +663,7 @@ export class IngestionLifecycle {
    * only protects candidates). Bounded by idempotent writes; route reprocess
    * through a fresh candidate version if that ever matters.
    */
-  reprocess(docId: string): IngestionCancellationResult | null {
+  reprocess(docId: string, trace?: TaskTraceContext): IngestionCancellationResult | null {
     if (!this.docRepo.exists(docId)) return null
     const documentStatus = this.docRepo.getStatus(docId)
     const task = this.taskRepo.getByDocId(docId)
@@ -694,7 +698,7 @@ export class IngestionLifecycle {
       }
       let taskId: number
       if (task) {
-        if (!this.taskRepo.requeue(task.id)) {
+        if (!this.taskRepo.requeue(task.id, trace)) {
           const current = this.taskRepo.getByDocId(docId)
           return { docId, taskId: task.id, status: current?.status ?? "pending", changed: false }
         }
@@ -702,7 +706,11 @@ export class IngestionLifecycle {
       } else {
         // A legacy completed document may have no task row at all — enqueue one
         // instead of requeueing.
-        taskId = this.taskRepo.enqueue({ docId, op: "ingest", payload: { reprocessed: true } })
+        taskId = this.taskRepo.enqueue({
+          docId,
+          op: "ingest",
+          payload: { reprocessed: true, ...(trace ? { trace } : {}) },
+        })
       }
       this.docRepo.updateStatus(docId, "pending")
       return { docId, taskId, status: "pending", changed: true }

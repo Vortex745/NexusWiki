@@ -28,6 +28,7 @@
 import { randomUUID } from "node:crypto"
 import type { DB } from "../ingestion/tracking/db"
 import type { IngestionLifecycle } from "../ingestion/lifecycle"
+import { readTaskTrace, taskTraceFromScope, type TaskTraceContext, type TracingRuntime } from "../tracing/contract"
 import type { FetchOptions } from "../ingestion/url_fetcher"
 import {
   SyncDataSourceService,
@@ -109,6 +110,9 @@ interface SyncRunRow {
   summary: string | null
   error: string | null
   lease_expires_at: string | null
+  trace_id: string | null
+  trace_span_id: string | null
+  trace_sampled: number | null
   created_at: string
   updated_at: string
 }
@@ -137,6 +141,8 @@ export class SyncRunService {
       now?: () => Date
       leaseMs?: number
       maxPagesPerRun?: number
+      /** LO-15: the runtime sync runs execute under; absent → no spans. */
+      tracing?: TracingRuntime
     }
   ) {}
 
@@ -168,7 +174,12 @@ export class SyncRunService {
    * point: when a pending/running run already exists for the source, the
    * conflict is reported with the ACTIVE run id.
    */
-  enqueue(tenantId: string, sourceId: string, trigger: SyncRunTrigger): SyncRun {
+  enqueue(
+    tenantId: string,
+    sourceId: string,
+    trigger: SyncRunTrigger,
+    trace?: TaskTraceContext,
+  ): SyncRun {
     const now = this.now().toISOString()
     const active = this.options.db
       .prepare(
@@ -186,6 +197,11 @@ export class SyncRunService {
       summary: null,
       error: null,
       lease_expires_at: null,
+      // LO-15: the durable handoff. An unsampled source is recorded as such
+      // (empty ids, sampled 0) so the worker cannot re-roll the decision.
+      trace_id: trace ? trace.traceId : null,
+      trace_span_id: trace ? trace.spanId : null,
+      trace_sampled: trace ? (trace.sampled ? 1 : 0) : null,
       created_at: now,
       updated_at: now,
     }
@@ -193,8 +209,9 @@ export class SyncRunService {
       .prepare(
         `INSERT INTO sync_runs (
            id, source_id, tenant_id, trigger, status, summary, error,
-           lease_expires_at, created_at, updated_at
-         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+           lease_expires_at, trace_id, trace_span_id, trace_sampled,
+           created_at, updated_at
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       )
       .run(
         run.id,
@@ -205,6 +222,9 @@ export class SyncRunService {
         run.summary,
         run.error,
         run.lease_expires_at,
+        run.trace_id,
+        run.trace_span_id,
+        run.trace_sampled,
         run.created_at,
         run.updated_at
       )
@@ -313,6 +333,28 @@ export class SyncRunService {
    * and invalid URL from generic failures without re-reading pages.
    */
   async executeClaimed(run: SyncRun): Promise<SyncRun> {
+    // LO-15: the run row's own handoff. A manual trigger continues the HTTP
+    // trace; a scheduled run has none and opens a root. Reads only the
+    // durable record — never a global context left by the submitter.
+    const traceRow = this.options.db
+      .prepare("SELECT trace_id, trace_span_id, trace_sampled FROM sync_runs WHERE id = ?")
+      .get(run.id) as { trace_id: string | null; trace_span_id: string | null; trace_sampled: number | null } | undefined
+    const trace = traceRow && traceRow.trace_sampled !== null
+      ? readTaskTrace({
+          traceId: traceRow.trace_id ?? "",
+          spanId: traceRow.trace_span_id ?? "",
+          sampled: traceRow.trace_sampled === 1,
+        })
+      : undefined
+    const scope = this.options.tracing?.startOperation(
+      "sync.run",
+      {
+        "sync.run_id": run.id,
+        "sync.source_id": run.sourceId,
+        "sync.trigger": run.trigger,
+      },
+      trace,
+    )
     const finalize = (status: SyncRunStatus, fields: { summary?: string; error?: string }) => {
       this.options.db
         .prepare(
@@ -331,28 +373,43 @@ export class SyncRunService {
         .get(run.id) as SyncRunRow
       return rowToRun(row)
     }
-    try {
-      const report = await this.dataSourceService().runOnce(run.tenantId, run.sourceId)
-      await this.drainLifecycle()
-      this.persistRunPages(run.id, report.pages, report.missing ?? [])
-      const failedPages = report.pages.filter((page) => page.status === "failed")
-      const summary = summarizePages(report.pages, report.missing)
-      if (failedPages.length > 0) {
-        // The durable run record names WHAT failed, bounded like every field.
-        const detail = failedPages
-          .map((page) => `${page.uri}: ${page.detail ?? "failed"}`)
-          .join("; ")
-          .slice(0, 300)
-        return report.pages.every((page) => page.status === "failed")
-          ? finalize("failed", { error: `${summary} — ${detail}` })
-          : finalize("completed", { summary: `${summary} — ${detail}` })
+    const execute = async (): Promise<SyncRun> => {
+      try {
+        const report = await this.dataSourceService().runOnce(run.tenantId, run.sourceId, {
+          ...(scope ? { trace: taskTraceFromScope(scope) } : {}),
+        })
+        await this.drainLifecycle()
+        this.persistRunPages(run.id, report.pages, report.missing ?? [])
+        const failedPages = report.pages.filter((page) => page.status === "failed")
+        const summary = summarizePages(report.pages, report.missing)
+        if (failedPages.length > 0) {
+          // The durable run record names WHAT failed, bounded like every field.
+          const detail = failedPages
+            .map((page) => `${page.uri}: ${page.detail ?? "failed"}`)
+            .join("; ")
+            .slice(0, 300)
+          return report.pages.every((page) => page.status === "failed")
+            ? finalize("failed", { error: `${summary} — ${detail}` })
+            : finalize("completed", { summary: `${summary} — ${detail}` })
+        }
+        return finalize("completed", { summary })
+      } catch (error) {
+        return finalize("failed", {
+          error: (error instanceof Error ? error.message : String(error)).slice(0, 300),
+        })
       }
-      return finalize("completed", { summary })
-    } catch (error) {
-      return finalize("failed", {
-        error: (error instanceof Error ? error.message : String(error)).slice(0, 300),
-      })
     }
+
+    // The whole run — provider fetches, derived ingestion submissions and the
+    // drain — executes with the run scope active, so every nested task and
+    // model call joins the same trace (LG-06-AC01).
+    const settled = scope ? await scope.runInContext(execute) : await execute()
+    scope?.end(
+      settled.status === "failed"
+        ? { outcome: "error", message: "sync run failed" }
+        : { outcome: "ok" },
+    )
+    return settled
   }
 
   /**
@@ -433,8 +490,8 @@ export class SyncRunService {
    * completion. The claimed run is THIS call's run — a concurrent trigger
    * for the same source is the one that lost the enqueue/claim.
    */
-  async runNow(tenantId: string, sourceId: string): Promise<SyncRun> {
-    const run = this.enqueue(tenantId, sourceId, "manual")
+  async runNow(tenantId: string, sourceId: string, trace?: TaskTraceContext): Promise<SyncRun> {
+    const run = this.enqueue(tenantId, sourceId, "manual", trace)
     const claimed = this.claimById(run.id)
     if (!claimed) throw new SyncRunConflictError(run.id)
     return this.executeClaimed(claimed)

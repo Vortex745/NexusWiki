@@ -785,14 +785,23 @@ router.get("/ingest/:docId/status", (req: Request, res: Response) => {
 router.post("/ingest/:docId/cancel", (req: Request, res: Response) => {
   const db = openDb()
   if (!ownedDocumentOrNotFound(res, db, String(req.params.docId))) return
-  const lifecycle = createIngestionLifecycle(db)
-  const result = lifecycle.cancel(String(req.params.docId))
+  // LO-14: a synchronous maintenance command gets its own step; it creates
+  // NO task (there is nothing to execute later).
+  const operation = requestScope(res)?.startChild("document.cancel", {
+    "document.id": String(req.params.docId),
+  })
+  try {
+    const lifecycle = createIngestionLifecycle(db)
+    const result = lifecycle.cancel(String(req.params.docId))
 
-  if (!result) {
-    return res.status(404).json({ error: "document not found" })
+    if (!result) {
+      return res.status(404).json({ error: "document not found" })
+    }
+
+    return res.json(result)
+  } finally {
+    operation?.end({ outcome: "ok" })
   }
-
-  return res.json(result)
 })
 
 // Ticket 12 (DOC-01B): administrator document operations. Both reuse the
@@ -802,30 +811,46 @@ router.post("/ingest/:docId/retry", (req: Request, res: Response) => {
   if (!requireAdminScope(res)) return
   const db = openDb()
   if (!ownedDocumentOrNotFound(res, db, String(req.params.docId))) return
-  const lifecycle = createIngestionLifecycle(db)
-  const result = lifecycle.retry(String(req.params.docId))
-  if (!result) {
-    return res.status(404).json({ error: "document not found" })
+  // LO-14: the operator's action is a real step in THIS request, and the
+  // task it requeues must continue this trace, not the original upload's.
+  const operation = requestScope(res)?.startChild("document.retry", {
+    "document.id": String(req.params.docId),
+  })
+  try {
+    const lifecycle = createIngestionLifecycle(db)
+    const result = lifecycle.retry(String(req.params.docId), submissionTrace(res))
+    if (!result) {
+      return res.status(404).json({ error: "document not found" })
+    }
+    if (!result.changed) {
+      return res.status(409).json({ error: `document is not retryable in state "${result.status}"`, ...result })
+    }
+    return res.json(result)
+  } finally {
+    operation?.end({ outcome: "ok" })
   }
-  if (!result.changed) {
-    return res.status(409).json({ error: `document is not retryable in state "${result.status}"`, ...result })
-  }
-  return res.json(result)
 })
 
 router.post("/ingest/:docId/reprocess", (req: Request, res: Response) => {
   if (!requireAdminScope(res)) return
   const db = openDb()
   if (!ownedDocumentOrNotFound(res, db, String(req.params.docId))) return
-  const lifecycle = createIngestionLifecycle(db)
-  const result = lifecycle.reprocess(String(req.params.docId))
-  if (!result) {
-    return res.status(404).json({ error: "document not found" })
+  const operation = requestScope(res)?.startChild("document.reprocess", {
+    "document.id": String(req.params.docId),
+  })
+  try {
+    const lifecycle = createIngestionLifecycle(db)
+    const result = lifecycle.reprocess(String(req.params.docId), submissionTrace(res))
+    if (!result) {
+      return res.status(404).json({ error: "document not found" })
+    }
+    if (!result.changed) {
+      return res.status(409).json({ error: `document is not reprocessable in state "${result.status}"`, ...result })
+    }
+    return res.json(result)
+  } finally {
+    operation?.end({ outcome: "ok" })
   }
-  if (!result.changed) {
-    return res.status(409).json({ error: `document is not reprocessable in state "${result.status}"`, ...result })
-  }
-  return res.json(result)
 })
 
 export default router

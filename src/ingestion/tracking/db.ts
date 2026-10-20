@@ -60,7 +60,8 @@ const SCHEMA = [
     status TEXT NOT NULL DEFAULT 'pending',
     claimed_at TEXT,
     next_attempt_at TEXT,
-    enqueued_at TEXT NOT NULL
+    enqueued_at TEXT NOT NULL,
+    execution_id TEXT
   )`,
   `CREATE INDEX IF NOT EXISTS idx_task_status ON task_pending_ops(status)`,
   `CREATE TABLE IF NOT EXISTS task_dead_letters (
@@ -541,6 +542,7 @@ const SCHEMA = [
     bytes INTEGER NOT NULL,
     status TEXT NOT NULL CHECK(status IN ('parsing','ready','failed','promoted','retired')),
     content TEXT NOT NULL,
+    raw_content BLOB,
     error TEXT,
     promoted_document_id TEXT,
     promoted_knowledge_base_id TEXT,
@@ -629,6 +631,11 @@ const SCHEMA = [
     summary TEXT,
     error TEXT,
     lease_expires_at TEXT,
+    -- LO-15: neutral handoff captured at trigger time. Empty strings mean
+    -- "known unsampled" (never re-sampled); NULL means "legacy, no source".
+    trace_id TEXT,
+    trace_span_id TEXT,
+    trace_sampled INTEGER,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
   )`,
@@ -721,6 +728,27 @@ export function openDb(dbPath?: string): DB {
     !syncSourceColumns.some(({ name }) => name === "next_run_at")
   ) {
     db.exec("ALTER TABLE sync_data_sources ADD COLUMN next_run_at TEXT")
+  }
+  // LO-15: additive migration — existing databases predate the handoff
+  // columns. Legacy rows stay NULL and run under the root policy.
+  const syncRunColumns = db.pragma("table_info(sync_runs)") as Array<{ name: string }>
+  if (syncRunColumns.length > 0) {
+    if (!syncRunColumns.some(({ name }) => name === "trace_id")) {
+      db.exec("ALTER TABLE sync_runs ADD COLUMN trace_id TEXT")
+    }
+    if (!syncRunColumns.some(({ name }) => name === "trace_span_id")) {
+      db.exec("ALTER TABLE sync_runs ADD COLUMN trace_span_id TEXT")
+    }
+    if (!syncRunColumns.some(({ name }) => name === "trace_sampled")) {
+      db.exec("ALTER TABLE sync_runs ADD COLUMN trace_sampled INTEGER")
+    }
+  }
+  // Ticket 21: the attachment channel retains the UPLOADED bytes alongside the
+  // decoded text, so a promotion re-submits the original file — not a
+  // re-encoded decode of it (legacy rows carry NULL and keep the decode).
+  const attachmentColumns = db.pragma("table_info(session_attachments)") as Array<{ name: string }>
+  if (attachmentColumns.length > 0 && !attachmentColumns.some(({ name }) => name === "raw_content")) {
+    db.exec("ALTER TABLE session_attachments ADD COLUMN raw_content BLOB")
   }
   if (!documentColumns.some(({ name }) => name === "content_hash")) {
     db.exec("ALTER TABLE documents ADD COLUMN content_hash TEXT")
@@ -911,6 +939,11 @@ export function openDb(dbPath?: string): DB {
   const taskColumns = db.pragma("table_info(task_pending_ops)") as Array<{ name: string }>
   if (!taskColumns.some(({ name }) => name === "next_attempt_at")) {
     db.exec("ALTER TABLE task_pending_ops ADD COLUMN next_attempt_at TEXT")
+  }
+  // Ticket 25: durable execution identity — the claim fence that survives
+  // restarts. Existing rows have no execution id until their next claim.
+  if (!taskColumns.some(({ name }) => name === "execution_id")) {
+    db.exec("ALTER TABLE task_pending_ops ADD COLUMN execution_id TEXT")
   }
   const spanColumns = db.pragma("table_info(processing_spans)") as Array<{ name: string }>
   if (!spanColumns.some(({ name }) => name === "error_stack")) {

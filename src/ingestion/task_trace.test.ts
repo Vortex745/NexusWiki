@@ -233,3 +233,39 @@ test("LO-13: the handoff codec rejects junk and never invents a decision", () =>
     { traceId: "", spanId: "", sampled: false },
   )
 })
+
+test("LO-14-AC03: a reprocess continues the operator's trace, not the original upload's", async () => {
+  const db = openDb(":memory:")
+  const exporter = new FakeExporter()
+  const runtime = new OtelTracingRuntime({ sampleRate: 1, exporter })
+  const otherTrace = "fedcba9876543210fedcba9876543210"
+  const otherSpan = "fedcba9876543210"
+  try {
+    const lifecycle = new IngestionLifecycle(db, completingRunner(), () => new Date(), "auto", undefined, runtime)
+    const submitted = lifecycle.submit({
+      title: "reprocess",
+      content: "body",
+      source: "lo14",
+      trace: { traceId: TRACE_ID, spanId: SPAN_ID, sampled: true },
+    })
+    await lifecycle.runNext()
+
+    const reprocessed = lifecycle.reprocess(submitted.docId, {
+      traceId: otherTrace,
+      spanId: otherSpan,
+      sampled: true,
+    })
+    assert.equal(reprocessed?.changed, true)
+    await lifecycle.runNext()
+    await runtime.flush(1_000)
+
+    const spans = ingestionSpans(exporter)
+    assert.equal(spans.length, 2)
+    assert.equal(spans[0].spanContext().traceId, TRACE_ID)
+    assert.equal(spans[1].spanContext().traceId, otherTrace, "the new execution belongs to the operator's trace")
+    assert.equal(spans[1].parentSpanContext?.spanId, otherSpan)
+    await runtime.shutdown(500)
+  } finally {
+    db.close()
+  }
+})
