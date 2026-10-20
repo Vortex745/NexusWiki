@@ -1,4 +1,5 @@
 import { SpanKind, SpanStatusCode, context, trace, type Span, type Tracer } from "@opentelemetry/api"
+import { AsyncLocalStorageContextManager } from "@opentelemetry/context-async-hooks"
 import type { SpanExporter } from "@opentelemetry/sdk-trace-base"
 import { ParentBasedSampler, TraceIdRatioBasedSampler } from "@opentelemetry/sdk-trace-base"
 import { resourceFromAttributes } from "@opentelemetry/resources"
@@ -276,6 +277,27 @@ class OtelModelCallScope implements ModelCallScope {
   }
 }
 
+/**
+ * LO-19: `runInContext` only works with a REAL context manager. The API's
+ * default is a no-op, and this runtime deliberately never calls
+ * `provider.register()` (no global tracer), so without this the active span
+ * would always be `undefined` and every model observation made inside an
+ * operation would silently become a new root trace. Installing the ALS
+ * manager is not a provider registration: it owns no exporter and no sampler.
+ */
+let contextManagerInstalled = false
+function ensureContextManager(): void {
+  if (contextManagerInstalled) return
+  contextManagerInstalled = true
+  try {
+    const manager = new AsyncLocalStorageContextManager()
+    manager.enable()
+    context.setGlobalContextManager(manager)
+  } catch {
+    // Another owner registered one first — theirs is authoritative.
+  }
+}
+
 export class OtelTracingRuntime implements TracingRuntime {
   readonly enabled = true
   private readonly processor: BoundedBatchProcessor
@@ -289,6 +311,7 @@ export class OtelTracingRuntime implements TracingRuntime {
   private truncatedAttributes = 0
 
   constructor(options: OtelRuntimeOptions) {
+    ensureContextManager()
     this.attributeBytes = options.maxAttributeBytes ?? DEFAULT_MAX_ATTRIBUTE_BYTES
     this.contentBytes = options.maxContentBytes ?? DEFAULT_MAX_CONTENT_BYTES
     this.sampleRate = options.sampleRate

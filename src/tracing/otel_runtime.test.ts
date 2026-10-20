@@ -250,6 +250,8 @@ test("LO-05-AC09/AC10: only the adapter touches the vendor; the contract stays n
   }
   const otelDeps = Object.keys(packageJson.dependencies).filter((name) => name.startsWith("@opentelemetry/"))
   assert.deepEqual(otelDeps.sort(), [
+    // LO-19: the ALS context manager is part of the adapter, not business code.
+    "@opentelemetry/context-async-hooks",
     "@opentelemetry/exporter-trace-otlp-proto",
     "@opentelemetry/resources",
     "@opentelemetry/sdk-trace-base",
