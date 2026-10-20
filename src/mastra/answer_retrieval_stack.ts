@@ -126,7 +126,7 @@ export function createAnswerRetrievalStack(
   // (src/index.ts) passes the shared safe fetcher + the config's server-side
   // Tavily key; evaluation scopes and probes omit it entirely.
   const buildSearcher = (operations: SearchOperations) =>
-    new SearcherImpl(operations, attachments, faqEvidence, web)
+    new SearcherImpl(operations, attachments, faqEvidence, web, context.tracing)
   const searchOperationsWithoutRerank = context.searchOperations
     ? undefined
     : new RuntimeSearchOperations({

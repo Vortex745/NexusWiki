@@ -1,9 +1,14 @@
+import { resolveChunkIndexName } from "../../config"
+import type { TracingRuntime } from "../../tracing/contract"
 import type { Client } from "@elastic/elasticsearch"
 import type OpenAI from "openai"
 import type { Driver } from "neo4j-driver"
 import { int as neo4jInt } from "neo4j-driver"
 import { createDriver } from "../../graph"
-import type { PageIndexRepository } from "../../ingestion/tracking/page_index_repo"
+import type {
+  PageIndexNodeEligibility,
+  PageIndexRepository,
+} from "../../ingestion/tracking/page_index_repo"
 import type { ActiveVersionRepository } from "../../ingestion/tracking/active_version_repo"
 import type { AccessContext } from "../../access/context"
 import type { Query, RetrievalResult, Chunk } from "../../types"
@@ -31,7 +36,6 @@ import {
 } from "./interface"
 import { rrf } from "./rrf"
 
-const INDEX_NAME = "kefu-rag-chunks"
 const CHANNEL_TOP_K = 5
 const RESULT_TOP_K = 10
 
@@ -68,6 +72,15 @@ export function activeTermsFilterFor(activeDocIds: readonly string[]): Array<Rec
 const RERANK_MIN_CANDIDATES = 2
 const GRAPH_CANDIDATE_MULTIPLIER = 4
 const GRAPH_HOPS = 1
+/**
+ * PT-10 (audit finding F1): the ceiling itself is unchanged — five nodes per
+ * PageIndex lookup. What changed is WHO may occupy those five slots: the
+ * eligibility axes below are resolved by the repository's own query before
+ * `ORDER BY document_id, node_id LIMIT 5`, so material from another tenant,
+ * another knowledge base, an invisible group or a non-active version can no
+ * longer push an eligible target out of the run. Raising this number would not
+ * fix that — it would only read more ineligible material.
+ */
 const PAGE_INDEX_NODE_LIMIT = 5
 /**
  * Ticket 31 (FAQ-01B): at most this many FAQ entries join one search as
@@ -318,13 +331,58 @@ export class RuntimeSearchOperations implements SearchOperations {
   constructor(private dependencies: RuntimeSearchDependencies) {}
 
   private get indexName(): string {
-    return this.dependencies.indexName ?? INDEX_NAME
+    return resolveChunkIndexName(this.dependencies.indexName)
   }
 
   private activeTermsFilter(): Array<Record<string, unknown>> {
     const repo = this.dependencies.activeVersionRepo
     if (!repo) return []
     return activeTermsFilterFor(repo.getActiveDocIds())
+  }
+
+  /**
+   * PT-10 (audit finding F1): the eligibility axes the bounded PageIndex node
+   * selection resolves inside its own SQL, before the ceiling is applied.
+   *
+   * The rules are NOT new — each axis is the one already enforced afterwards by
+   * `filterNodesByAccessContext` / `filterByKnowledgeBase` and by the hydration
+   * filters (`accessContextFilter`, `knowledgeBaseFilter`,
+   * `activeTermsFilterFor`), so the pre-selection decision and the re-check can
+   * never disagree.
+   *
+   * Axes are only ever ADDED from what the caller actually carries, which keeps
+   * the three existing behaviors distinguishable:
+   *  - no AccessContext → no tenant/group axis (legacy single-tenant callers);
+   *    an AccessContext is always tenant-bound, so an `admin` scope gains
+   *    neither cross-tenant nor cross-knowledge-base reach;
+   *  - no RetrievalScope → no knowledge axis (a legacy read spans bases), while
+   *    an explicit EMPTY scope never reaches the repository at all —
+   *    `hasNoKnowledgeContext` short-circuits the channel first;
+   *  - no active-version repository → no active axis (an evaluation scope owns a
+   *    dedicated ephemeral index and must keep reading its whole corpus);
+   *    a wired repository → active versions only, so a configured-but-empty
+   *    active set legitimately selects nothing instead of collapsing into the
+   *    unconfigured default.
+   *
+   * Returns `undefined` when nothing is known, so a legacy caller emits exactly
+   * the pre-existing two-argument read.
+   */
+  private pageIndexEligibility(
+    accessContext?: AccessContext,
+    retrievalScope?: RetrievalScope
+  ): PageIndexNodeEligibility | undefined {
+    const eligibility: PageIndexNodeEligibility = {}
+    if (accessContext) {
+      eligibility.tenantId = accessContext.tenantId
+      eligibility.callerGroups = accessContext.groups
+    }
+    if (retrievalScope) {
+      eligibility.knowledgeBaseIds = retrievalScope.knowledgeBaseIds
+    }
+    if (this.dependencies.activeVersionRepo) {
+      eligibility.restrictToActiveDocumentVersions = true
+    }
+    return Object.keys(eligibility).length > 0 ? eligibility : undefined
   }
 
   async vectorSearch(query: Query, topK: number, hypothesis?: string, accessContext?: AccessContext, retrievalScope?: RetrievalScope, signal?: AbortSignal): Promise<RetrievalResult[]> {
@@ -337,6 +395,10 @@ export class RuntimeSearchOperations implements SearchOperations {
       {
         model: this.dependencies.embeddingModel,
         input: embedInput,
+        // Float encoding: the SDK's base64 default can yield truncated
+        // vectors on some providers (see store.ts) — the query vector must
+        // live in the same 1024-dim space as the indexed chunks.
+        encoding_format: "float",
       },
       { signal }
     )
@@ -570,7 +632,16 @@ export class RuntimeSearchOperations implements SearchOperations {
     if (hasNoKnowledgeContext(retrievalScope)) return []
     const repo = this.dependencies.pageIndexRepo
     if (!repo) throw new Error("pageIndex repository unavailable")
-    const allNodes = repo.searchNodes(query.text, PAGE_INDEX_NODE_LIMIT)
+    // PT-10 (F1): eligibility is part of the bounded selection, so the five
+    // slots are spent on nodes this caller may actually read.
+    const allNodes = repo.searchNodes(
+      query.text,
+      PAGE_INDEX_NODE_LIMIT,
+      this.pageIndexEligibility(accessContext, retrievalScope)
+    )
+    // Defense in depth, deliberately kept: the application-layer filters still
+    // run, so a repository that ignored the eligibility argument — or a row that
+    // lost eligibility between the query and this line — cannot reach hydration.
     const nodes = filterByKnowledgeBase(
       filterNodesByAccessContext(allNodes, accessContext),
       retrievalScope
@@ -733,6 +804,17 @@ export function parseGraphProvenance(values: unknown): NonNullable<
   return [...provenance.values()]
 }
 
+const RETRIEVAL_PREVIEW_RESULTS = 25
+const RETRIEVAL_PREVIEW_CHARS = 160
+
+/** LO-12: bounded retrieval preview (25 results × 160 chars). */
+export function retrievalPreview(results: RetrievalResult[]): string[] {
+  return results.slice(0, RETRIEVAL_PREVIEW_RESULTS).map((result) => {
+    const content = result.chunk?.content ?? ""
+    return content.length > RETRIEVAL_PREVIEW_CHARS ? content.slice(0, RETRIEVAL_PREVIEW_CHARS) : content
+  })
+}
+
 export class SearcherImpl implements Searcher {
   constructor(
     private operations: SearchOperations,
@@ -758,10 +840,41 @@ export class SearcherImpl implements Searcher {
      * server-side fetch of what the user pasted) or the run opted into
      * configured web search (`webRequested`).
      */
-    private webEvidence?: WebEvidenceOperations
+    private webEvidence?: WebEvidenceOperations,
+    /**
+     * LO-12: retrieval preview observation. Optional — with tracing off the
+     * searcher behaves exactly as before.
+     */
+    private tracing?: TracingRuntime,
   ) {}
 
   async search(query: Query, options?: SearchOptions): Promise<SearchOutcome> {
+    const operation = this.tracing?.startOperation("retrieval.search", {
+      "retrieval.query_length": query.text.length,
+    })
+    operation?.setAttributes({ "langfuse.observation.input": query.text })
+    try {
+      const outcome = await this.searchInternal(query, options)
+      operation?.end({
+        outcome: "ok",
+        attributes: {
+          "retrieval.status": outcome.status,
+          "retrieval.result_count": outcome.results.length,
+          // Bounded preview: 25 results × 160 chars, never the full corpus.
+          "langfuse.observation.output": JSON.stringify(retrievalPreview(outcome.results)),
+        },
+      })
+      return outcome
+    } catch (error) {
+      operation?.end({
+        outcome: "error",
+        message: error instanceof Error ? error.message.slice(0, 200) : "retrieval failed",
+      })
+      throw error
+    }
+  }
+
+  private async searchInternal(query: Query, options?: SearchOptions): Promise<SearchOutcome> {
     const hypothesis = options?.hypothesis
     const graphSeeds = options?.graphSeeds
     const accessContext = options?.accessContext
