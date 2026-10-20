@@ -104,7 +104,9 @@ When `ACCESS_MODE=single_tenant`, no token is required (backward compat). When `
 
 Langfuse is a DI-seam — the `langfuse` npm package IS a project dependency now. `src/answer/langfuse_client.ts` builds the real client (+ REST fetchTrace read-back) when both keys are set; absent keys keep Noop mode with zero cost.
 
-Compatibility probe (LO-01): `node --import tsx scripts/langfuse-compat-probe.ts` reports the deployed backend version, whether an OTLP endpoint exists, whether the installed SDK's synthetic Trace/Span/Generation read back with parent linkage, and the byte-exact content capacity. **The pinned `langfuse/langfuse:2` (2.95.11) has no `/api/public/otel/v1/traces` endpoint (404)** — only the SDK ingestion path works, so G-COMPAT is blocked pending a decision (recorded in `.scratch/logging-observability-tickets/evidence/LO-01/`).
+The op-stack now runs the **v3 line** (`langfuse/langfuse:3` + `langfuse-worker:3` + ClickHouse + Redis + MinIO) because v2 has no OTLP endpoint at all. OTLP is HTTP/protobuf only (no gRPC) at `http://localhost:3000/api/public/otel/v1/traces` with `Authorization: Basic base64(pk:sk)` and `x-langfuse-ingestion-version: 4` (without that header ingestion can lag ~10 min). The worker is mandatory: web writes events to MinIO + Redis and the worker lands them in ClickHouse, so running web alone gives an empty trace store.
+
+Probes: `node --import tsx scripts/otel-otlp-probe.ts` (real OTel SDK → OTLP → readback; the one the compatibility gate depends on) and `node --import tsx scripts/langfuse-compat-probe.ts` (legacy SDK ingestion path, kept for comparison). Evidence: `.scratch/logging-observability-tickets/evidence/LO-01/`.
 
 ### 2.8b Runtime logs (LO-03)
 
