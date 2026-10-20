@@ -167,6 +167,14 @@ async function main() {
   const sharedAnswerEntry = await createSharedAnswerEntry({
     config: cfg,
     answerRuntime,
+    // Whole-run deadline budget. ANSWER_RUN_BUDGET_MS existed as dead config
+    // for normal chat: the entry's injectable seam was never fed from the
+    // composition root, so every run kept the 30s DEFAULT_RUN_BUDGET_MS and
+    // complex multi-tool loops were cancelled mid-flight (observed live: a
+    // complex-routed question died at exactly 30.04s with status=cancelled).
+    ...(cfg.answerRunBudgetMs !== undefined
+      ? { budgetMs: cfg.answerRunBudgetMs }
+      : {}),
     // The retrieval channel that reads this session's temporary attachments.
     attachments,
     // Ticket 31 (FAQ-01B): the FAQ standard-answer channel.
@@ -189,7 +197,12 @@ async function main() {
     modeReader: () => runtimeMode,
   })
 
-  const { server, processRuntime, evaluationService } = await startServer(
+  const {
+    server,
+    processRuntime,
+    evaluationService,
+    logger: runtimeLogger,
+  } = await startServer(
     3001,
     mastraBoundary.eventsSource,
     identityAdapter,
@@ -207,7 +220,11 @@ async function main() {
       ...(sharedAnswerEntry.mcp ? { mcpCapabilities: sharedAnswerEntry.mcp } : {}),
     }
   )
-  const worker = startWorker({ db: processRuntime.db })
+  const worker = startWorker({
+    db: processRuntime.db,
+    wikiChatClient: processRuntime.chatClient,
+    wikiElasticsearch: processRuntime.elasticsearch,
+  })
 
   // Ticket 08 P6 (spec §7 L1535): conversation GC — scheduled job that purges
   // sessions inactive for >conversationTtlDays. Uses the SAME db as the answer
@@ -242,6 +259,9 @@ async function main() {
         // Close the Mastra runtime boundary after ProcessRuntime so in-flight
         // streams have already been cancelled by the upstream close cascade.
         await mastraBoundary.close()
+        // LO-03: flush the runtime logger LAST so the closes above still
+        // produce diagnostics, then drain the pipe within its own budget.
+        await runtimeLogger.close()
       },
     },
     // P8.2 (Debt #3 fix): close the legacy graph Neo4j driver singleton.

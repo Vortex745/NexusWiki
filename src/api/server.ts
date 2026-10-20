@@ -7,7 +7,7 @@ import { extname, join, resolve } from "node:path"
 import type { DB } from "../ingestion/tracking/db"
 import { openDb } from "../ingestion/tracking/db"
 import { AnswerTraceRepository } from "../answer/trace_repository"
-import { loadConfig } from "../config"
+import { loadConfig, resolveChunkIndexName } from "../config"
 import { createProcessRuntime, type ProcessRuntime } from "../runtime/process_runtime"
 import { createChatRouter, type AnswerEventsSource } from "./chat"
 import ingestRouter, { rawIngestRouter } from "./ingest"
@@ -41,11 +41,21 @@ import {
   type KnowledgeBaseService,
 } from "../knowledge/knowledge_base_service"
 import { SqliteKnowledgeBaseRepo } from "../knowledge/knowledge_base_repo"
+import { SqliteKnowledgeBaseFolderRepo } from "../knowledge/knowledge_base_folder_repo"
+import {
+  KnowledgeBaseFolderServiceImpl,
+  type KnowledgeBaseFolderService,
+} from "../knowledge/knowledge_base_folder_service"
 import { knowledgeBaseEmbeddingProfile } from "../types/knowledge_base"
 import { createKnowledgeBaseRouter } from "./knowledge_bases"
+import { createKnowledgeBaseFolderRouter } from "./knowledge_base_folders"
+import { createDocumentFolderService } from "../knowledge/document_folder_service"
+import { createDocumentFolderRouter } from "./document_folders"
 import { createDocumentsRouter, createEsChunkReader } from "./documents"
+import { ExtractionEvidenceRepository } from "../ingestion/tracking/extraction_evidence_repo"
 import { createGraphBrowseRouter } from "./graph_browse"
 import { createWikiRouter } from "./wiki"
+import { WikiAgent } from "../wiki/agent"
 import { createSyncDataSourcesRouter } from "./sync_data_sources"
 import { ActiveVersionRepository } from "../ingestion/tracking/active_version_repo"
 import { createRetrievalDebugRouter } from "./retrieval_debug"
@@ -68,10 +78,19 @@ import {
   InvalidAssistantCommandError,
 } from "../assistants/assistant_service"
 import { ModelProfileRegistry } from "../models/profiles"
+import type { Logger } from "../logging/logger"
+import { createOperationLogSlice } from "../logging/log_slice"
+import { createServerLogger } from "../logging/composition"
 
 export function createApp(options: {
   db?: DB
   imageAssetPath?: string
+  /**
+   * LO-03: the neutral runtime logger, injected by the composition root.
+   * Absent in bare mounts/probes — every log call is then a no-op, so an
+   * uninjected logger can never change a business response.
+   */
+  logger?: Logger
   accessMiddleware?: RequestHandler
   /**
    * Eval refactor Ticket 04: in-process evaluation service. Mounted only when
@@ -111,6 +130,12 @@ export function createApp(options: {
    * from the tenant database when omitted.
    */
   knowledgeBaseService?: KnowledgeBaseService
+  /**
+   * The knowledge-base folder service behind the folder routes and the
+   * `/knowledge-bases/:id/folder` move. Built from the same tenant database as
+   * the knowledge-base service when omitted.
+   */
+  knowledgeBaseFolders?: KnowledgeBaseFolderService
   /**
    * Ticket 14 (RET-01): the shared SearchOperations behind the retrieval-debug
    * endpoint. startServer receives chat's own operations (single retrieval
@@ -173,6 +198,18 @@ export function createApp(options: {
     options.imageAssetPath ?? process.env.IMAGE_ASSET_PATH ?? "./data/image-assets"
   )
   app.use(cors())
+  // LO-03: the first structured-log slice — one real JSON business operation
+  // (knowledge-base writes) through the injected neutral logger. Read-only
+  // lists stay excluded, matching the coverage policy in LO-02.
+  if (options.logger) {
+    app.use(
+      "/api/knowledge-bases",
+      createOperationLogSlice(options.logger, {
+        operation: "knowledge_base.write",
+        methods: ["POST", "PATCH", "DELETE"],
+      }),
+    )
+  }
   app.get("/api/assets/:assetPath", async (req, res, next) => {
     const assetPath = String(req.params.assetPath)
     if (!/^[a-f0-9]{64}\.[a-z0-9]{1,10}$/.test(assetPath)) {
@@ -212,6 +249,13 @@ export function createApp(options: {
     // knowledge-base workspace — browsing is for every authenticated member,
     // and the admin commands re-check the admin scope in-handler.
     app.use("/api/knowledge-bases", options.accessMiddleware)
+    // Knowledge-base folders: the same chat-scope identity gate. The move route
+    // (/api/knowledge-bases/:id/folder) is already covered by the prefix above.
+    app.use("/api/knowledge-base-folders", options.accessMiddleware)
+    // Document folders: rename/delete address a folder by id, so they need the
+    // same chat-scope gate as the rest of the workspace. The list/create routes
+    // sit under /api/knowledge-bases and are already covered above.
+    app.use("/api/document-folders", options.accessMiddleware)
     // Ticket 14 (RET-01): the retrieval-debug run is an authorized read —
     // same chat scope, same identity that constrains the channels.
     app.use("/api/retrieval-debug", options.accessMiddleware)
@@ -260,8 +304,32 @@ export function createApp(options: {
     )
   app.use(
     "/api",
-    createKnowledgeBaseRouter({ service: workspaceKnowledgeBaseService })
+    createKnowledgeBaseRouter({
+      service: workspaceKnowledgeBaseService,
+      // The same retirement service the per-source route uses, so a
+      // knowledge-base-wide wipe goes through the identical tombstone +
+      // cleanup-enqueue path rather than a second implementation of it.
+      retirement: retirementService,
+    })
   )
+  // Knowledge-base folders: grouping only. A retrieval scope still carries plain
+  // knowledge-base ids, so nothing on the chat path changes.
+  const knowledgeBaseFolderService =
+    options.knowledgeBaseFolders ??
+    new KnowledgeBaseFolderServiceImpl(
+      new SqliteKnowledgeBaseFolderRepo(db),
+      new SqliteKnowledgeBaseRepo(db)
+    )
+  app.use(
+    "/api",
+    createKnowledgeBaseFolderRouter({ service: knowledgeBaseFolderService })
+  )
+  // Document folders: the per-knowledge-base directory the document catalog
+  // browses by. Deleting one retires the documents inside it, so this goes
+  // through the SAME retirement service the per-source and whole-knowledge-base
+  // deletes use — one destruction path, one tombstone format.
+  const documentFolderService = createDocumentFolderService(db, retirementService)
+  app.use("/api", createDocumentFolderRouter({ service: documentFolderService }))
   // Ticket 22 (ATT-01): the session attachment routes. They live under
   // /api/chat so they inherit the chat identity gate; promotion re-checks the
   // ingest capability in-handler and resolves its target base through the SAME
@@ -281,10 +349,13 @@ export function createApp(options: {
       documentRepo,
       knowledgeBaseService: workspaceKnowledgeBaseService,
       pageIndexRepo: new PageIndexRepository(db),
+      // Ticket UT-09: durable extraction evidence reads over the SAME tenant
+      // database; the route itself re-checks doc-level authorization.
+      extractionEvidenceRepo: new ExtractionEvidenceRepository(db),
       // Ticket 13 (DOC-02): chunk reads need the shared Elasticsearch client —
       // absent in bare createApp() mounts (tests), where chunk views answer 503.
       ...(options.processRuntime
-        ? { chunkReader: createEsChunkReader(options.processRuntime.elasticsearch, "kefu-rag-chunks") }
+        ? { chunkReader: createEsChunkReader(options.processRuntime.elasticsearch, resolveChunkIndexName(undefined, options.config)) }
         : {}),
     })
   )
@@ -301,6 +372,7 @@ export function createApp(options: {
         ? {
             neo4jDriver: options.processRuntime.neo4jDriver,
             es: options.processRuntime.elasticsearch,
+            indexName: resolveChunkIndexName(undefined, options.config),
             activeVersionRepo: new ActiveVersionRepository(db),
           }
         : {}),
@@ -319,20 +391,15 @@ export function createApp(options: {
       })
     )
   }
-  // Ticket 38 (WIKI-01): the administrator Wiki surface (generate → validate →
-  // publish → restore). Same chat-scope identity middleware as the KB prefix;
-  // the admin gate and the KB ownership check happen in-handler. Generation
-  // reuses the process chat client; bare mounts answer 503 for generate but
-  // still serve reads.
+  // Wiki pages are generated asynchronously after source activation. The
+  // router owns browsing and administration; the worker owns generation.
   app.use(
     "/api",
     createWikiRouter({
       knowledgeBaseService: workspaceKnowledgeBaseService,
       db,
-      ...(options.processRuntime
-        ? { chatClient: options.processRuntime.chatClient }
-        : {}),
-      ...(options.config ? { model: options.config.openaiChatModel } : {}),
+      agent: options.processRuntime ? new WikiAgent(db, options.processRuntime.chatClient,
+        (options.config ?? loadConfig()).openaiChatModel) : undefined,
     })
   )
   // Ticket 39 (SYNC-01A): the URL/sitemap sync data-source surface. Same
@@ -571,14 +638,30 @@ export async function startServer(
      * next run of that session.
      */
     attachments?: import("../attachments/session_attachment_service").SessionAttachmentService
+    /**
+     * Ticket 35 (TOOL-01B): the MCP capability invocation seam. startServer
+     * must forward it to createApp — dropping it here left the discovered
+     * capability tools healthy inside chat runs while /api/capabilities
+     * answered 404 forever.
+     */
+    mcpCapabilities?: import("../mastra/shared_answer_entry").SharedAnswerEntry["mcp"]
+    /**
+     * LO-03: an already-built runtime logger. When absent, startServer builds
+     * the process logger from `LOG_LEVEL` — the composition root stays the
+     * only place that knows about Pino.
+     */
+    logger?: Logger
   } = {}
 ): Promise<{
   server: Server
   processRuntime: ProcessRuntime
   /** Ticket 14: exposed so the shutdown controller can release eval scopes. */
   evaluationService: EvaluationService
+  /** LO-03: the runtime logger, so shutdown can flush it last. */
+  logger: Logger
 }> {
   const config = loadConfig()
+  const logger = options.logger ?? createServerLogger(process.env)
   const processRuntime = createProcessRuntime(config)
   // Ticket 05 follow-up wiring + P5.2: in single_tenant mode (default), mount
   // the access middleware and session binder so every chat request gets a
@@ -677,6 +760,7 @@ export async function startServer(
   const app = createApp({
     db: processRuntime.db,
     imageAssetPath: config.imageAssetPath,
+    logger,
     accessMiddleware,
     ...(ingestAccessMiddleware ? { ingestAccessMiddleware } : {}),
     ...(managementAccessMiddleware ? { managementAccessMiddleware } : {}),
@@ -702,6 +786,9 @@ export async function startServer(
     // cleanup). Absent when the composition did not build the service — the
     // routes then simply do not exist and no run reads attachments.
     ...(options.attachments ? { attachments: options.attachments } : {}),
+    // Ticket 35 (TOOL-01B): forward the MCP capability invocation seam so the
+    // capabilities router actually mounts in production.
+    ...(options.mcpCapabilities ? { mcpCapabilities: options.mcpCapabilities } : {}),
   })
   const server = await new Promise<Server>((resolve) => {
     const s = app.listen(port, () => {
@@ -709,5 +796,5 @@ export async function startServer(
       resolve(s)
     })
   })
-  return { server, processRuntime, evaluationService }
+  return { server, processRuntime, evaluationService, logger }
 }

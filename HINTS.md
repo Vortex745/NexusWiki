@@ -12,7 +12,7 @@
 |----------|-------|
 | Node.js | ≥ 20 (uses native `node:test` runner, `AbortController`, `DOMException`) |
 | Package manager | npm (lockfile: `package-lock.json`) |
-| TypeScript | strict mode (`tsconfig.json`); frontend build: `tsconfig.frontend.json` |
+| TypeScript | strict mode (`tsconfig.json`); frontend build: Vite (`npm run build:web`), typecheck: `tsconfig.web.json` |
 | Module system | CommonJS (`"type": "commonjs"`) |
 | OS | Windows (PowerShell); cross-platform compatible |
 | Test runner | `node --import tsx --test src/**/*.test.ts` |
@@ -29,6 +29,9 @@ Copy `.env.example` to `.env` and fill in values. All variables are optional unl
 |----------|---------|-----------|-------|
 | `ES_NODE` | `http://localhost:9200` | Required for production | Elasticsearch node URL |
 | `ES_API_KEY` | (empty) | Optional | API key for authenticated ES clusters |
+| `ES_CHUNK_INDEX` | `kefu-rag-chunks` | Optional | Single lowercase physical chunk index shared by all business readers/writers and maintenance scripts. Trimmed; blank uses default; wildcards/multiple targets fail startup. Explicit isolated eval indices win. |
+
+Retain the old index during a float-mapping migration. `ESStore.ensureIndex()` rejects incompatible numeric mappings before trying to mutate them. Verify full source IDs, contents, access fields and embeddings in the new index before switching `ES_CHUNK_INDEX` and restarting all backend/worker consumers. Once the new index accepts writes, freeze and reconcile increments before any rollback; returning directly to the old index loses updates. `demo:reset` and `demo:rebuild` target the configured index, so review their read-only previews before confirming maintenance.
 
 ### 2.2 OpenAI (Chat)
 
@@ -48,19 +51,27 @@ Copy `.env.example` to `.env` and fill in values. All variables are optional unl
 | `EMBEDDING_BASE_URL` | (falls back to `OPENAI_BASE_URL`) | Optional | Separate embedding provider URL |
 | `EMBEDDING_MODEL` | `text-embedding-3-small` | Required | Embedding model ID |
 | `EMBEDDING_DIMENSIONS` | `1536` | Required | Embedding vector dimensions |
+| `EMBEDDING_BATCH_MAX_CHUNKS` | `64` | Optional | Maximum passages per embedding request; lower if the provider rejects large batches |
+| `EMBEDDING_BATCH_MAX_BYTES` | `153600` | Optional | UTF-8 request byte budget (150 KiB); lower if the provider has a smaller payload limit |
 
-### 2.4 Answer Run Resource Budgets
+### 2.4 Ingestion worker
 
 | Variable | Default | Required? | Notes |
 |----------|---------|-----------|-------|
-| `ANSWER_RUN_MAX_MODEL_CALLS` | Unlimited | Optional | Maximum chat + embedding provider calls in one Answer run; `0` rejects the first call |
+| `INGESTION_CONCURRENCY` | `2` | Optional | Number of documents the background worker may process concurrently; embedding calls remain serialized per shared store |
+
+### 2.5 Answer Run Resource Budgets
+
+| Variable | Default | Required? | Notes |
+|----------|---------|-----------|-------|
+| `ANSWER_RUN_MAX_MODEL_CALLS` | Unlimited | Optional | Maximum chat + embedding + decision provider calls in one Answer run; `0` rejects the first call |
 | `ANSWER_RUN_MAX_TOKENS` | Unlimited | Optional | Maximum aggregate provider-reported tokens in one Answer run |
 | `ANSWER_RUN_MAX_COST_MICROS` | Unlimited | Optional | Maximum aggregate cost in integer micro-USD |
 | `ANSWER_RUN_MODEL_PRICING_JSON` | — | Required with a cost limit | Exact-model JSON map with `inputCostMicrosPerMillionTokens` and `outputCostMicrosPerMillionTokens`; no prices are built in |
 
 All limits are opt-in. A configured token or cost limit fails closed if the provider does not report usage. A cost limit also fails closed when the exact model is absent from the pricing table.
 
-### 2.5 Neo4j
+### 2.6 Neo4j
 
 | Variable | Default | Required? | Notes |
 |----------|---------|-----------|-------|
@@ -68,7 +79,7 @@ All limits are opt-in. A configured token or cost limit fails closed if the prov
 | `NEO4J_USER` | `neo4j` | Required for production | Neo4j username |
 | `NEO4J_PASSWORD` | — | Required for production | Neo4j password |
 
-### 2.6 OIDC / Identity (Ticket 05)
+### 2.7 OIDC / Identity (Ticket 05)
 
 | Variable | Default | Required? | Notes |
 |----------|---------|-----------|-------|
@@ -83,7 +94,7 @@ All limits are opt-in. A configured token or cost limit fails closed if the prov
 
 When `ACCESS_MODE=single_tenant`, no token is required (backward compat). When `ACCESS_MODE=enforced`, all `/api/chat` and `/api/ingest` requests require a valid RS256 JWT verified by `jose.jwtVerify` against the remote JWKS.
 
-### 2.7 Langfuse (Optional Observability)
+### 2.8 Langfuse (Optional Observability)
 
 | Variable | Default | Required? | Notes |
 |----------|---------|-----------|-------|
@@ -91,13 +102,48 @@ When `ACCESS_MODE=single_tenant`, no token is required (backward compat). When `
 | `LANGFUSE_SECRET_KEY` | — | Optional | When absent, disabled mode |
 | `LANGFUSE_BASE_URL` | — | Optional | Self-hosted Langfuse URL |
 
-Langfuse is a DI-seam — the `langfuse` npm package is NOT a hard dependency. Callers must install it and inject a `RealLangfuseClient`.
+Langfuse is a DI-seam — the `langfuse` npm package IS a project dependency now. `src/answer/langfuse_client.ts` builds the real client (+ REST fetchTrace read-back) when both keys are set; absent keys keep Noop mode with zero cost.
 
-### 2.8 Mastra Promotion
+### 2.8b Runtime logs (LO-03)
+
+| Variable | Default | Required? | Notes |
+|----------|---------|-----------|-------|
+| `LOG_LEVEL` | `info` | Optional | `debug` \| `info` \| `warn` \| `error` \| `off`. Structured JSON on **stdout only** (Pino, one record per line, 8 KiB ceiling with a `truncated` marker). `off` returns a silent logger — the same path as an un-injected logger, so it is a safe rollback. |
+
+Business code depends on the neutral `Logger` in `src/logging/logger.ts`; only `src/logging/pino_logger.ts` may import `pino`. Credentials (auth headers, cookies, keys, passwords, private keys) are redacted before serialization. A full stdout pipe makes the producer wait for `drain` — the logger never buffers without bound.
+
+### 2.9 Mastra Promotion
 
 | Variable | Default | Required? | Notes |
 |----------|---------|-----------|-------|
 | `MASTRA_PROMOTION_ARTIFACT` | — | Optional | Path to a release verification artifact JSON. When present, the Mastra runtime starts in `live` mode; otherwise `shadow` mode. |
+
+### 2.10 Question-Routing Decision Provider
+
+| Variable | Default | Required? | Notes |
+|----------|---------|-----------|-------|
+| `DECISION_PROVIDER` | `chat` | Optional | Accepts only `chat` or `clef`; selects the question router shared by normal chat and evaluation |
+| `CLOUDFLARE_ACCOUNT_ID` | (empty) | Required for `clef` | Cloudflare account ID; server-side only |
+| `CLOUDFLARE_API_TOKEN` | (empty) | Required for `clef` | Cloudflare Workers AI Bearer token; store only in local `.env` |
+| `DECISION_REQUEST_TIMEOUT_MS` | `10000` | Optional | Per-decision ceiling in integer milliseconds, from `1` through `2147483647`; caller cancellation and the run deadline also apply |
+
+Clef routes `direct / simple / ambiguous / complex` with the fixed model `@cf/cloudflare/clef`. Both credentials are required at startup when selected. Settings are trimmed; blank provider or timeout uses its default. Keep credential values out of templates, logs, frontend settings, and config exports. Answer generation continues to use the OpenAI Chat configuration.
+
+Clef calls share the Answer run budgets. With a cost limit, add the exact `@cf/cloudflare/clef` key to `ANSWER_RUN_MODEL_PRICING_JSON`. Change `DECISION_PROVIDER` back to `chat` and restart the backend to restore the Chat router.
+
+### 2.11 OCR (Volcengine OCRPdf)
+
+| Variable | Required? | Notes |
+|----------|-----------|-------|
+| `VOLC_ACCESSKEY` | For OCR | Server-side Access Key ID |
+| `VOLC_SECRETKEY` | For OCR | Server-side Secret Access Key; not an Ark/OpenAI API key |
+| `VOLC_SESSION_TOKEN` | For STS only | Session token accompanying temporary AK/SK |
+
+Enable intelligent document parsing on the Volcengine account, configure the credentials in local `.env`, and restart the backend. Images use `ocr-api`; scanned PDFs select **OCR API** in the import advanced options. Default PDF imports extract the text layer with `builtin-pdf`. Historical `marker/mineru` overrides map to `ocr-api`; production does not construct those CLI OCR runtimes.
+
+OCR calls use `https://visual.volcengineapi.com`, Action `OCRPdf`, Version `2021-08-23`, body version `v3`, region `cn-north-1`, service `cv`. The adapter reads PDF page counts and splits at 16 pages and 8 MiB of encoded form data. A single oversized page/image fails explicitly. The existing `PARSER_TIMEOUT_MS` (120000) bounds the whole document; input/output limits default to 20 MiB each. No TOS bucket is required.
+
+Raw responses, page IDs and coordinates are retained as extraction evidence. Header/footer/footnote filtering is disabled. OCR results remain pending review (`ocr_content_unverified`) until content accuracy has independent verification; API success and page coverage alone cannot authorize activation. Missing credentials/auth failures do not automatically retry or fall back to another OCR engine. `npm run release:smoke` includes a live OCR probe using a fixed synthetic PDF when credentials are configured.
 
 ---
 
@@ -106,13 +152,14 @@ Langfuse is a DI-seam — the `langfuse` npm package is NOT a hard dependency. C
 ```bash
 # Development
 npm run dev                    # Start backend in dev mode (tsx watch)
-npm run frontend               # Serve frontend on localhost:3000
+npm run dev:web                # Vite dev server for the frontend
 npm run ingest                 # Run ingestion CLI
 
 # Build
 npm run build                  # TypeScript compile (tsc)
-npm run build:frontend         # Frontend TS + Tailwind CSS build
-npm run build:css              # Tailwind CSS build only
+npm run build:web              # Vite production build (frontend + Tailwind)
+npm run typecheck:web          # Frontend TypeScript check only
+npm run preview:web            # Preview the built frontend
 
 # Test
 npm test                       # Full test suite (node:test + tsx)
@@ -142,9 +189,9 @@ npm run release:promotion-check    # Validate release artifact promotion contrac
 | Elasticsearch | Vector + BM25 retrieval, PageIndex | Production, acceptance tests |
 | Neo4j | GraphRAG provenance | Production, acceptance tests |
 | OpenAI-compatible API | Chat + embeddings | Always (dev + prod) |
+| Cloudflare Workers AI | Clef question routing | When `DECISION_PROVIDER=clef` |
 | MarkItDown | Document ingestion (raw file → normalized blocks) | Ingestion; Ticket 09 will repair ABI |
-| Marker | Paper ingestion (PDF → structured) | Ingestion; Ticket 09 will install |
-| MinerU | Chinese OCR ingestion | Ingestion; Ticket 09 will install |
+| Volcengine OCRPdf | PDF/image recognition and structured extraction | Images + PDF OCR override; server-side AK/SK required |
 | Langfuse | Observability / trace export | Optional (disabled by default) |
 
 ---
@@ -156,3 +203,12 @@ npm run release:promotion-check    # Validate release artifact promotion contrac
 - **Elasticsearch client:** Multiple construction sites exist (`process_runtime.ts`, `ingestion/storage/index.ts`, `ingestion/storage/store.ts`) — known architectural debt (the historical `docs/dormant-surface-audit.md` audit was deleted; the debt is documented inline here and in `src/runtime/p8_3_runtime_integration.test.ts` for ProcessRuntime).
 - **ProcessRuntime:** Two production construction sites (`api/server.ts`, `answer/runtime.ts`) — documented in `src/runtime/p8_3_runtime_integration.test.ts`.
 - **CRLF warnings:** `git diff --check` on Windows emits CRLF warnings; these are NOT errors (exit code 0).
+
+---
+
+## 7. Repository Navigation
+
+- **`src/frontend/` is the `@core` shared conversation core** — plain TypeScript consumed by the React app through the Vite alias `@core` (see `vite.config.ts`). It is live wiring, not a stale frontend copy.
+- **Current ticket state** lives in untracked scratch: `.scratch/upload-integrity-tickets/README.md` (UT-series work); retro guardrail tickets in `.scratch/retro-guardrails/README.md`.
+- **Contract assertions live in tests, not docs:** dependency contracts in `src/frontend/app.contract.test.ts`; dormant-surface policy (deliberately unwired modules, e.g. `src/api/models.ts`) in `src/release/dormant_surface_audit.test.ts`. Check both before deleting anything.
+- **Push gate:** `githooks/pre-push` runs build + `typecheck:web` + the test suite. After a fresh clone run `git config core.hooksPath githooks` to arm it. Escape a single push deliberately with `git push --no-verify`; on POSIX clones re-arm the exec bit with `git update-index --chmod=+x githooks/pre-push`.
