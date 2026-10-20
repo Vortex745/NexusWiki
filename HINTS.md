@@ -116,6 +116,16 @@ Probes: `node --import tsx scripts/otel-otlp-probe.ts` (real OTel SDK → OTLP �
 
 Business code depends on the neutral `Logger` in `src/logging/logger.ts`; only `src/logging/pino_logger.ts` may import `pino`. Credentials (auth headers, cookies, keys, passwords, private keys) are redacted before serialization. A full stdout pipe makes the producer wait for `drain` — the logger never buffers without bound.
 
+### 2.8c Tracing (LO-05, OpenTelemetry → Langfuse OTLP)
+
+| Variable | Default | Required? | Notes |
+|----------|---------|-----------|-------|
+| `TRACING_ENABLED` | off | Optional | Must be `1`/`true`. Off means a `NoopTracingRuntime` — no exporter, no queue, no samples. |
+| `LANGFUSE_SAMPLE_RATE` | `1` | Optional | `0` → off; `1` → every root; in between → trace-id ratio. **Illegal values (`abc`, `1.5`, `-0.1`) turn tracing OFF with a diagnostic warning** rather than sampling unexpectedly. |
+| `LANGFUSE_BASE_URL` / `LANGFUSE_PUBLIC_KEY` / `LANGFUSE_SECRET_KEY` | — | Required when enabled | Auth is HTTP Basic `pk:sk`; the OTLP path is `/api/public/otel/v1/traces`. |
+
+Business code depends on `src/tracing/contract.ts` only; `@opentelemetry/*` imports are confined to `src/tracing/{composition,otel_runtime,bounded_processor}.ts` (a test enforces this). Sampling happens once at the root (`ParentBasedSampler` + ratio) and children inherit; the exporter never samples again. The buffer is our own bounded processor: drop-newest on overflow, counters in `runtime.diagnostics()`, one in-flight export, per-batch timeout, bounded `flush`/`shutdown`. Attribute ceiling is 2 KiB per ordinary attribute; `langfuse.observation.input/output` use a 1 MiB content ceiling (Generation content is not a log line).
+
 ### 2.9 Mastra Promotion
 
 | Variable | Default | Required? | Notes |

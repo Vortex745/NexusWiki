@@ -81,6 +81,8 @@ import { ModelProfileRegistry } from "../models/profiles"
 import type { Logger } from "../logging/logger"
 import { createHttpLogLifecycle, type HttpLogLifecycleOptions } from "../logging/http_lifecycle"
 import { createServerLogger } from "../logging/composition"
+import { NoopTracingRuntime, type TracingRuntime } from "../tracing/contract"
+import { createTracingRuntime } from "../tracing/composition"
 
 export function createApp(options: {
   db?: DB
@@ -93,6 +95,11 @@ export function createApp(options: {
   logger?: Logger
   /** LO-04: request-log policy/timeout overrides (tests, probes). */
   httpLog?: HttpLogLifecycleOptions
+  /**
+   * LO-05: the neutral tracing runtime. Absent (or a Noop runtime) means
+   * tracing is off; business handlers must behave identically either way.
+   */
+  tracing?: TracingRuntime
   accessMiddleware?: RequestHandler
   /**
    * Eval refactor Ticket 04: in-process evaluation service. Mounted only when
@@ -308,6 +315,9 @@ export function createApp(options: {
       // knowledge-base-wide wipe goes through the identical tombstone +
       // cleanup-enqueue path rather than a second implementation of it.
       retirement: retirementService,
+      // LO-05: the first real business operation on the neutral tracing
+      // contract (root span + trace id echoed for acceptance evidence).
+      tracing: options.tracing ?? new NoopTracingRuntime(),
     })
   )
   // Knowledge-base folders: grouping only. A retrieval scope still carries plain
@@ -649,6 +659,12 @@ export async function startServer(
      * only place that knows about Pino.
      */
     logger?: Logger
+    /**
+     * LO-05: an already-built tracing runtime. When absent, startServer builds
+     * it from TRACING_ENABLED / LANGFUSE_SAMPLE_RATE / LANGFUSE_* — the
+     * composition root stays the only place that knows the vendor.
+     */
+    tracing?: TracingRuntime
   } = {}
 ): Promise<{
   server: Server
@@ -657,9 +673,12 @@ export async function startServer(
   evaluationService: EvaluationService
   /** LO-03: the runtime logger, so shutdown can flush it last. */
   logger: Logger
+  /** LO-05: the tracing runtime, so shutdown can flush and bound it last. */
+  tracing: TracingRuntime
 }> {
   const config = loadConfig()
   const logger = options.logger ?? createServerLogger(process.env)
+  const tracing = options.tracing ?? createTracingRuntime(process.env).runtime
   const processRuntime = createProcessRuntime(config)
   // Ticket 05 follow-up wiring + P5.2: in single_tenant mode (default), mount
   // the access middleware and session binder so every chat request gets a
@@ -759,6 +778,7 @@ export async function startServer(
     db: processRuntime.db,
     imageAssetPath: config.imageAssetPath,
     logger,
+    tracing,
     accessMiddleware,
     ...(ingestAccessMiddleware ? { ingestAccessMiddleware } : {}),
     ...(managementAccessMiddleware ? { managementAccessMiddleware } : {}),
@@ -794,5 +814,5 @@ export async function startServer(
       resolve(s)
     })
   })
-  return { server, processRuntime, evaluationService, logger }
+  return { server, processRuntime, evaluationService, logger, tracing }
 }

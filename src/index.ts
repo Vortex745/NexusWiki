@@ -202,6 +202,7 @@ async function main() {
     processRuntime,
     evaluationService,
     logger: runtimeLogger,
+    tracing: tracingRuntime,
   } = await startServer(
     3001,
     mastraBoundary.eventsSource,
@@ -259,6 +260,14 @@ async function main() {
         // Close the Mastra runtime boundary after ProcessRuntime so in-flight
         // streams have already been cancelled by the upstream close cascade.
         await mastraBoundary.close()
+        // LO-05: flush spans within a bounded budget. A timed-out flush is
+        // reported, not retried forever, and never blocks the closes below.
+        const tracingShutdown = await tracingRuntime.shutdown(2_000)
+        if (tracingShutdown.timedOut) {
+          console.error(
+            `[shutdown] tracing flush timed out; dropped ${tracingShutdown.droppedPending} pending spans`,
+          )
+        }
         // LO-03: flush the runtime logger LAST so the closes above still
         // produce diagnostics, then drain the pipe within its own budget.
         await runtimeLogger.close()
