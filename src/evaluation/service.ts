@@ -14,7 +14,7 @@
  *   - nothing is written outside this process (no JSON reports, no business
  *     DB rows, no persistent trace export).
  */
-import type { TracingRuntime } from "../tracing/contract"
+import type { TaskTraceContext, TracingRuntime } from "../tracing/contract"
 
 import { randomUUID } from "node:crypto"
 import type { AppConfig } from "../config"
@@ -328,6 +328,8 @@ interface TaskRecord {
    * provider failure).
    */
   controller: AbortController
+  /** LO-17: neutral handoff captured by the HTTP submit (in-process only). */
+  trace?: TaskTraceContext
   run?: Promise<void>
   cancelReason?: string
   /** Ticket 25: the deadline watchdog had to abandon the case loop. */
@@ -364,8 +366,11 @@ export class EvaluationService {
   private readonly modelProfileGate?: { selectable(kind: "chat" | "rerank"): boolean }
   /** Ticket 14: set once shutdown began — no new task is accepted after it. */
   private stopped = false
+  /** LO-17: absent → every task runs untraced, exactly as before. */
+  private readonly tracing?: TracingRuntime
 
   constructor(private readonly options: EvaluationServiceOptions) {
+    this.tracing = options.tracing
     this.now = options.now ?? (() => new Date())
     this.generateId = options.generateId ?? (() => randomUUID())
     this.maxRetainedTasks = options.maxRetainedTasks ?? DEFAULT_MAX_RETAINED_TASKS
@@ -444,7 +449,11 @@ export class EvaluationService {
    * Validate and register a task, then run it in the background. Returns
    * immediately — the caller polls {@link getTask}.
    */
-  createTask(input: CreateEvaluationTaskInput, owner: EvaluationOwner): EvalTaskSummary {
+  createTask(
+    input: CreateEvaluationTaskInput,
+    owner: EvaluationOwner,
+    trace?: TaskTraceContext,
+  ): EvalTaskSummary {
     // Ticket 14: a stopping service must not register work it cannot release.
     if (this.stopped) throw new EvaluationShuttingDownError()
     const { dataset, datasetId } = this.resolveDataset(input)
@@ -507,6 +516,7 @@ export class EvaluationService {
       ...(taskReranker ? { reranker: taskReranker } : {}),
       // Ticket 14: shutdown aborts this run through here.
       controller: new AbortController(),
+      ...(trace ? { trace } : {}),
       // Snapshot at start: later global config changes cannot re-interpret a
       // task that already ran (ticket 11) and an immutable assistant version
       // keeps its identity in the record (ticket 28).
@@ -517,7 +527,7 @@ export class EvaluationService {
     // Fire-and-forget: the HTTP response must not wait for prepare/run/cleanup.
     // Ticket 14: the chain is kept on the record so shutdown can await every
     // in-flight task's cleanup instead of hoping it finished in time.
-    record.run = this.runTask(record, record.controller).catch((error) => {
+    record.run = this.runTracedTask(record, record.controller).catch((error) => {
       // runTask already records failures; this is the last-resort guard so a
       // bug in the runner can never leave an unhandled rejection behind.
       // Ticket 25: it must never RE-open or overwrite a record that already
@@ -724,7 +734,8 @@ export class EvaluationService {
    */
   createComparisonExample(
     owner: EvaluationOwner,
-    input: { datasetId?: unknown } = {}
+    input: { datasetId?: unknown } = {},
+    trace?: TaskTraceContext,
   ): { datasetId: string; left: EvalTaskSummary; right: EvalTaskSummary } {
     // `createReranker` builds a task-scoped adapter for an OVERRIDE id only;
     // it says nothing about whether this server has RERANK_* credentials, so
@@ -748,13 +759,15 @@ export class EvaluationService {
     }
     const on = this.createTask(
       { datasetId, assistant: EVAL_BUILTIN_ASSISTANTS[0] },
-      owner
+      owner,
+      trace
     )
     let off: EvalTaskSummary
     try {
       off = this.createTask(
         { datasetId, assistant: EVAL_BUILTIN_ASSISTANTS[1] },
-        owner
+        owner,
+        trace
       )
     } catch (error) {
       // Creating the pair is not atomic: capacity or a stopping service can
@@ -993,6 +1006,33 @@ export class EvaluationService {
     // rejection carries every field/case-level issue (ticket 05).
     const dataset = validateEvalDataset(input.dataset)
     return { dataset }
+  }
+
+  /**
+   * LO-17: the in-process task runs with its scope active, so the isolated
+   * resources' provider calls join the submitter's trace. There is no durable
+   * queue here, so nothing pretends to survive a restart.
+   */
+  private async runTracedTask(record: TaskRecord, taskController: AbortController): Promise<void> {
+    const scope = this.tracing?.startOperation(
+      "evaluation.task",
+      {
+        "evaluation.task_id": record.id,
+        "evaluation.dataset": record.datasetId ?? "inline",
+        "evaluation.cases": record.total,
+      },
+      record.trace,
+    )
+    try {
+      if (scope) await scope.runInContext(() => this.runTask(record, taskController))
+      else await this.runTask(record, taskController)
+    } finally {
+      scope?.end(
+        record.stage === "completed"
+          ? { outcome: "ok" }
+          : { outcome: "error", message: record.stage },
+      )
+    }
   }
 
   private async runTask(record: TaskRecord, taskController: AbortController): Promise<void> {

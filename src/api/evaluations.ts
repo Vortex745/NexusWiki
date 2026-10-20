@@ -33,6 +33,8 @@ import { EvalDatasetValidationError } from "../evaluation/dataset"
 import { EVAL_TASK_TERMINAL_STAGES } from "../evaluation/contracts"
 import type { EvalAssistantSnapshot } from "../evaluation/contracts"
 import { builtinEvalAssistantSnapshot } from "../evaluation/assistant_snapshots"
+import { taskTraceFromScope } from "../tracing/contract"
+import { requestScope } from "../tracing/express"
 
 function resolveContext(res: Response): AccessContext {
   return (res.locals.accessContext as AccessContext | undefined) ?? singleTenantAccessContext()
@@ -96,7 +98,10 @@ export function createEvaluationsRouter(
             ? { assistant: assistantResolution.assistant }
             : {}),
         },
-        { tenantId: ctx.tenantId, subjectId: ctx.subjectId }
+        { tenantId: ctx.tenantId, subjectId: ctx.subjectId },
+        // LO-17: the in-process task explicitly carries this request's
+        // handoff; it never relies on a global after the response returns.
+        taskTraceFromScope(requestScope(res))
       )
       // 202: accepted and running in the background — the client polls.
       res.status(202).json(summary)
@@ -219,7 +224,8 @@ export function createEvaluationsRouter(
         { tenantId: ctx.tenantId, subjectId: ctx.subjectId },
         {
           ...("datasetId" in body ? { datasetId: body.datasetId } : {}),
-        }
+        },
+        taskTraceFromScope(requestScope(res))
       )
       // 202: both tasks are running in the background — the client polls them
       // and then asks for the comparison.
