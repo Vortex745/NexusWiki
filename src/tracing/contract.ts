@@ -31,6 +31,8 @@ export interface OperationEndOptions {
 export interface OperationScope {
   /** Sampled trace id, or undefined when this operation is not traced. */
   readonly traceId: string | undefined
+  /** Sampled span id of THIS operation (distinct from trace id, LG-05-AC03). */
+  readonly spanId: string | undefined
   readonly sampled: boolean
   setAttributes(attributes: TracingAttributes): void
   /** Child step of this operation. Never starts a new root. */
@@ -86,6 +88,7 @@ export interface TracingRuntime {
 
 const NOOP_SCOPE: OperationScope = {
   traceId: undefined,
+  spanId: undefined,
   sampled: false,
   setAttributes: () => undefined,
   startChild: () => NOOP_SCOPE,

@@ -24,6 +24,7 @@ import { startServer } from "./api"
 import { startWorker } from "./api/worker"
 import { closeDriver } from "./graph"
 import { createShutdownController, installSignalHandlers } from "./shutdown"
+import { createTracingRuntime } from "./tracing/composition"
 import { createMastraRuntimeBoundary } from "./mastra/runtime_boundary"
 import { createSharedAnswerEntry } from "./mastra/shared_answer_entry"
 import { createSessionAttachmentService } from "./attachments/session_attachment_service"
@@ -164,9 +165,25 @@ async function main() {
     db: answerRuntime.processRuntime.db,
   })
 
+  // LO-05/LO-06: one tracing runtime for the whole process. Built here (before
+  // the Answer entry) so the entry knows whether OTel has taken over the run
+  // and the legacy Langfuse trace出口 must stay silent (LG-05-AC10).
+  const { runtime: tracingRuntime, config: tracingConfig } = createTracingRuntime(process.env)
+  if (tracingConfig.enabled) {
+    console.log(
+      `[kefu-RAG] tracing enabled (sampleRate=${tracingConfig.sampleRate}) → OTLP ${process.env.LANGFUSE_BASE_URL}`,
+    )
+  } else {
+    console.log(`[kefu-RAG] tracing off (${tracingConfig.reason})`)
+  }
+
   const sharedAnswerEntry = await createSharedAnswerEntry({
     config: cfg,
     answerRuntime,
+    // LG-05-AC10: with the HTTP root owning the run, the legacy exporter must
+    // not publish a second trace. SQLite consumption (traceObserver) is
+    // untouched either way.
+    legacyLangfuseObserver: !tracingConfig.enabled,
     // Whole-run deadline budget. ANSWER_RUN_BUDGET_MS existed as dead config
     // for normal chat: the entry's injectable seam was never fed from the
     // composition root, so every run kept the 30s DEFAULT_RUN_BUDGET_MS and
@@ -202,7 +219,6 @@ async function main() {
     processRuntime,
     evaluationService,
     logger: runtimeLogger,
-    tracing: tracingRuntime,
   } = await startServer(
     3001,
     mastraBoundary.eventsSource,
@@ -219,6 +235,8 @@ async function main() {
       attachments,
       // Ticket 35 (TOOL-01B): the MCP capability invocation seam.
       ...(sharedAnswerEntry.mcp ? { mcpCapabilities: sharedAnswerEntry.mcp } : {}),
+      // LO-06: the single tracing runtime built above.
+      tracing: tracingRuntime,
     }
   )
   const worker = startWorker({

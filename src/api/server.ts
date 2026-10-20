@@ -213,7 +213,12 @@ export function createApp(options: {
   // surfaces (assets, status/health, polling reads, auth/config reads, plain
   // collection GETs) still get an id but produce no terminal record.
   if (options.logger) {
-    app.use(createHttpLogLifecycle(options.logger, options.httpLog ?? {}))
+    app.use(
+      createHttpLogLifecycle(options.logger, {
+        ...(options.httpLog ?? {}),
+        ...(options.tracing ? { tracing: options.tracing } : {}),
+      }),
+    )
   }
   app.get("/api/assets/:assetPath", async (req, res, next) => {
     const assetPath = String(req.params.assetPath)

@@ -99,9 +99,11 @@ test("LO-05-AC02: a real knowledge-base write produces a root span and a correla
     assert.match(String(traceId), /^[0-9a-f]{32}$/)
 
     await runtime.flush(1_000)
-    assert.equal(exporter.spans.length, 1)
-    const span = exporter.spans[0]
-    assert.equal(span.name, "knowledge_base.create")
+    // LO-06 later adds an HTTP root above this step; this ticket asserts the
+    // business operation itself, so filter by name instead of counting.
+    const business = exporter.spans.filter((entry) => entry.name === "knowledge_base.create")
+    assert.equal(business.length, 1)
+    const span = business[0]
     assert.equal(span.spanContext().traceId, traceId)
     assert.equal(span.status.code, 1, "the operation is marked OK")
     const attributes = span.attributes as Record<string, unknown>
@@ -126,8 +128,9 @@ test("LO-05-AC02: a rejected operation ends its span as an error with a short me
     assert.equal(response.status, 400)
     await runtime.flush(1_000)
 
-    assert.equal(exporter.spans.length, 1)
-    const span = exporter.spans[0]
+    const business = exporter.spans.filter((entry) => entry.name === "knowledge_base.create")
+    assert.equal(business.length, 1)
+    const span = business[0]
     assert.equal(span.status.code, 2, "ERROR status")
     assert.match(String(span.status.message), /non-empty string/)
     await runtime.shutdown(500)
@@ -177,7 +180,7 @@ test("LO-05-AC05/AC11: an unreachable trace backend cannot change the business r
     await runtime.flush(500)
     const diagnostics = runtime.diagnostics()
     assert.ok(diagnostics.exportErrors >= 1, "the failure is visible locally")
-    assert.equal(diagnostics.received, 1)
+    assert.ok(diagnostics.received >= 1, "the request and its step were both attempted")
     await runtime.shutdown(500)
   } finally {
     server.close()

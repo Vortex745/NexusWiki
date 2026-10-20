@@ -8,6 +8,7 @@ import {
 } from "../knowledge/knowledge_base_service"
 import type { RetirementService } from "../knowledge/retirement"
 import { NoopTracingRuntime, type TracingRuntime } from "../tracing/contract"
+import { requestOperation } from "../tracing/express"
 import { validateReason } from "./source_governance"
 
 /**
@@ -93,7 +94,9 @@ export function createKnowledgeBaseRouter(options: {
     // Nothing here knows about a vendor: when tracing is off this is a no-op,
     // and the response is byte-identical (only the optional x-trace-id header
     // differs, and only when the root was actually sampled).
-    const scope = tracing.startOperation("knowledge_base.create", {
+    // `requestOperation` makes this a CHILD of the HTTP root when one exists,
+    // so the request's sampling decision carries into the business step.
+    const scope = requestOperation(tracing, res, "knowledge_base.create", {
       "knowledge_base.name_length": body.name.length,
       "knowledge_base.has_description": body.description !== undefined,
     })

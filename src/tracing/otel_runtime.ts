@@ -89,6 +89,12 @@ class OtelOperationScope implements OperationScope {
     return traceId.length > 0 ? traceId : undefined
   }
 
+  get spanId(): string | undefined {
+    if (!this.sampled) return undefined
+    const spanId = this.span.spanContext().spanId
+    return spanId.length > 0 ? spanId : undefined
+  }
+
   get sampled(): boolean {
     return (this.span.spanContext().traceFlags & 0x1) === 0x1
   }

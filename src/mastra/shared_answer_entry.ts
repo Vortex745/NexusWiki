@@ -42,6 +42,7 @@ import { SqliteHandoffStore } from "../answer/handoff_store"
 import {
   langfuseObserver,
   NoopLangfuseExporter,
+  type LangfuseExporter,
 } from "../answer/langfuse_exporter"
 import type { SearchOperations } from "../retrieval/search/searcher"
 import type { Reranker } from "../retrieval/search/dedicated_reranker"
@@ -108,6 +109,14 @@ export interface SharedAnswerEntryOptions {
   traceObserver?: AnswerRunObserver
   /** Soft observers appended AFTER the (optional) Langfuse observer. */
   observers?: AnswerRunObserver[]
+  /**
+   * LO-06 (LG-05-AC10): once OTel takes over the Answer execution through the
+   * HTTP root, the legacy Langfuse exporter must not publish a second trace or
+   * synthesize Generations for the same run. Set to false when tracing is
+   * enabled — SQLite consumption (`traceObserver`) is unaffected, so product
+   * events keep being recorded exactly as before.
+   */
+  legacyLangfuseObserver?: boolean
   /**
    * Direct-route LLM stream seam. Default: the production
    * `createDirectReplyStream` agent (model from config).
@@ -206,6 +215,22 @@ function resourceBudgetFromConfig(
 }
 
 /**
+ * LO-06 (LG-05-AC10): decide whether the legacy Langfuse observer may publish
+ * for this composition. False means "OTel owns the run" — the entry then keeps
+ * only the SQLite trace observer, so a run is never recorded twice and no
+ * synthetic Generation is produced alongside the OTel one.
+ *
+ * Exported pure so the cutover can be tested without building a full entry.
+ */
+export function shouldAttachLangfuseObserver(
+  option: boolean | undefined,
+  exporter: LangfuseExporter,
+): boolean {
+  const enabled = option ?? true
+  return enabled && !(exporter instanceof NoopLangfuseExporter)
+}
+
+/**
  * Create the shared Answer run entry: resolve what the caller injected,
  * connect the retrieval stack's searcher factory to the route stack's runner,
  * and wrap that runner in the observer, budget, cancellation and model-
@@ -265,7 +290,7 @@ export async function createSharedAnswerEntry(
   // Observer fanout (T06 §5.3 order): traceObserver (hard) first, then the
   // Langfuse observer when Real, then any injected observers (evaluation).
   const observers: AnswerRunObserver[] = []
-  if (!(answerRuntime.langfuseExporter instanceof NoopLangfuseExporter)) {
+  if (shouldAttachLangfuseObserver(options.legacyLangfuseObserver, answerRuntime.langfuseExporter)) {
     observers.push(langfuseObserver(answerRuntime.langfuseExporter))
   }
   if (options.observers) {

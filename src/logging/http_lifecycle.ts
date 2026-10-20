@@ -2,6 +2,8 @@ import { AsyncLocalStorage } from "node:async_hooks"
 import { randomUUID } from "node:crypto"
 import type { NextFunction, Request, Response } from "express"
 import type { Logger, LogFields, LogLevel } from "./logger"
+import type { TracingRuntime } from "../tracing/contract"
+import { attachRequestScope } from "../tracing/express"
 
 /**
  * LO-04: HTTP request logging — one request_id per real request, exactly one
@@ -141,6 +143,13 @@ export function decideHttpLog(
 export interface HttpLogLifecycleOptions {
   policy?: HttpLogPolicy
   /**
+   * LO-06: request-level tracing. When present and enabled, every whitelisted
+   * request opens exactly one root span, exposes it to handlers via
+   * `res.locals.tracingScope`, and ends it exactly once with the same terminal
+   * classification as the log record.
+   */
+  tracing?: TracingRuntime
+  /**
    * Optional idle deadline for the request socket. Off by default — enabling
    * it changes connection behaviour, so it is opt-in per deployment. When
    * set, an idle request is classified as `timeout` exactly once.
@@ -185,15 +194,47 @@ export function createHttpLogLifecycle(logger: Logger, options: HttpLogLifecycle
       path,
       released: false,
     }
+    // LO-06: the HTTP root span. It is a root by construction (no inbound
+    // traceparent is ever trusted), sampled once by the runtime, and exposed
+    // to handlers through `res.locals` so nested business steps become
+    // children instead of opening a second root.
+    const operation =
+      decision.logged && options.tracing?.enabled
+        ? options.tracing.startOperation(`http.${req.method.toLowerCase()}`, {
+            "http.request.method": req.method,
+            "http.route": path,
+            "http.request_id": requestId,
+          })
+        : undefined
+    if (operation) {
+      attachRequestScope(res, operation)
+      if (operation.sampled && operation.traceId) {
+        res.setHeader("x-trace-id", operation.traceId)
+      }
+    }
     let finalized = false
 
     const finalize = (reason: TerminalReason): void => {
       if (finalized) return
       finalized = true
       context.released = true
-      if (!decision.logged) return
       const durationMs = Number(process.hrtime.bigint() - startedAt) / 1e6
       const outcome = outcomeFor(reason, res)
+      // Exactly one scope end per request (LG-05-AC07): the same guard that
+      // makes the log record unique also closes the span once.
+      if (operation) {
+        operation.end({
+          outcome: outcome === "error" || outcome === "timeout" ? "error" : "ok",
+          ...(outcome === "error" || outcome === "timeout" ? { message: outcome } : {}),
+          attributes: {
+            "http.status_code": res.headersSent ? res.statusCode : 0,
+            "http.outcome": outcome,
+            "http.terminal_reason": reason,
+            "http.duration_ms": Math.round(durationMs * 1000) / 1000,
+          },
+        })
+      }
+      if (!decision.logged) return
       const fields: LogFields = {
         operation: decision.operation,
         requestId,
@@ -203,6 +244,8 @@ export function createHttpLogLifecycle(logger: Logger, options: HttpLogLifecycle
         outcome,
         terminalReason: reason,
         durationMs: Math.round(durationMs * 1000) / 1000,
+        ...(operation?.traceId ? { traceId: operation.traceId } : {}),
+        ...(operation?.spanId ? { spanId: operation.spanId } : {}),
       }
       // Fire-and-forget: a slow stdout must not keep the socket open. The sink
       // still applies backpressure to whoever awaits; the request path does
