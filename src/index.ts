@@ -26,6 +26,7 @@ import { closeDriver } from "./graph"
 import { createShutdownController, installSignalHandlers } from "./shutdown"
 import { createTracingRuntime } from "./tracing/composition"
 import { configureIngestionTracing } from "./ingestion/storage"
+import { configureDecisionTracing } from "./runtime/decision_call"
 import { createMastraRuntimeBoundary } from "./mastra/runtime_boundary"
 import { createSharedAnswerEntry } from "./mastra/shared_answer_entry"
 import { createSessionAttachmentService } from "./attachments/session_attachment_service"
@@ -112,6 +113,7 @@ async function main() {
   // LO-11: the ingestion store builds its own embedding client; hand it the
   // same runtime so ingestion embeddings are observed too.
   configureIngestionTracing(tracingRuntime)
+  configureDecisionTracing(tracingRuntime)
   console.log(
     tracingConfig.enabled
       ? `[kefu-RAG] tracing enabled (sampleRate=${tracingConfig.sampleRate}) → OTLP ${process.env.LANGFUSE_BASE_URL}`

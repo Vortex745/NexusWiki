@@ -1,4 +1,12 @@
 import type { DecisionCallExecutor } from "../types/agent"
+import type { ModelCallScope, TracingRuntime } from "../tracing/contract"
+
+let decisionTracing: TracingRuntime | undefined
+
+/** LO-10: composition hook for the decision (CLEF) provider. */
+export function configureDecisionTracing(runtime: TracingRuntime | undefined): void {
+  decisionTracing = runtime
+}
 import { performance } from "node:perf_hooks"
 import { tagClefErrorCode } from "../clef/protocol_errors"
 import { getCurrentRunContext, isRunBudgetError, recordModelUsage, reserveModelCall } from "./run_context"
@@ -14,6 +22,21 @@ export const executeDecisionCall: DecisionCallExecutor = async (modelId, operati
     throw tagClefErrorCode(new DOMException("run deadline exceeded", "AbortError"), "run_deadline_exceeded")
   }
   const reservation = ctx ? reserveModelCall(ctx, { kind: "decision", model: modelId }) : undefined
+  // LO-10: one real decision call = one observation. CLEF is a protocol
+  // envelope, not chat messages, so the input records the operation identity
+  // and the model, never a fabricated prompt.
+  let observation: ModelCallScope | undefined
+  try {
+    observation = decisionTracing?.observeModel({
+      name: "decision.clef",
+      model: modelId,
+      provider: "clef",
+      input: { operation: "clef-decision", model: modelId },
+      stream: false,
+    })
+  } catch {
+    observation = undefined
+  }
   const controller = new AbortController()
   let timer: ReturnType<typeof setTimeout> | undefined
   let deadlineTimer: ReturnType<typeof setTimeout> | undefined
@@ -76,7 +99,12 @@ export const executeDecisionCall: DecisionCallExecutor = async (modelId, operati
     const result = await Promise.race([work, cancellation])
     checkTimeCeilings()
     if (ctx && reservation) recordModelUsage(ctx, reservation, result.usage)
+    observation?.end({ status: "ok", output: { ok: true }, ...(result.usage ? { usage: result.usage } : {}) })
     return result
+  } catch (error) {
+    const cancelled = error instanceof Error && error.name === "AbortError"
+    observation?.end({ status: cancelled ? "cancelled" : "error", message: error instanceof Error ? error.message.slice(0, 200) : "decision failed" })
+    throw error
   } finally {
     if (timer !== undefined) clearTimeout(timer)
     if (deadlineTimer !== undefined) clearTimeout(deadlineTimer)
