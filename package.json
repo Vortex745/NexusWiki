@@ -9,7 +9,7 @@
     "build:web": "vite build",
     "preview:web": "vite preview",
     "typecheck:web": "tsc -p tsconfig.web.json --noEmit",
-    "test": "node --import tsx --test src/**/*.test.ts frontend/src/**/*.test.ts",
+    "test": "node --import tsx --import ./scripts/test-env.ts --test src/**/*.test.ts frontend/src/**/*.test.ts",
     "start": "node dist/index.js",
     "ingest": "tsx src/ingestion/cli.ts",
     "release:verify:local": "node --import tsx scripts/release-verify.ts local ./release-verification-local.json",

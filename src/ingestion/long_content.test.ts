@@ -208,6 +208,11 @@ test("UT-14 真实 provider 受控请求：最大块尺寸无截断、返回维�
     const response = await client.embeddings.create({
       model: config.embeddingModel,
       input: [maxChunkInput, `${maxChunkInput.slice(0, 750)}multilingual tail probe`],
+      // The production ingestion path always asks for float vectors: the SDK's
+      // base64 default gets truncated to 256 dims by some providers (Zhipu
+      // embedding-2), which would fail this assertion for a reason the
+      // pipeline never hits. Same encoding as store.ts / searcher.ts.
+      encoding_format: "float",
     })
     assert.equal(response.data.length, 2, "两条输入各自返回向量（无合并截断）")
     for (const item of response.data) {
@@ -215,8 +220,19 @@ test("UT-14 真实 provider 受控请求：最大块尺寸无截断、返回维�
     }
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error)
-    if (/timeout|fetch failed|network|ECONN|ETIMEDOUT|ENOTFOUND|certificate/i.test(message)) {
-      t.skip(`真实 provider 不可达（${message.slice(0, 80)}）——限制实测单列未验收`)
+    // 环境阻断（凭据 401、代理 403、限流 429、5xx）与本文件"如实单列"约定同
+    // 口径：跳过。4xx 语义拒绝（400/404/422）说明 provider 拒绝了受控输入
+    // ——那正是本测试要证伪的行为，必须保持红。
+    const status = (error as { status?: number }).status
+    const envBlocked =
+      typeof status === "number" &&
+      (status === 401 || status === 403 || status === 429 || status >= 500)
+    if (
+      /timeout|fetch failed|network|ECONN|ETIMEDOUT|ENOTFOUND|certificate/i.test(message) ||
+      envBlocked
+    ) {
+      const prefix = typeof status === "number" ? `HTTP ${status}: ` : ""
+      t.skip(`真实 provider 不可达（${prefix}${message.slice(0, 80)}）——限制实测单列未验收`)
       return
     }
     throw error

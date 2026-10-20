@@ -179,6 +179,15 @@ npm run preview:web            # Preview the built frontend
 npm test                       # Full test suite (node:test + tsx)
 node --import tsx --test <file># Focused test file
 
+# `npm test` promotes ONLY the parser commands from .env (scripts/test-env.ts):
+# PYTHON_COMMAND / MARKITDOWN_COMMAND / MARKER_COMMAND / MINERU_COMMAND.
+# Without a Python that has PyMuPDF, the PDF tests fail with
+# "PyMuPDF is required". Point PYTHON_COMMAND at one that does, e.g.
+#   PYTHON_COMMAND=E:/miniconda3/python.exe
+# Credentials and DEMO_OIDC are deliberately NOT loaded from .env in tests.
+# Focused runs need the same promotion:
+#   node --import tsx --import ./scripts/test-env.ts --test <file>
+
 # Release verification (Tickets 03-04)
 npm run release:verify:local   # Run 6 local release gates
 npm run release:verify:production  # Run production release gates
