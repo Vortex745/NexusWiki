@@ -22,7 +22,7 @@
 
 import type { Client as ElasticsearchClient } from "@elastic/elasticsearch"
 import type OpenAI from "openai"
-import type { AppConfig } from "../config"
+import { resolveChunkIndexName, type AppConfig } from "../config"
 import type { DB } from "../ingestion/tracking/db"
 import { PageIndexRepository } from "../ingestion/tracking/page_index_repo"
 import { ActiveVersionRepository } from "../ingestion/tracking/active_version_repo"
@@ -39,6 +39,7 @@ import type { AttachmentSearchOperations, WebEvidenceOperations } from "../types
 import type { FaqEntryService } from "../faq/faq_entry_service"
 import { createFaqEvidenceOperations } from "../faq/faq_evidence"
 import type { AssistantRunSnapshot } from "../assistants/assistant_service"
+import type { TracingRuntime } from "../tracing/contract"
 
 export interface AnswerRetrievalStackContext {
   /** Read for the RERANK_* surface and the embedding profile only. */
@@ -46,6 +47,8 @@ export interface AnswerRetrievalStackContext {
   db: DB
   elasticsearch: ElasticsearchClient
   embeddingClient: OpenAI
+  /** LO-12: the process-wide tracing runtime, so rerank calls are observed. */
+  tracing?: TracingRuntime
   /**
    * Retrieval operations (ES + embedding + PageIndex/ActiveVersion repos).
    * Default: RuntimeSearchOperations on the shared clients.
@@ -95,6 +98,7 @@ export function createAnswerRetrievalStack(
       model: cfg.rerankModel,
       timeoutMs: cfg.rerankTimeoutMs,
       maxDocumentChars: cfg.rerankMaxDocumentChars,
+      ...(context.tracing ? { tracing: context.tracing } : {}),
     })
   const pageIndexRepo = new PageIndexRepository(db)
   const activeVersionRepo = new ActiveVersionRepository(db)
@@ -104,6 +108,7 @@ export function createAnswerRetrievalStack(
       es: elasticsearch,
       embeddingClient,
       embeddingModel: cfg.embeddingModel,
+      indexName: resolveChunkIndexName(undefined, cfg),
       pageIndexRepo,
       activeVersionRepo,
       ...(reranker ? { reranker } : {}),
@@ -128,6 +133,7 @@ export function createAnswerRetrievalStack(
         es: elasticsearch,
         embeddingClient,
         embeddingModel: cfg.embeddingModel,
+        indexName: resolveChunkIndexName(undefined, cfg),
         pageIndexRepo,
         activeVersionRepo,
       })

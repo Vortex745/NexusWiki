@@ -742,6 +742,7 @@ export async function startServer(
     model: config.rerankModel,
     timeoutMs: config.rerankTimeoutMs,
     maxDocumentChars: config.rerankMaxDocumentChars,
+    tracing,
   })
   const evaluationService = new EvaluationService({
     config,
@@ -763,6 +764,7 @@ export async function startServer(
         model,
         timeoutMs: config.rerankTimeoutMs,
         maxDocumentChars: config.rerankMaxDocumentChars,
+        tracing,
       }),
     // Ticket 16 (MODEL-01A): a disabled or unknown profile can never be
     // selected through raw request values, whatever the allowlists say.

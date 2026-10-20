@@ -37,6 +37,7 @@ import {
   type ModelUsage,
 } from "../../runtime/run_context"
 import type { Reranker } from "./interface"
+import type { TracingRuntime } from "../../tracing/contract"
 
 export type { Reranker }
 
@@ -52,6 +53,11 @@ const DEFAULT_TIMEOUT_MS = 30_000
  */
 const DEFAULT_MAX_DOCUMENT_CHARS = 4_000
 
+/** LO-12 content rules: previews, never the whole candidate set or score list. */
+const RERANK_PREVIEW_DOCUMENTS = 8
+const RERANK_PREVIEW_CHARS = 160
+const RERANK_MAX_SCORES = 50
+
 export interface DedicatedRerankerOptions {
   baseUrl: string
   apiKey: string
@@ -60,6 +66,12 @@ export interface DedicatedRerankerOptions {
   maxDocumentChars?: number
   /** Injectable transport for tests; defaults to global fetch. */
   fetchImpl?: typeof fetch
+  /**
+   * LO-12: model observation. One real provider call becomes one Generation
+   * (query in full, top-8 document previews, at most 50 scores, provider
+   * usage). No call → no record.
+   */
+  tracing?: TracingRuntime
 }
 
 /** A rerank failure with the provider's status (never the credential). */
@@ -94,6 +106,7 @@ export class DedicatedReranker implements Reranker {
   private readonly timeoutMs: number
   private readonly maxDocumentChars: number
   private readonly fetchImpl: typeof fetch
+  private readonly tracing: TracingRuntime | undefined
 
   constructor(options: DedicatedRerankerOptions) {
     if (!options.apiKey?.trim()) {
@@ -108,6 +121,7 @@ export class DedicatedReranker implements Reranker {
     this.timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS
     this.maxDocumentChars = options.maxDocumentChars ?? DEFAULT_MAX_DOCUMENT_CHARS
     this.fetchImpl = options.fetchImpl ?? fetch
+    this.tracing = options.tracing
   }
 
   async rerank(
@@ -129,44 +143,80 @@ export class DedicatedReranker implements Reranker {
       ? reserveModelCall(ctx, { kind: "rerank", model: this.model })
       : undefined
 
-    const response = await this.fetchImpl(this.endpoint, {
-      method: "POST",
-      headers: {
-        authorization: `Bearer ${this.apiKey}`,
-        "content-type": "application/json",
-      },
-      body: JSON.stringify({
-        model: this.model,
+    // The observation is created only after the budget reservation: a refusal
+    // means no provider call happened, so no Generation may be recorded.
+    const observation = this.tracing?.observeModel({
+      name: "rerank",
+      model: this.model,
+      provider: "rerank",
+      input: {
         query,
-        documents: results.map((result) =>
-          truncate(result.chunk.content, this.maxDocumentChars)
+        // Full query, bounded previews: the request can carry 60 candidates
+        // and the observation must not become the document store.
+        documents: results.slice(0, RERANK_PREVIEW_DOCUMENTS).map((result) =>
+          truncate(result.chunk.content, RERANK_PREVIEW_CHARS)
         ),
-      }),
-      signal: effectiveSignal,
+        documentCount: results.length,
+      },
+      stream: false,
     })
 
-    if (!response.ok) {
-      const detail = await describeFailureBody(response)
-      throw new DedicatedRerankError(
-        `dedicated rerank failed with HTTP ${response.status}${detail}`,
-        response.status
-      )
-    }
-
-    let body: unknown
     try {
-      body = await response.json()
-    } catch {
-      throw new DedicatedRerankError("malformed rerank response: body is not JSON")
-    }
+      const response = await this.fetchImpl(this.endpoint, {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${this.apiKey}`,
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          model: this.model,
+          query,
+          documents: results.map((result) =>
+            truncate(result.chunk.content, this.maxDocumentChars)
+          ),
+        }),
+        signal: effectiveSignal,
+      })
 
-    const scores = parseRerankScores(body, results.length)
-    if (ctx && reservation) {
-      // Unknown usage stays unknown: with a token/cost budget configured the
-      // budget layer fails closed instead of inventing zeros.
-      recordModelUsage(ctx, reservation, extractRerankUsage(body))
+      if (!response.ok) {
+        const detail = await describeFailureBody(response)
+        throw new DedicatedRerankError(
+          `dedicated rerank failed with HTTP ${response.status}${detail}`,
+          response.status
+        )
+      }
+
+      let body: unknown
+      try {
+        body = await response.json()
+      } catch {
+        throw new DedicatedRerankError("malformed rerank response: body is not JSON")
+      }
+
+      const scores = parseRerankScores(body, results.length)
+      const usage = extractRerankUsage(body)
+      if (ctx && reservation) {
+        // Unknown usage stays unknown: with a token/cost budget configured the
+        // budget layer fails closed instead of inventing zeros.
+        recordModelUsage(ctx, reservation, usage)
+      }
+      observation?.end({
+        status: "ok",
+        output: { scores: scores.slice(0, RERANK_MAX_SCORES) },
+        ...(usage ? { usage } : {}),
+      })
+      return applyRerankOrder(results, scores)
+    } catch (error) {
+      // Abort/timeout is a cancellation, not a provider failure; the caller's
+      // error object is rethrown unchanged either way.
+      const cancelled = error instanceof Error
+        && (error.name === "AbortError" || error.name === "TimeoutError")
+      observation?.end({
+        status: cancelled ? "cancelled" : "error",
+        message: error instanceof Error ? error.message : "rerank failed",
+      })
+      throw error
     }
-    return applyRerankOrder(results, scores)
   }
 }
 
