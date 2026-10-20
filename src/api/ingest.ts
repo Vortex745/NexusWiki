@@ -5,6 +5,8 @@ import { singleTenantAccessContext, type AccessContext } from "../access/context
 import { loadConfig } from "../config"
 import { decodeUtf8HeaderValue } from "./header_encoding"
 import { createIngestionLifecycle } from "../ingestion/pipeline"
+import { taskTraceFromScope, type TaskTraceContext } from "../tracing/contract"
+import { requestScope } from "../tracing/express"
 import { detectTypeConflict } from "../ingestion/admission"
 import { selectParserRoute } from "../ingestion/parser"
 import type { SourceIdentityInput } from "../ingestion/source_identity"
@@ -83,6 +85,16 @@ interface IngestUrlRequestBody {
 }
 
 const router = Router()
+
+/**
+ * LO-13: the request's neutral handoff. Captured HERE, where the request scope
+ * is explicit; the persisted task carries only ids, so the worker never reads
+ * a global or trusts a client header.
+ */
+function submissionTrace(res: Response): TaskTraceContext | undefined {
+  return taskTraceFromScope(requestScope(res))
+}
+
 export const rawIngestRouter = Router()
 
 const RAW_FILE_LIMIT = "20mb"
@@ -443,6 +455,7 @@ rawIngestRouter.post(
     let submission
     try {
       submission = lifecycle.submit({
+        ...(submissionTrace(res) ? { trace: submissionTrace(res) } : {}),
         title: req.get("x-document-title")?.trim() || fileName,
         content: "",
         rawContent: req.body,
@@ -503,6 +516,7 @@ router.post("/ingest", (req: Request, res: Response) => {
         content: body.content,
         source: body.source,
         knowledgeBaseId: resolved.knowledgeBaseId,
+        ...(submissionTrace(res) ? { trace: submissionTrace(res) } : {}),
         ...(catalogMetadata.metadata ? { metadata: catalogMetadata.metadata } : {}),
         ...(versionIntent.intent ? { versionIntent: versionIntent.intent } : {}),
         sourceIdentity: trustedSourceIdentity(res, requestSourceIdentity(body)),
@@ -588,9 +602,23 @@ router.post("/ingest/url", async (req: Request, res: Response) => {
         retryable: true,
       })
     }
+    // Ticket 21: URL imports get the same file-open validation as uploads —
+    // the fetched bytes are judged against their declared name before anything
+    // is persisted, so a fetched masquerade is refused at admission.
+    const typeConflict = detectTypeConflict(fetched.fileName, fetched.buffer)
+    if (typeConflict) {
+      return res.status(415).json({
+        error: {
+          kind: typeConflict.kind,
+          detected: typeConflict.detected,
+          message: typeConflict.message,
+        },
+      })
+    }
     let submission
     try {
       submission = lifecycle.submit({
+        ...(submissionTrace(res) ? { trace: submissionTrace(res) } : {}),
         title: body.title?.trim() || fetched.title || fetched.fileName,
         content: "",
         rawContent: fetched.buffer,
@@ -673,9 +701,22 @@ router.post("/ingest/url", async (req: Request, res: Response) => {
       }
       continue
     }
+    // Ticket 21: a fetched page masquerading as another type is a per-page
+    // admission failure, reported in the batch like any other page failure.
+    const pageTypeConflict = detectTypeConflict(pageFetched.fileName, pageFetched.buffer)
+    if (pageTypeConflict) {
+      submissions.push({
+        url: page.url.toString(),
+        docId: "",
+        status: `type_conflict: ${pageTypeConflict.detected} — ${pageTypeConflict.message}`,
+        retryable: false,
+      })
+      continue
+    }
     let submission
     try {
       submission = lifecycle.submit({
+        ...(submissionTrace(res) ? { trace: submissionTrace(res) } : {}),
         title: pageFetched.title || pageFetched.fileName,
         content: "",
         rawContent: pageFetched.buffer,

@@ -20,6 +20,7 @@ import {
   allowedOperationsFor,
   classifyIngestionError,
   redactedFailureMessage,
+  RETRY_DELAYS_MS,
   type IngestionFailureCategory,
 } from "./error_classification"
 import {
@@ -27,6 +28,11 @@ import {
   sourceIdentityKey,
   type SourceIdentityInput,
 } from "./source_identity"
+import {
+  readTaskTrace,
+  type TaskTraceContext,
+  type TracingRuntime,
+} from "../tracing/contract"
 
 export const INGESTION_STAGE_NAMES = [
   "chunk",
@@ -35,13 +41,22 @@ export const INGESTION_STAGE_NAMES = [
   "storeGraph",
 ] as const
 
-const RETRY_DELAYS_MS = [2_000, 4_000, 8_000] as const
+// RETRY_DELAYS_MS (Ticket 18) now lives in ./error_classification next to the
+// transient classification it serves — one bounded budget for the task runner
+// and the PDF quality gate's per-page Clef requests alike.
 const RUNNING_ABORT_CONTROLLERS = new Map<string, AbortController>()
 
 export type IngestionStageName = (typeof INGESTION_STAGE_NAMES)[number]
 
 export interface StageExecution {
   readonly signal: AbortSignal
+  /**
+   * Ticket 25: the durable execution identity this run was claimed under.
+   * Stage runners present it at the injection boundary so downstream writes
+   * (extraction evidence, Clef calls, OCR) can be fenced against a superseded
+   * execution.
+   */
+  readonly executionId: string
   runStage<T>(
     name: IngestionStageName,
     input: Record<string, unknown>,
@@ -91,6 +106,13 @@ export interface SubmitIngestionInput {
    * "unchanged" no-op) and a brand-new source needs none either.
    */
   versionIntent?: "new_version" | "new_document"
+  /**
+   * LO-13: neutral correlation captured by the caller (the HTTP handler that
+   * owns the request scope). Persisted with the task, so the worker can
+   * continue the same trace after the request is gone. Absent → the task
+   * runs under the root policy.
+   */
+  trace?: TaskTraceContext
 }
 
 export type IngestionSubmission = {
@@ -150,6 +172,15 @@ export interface IngestionFailureRecord {
   allowedOperations: string[]
   message: string
   failedAt: string
+  /** Ticket 17: actionable fix guidance when the failure may be protection-related. */
+  userGuidance?: string
+  /**
+   * Ticket 26: the page-quality audit's own detailed reason codes (verbatim,
+   * e.g. `quality_failed:3` / `service_failure:timeout:5`) when the failure was
+   * a quality rejection — the evidence the frontend keys off to tell a true
+   * quality rejection apart from gate service unavailability. Absent otherwise.
+   */
+  reasonCodes?: string[]
 }
 
 export interface IngestionExecutionResult {
@@ -158,6 +189,8 @@ export interface IngestionExecutionResult {
   rootSpanId: string
   success: boolean
   cancelled?: boolean
+  /** Ticket 25: the run was superseded by a newer execution and wrote nothing. */
+  stale?: boolean
   error?: string
 }
 
@@ -225,6 +258,12 @@ class TrackedStageExecution implements StageExecution {
     private spanRepo: SpanRepo,
     private stageSpanIds: Map<IngestionStageName, string>,
     private now: () => Date,
+    // Ticket 25: the claim fence — every stage advance re-checks ownership so
+    // a superseded execution (cancelled, or re-claimed after a restart)
+    // cannot persist stage results.
+    private taskRepo: TaskRepo,
+    private taskId: number,
+    readonly executionId: string,
     readonly signal: AbortSignal
   ) {}
 
@@ -246,6 +285,15 @@ class TrackedStageExecution implements StageExecution {
     const spanId = this.stageSpanIds.get(name)
     if (!spanId) {
       throw new Error(`Unknown ingestion stage: ${name}`)
+    }
+
+    // Ticket 25: fence before any span or downstream write — cancellation
+    // first (cooperative abort), then execution identity (stale run).
+    this.signal.throwIfAborted()
+    if (!this.taskRepo.owns(this.taskId, this.executionId)) {
+      throw new Error(
+        `Ingestion execution ${this.executionId} no longer owns task ${this.taskId}`
+      )
     }
 
     const startedAt = this.now()
@@ -299,7 +347,9 @@ export class IngestionLifecycle {
     private stageRunner: IngestionStageRunner,
     private now: () => Date = () => new Date(),
     private activationMode: ActivationMode = "auto",
-    private cleanup: Pick<ArtifactCleanupService, "run"> = new ArtifactCleanupService(db)
+    private cleanup: Pick<ArtifactCleanupService, "run"> = new ArtifactCleanupService(db),
+    /** LO-13: the worker-side runtime; absent in submit-only callers. */
+    private tracing?: TracingRuntime
   ) {
     this.docRepo = new DocumentRepo(db)
     this.spanRepo = new SpanRepo(db)
@@ -478,6 +528,9 @@ export class IngestionLifecycle {
           ...(input.fileName ? { fileName: input.fileName } : {}),
           ...(input.mimeType ? { mimeType: input.mimeType } : {}),
           ...(input.parserOverride ? { parserOverride: input.parserOverride } : {}),
+          // LO-13: three primitives, not an SDK object — the payload stays
+          // JSON and an old reader simply ignores the field.
+          ...(input.trace ? { trace: input.trace } : {}),
         },
       })
       this.docRepo.recordOutcome(source.sourceId, docId, "pending")
@@ -712,7 +765,7 @@ export class IngestionLifecycle {
             error.stack ?? null,
             recoveredAt.toISOString()
           )
-        : this.taskRepo.recordFailure(task.id, nextAttemptAt, task.claimedAt)
+        : this.taskRepo.recordFailure(task.id, nextAttemptAt, task.executionId)
       if (!recorded) {
         throw new Error(`Stale ingestion task ${task.id} could not be recovered`)
       }
@@ -735,9 +788,29 @@ export class IngestionLifecycle {
 
     const document = this.docRepo.get(task.docId)
     if (!document) {
-      this.taskRepo.finalize(task.id, "failed", task.claimedAt)
+      this.taskRepo.finalize(task.id, "failed", task.executionId)
       throw new Error(`Document not found: ${task.docId}`)
     }
+
+    // LO-13: continue the submitter's trace when the task carries one. The
+    // scope opens AFTER the claim, so every execution — including each retry,
+    // which mints a new execution_id — owns its own span and no ended scope is
+    // ever reused. A task without the field runs under the root policy.
+    const taskTrace = readTaskTrace(
+      (task.payload as Record<string, unknown> | null | undefined)?.trace
+    )
+    const taskScope = this.tracing?.startOperation(
+      "ingestion.task",
+      {
+        "task.id": task.id,
+        "task.op": task.op,
+        "task.doc_id": task.docId,
+        "task.execution_id": task.executionId ?? "",
+        "task.attempt": task.failCount + 1,
+      },
+      taskTrace,
+    )
+    let taskOutcome: "ok" | "error" | "cancelled" = "error"
 
     const rootSpanId = uuid()
     const rootStartedAt = this.now()
@@ -786,12 +859,14 @@ export class IngestionLifecycle {
         this.spanRepo,
         stageSpanIds,
         this.now,
+        this.taskRepo,
+        task.id,
+        task.executionId ?? "unowned",
         abortController.signal
       )
-      const summary = await this.stageRunner.run(
-        document,
-        execution
-      )
+      // The stage runner's provider calls must land in the task scope.
+      const runStages = () => this.stageRunner.run(document, execution)
+      const summary = taskScope ? await taskScope.runInContext(runStages) : await runStages()
       execution.assertComplete()
       this.db.transaction(() => {
         const finishedAt = this.now()
@@ -805,7 +880,7 @@ export class IngestionLifecycle {
         ) {
           throw new Error("Ingestion root span could not be completed")
         }
-        if (!this.taskRepo.finalize(task.id, "completed", task.claimedAt)) {
+        if (!this.taskRepo.finalize(task.id, "completed", task.executionId)) {
           throw new Error(`Ingestion task ${task.id} could not be completed`)
         }
         this.docRepo.updateStatus(task.docId, "completed")
@@ -844,8 +919,26 @@ export class IngestionLifecycle {
           }
         }
       })()
+      taskOutcome = "ok"
       return { taskId: task.id, docId: task.docId, rootSpanId, success: true }
     } catch (error) {
+      // Ticket 25: a superseded execution (its identity was re-minted by a
+      // restart recovery or a fence check tripped) must not record failures,
+      // dead-letter, or touch document metadata — the execution that now owns
+      // the task owns all writes. Cancelled tasks keep the existing path.
+      const ownershipLost =
+        task.executionId !== null && !this.taskRepo.owns(task.id, task.executionId)
+      const isCancelled = this.taskRepo.getById(task.id)?.status === "cancelled"
+      if (ownershipLost && !isCancelled) {
+        return {
+          taskId: task.id,
+          docId: task.docId,
+          rootSpanId,
+          success: false,
+          stale: true,
+          error: "superseded by a newer execution",
+        }
+      }
       // Ticket UT-07/UT-08: classify before deciding whether the failure may
       // retry. Capability-missing and permanent-input errors terminate
       // immediately; only evidence-backed transient errors enter the bounded
@@ -874,7 +967,7 @@ export class IngestionLifecycle {
               errorStack,
             finishedAt.toISOString()
           )
-          : this.taskRepo.recordFailure(task.id, nextAttemptAt, task.claimedAt)
+          : this.taskRepo.recordFailure(task.id, nextAttemptAt, task.executionId)
         if (!recorded) {
           if (this.taskRepo.getById(task.id)?.status === "cancelled") return true
           throw new Error(`Ingestion task ${task.id} failure could not be recorded`)
@@ -902,12 +995,20 @@ export class IngestionLifecycle {
               allowedOperations: allowedOperationsFor(classification.category),
               message: redactedFailureMessage(error),
               failedAt: finishedAt.toISOString(),
+              // Ticket 17: actionable fix guidance when the failure may be
+              // protection-related (e.g. a PDF that will not open or decode).
+              ...(classification.userGuidance ? { userGuidance: classification.userGuidance } : {}),
+              // Ticket 26: the audit's detailed reason codes ride with the
+              // record so the frontend can render page-level evidence-backed
+              // reasons instead of the coarse error class.
+              ...(classification.reasonCodes?.length ? { reasonCodes: classification.reasonCodes } : {}),
             },
           },
         })
         return false
       })()
       if (cancellationWon) {
+        taskOutcome = "cancelled"
         return {
           taskId: task.id,
           docId: task.docId,
@@ -925,6 +1026,13 @@ export class IngestionLifecycle {
         error: message,
       }
     } finally {
+      // Exactly one end per execution, on success, failure, cancellation and
+      // ownership loss alike (LG-06-AC07).
+      taskScope?.end(
+        taskOutcome === "ok"
+          ? { outcome: "ok" }
+          : { outcome: "error", message: taskOutcome }
+      )
       if (RUNNING_ABORT_CONTROLLERS.get(task.docId) === abortController) {
         RUNNING_ABORT_CONTROLLERS.delete(task.docId)
       }
@@ -935,22 +1043,28 @@ export class IngestionLifecycle {
     const document = this.docRepo.get(task.docId)
     if (!isCleanupOperation(task.op) || !document ||
       this.docRepo.getSourceLifecycleState(document.sourceId) !== "retired") {
-      this.taskRepo.finalize(task.id, "failed", task.claimedAt)
+      this.taskRepo.finalize(task.id, "failed", task.executionId)
       return { taskId: task.id, docId: task.docId, rootSpanId: "", success: false,
         error: `Unsafe or unsupported cleanup operation: ${task.op}` }
     }
     try {
       await this.cleanup.run(task.op, document)
-      if (!this.taskRepo.finalize(task.id, "completed", task.claimedAt)) {
+      if (!this.taskRepo.finalize(task.id, "completed", task.executionId)) {
         throw new Error("cleanup task claim expired")
       }
       return { taskId: task.id, docId: task.docId, rootSpanId: "", success: true }
     } catch (error) {
+      // Ticket 25: a superseded execution must not record a cleanup failure
+      // against the run that now owns the task.
+      if (task.executionId !== null && !this.taskRepo.owns(task.id, task.executionId)) {
+        return { taskId: task.id, docId: task.docId, rootSpanId: "", success: false,
+          stale: true, error: "superseded by a newer execution" }
+      }
       const message = error instanceof Error ? error.message : String(error)
       const delay = RETRY_DELAYS_MS[task.failCount]
       const nextAttemptAt = delay === undefined ? null
         : new Date(this.now().getTime() + delay).toISOString()
-      this.taskRepo.recordFailure(task.id, nextAttemptAt, task.claimedAt)
+      this.taskRepo.recordFailure(task.id, nextAttemptAt, task.executionId)
       return { taskId: task.id, docId: task.docId, rootSpanId: "", success: false,
         error: message }
     }

@@ -247,6 +247,9 @@ async function main() {
     db: processRuntime.db,
     wikiChatClient: processRuntime.chatClient,
     wikiElasticsearch: processRuntime.elasticsearch,
+    // LO-13: the worker executes persistent tasks under the same runtime, so a
+    // submitted task continues its trace instead of opening a second one.
+    tracing: tracingRuntime,
   })
 
   // Ticket 08 P6 (spec §7 L1535): conversation GC — scheduled job that purges

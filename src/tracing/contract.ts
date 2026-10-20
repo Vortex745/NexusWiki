@@ -137,13 +137,19 @@ export interface TracingRuntime {
    * Start a root operation. Returns an unsampled no-op scope when tracing is
    * disabled, the roll dice says no, or the runtime is shutting down. Never
    * throws and never blocks on I/O.
+   *
+   * LO-13: `parent` is a NEUTRAL task handoff — ids captured when the work was
+   * submitted, possibly by a different process. A sampled parent continues the
+   * same trace; an unsampled parent stays unsampled (no re-sampling) and
+   * `undefined` falls through to the root policy.
    */
-  startOperation(name: string, attributes?: TracingAttributes): OperationScope
+  startOperation(name: string, attributes?: TracingAttributes, parent?: TaskTraceContext): OperationScope
   /** Run `fn` inside a root operation, ending it regardless of the result. */
   runOperation<T>(
     name: string,
     attributes: TracingAttributes | undefined,
     fn: (scope: OperationScope) => Promise<T>,
+    parent?: TaskTraceContext,
   ): Promise<T>
   /**
    * Observe one real provider call. Returns undefined when nothing should be
@@ -155,6 +161,54 @@ export interface TracingRuntime {
   flush(timeoutMs?: number): Promise<boolean>
   shutdown(timeoutMs?: number): Promise<ShutdownResult>
   diagnostics(): TracingDiagnostics
+}
+
+/**
+ * LO-13: the neutral correlation a persistent task carries.
+ *
+ * Deliberately NOT an OTel object: it is three primitives that JSON can hold,
+ * so a task row never serialises SDK state and a worker never depends on a
+ * vendor type. `sampled: false` is information, not absence — a task
+ * submitted under an unsampled trace must stay unsampled when it executes,
+ * instead of being re-sampled into a new decision (LG-06-AC06).
+ */
+export interface TaskTraceContext {
+  traceId: string
+  spanId: string
+  sampled: boolean
+}
+
+const TRACE_ID_PATTERN = /^[0-9a-f]{32}$/
+const SPAN_ID_PATTERN = /^[0-9a-f]{16}$/
+
+/** Capture the current scope as a task handoff, if it has one to give. */
+export function taskTraceFromScope(scope: OperationScope | undefined): TaskTraceContext | undefined {
+  if (!scope) return undefined
+  if (!scope.sampled) return { traceId: "", spanId: "", sampled: false }
+  if (!scope.traceId || !scope.spanId) return undefined
+  return { traceId: scope.traceId, spanId: scope.spanId, sampled: true }
+}
+
+/**
+ * Read a handoff from a persisted task payload.
+ *
+ * The payload is caller-influenced storage history, so every field is
+ * validated: malformed ids, a non-boolean flag or an unexpected shape all
+ * return `undefined`, which makes the task run under the root policy instead
+ * of being steered by junk. Returned ids are only ever used as a tracing
+ * parent — never for identity, authorization or budget (LG-06-AC08).
+ */
+export function readTaskTrace(value: unknown): TaskTraceContext | undefined {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) return undefined
+  const candidate = value as Record<string, unknown>
+  const sampled = candidate.sampled
+  if (typeof sampled !== "boolean") return undefined
+  const traceId = candidate.traceId
+  const spanId = candidate.spanId
+  if (typeof traceId !== "string" || typeof spanId !== "string") return undefined
+  if (!sampled) return { traceId: "", spanId: "", sampled: false }
+  if (!TRACE_ID_PATTERN.test(traceId) || !SPAN_ID_PATTERN.test(spanId)) return undefined
+  return { traceId, spanId, sampled: true }
 }
 
 const NOOP_SCOPE: OperationScope = {

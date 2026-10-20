@@ -19,12 +19,13 @@ import {
   BuiltinPdfParser,
   DirectTextParser,
   MarkItDownParser,
-  MarkerParser,
-  MinerUParser,
+  OcrApiParser,
   selectParserRoute,
   type Parser,
   type ParserRouteInfo,
 } from "./parser"
+import { BuiltinPdfTextLayerAbsentError } from "./parser/builtin_pdf"
+import { ocrApiParserConfigVersion } from "./parser/ocr_api"
 import {
   createIngestionStore,
   IngestionStoreImpl,
@@ -35,7 +36,18 @@ import { findOversizedChunks, resolveEmbeddingLimits } from "./limits"
 import { produceContentProof, manifestDigest } from "./content_proof"
 import { verifyIndexEntries } from "./index_verification"
 import { ACTIVATION_EVIDENCE_SCHEMA_VERSION } from "./activation_gate"
+import type { TracingRuntime } from "../tracing/contract"
+import {
+  PdfQualityGateUnavailableError,
+  PdfQualityRejectionError,
+  decidePdfQualityWorkflow,
+  pdfQualityDiagnostics,
+  type PdfQualityDiagnostics,
+  type PdfQualityGate,
+  type PdfQualityGateResult,
+} from "./quality/pdf_ocr_fallback_flag"
 import { buildPageIndex } from "./page_index_builder"
+import { createProductionPdfQualityGate } from "./page_evidence/production_gate"
 import type { DB } from "./tracking/db"
 import { DocumentRepo } from "./tracking/doc_repo"
 import { ExpectedChunkRepository } from "./tracking/expected_chunk_repo"
@@ -69,18 +81,13 @@ interface ChunkStageResult {
   parserConfigVersion?: string | null
   /** 解码/结构层的待校验理由码（UT-10 decode + UT-12 risks）。 */
   reviewReasons?: string[]
+  /** Ticket 04 (PDF quality): effective switch state + gate outcome for task diagnostics. */
+  pdfQuality?: PdfQualityDiagnostics
 }
 
 interface ChunkStoreStageResult {
   chunks: Chunk[]
   metrics: ChunkStoreMetrics | null
-}
-
-function isParserUnavailableError(error: unknown): boolean {
-  // Every CLI-backed parser wraps a missing executable with this phrase; it
-  // is the only failure mode that justifies trying the next route candidate.
-  const message = error instanceof Error ? error.message : String(error)
-  return message.includes("executable is unavailable")
 }
 
 function configuredParser(type: ParserType): Parser {
@@ -97,23 +104,17 @@ function configuredParser(type: ParserType): Parser {
       outputLimitBytes: config.parserOutputLimitBytes ?? 20 * 1024 * 1024,
     })
   }
-  if (type === "marker") {
-    return new MarkerParser({
-      command: config.markerCommand ?? "marker_single",
+  if (type === "ocr-api") {
+    return new OcrApiParser({
+      accessKeyId: config.ocrAccessKeyId ?? "",
+      secretAccessKey: config.ocrSecretAccessKey ?? "",
+      sessionToken: config.ocrSessionToken,
       timeoutMs: config.parserTimeoutMs ?? 120_000,
       inputLimitBytes: config.parserInputLimitBytes ?? 20 * 1024 * 1024,
       outputLimitBytes: config.parserOutputLimitBytes ?? 20 * 1024 * 1024,
     })
   }
-  if (type === "mineru") {
-    return new MinerUParser({
-      command: config.mineruCommand ?? "mineru",
-      timeoutMs: config.parserTimeoutMs ?? 120_000,
-      inputLimitBytes: config.parserInputLimitBytes ?? 20 * 1024 * 1024,
-      outputLimitBytes: config.parserOutputLimitBytes ?? 20 * 1024 * 1024,
-      assetRoot: config.imageAssetPath,
-    })
-  }
+  if (type !== "markitdown") throw new Error(`Unsupported production parser: ${type}`)
   return new MarkItDownParser({
     command: config.markitdownCommand ?? "markitdown",
     timeoutMs: config.parserTimeoutMs ?? 120_000,
@@ -138,17 +139,22 @@ function parserConfigFingerprint(type: ParserType): string {
   } catch {
     config = {} as ReturnType<typeof loadConfig>
   }
+  if (type === "ocr-api") {
+    // Ticket 24: one shared fingerprint source with the quality gate's OCR
+    // fallback seam (same key order, same digest).
+    return ocrApiParserConfigVersion({
+      timeoutMs: config.parserTimeoutMs ?? 120_000,
+      inputLimitBytes: config.parserInputLimitBytes ?? 20 * 1024 * 1024,
+      outputLimitBytes: config.parserOutputLimitBytes ?? 20 * 1024 * 1024,
+    })
+  }
   // UT-10: direct-txt decodes in-process — no command participates.
   const command =
     type === "direct-txt"
       ? null
       : type === "builtin-pdf"
         ? (config.pythonCommand ?? "python")
-        : type === "marker"
-          ? (config.markerCommand ?? "marker_single")
-          : type === "mineru"
-            ? (config.mineruCommand ?? "mineru")
-            : (config.markitdownCommand ?? "markitdown")
+        : (config.markitdownCommand ?? "markitdown")
   return createHash("sha256")
     .update(
       JSON.stringify({
@@ -201,16 +207,38 @@ function recordParserMetadata(
   })
 }
 
+/**
+ * Ticket 04 (PDF quality): the optional boundary of the PDF OCR-fallback +
+ * page-quality-gate workflow.
+ *
+ * - `qualityGate` is the page-audit seam. Tickets 07/08/12 implement it; the
+ *   pipeline only ever asks it to audit an extracted PDF candidate. Production
+ *   omits it, which is why an enabled switch without an evaluator fails closed
+ *   instead of importing an unaudited PDF.
+ * - `pdfOcrFallbackEnabled` overrides the server switch for an isolated scope,
+ *   the same way `createIngestionLifecycle({ activationMode })` overrides
+ *   `ACTIVATION_MODE`. Production omits it and reads
+ *   `loadConfig().pdfOcrFallbackEnabled` (env `PDF_OCR_FALLBACK_ENABLED`,
+ *   default off).
+ */
+export interface PipelineStageRunnerOptions {
+  qualityGate?: PdfQualityGate
+  pdfOcrFallbackEnabled?: boolean
+}
+
 export class PipelineStageRunner implements IngestionStageRunner {
   private documentRepo: DocumentRepo
   private store: IngestionStoreImpl | null
   private readonly injectedWikifier?: WikifierLike
+  private readonly qualityGate?: PdfQualityGate
+  private readonly pdfOcrFallbackEnabledOverride?: boolean
 
   constructor(
     private db: DB,
     private resolveParser: ParserResolver = configuredParser,
     store?: IngestionStoreImpl,
-    wikifier?: WikifierLike
+    wikifier?: WikifierLike,
+    options?: PipelineStageRunnerOptions
   ) {
     this.documentRepo = new DocumentRepo(db)
     // T21: accept an injected store for sharing across runs; lazily create one
@@ -218,6 +246,26 @@ export class PipelineStageRunner implements IngestionStageRunner {
     // that never reach storeChunks don't need env vars.
     this.store = store ?? null
     this.injectedWikifier = wikifier
+    this.qualityGate = options?.qualityGate
+    this.pdfOcrFallbackEnabledOverride = options?.pdfOcrFallbackEnabled
+  }
+
+  /**
+   * Ticket 04: the effective PDF OCR-fallback / quality-gate switch for this
+   * run. An explicit scope override wins; otherwise the validated server config
+   * value is used. A restricted environment where config cannot load, or a
+   * config object that never carried the field, resolves to the documented
+   * default (off) — exactly like `parserConfigFingerprint` below. Off is the
+   * only safe fallback: it keeps the existing import path instead of
+   * inventing a gate.
+   */
+  private effectivePdfOcrFallbackEnabled(): boolean {
+    if (this.pdfOcrFallbackEnabledOverride !== undefined) return this.pdfOcrFallbackEnabledOverride
+    try {
+      return loadConfig().pdfOcrFallbackEnabled === true
+    } catch {
+      return false
+    }
   }
 
   private ensureStore(): IngestionStoreImpl {
@@ -243,6 +291,18 @@ export class PipelineStageRunner implements IngestionStageRunner {
     document: Document,
     execution: StageExecution
   ): Promise<Record<string, unknown>> {
+    // Ticket 04 (PDF quality): the independent PDF OCR-fallback + quality-gate
+    // switch, resolved once per run from server config (or an explicit scope
+    // override). OFF (the default) this decision is inert and every candidate
+    // keeps the existing import path; ON, a PDF candidate must clear the page
+    // quality gate below before chunking, vectorization or index writes.
+    // Question-answering Clef routing reads nothing here.
+    const pdfQualityDecision = decidePdfQualityWorkflow({
+      flagEnabled: this.effectivePdfOcrFallbackEnabled(),
+      hasSourceBytes: Boolean(document.rawContent),
+      fileName: document.fileName ?? document.title,
+      mimeType: document.mimeType ?? undefined,
+    })
     let parserRoute: ParserRouteInfo | null = null
     let parserRoutingError: Error | null = null
       if (document.rawContent) {
@@ -272,8 +332,14 @@ export class PipelineStageRunner implements IngestionStageRunner {
               mimeType: document.mimeType,
               parser: parserRoute?.candidates[0] ?? null,
               parserReason: parserRoute?.reason ?? parserRoutingError?.message ?? null,
+              // Ticket 04: the effective switch state is part of the task
+              // diagnostics even when the stage later fails.
+              pdfOcrFallbackEnabled: pdfQualityDecision.flagEnabled,
             }
-          : { contentLength: document.content.length },
+          : {
+              contentLength: document.content.length,
+              pdfOcrFallbackEnabled: pdfQualityDecision.flagEnabled,
+            },
         async (): Promise<ChunkStageResult> => {
           if (!document.rawContent) {
             return {
@@ -281,21 +347,19 @@ export class PipelineStageRunner implements IngestionStageRunner {
               blocks: [],
               parser: null,
               parserReason: null,
+              pdfQuality: pdfQualityDiagnostics(pdfQualityDecision),
             }
           }
           if (parserRoutingError) throw parserRoutingError
           if (!parserRoute) throw new Error("Raw document parser routing did not produce a decision")
 
-          // Walk the route candidates in preference order. A candidate whose
-          // runtime is missing falls back to the next one; every other
-          // failure (timeout, malformed output, content issues) aborts the
-          // import loudly — fallback must never mask a real parse failure.
+          // Each route has one parser. Preserve its failures and cancellation
+          // without switching providers or discarding extraction evidence.
           let blocks: NormalizedBlock[] | null = null
           let rawExtraction: string | null = null
           let usedParser: ParserType | null = null
           let usedParserInstance: Parser | null = null
-          let parserReason = parserRoute.reason
-          const attempts: string[] = []
+          const parserReason = parserRoute.reason
 
           // Ticket UT-19: verified-extraction reuse. A resume/reprocess may
           // reuse the durable extraction ONLY when the recorded evidence is
@@ -338,47 +402,51 @@ export class PipelineStageRunner implements IngestionStageRunner {
             }
           }
 
-          for (const candidate of reusedExtraction ? [] : parserRoute.candidates) {
-            const parser = this.resolveParser(candidate)
-            try {
-              if (typeof parser.parseRaw === "function" && typeof parser.normalizeRaw === "function") {
-                // UT-09 truth seam: capture the RAW extraction (pre-cleaning)
-                // for the durable evidence record; normalization happens on
-                // the exact same output — nothing is parsed twice.
-                rawExtraction = await parser.parseRaw({
-                  content: document.rawContent,
-                  fileName: document.fileName ?? document.title,
-                  mimeType: document.mimeType ?? undefined,
-                  signal: execution.signal,
-                })
+          if (!reusedExtraction) {
+            const parser = this.resolveParser(reuseCandidate)
+            if (typeof parser.parseRaw === "function" && typeof parser.normalizeRaw === "function") {
+              // UT-09 truth seam: capture the RAW extraction (pre-cleaning)
+              // for the durable evidence record; normalization happens on
+              // the exact same output — nothing is parsed twice.
+              rawExtraction = await parser.parseRaw({
+                content: document.rawContent,
+                fileName: document.fileName ?? document.title,
+                mimeType: document.mimeType ?? undefined,
+                signal: execution.signal,
+              })
+              try {
                 blocks = parser.normalizeRaw(rawExtraction, document.id)
-              } else {
-                rawExtraction = null
-                blocks = await parser.parse({
-                  content: document.rawContent,
-                  fileName: document.fileName ?? document.title,
-                  mimeType: document.mimeType ?? undefined,
-                  documentId: document.id,
-                  signal: execution.signal,
-                })
+              } catch (error) {
+                // Ticket 13: a PDF whose extractor read zero text blocks is a
+                // scan, not a broken import — under the quality workflow the
+                // candidate stays alive for the page-quality gate, whose
+                // whole-document OCR fallback (Ticket 12) owns the recovery.
+                // Ungated, the extractor's empty-text guard stays a terminal
+                // input failure (Ticket 17).
+                if (
+                  !(error instanceof BuiltinPdfTextLayerAbsentError) ||
+                  !pdfQualityDecision.gated
+                ) {
+                  throw error
+                }
+                blocks = []
               }
-              usedParser = candidate
-              usedParserInstance = parser
-              if (attempts.length > 0) {
-                parserReason = `${parserRoute.reason}; ${attempts.join("; ")}; fell back to ${candidate}`
-              }
-              break
-            } catch (error) {
-              const failure = error instanceof Error ? error : new Error(String(error))
-              if (parserRoute.authoritative || !isParserUnavailableError(failure)) {
-                throw failure
-              }
-              attempts.push(`${candidate} unavailable`)
+            } else {
+              rawExtraction = null
+              blocks = await parser.parse({
+                content: document.rawContent,
+                fileName: document.fileName ?? document.title,
+                mimeType: document.mimeType ?? undefined,
+                documentId: document.id,
+                signal: execution.signal,
+              })
             }
+            usedParser = reuseCandidate
+            usedParserInstance = parser
           }
           if (!blocks || !usedParser) {
             throw new Error(
-              `No usable parser for ${document.fileName ?? document.title}: tried ${parserRoute.candidates.join(", ")} (${parserRoute.reason}). Install one of the missing runtimes — marker (pip install marker-pdf), mineru, or the repo-bundled builtin parser (python + pymupdf).`
+              `No usable parser for ${document.fileName ?? document.title}: tried ${parserRoute.candidates.join(", ")} (${parserRoute.reason}). Configure the selected parser runtime or the server-side OCR API credentials.`
             )
           }
 
@@ -420,7 +488,7 @@ export class PipelineStageRunner implements IngestionStageRunner {
                   : null
               let warnings = provenance?.warnings ?? []
               let pageCount: number | null = null
-              if (usedParser === "builtin-pdf") {
+              if (usedParser === "builtin-pdf" || usedParser === "ocr-api") {
                 try {
                   const rawJson = JSON.parse(rawExtraction) as {
                     warnings?: unknown
@@ -468,6 +536,30 @@ export class PipelineStageRunner implements IngestionStageRunner {
             }
           }
 
+          // Ticket 04 (PDF quality): the switch's decision point. It sits after
+          // local extraction (and its durable evidence record) and BEFORE
+          // chunking, so an ON switch makes the page-quality gate the entry to
+          // the rest of the import and an OFF switch skips this block entirely.
+          // A rejection is terminal for this candidate; an enabled switch with
+          // no evaluator wired fails closed rather than importing unaudited
+          // pages. The audited candidate stays the local extraction — the OCR
+          // fallback (Ticket 12) replaces it behind this same gate.
+          let pdfQualityGateResult: PdfQualityGateResult | null = null
+          if (pdfQualityDecision.gated) {
+            if (!this.qualityGate) throw new PdfQualityGateUnavailableError()
+            pdfQualityGateResult = await this.qualityGate.audit({
+              docId: document.id,
+              version: document.version,
+              parser: usedParser,
+              blocks,
+              rawExtractionSha256: stageRawExtractionSha256,
+              signal: execution.signal,
+            })
+            if (pdfQualityGateResult.verdict !== "pass") {
+              throw new PdfQualityRejectionError(pdfQualityGateResult.reasonCodes)
+            }
+          }
+
           const parsedDocument: Document = {
             ...document,
             content: blocks.map((block) => block.text).join("\n\n"),
@@ -491,6 +583,7 @@ export class PipelineStageRunner implements IngestionStageRunner {
             rawExtractionSha256: stageRawExtractionSha256,
             parserConfigVersion: parserConfigFingerprint(usedParser),
             reviewReasons: stageReviewReasons,
+            pdfQuality: pdfQualityDiagnostics(pdfQualityDecision, pdfQualityGateResult),
           }
         },
         (result) => ({
@@ -506,6 +599,8 @@ export class PipelineStageRunner implements IngestionStageRunner {
                 provenance: result.blocks[0]?.provenance ?? null,
               }
             : {}),
+          // Ticket 04: effective PDF switch state, stable codes only.
+          ...(result.pdfQuality ?? {}),
         })
       )
       const chunks = chunkResult.chunks
@@ -573,7 +668,15 @@ export class PipelineStageRunner implements IngestionStageRunner {
         manifestEntries,
         parserConfigVersion: chunkResult.parserConfigVersion ?? null,
       })
+      // Ticket 21: merge, never overwrite — the page-quality audit envelope
+      // the gate persisted earlier in this run (and any future producer) must
+      // survive the content/index proof write.
+      const existingEvidence = this.documentRepo.getCandidateEvidence(document.id)
+      const priorEvidence = existingEvidence && typeof existingEvidence === "object" && !Array.isArray(existingEvidence)
+        ? existingEvidence as Record<string, unknown>
+        : {}
       this.documentRepo.setCandidateEvidence(document.id, {
+        ...priorEvidence,
         schemaVersion: ACTIVATION_EVIDENCE_SCHEMA_VERSION,
         contentProof,
         indexProof: null,
@@ -703,12 +806,19 @@ export class PipelineStageRunner implements IngestionStageRunner {
                   searchVisibleCount,
                   manifestSha256: manifestDigest(manifestEntries),
                 })
-          const existingEvidence = this.documentRepo.getCandidateEvidence(document.id) as {
-            contentProof?: unknown
-          } | null
+          // Read-merge-write, same contract as the contentProof write: the
+          // candidate evidence column is shared by independent producers
+          // (ticket 21's pdfQualityAudit, UT-15's contentProof), and no
+          // single proof may whole-column-overwrite the others.
+          const existingEvidence = this.documentRepo.getCandidateEvidence(document.id)
+          const priorEvidence =
+            existingEvidence && typeof existingEvidence === "object" && !Array.isArray(existingEvidence)
+              ? (existingEvidence as Record<string, unknown>)
+              : {}
           this.documentRepo.setCandidateEvidence(document.id, {
+            ...priorEvidence,
             schemaVersion: ACTIVATION_EVIDENCE_SCHEMA_VERSION,
-            contentProof: existingEvidence?.contentProof ?? null,
+            contentProof: priorEvidence.contentProof ?? null,
             indexProof,
           })
         }
@@ -748,6 +858,8 @@ export class PipelineStageRunner implements IngestionStageRunner {
         chunkCount: chunks.length,
         entityCount: wikified.entities.length,
         wikilinkCount: wikified.wikilinks.length,
+        // Ticket 04: the root task record reports the effective switch state.
+        ...(chunkResult.pdfQuality ?? {}),
         ...(chunkResult.parser
           ? {
               parser: chunkResult.parser,
@@ -773,6 +885,8 @@ export interface CreateIngestionLifecycleOptions {
   stageRunner?: IngestionStageRunner
   activationMode?: ActivationMode
   now?: () => Date
+  /** LO-13: the worker-side runtime; absent in submit-only callers. */
+  tracing?: TracingRuntime
 }
 
 export function createIngestionLifecycle(
@@ -795,9 +909,30 @@ export function createIngestionLifecycle(
   const cfg = options?.activationMode
     ? { activationMode: options.activationMode }
     : loadConfig()
+  // Ticket 21: the production page-quality gate, wired when the validated
+  // server switch asks for it (an explicit stageRunner override always wins).
+  // Wiring failures — config unreadable, a part unconstructible — leave the
+  // gate unwired and log; a gated import then fails closed with the
+  // documented PdfQualityGateUnavailableError instead of importing unaudited
+  // pages, and an OFF switch keeps the existing import path untouched.
+  let qualityGate: PdfQualityGate | undefined
+  if (!options?.stageRunner) {
+    try {
+      if (loadConfig().pdfOcrFallbackEnabled === true) {
+        qualityGate = createProductionPdfQualityGate(db, loadConfig())
+      }
+    } catch (error) {
+      console.warn(
+        "[pipeline] PDF page-quality gate not wired:",
+        error instanceof Error ? error.message : String(error)
+      )
+    }
+  }
   return new IngestionLifecycle(
     db,
-    options?.stageRunner ?? new PipelineStageRunner(db),
+    options?.stageRunner ?? new PipelineStageRunner(db, configuredParser, undefined, undefined, { qualityGate }),
     options?.now ?? (() => new Date()),
-    cfg.activationMode)
+    cfg.activationMode,
+    undefined,
+    options?.tracing)
 }

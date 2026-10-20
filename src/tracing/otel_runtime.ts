@@ -17,6 +17,7 @@ import {
   type OperationEndOptions,
   type OperationScope,
   type ShutdownResult,
+  type TaskTraceContext,
   type TracingAttributes,
   type TracingDiagnostics,
   type TracingRuntime,
@@ -306,17 +307,29 @@ export class OtelTracingRuntime implements TracingRuntime {
     this.tracer = provider.getTracer("kefu-rag", "1.0.0")
   }
 
-  startOperation(name: string, attributes?: TracingAttributes): OperationScope {
+  startOperation(name: string, attributes?: TracingAttributes, task?: TaskTraceContext): OperationScope {
     if (this.closing) return noopOperationScope()
+    // LO-13: a task submitted under an unsampled decision stays unsampled.
+    // Re-rolling here would create a trace the submitter explicitly did not
+    // agree to (LG-06-AC06), so the handoff is honoured, not re-evaluated.
+    if (task && !task.sampled) return noopOperationScope()
+    const parentContext = task
+      ? trace.setSpanContext(context.active(), {
+          traceId: task.traceId,
+          spanId: task.spanId,
+          traceFlags: 0x1,
+          isRemote: true,
+        })
+      : context.active()
     const span = this.tracer.startSpan(
       name,
-      { root: true, kind: SpanKind.INTERNAL },
-      context.active(),
+      { root: task === undefined, kind: SpanKind.INTERNAL },
+      parentContext,
     )
     const scope = new OtelOperationScope(
       this.tracer,
       span,
-      context.active(),
+      parentContext,
       { attributeBytes: this.attributeBytes, contentBytes: this.contentBytes },
       () => {
         this.truncatedAttributes += 1
@@ -330,8 +343,9 @@ export class OtelTracingRuntime implements TracingRuntime {
     name: string,
     attributes: TracingAttributes | undefined,
     fn: (scope: OperationScope) => Promise<T>,
+    parent?: TaskTraceContext,
   ): Promise<T> {
-    const scope = this.startOperation(name, attributes)
+    const scope = this.startOperation(name, attributes, parent)
     try {
       const result = await scope.runInContext(() => fn(scope))
       scope.end({ outcome: "ok" })
