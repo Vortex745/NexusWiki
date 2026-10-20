@@ -543,6 +543,7 @@ export function createApp(options: {
       createModelProfilesRouter({
         registry: options.modelProfiles,
         config: options.config,
+        ...(options.tracing ? { tracing: options.tracing } : {}),
         clients: {
           chatClient: options.processRuntime.chatClient,
           embeddingClient: options.processRuntime.embeddingClient,
@@ -746,6 +747,7 @@ export async function startServer(
   })
   const evaluationService = new EvaluationService({
     config,
+    tracing,
     clients: {
       es: processRuntime.elasticsearch,
       chatClient: processRuntime.chatClient,

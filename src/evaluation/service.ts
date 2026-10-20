@@ -14,6 +14,7 @@
  *   - nothing is written outside this process (no JSON reports, no business
  *     DB rows, no persistent trace export).
  */
+import type { TracingRuntime } from "../tracing/contract"
 
 import { randomUUID } from "node:crypto"
 import type { AppConfig } from "../config"
@@ -21,6 +22,7 @@ import type {
   AnswerRunEvent,
   AnswerRunResult,
   FinalContextOrdering,
+  GenerationContextSnapshot,
   RankedCandidateObservation,
 } from "../types"
 import type { Reranker } from "../retrieval/search/interface"
@@ -54,6 +56,11 @@ import {
   rougeMetrics,
 } from "./text_metrics"
 import { EVAL_TEXT_RULE_VERSION } from "./text_rules"
+import {
+  EVAL_GENERATION_CONTEXT_METRIC_VERSION,
+  evaluateGenerationContext,
+  notApplicableGenerationContextMetrics,
+} from "./context_metrics"
 import {
   EVAL_TASK_TERMINAL_STAGES,
   cleanupIncomplete,
@@ -243,6 +250,8 @@ function redactCleanupReport(report: EvalCleanupReport): EvalCleanupReport {
 export interface EvaluationServiceOptions {
   config: AppConfig
   clients: IsolatedEvalClients
+  /** LO-12: observe rerank calls made inside evaluation scopes. */
+  tracing?: TracingRuntime
   /**
    * Isolated-scope factory seam. Production uses
    * {@link createIsolatedEvalResources}; tests inject a fake to replace the
@@ -393,6 +402,7 @@ export class EvaluationService {
           taskId,
           config: taskConfig,
           clients: options.clients,
+          ...(options.tracing ? { tracing: options.tracing } : {}),
           ...(taskReranker ? { reranker: taskReranker } : {}),
           // Ticket 28: an assistant that pins no reranker must not fall back to
           // the RERANK_* adapter inside the scope.
@@ -716,7 +726,10 @@ export class EvaluationService {
     owner: EvaluationOwner,
     input: { datasetId?: unknown } = {}
   ): { datasetId: string; left: EvalTaskSummary; right: EvalTaskSummary } {
-    if (!this.reranker && !this.createReranker) {
+    // `createReranker` builds a task-scoped adapter for an OVERRIDE id only;
+    // it says nothing about whether this server has RERANK_* credentials, so
+    // the example's enabled side needs the config-built dedicated reranker.
+    if (!this.reranker) {
       throw new EvaluationRequestError(
         "the built-in Rerank on/off example needs a configured dedicated reranker (RERANK_*) on this server",
         ["rerankModel"]
@@ -737,10 +750,23 @@ export class EvaluationService {
       { datasetId, assistant: EVAL_BUILTIN_ASSISTANTS[0] },
       owner
     )
-    const off = this.createTask(
-      { datasetId, assistant: EVAL_BUILTIN_ASSISTANTS[1] },
-      owner
-    )
+    let off: EvalTaskSummary
+    try {
+      off = this.createTask(
+        { datasetId, assistant: EVAL_BUILTIN_ASSISTANTS[1] },
+        owner
+      )
+    } catch (error) {
+      // Creating the pair is not atomic: capacity or a stopping service can
+      // refuse the second task. Roll the first one back instead of leaving an
+      // orphan run that burns quota and retention.
+      this.cancelTask(
+        on.id,
+        owner,
+        "comparison example rolled back: the second task could not be created"
+      )
+      throw error
+    }
     return { datasetId, left: on, right: off }
   }
 
@@ -1270,7 +1296,32 @@ export class EvaluationService {
       }
     }
 
-    const { candidates, ordering, round } = collectFinalContext(caseDef, events, resources)
+    // PL-05 / PT-09: the two stages are scored from the run's PERSISTED trace
+    // record — the durable copy this scope kept for `runId` — so what the
+    // metric, the API, the page and the export report is computed from the same
+    // bytes the trace holds, not from a copy that lived only inside the stream
+    // loop. An entry that wires no trace store (a test double) has nothing
+    // persisted and is scored from the events it streamed.
+    const persisted = entry.readPersistedRun?.(runId)
+    const scoredEvents = persisted && persisted.length > 0 ? persisted : events
+
+    const { candidates, ordering, round } = collectFinalContext(caseDef, scoredEvents, resources)
+    // PL-05 / PT-09: the generation-context stage is read from the LAST real
+    // `generation-context-v1` snapshot on the run's own progress events. It is
+    // never derived from the candidate ranking or the final references, so a
+    // record that predates the snapshot reports unavailable rather than a 0.
+    const contextObservation = collectGenerationContext(scoredEvents)
+    const contextOutcome = evaluateGenerationContext(
+      contextObservation.snapshot,
+      (entry) => resources.passageIdForChunk({ documentId: entry.documentId }),
+      caseDef.relevantPassageIds,
+      {
+        generated: failure === undefined && contextObservation.sawContextStage,
+        snapshotVersionKnown:
+          contextObservation.snapshot?.version ===
+          EVAL_GENERATION_CONTEXT_METRIC_VERSION,
+      }
+    )
     const scored: ScoredCandidate[] = candidates.map((candidate) => ({
       passageId: candidate.passageId,
       relevant: candidate.relevant,
@@ -1287,10 +1338,14 @@ export class EvaluationService {
       failure === undefined
         ? {
             ...retrievalMetrics(scored, caseDef.relevantPassageIds),
+            ...contextOutcome.metrics,
             ...bleuMetrics(done?.reply ?? "", caseDef.referenceAnswer),
             ...rougeMetrics(done?.reply ?? "", caseDef.referenceAnswer),
           }
-        : notApplicableCaseMetrics()
+        : {
+            ...notApplicableCaseMetrics(),
+            ...notApplicableGenerationContextMetrics(),
+          }
 
     return {
       caseId: caseDef.caseId,
@@ -1302,6 +1357,16 @@ export class EvaluationService {
       ...(failure !== undefined ? { error: failure } : {}),
       ...(ordering ? { ordering } : {}),
       ...(round !== undefined ? { finalContextRound: round } : {}),
+      generationContextAvailability: contextOutcome.availability,
+      ...(contextOutcome.reason ? { generationContextReason: contextOutcome.reason } : {}),
+      ...(contextObservation.snapshot
+        ? {
+            generationContextRound: contextObservation.snapshot.generationRound,
+            generationContextRepresentation: contextObservation.snapshot.representation,
+            generationContextTokenCount: contextObservation.snapshot.tokenCount,
+            generationContextVersion: contextObservation.snapshot.version,
+          }
+        : {}),
       // Ticket 27 (EVAL-01B2): the per-task model snapshot the entry stamped on
       // this case's terminal event — the override is verifiable per case, and a
       // case that never reached a terminal result carries none.
@@ -1435,7 +1500,10 @@ function failedCase(caseDef: EvalDatasetCase, error: string): EvalCaseResult {
     // Ticket 25: the same redaction rule as every other exposed error.
     error: redactDetail(error),
     durationMs: 0,
-    metrics: notApplicableCaseMetrics(),
+    metrics: {
+      ...notApplicableCaseMetrics(),
+      ...notApplicableGenerationContextMetrics(),
+    },
     retrievedPassageIds: [],
     candidates: [],
     unmappedCandidates: 0,
@@ -1495,6 +1563,27 @@ function collectFinalContext(
 }
 
 /**
+ * PL-05 / PT-08: the last actual generation-context snapshot the run published.
+ * Only a run that reached the context stage can say anything about the context
+ * the generator received, so "no context event" and "snapshot absent" are kept
+ * distinct rather than collapsed into an empty adoption list.
+ */
+function collectGenerationContext(events: readonly AnswerRunEvent[]): {
+  snapshot?: GenerationContextSnapshot
+  sawContextStage: boolean
+} {
+  let snapshot: GenerationContextSnapshot | undefined
+  let sawContextStage = false
+  for (const event of events) {
+    if (event.type === "progress" && event.stage === "context") {
+      sawContextStage = true
+      if (event.data.generationContext) snapshot = event.data.generationContext
+    }
+  }
+  return { ...(snapshot ? { snapshot } : {}), sawContextStage }
+}
+
+/**
  * Ticket 28: true when the two runs differ ONLY in the immutable rerank
  * binding (same prompt, same chat model) — the built-in example pair, and the
  * only case where a reported difference is attributable to the dedicated
@@ -1538,6 +1627,7 @@ export function summarizeMetrics(cases: EvalCaseResult[]): EvalMetricsSummary {
   }
   return {
     version: EVAL_METRIC_VERSION,
+    context: { version: EVAL_GENERATION_CONTEXT_METRIC_VERSION },
     generation: {
       bleuVersion: EVAL_BLEU_VERSION,
       rougeVersion: EVAL_ROUGE_VERSION,

@@ -263,6 +263,8 @@ export async function createSharedAnswerEntry(
     ...(options.attachments ? { attachments: options.attachments } : {}),
     ...(options.faq ? { faq: options.faq } : {}),
     ...(options.web ? { web: options.web } : {}),
+    // LO-12: the same runtime instance observes rerank calls made by retrieval.
+    ...(answerRuntime.tracing ? { tracing: answerRuntime.tracing } : {}),
   })
   const searchOperations = retrieval.searchOperations
   const handoffStore = options.handoffStore ?? new SqliteHandoffStore(db)

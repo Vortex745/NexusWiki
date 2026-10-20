@@ -17,6 +17,7 @@ import { Router, type Request, type Response } from "express"
 import type OpenAI from "openai"
 import { singleTenantAccessContext, type AccessContext } from "../access/context"
 import type { AppConfig } from "../config"
+import type { TracingRuntime } from "../tracing/contract"
 import { createDedicatedReranker } from "../retrieval/search/dedicated_reranker"
 import type { RetrievalResult } from "../types/retrieval"
 import {
@@ -168,7 +169,14 @@ async function testEmbeddingProfile(
 ): Promise<ProfileTestResult> {
   const result = await timeBoxed(async (signal) => {
     const response = await embeddingClient.embeddings.create(
-      { model: config.embeddingModel, input: "ping" },
+      {
+        model: config.embeddingModel,
+        input: "ping",
+        // Probe with the production encoding (float, not the SDK base64
+        // default) so a provider-side truncation is caught here, not at
+        // index time.
+        encoding_format: "float",
+      },
       { signal }
     )
     const embedding = response.data?.[0]?.embedding
@@ -189,13 +197,14 @@ async function testEmbeddingProfile(
  * it IS the protocol (Edgefn `POST {base}/rerank`) with all its response
  * validation, so the test validates exactly what retrieval will call.
  */
-async function testRerankProfile(config: AppConfig): Promise<ProfileTestResult> {
+async function testRerankProfile(config: AppConfig, tracing?: TracingRuntime): Promise<ProfileTestResult> {
   const reranker = createDedicatedReranker({
     baseUrl: config.rerankBaseUrl,
     apiKey: config.rerankApiKey,
     model: config.rerankModel,
     timeoutMs: TEST_TIMEOUT_MS,
     maxDocumentChars: 1_000,
+    ...(tracing ? { tracing } : {}),
   })
   if (!reranker) {
     return {
@@ -226,6 +235,8 @@ export interface ModelProfilesRouterDeps {
   registry: ModelProfileRegistry
   config: AppConfig
   clients: ModelProfileClients
+  /** LO-12: observe the real rerank probe like any other provider call. */
+  tracing?: TracingRuntime
 }
 
 export function createModelProfilesRouter(deps: ModelProfilesRouterDeps): Router {
@@ -272,7 +283,7 @@ export function createModelProfilesRouter(deps: ModelProfilesRouterDeps): Router
     } else if (id === "embedding") {
       result = await testEmbeddingProfile(deps.clients.embeddingClient, deps.config)
     } else {
-      result = await testRerankProfile(deps.config)
+      result = await testRerankProfile(deps.config, deps.tracing)
     }
     res.json({ id, checkedAt: new Date().toISOString(), ...result })
   })

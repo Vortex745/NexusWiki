@@ -32,6 +32,7 @@
  * AnswerRuntime uses NoopLangfuseExporter and the in-memory trace collector
  * — nothing reaches the business DB or a persistent observation backend.
  */
+import type { TracingRuntime } from "../tracing/contract"
 
 import type { Client } from "@elastic/elasticsearch"
 import type OpenAI from "openai"
@@ -103,6 +104,8 @@ export interface IsolatedEvalResourceOptions {
   taskId: string
   config: AppConfig
   clients: IsolatedEvalClients
+  /** LO-12: observe the scope's rerank provider calls. */
+  tracing?: TracingRuntime
   /** LLM boundary of the wikify stage. Omitted → production LLMWikifier. */
   wikifier?: WikifierLike
   /** Clock override (tests skip the lifecycle's retry backoff). */
@@ -172,6 +175,14 @@ export interface IsolatedEvalAnswerEntry {
   eventsSource: SharedAnswerEventsSource
   accessContext: AccessContext
   traceCollector: EvalTraceCollector
+  /**
+   * PL-05 / PT-09: read back the run's PERSISTED event record from this scope's
+   * own trace store (it dies with `dispose()`, so nothing survives the task).
+   * `null` when the run persisted nothing; an entry that wires no trace store
+   * (a test double) omits the method entirely and the service scores the stream
+   * it consumed.
+   */
+  readPersistedRun?(runId: string): AnswerRunEvent[] | null
 }
 
 export interface IsolatedEvalResources {
@@ -497,6 +508,7 @@ export function createIsolatedEvalResources(
         model: config.rerankModel,
         timeoutMs: config.rerankTimeoutMs,
         maxDocumentChars: config.rerankMaxDocumentChars,
+        ...(options.tracing ? { tracing: options.tracing } : {}),
       })
 
   // One in-memory SQLite owns tracking + sessions + traces for the scope.
@@ -788,6 +800,7 @@ export function createIsolatedEvalResources(
     // Memory-only side channel: the eval runtime shares the production
     // clients but never the business DB, business trace repository, or a real
     // Langfuse exporter.
+    const traceRepository = new AnswerTraceRepository(db)
     const evalRuntime = new AnswerRuntime(
       {
         chatClient: clients.chatClient,
@@ -799,7 +812,7 @@ export function createIsolatedEvalResources(
           /* scope-owned close happens in dispose() */
         },
       },
-      new AnswerTraceRepository(db),
+      traceRepository,
       new NoopLangfuseExporter()
     )
 
@@ -822,7 +835,14 @@ export function createIsolatedEvalResources(
         ...(reranker ? { reranker } : {}),
       }),
       handoffStore: new SqliteHandoffStore(db),
-      traceObserver: traceCollector,
+      // The hard observer is the scope's OWN trace repository: the run's events
+      // become a durable record inside this scope's in-memory SQLite (deleted
+      // with `dispose()`), which is what lets the EvaluationService score the
+      // persisted run instead of a copy that lived only as long as the loop
+      // that streamed it (PL-05 / PT-09:AC01). The side-channel collector
+      // stays a soft observer.
+      traceObserver: traceRepository,
+      observers: [traceCollector],
     })
 
     // The scope owns the run identity: the eval AccessContext is always
@@ -852,7 +872,12 @@ export function createIsolatedEvalResources(
           : {}),
       })
 
-    return { eventsSource: scopedEventsSource, accessContext, traceCollector }
+    return {
+      eventsSource: scopedEventsSource,
+      accessContext,
+      traceCollector,
+      readPersistedRun: (runId) => traceRepository.getRun(runId)?.events ?? null,
+    }
   }
 
   async function dispose(): Promise<EvalDisposeReport> {

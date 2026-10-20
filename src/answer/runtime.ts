@@ -51,7 +51,9 @@ export class AnswerRuntime {
   constructor(
     readonly processRuntime: ProcessRuntime,
     traceRepository?: AnswerTraceRepository,
-    langfuseExporter?: LangfuseExporter
+    langfuseExporter?: LangfuseExporter,
+    /** LO-12: exposed so the retrieval stack can observe rerank calls. */
+    readonly tracing?: TracingRuntime,
   ) {
     this.traceRepository = traceRepository ?? new AnswerTraceRepository(processRuntime.db)
     this.langfuseExporter = langfuseExporter ?? new NoopLangfuseExporter()
@@ -105,5 +107,5 @@ export function createAnswerRuntime(
     langfuseClient,
     { chatModel: config.openaiChatModel },
   )
-  return new AnswerRuntime(processRuntime, traceRepository, langfuseExporter)
+  return new AnswerRuntime(processRuntime, traceRepository, langfuseExporter, tracing)
 }
