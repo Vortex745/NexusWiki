@@ -104,6 +104,8 @@ When `ACCESS_MODE=single_tenant`, no token is required (backward compat). When `
 
 Langfuse is a DI-seam — the `langfuse` npm package IS a project dependency now. `src/answer/langfuse_client.ts` builds the real client (+ REST fetchTrace read-back) when both keys are set; absent keys keep Noop mode with zero cost.
 
+Compatibility probe (LO-01): `node --import tsx scripts/langfuse-compat-probe.ts` reports the deployed backend version, whether an OTLP endpoint exists, whether the installed SDK's synthetic Trace/Span/Generation read back with parent linkage, and the byte-exact content capacity. **The pinned `langfuse/langfuse:2` (2.95.11) has no `/api/public/otel/v1/traces` endpoint (404)** — only the SDK ingestion path works, so G-COMPAT is blocked pending a decision (recorded in `.scratch/logging-observability-tickets/evidence/LO-01/`).
+
 ### 2.8b Runtime logs (LO-03)
 
 | Variable | Default | Required? | Notes |
