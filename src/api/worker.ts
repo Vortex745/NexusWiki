@@ -37,7 +37,8 @@ export function startWorker(options: {
   const wikiStore = new WikiStore(db)
   const wikiEngine = options.wikiChatClient && options.wikiElasticsearch
     ? new WikiEngine(db, wikiStore, esWikiChunkReader(options.wikiElasticsearch, cfg.esChunkIndexName),
-      new ModelWikiTopicGenerator(options.wikiChatClient, cfg.openaiChatModel))
+      new ModelWikiTopicGenerator(options.wikiChatClient, cfg.openaiChatModel),
+      options.tracing)
     : null
   if (wikiEngine) wikiStore.recoverRunningJobs()
 

@@ -30,6 +30,7 @@ import {
 } from "./source_identity"
 import {
   readTaskTrace,
+  taskTraceFromScope,
   type TaskTraceContext,
   type TracingRuntime,
 } from "../tracing/contract"
@@ -918,8 +919,10 @@ export class IngestionLifecycle {
             if (this.docRepo.getActive(document.sourceId)?.id === document.id) {
               const wiki = new WikiStore(this.db, this.now)
               if (wiki.enabled(document.tenantId ?? "default", document.knowledgeBaseId ?? "")) {
+                // LO-16: the derived wiki job continues this ingestion task's
+                // trace instead of rooting a new one.
                 wiki.enqueue(document.tenantId ?? "default", document.knowledgeBaseId ?? "",
-                  document.id, document.sourceId, "ingest")
+                  document.id, document.sourceId, "ingest", taskTraceFromScope(taskScope))
               }
             }
           } else {

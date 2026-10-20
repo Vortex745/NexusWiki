@@ -415,6 +415,10 @@ const SCHEMA = [
     status TEXT NOT NULL DEFAULT 'pending',
     attempts INTEGER NOT NULL DEFAULT 0,
     error TEXT,
+    -- LO-16: neutral handoff (NULL = legacy row, '' + 0 = known unsampled).
+    trace_id TEXT,
+    trace_span_id TEXT,
+    trace_sampled INTEGER,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
   )`,
@@ -741,6 +745,19 @@ export function openDb(dbPath?: string): DB {
     }
     if (!syncRunColumns.some(({ name }) => name === "trace_sampled")) {
       db.exec("ALTER TABLE sync_runs ADD COLUMN trace_sampled INTEGER")
+    }
+  }
+  // LO-16: additive migration for wiki jobs created before the handoff.
+  const wikiJobColumns = db.pragma("table_info(wiki_jobs)") as Array<{ name: string }>
+  if (wikiJobColumns.length > 0) {
+    if (!wikiJobColumns.some(({ name }) => name === "trace_id")) {
+      db.exec("ALTER TABLE wiki_jobs ADD COLUMN trace_id TEXT")
+    }
+    if (!wikiJobColumns.some(({ name }) => name === "trace_span_id")) {
+      db.exec("ALTER TABLE wiki_jobs ADD COLUMN trace_span_id TEXT")
+    }
+    if (!wikiJobColumns.some(({ name }) => name === "trace_sampled")) {
+      db.exec("ALTER TABLE wiki_jobs ADD COLUMN trace_sampled INTEGER")
     }
   }
   // Ticket 21: the attachment channel retains the UPLOADED bytes alongside the
