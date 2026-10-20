@@ -79,7 +79,7 @@ import {
 } from "../assistants/assistant_service"
 import { ModelProfileRegistry } from "../models/profiles"
 import type { Logger } from "../logging/logger"
-import { createOperationLogSlice } from "../logging/log_slice"
+import { createHttpLogLifecycle, type HttpLogLifecycleOptions } from "../logging/http_lifecycle"
 import { createServerLogger } from "../logging/composition"
 
 export function createApp(options: {
@@ -91,6 +91,8 @@ export function createApp(options: {
    * uninjected logger can never change a business response.
    */
   logger?: Logger
+  /** LO-04: request-log policy/timeout overrides (tests, probes). */
+  httpLog?: HttpLogLifecycleOptions
   accessMiddleware?: RequestHandler
   /**
    * Eval refactor Ticket 04: in-process evaluation service. Mounted only when
@@ -198,17 +200,13 @@ export function createApp(options: {
     options.imageAssetPath ?? process.env.IMAGE_ASSET_PATH ?? "./data/image-assets"
   )
   app.use(cors())
-  // LO-03: the first structured-log slice — one real JSON business operation
-  // (knowledge-base writes) through the injected neutral logger. Read-only
-  // lists stay excluded, matching the coverage policy in LO-02.
+  // LO-04: request correlation + exactly one terminal record per real request.
+  // Mounted before every route (including the raw ingest router) so the
+  // request_id and AsyncLocalStorage context cover the whole stack. Excluded
+  // surfaces (assets, status/health, polling reads, auth/config reads, plain
+  // collection GETs) still get an id but produce no terminal record.
   if (options.logger) {
-    app.use(
-      "/api/knowledge-bases",
-      createOperationLogSlice(options.logger, {
-        operation: "knowledge_base.write",
-        methods: ["POST", "PATCH", "DELETE"],
-      }),
-    )
+    app.use(createHttpLogLifecycle(options.logger, options.httpLog ?? {}))
   }
   app.get("/api/assets/:assetPath", async (req, res, next) => {
     const assetPath = String(req.params.assetPath)

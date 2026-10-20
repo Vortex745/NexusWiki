@@ -1,0 +1,269 @@
+import { AsyncLocalStorage } from "node:async_hooks"
+import { randomUUID } from "node:crypto"
+import type { NextFunction, Request, Response } from "express"
+import type { Logger, LogFields, LogLevel } from "./logger"
+
+/**
+ * LO-04: HTTP request logging — one request_id per real request, exactly one
+ * terminal record per request, accurate classification of success / rejected /
+ * error / client-disconnect / timeout.
+ *
+ * Design rules that come from the spec, not from convenience:
+ *  - `request_id` is minted here and is NOT a W3C trace id (D17). No inbound
+ *    header can set it, so a caller can never forge correlation.
+ *  - The terminal record is emitted once. `finish`, `close` and `timeout`
+ *    race in real traffic (an SSE stream finishes and closes; a client that
+ *    disconnects after the last byte fires both), so a single `finalized`
+ *    guard decides the one record that describes what really happened.
+ *  - The record describes what the caller actually received: `statusCode` is
+ *    null when no headers were sent, and `outcome` distinguishes a full
+ *    success from a partial stream that the client abandoned.
+ *  - Correlation travels through AsyncLocalStorage, so nested async work
+ *    (the answer runner, ingestion handlers) reuses the request's context
+ *    without threading a parameter through every signature.
+ *  - Excluded surfaces (assets, health/status, polling reads, auth/session,
+ *    capability and config reads, and plain collection GETs) get a request id
+ *    but no terminal record — matching the coverage policy frozen in LO-02.
+ */
+
+export interface HttpLogContext {
+  requestId: string
+  operation: string
+  method: string
+  path: string
+  released: boolean
+}
+
+export type HttpOutcome = "success" | "rejected" | "error" | "client_closed" | "aborted" | "timeout"
+
+export interface HttpLogPolicy {
+  /** Paths that never produce a terminal record. */
+  excludedPrefixes: readonly string[]
+  /** Collection roots whose plain GET (a read-only list) is excluded. */
+  excludedGetPaths: readonly string[]
+  /** Ordered prefix → operation mapping (longest match wins). */
+  operations: ReadonlyArray<{ prefix: string; operation: string }>
+}
+
+const storage = new AsyncLocalStorage<HttpLogContext>()
+
+/** The live request context, or undefined once the request terminated. */
+export function currentHttpLogContext(): HttpLogContext | undefined {
+  const context = storage.getStore()
+  return context && !context.released ? context : undefined
+}
+
+/** A logger bound to the current request, for nested business steps. */
+export function currentRequestLogger(logger: Logger): Logger | undefined {
+  const context = currentHttpLogContext()
+  if (!context) return undefined
+  return logger.child({ requestId: context.requestId, operation: context.operation })
+}
+
+export const DEFAULT_HTTP_LOG_POLICY: HttpLogPolicy = {
+  excludedPrefixes: [
+    "/api/assets",
+    "/api/status",
+    "/api/capabilities",
+    "/api/session",
+    "/api/auth",
+    "/api/demo-config",
+    "/api/health",
+    "/api/chat/runs",
+    "/api/models",
+    "/api/model-profiles",
+  ],
+  excludedGetPaths: [
+    "/api/knowledge-bases",
+    "/api/knowledge-base-folders",
+    "/api/documents",
+    "/api/conversations",
+    "/api/handoffs",
+    "/api/assistants",
+    "/api/faq-entries",
+    "/api/memories",
+    "/api/memory-suggestions",
+    "/api/evaluations",
+    "/api/evaluation-datasets",
+    "/api/sync-data-sources",
+  ],
+  operations: [
+    { prefix: "/api/chat", operation: "chat.run" },
+    { prefix: "/api/retrieval-debug", operation: "retrieval.debug" },
+    { prefix: "/api/ingest", operation: "ingest.submit" },
+    { prefix: "/api/documents", operation: "documents.maintain" },
+    { prefix: "/api/document-folders", operation: "documents.maintain" },
+    { prefix: "/api/knowledge-bases", operation: "knowledge_base.manage" },
+    { prefix: "/api/knowledge-base-folders", operation: "knowledge_base.manage" },
+    { prefix: "/api/sync", operation: "sync.run" },
+    { prefix: "/api/wiki", operation: "wiki.run" },
+    { prefix: "/api/evaluations", operation: "evaluation.run" },
+    { prefix: "/api/evaluation-datasets", operation: "evaluation.run" },
+    { prefix: "/api/faq-entries", operation: "faq.manage" },
+    { prefix: "/api/memories", operation: "memory.manage" },
+    { prefix: "/api/memory-suggestions", operation: "memory.manage" },
+    { prefix: "/api/assistants", operation: "assistants.manage" },
+    { prefix: "/api/attachments", operation: "attachments.submit" },
+    { prefix: "/api/handoffs", operation: "handoff.manage" },
+    { prefix: "/api/feedback", operation: "feedback.submit" },
+    { prefix: "/api/conversations", operation: "conversations.manage" },
+  ],
+}
+
+export interface HttpLogDecision {
+  logged: boolean
+  operation: string
+}
+
+export function decideHttpLog(
+  method: string,
+  path: string,
+  policy: HttpLogPolicy = DEFAULT_HTTP_LOG_POLICY,
+): HttpLogDecision {
+  const normalizedMethod = method.toUpperCase()
+  const normalizedPath = path.replace(/\/+$/, "") || "/"
+  const operation = [...policy.operations]
+    .filter((entry) => normalizedPath === entry.prefix || normalizedPath.startsWith(`${entry.prefix}/`))
+    .sort((left, right) => right.prefix.length - left.prefix.length)[0]
+
+  if (!normalizedPath.startsWith("/api/")) {
+    return { logged: false, operation: operation?.operation ?? "http.request" }
+  }
+  if (policy.excludedPrefixes.some((prefix) => normalizedPath === prefix || normalizedPath.startsWith(`${prefix}/`))) {
+    return { logged: false, operation: operation?.operation ?? "http.request" }
+  }
+  if (normalizedMethod === "GET" && policy.excludedGetPaths.includes(normalizedPath)) {
+    return { logged: false, operation: operation?.operation ?? "http.request" }
+  }
+  return { logged: true, operation: operation?.operation ?? "http.request" }
+}
+
+export interface HttpLogLifecycleOptions {
+  policy?: HttpLogPolicy
+  /**
+   * Optional idle deadline for the request socket. Off by default — enabling
+   * it changes connection behaviour, so it is opt-in per deployment. When
+   * set, an idle request is classified as `timeout` exactly once.
+   */
+  idleTimeoutMs?: number
+}
+
+type TerminalReason = "finish" | "close" | "timeout" | "error"
+
+function outcomeFor(reason: TerminalReason, res: Response): HttpOutcome {
+  if (reason === "timeout") return "timeout"
+  if (reason === "error") return "error"
+  if (reason === "finish") {
+    if (res.statusCode >= 500) return "error"
+    if (res.statusCode >= 400) return "rejected"
+    return "success"
+  }
+  // close without finish: the connection ended before the response completed.
+  return res.headersSent ? "client_closed" : "aborted"
+}
+
+function levelFor(outcome: HttpOutcome): LogLevel {
+  if (outcome === "success") return "info"
+  if (outcome === "rejected" || outcome === "client_closed" || outcome === "aborted") return "warn"
+  return "error"
+}
+
+export function createHttpLogLifecycle(logger: Logger, options: HttpLogLifecycleOptions = {}) {
+  const policy = options.policy ?? DEFAULT_HTTP_LOG_POLICY
+  return function httpLogLifecycle(req: Request, res: Response, next: NextFunction): void {
+    const startedAt = process.hrtime.bigint()
+    const path = req.originalUrl.split("?")[0]
+    const decision = decideHttpLog(req.method, path, policy)
+    const requestId = randomUUID()
+    if (!res.headersSent) {
+      res.setHeader("x-request-id", requestId)
+    }
+    const context: HttpLogContext = {
+      requestId,
+      operation: decision.operation,
+      method: req.method,
+      path,
+      released: false,
+    }
+    let finalized = false
+
+    const finalize = (reason: TerminalReason): void => {
+      if (finalized) return
+      finalized = true
+      context.released = true
+      if (!decision.logged) return
+      const durationMs = Number(process.hrtime.bigint() - startedAt) / 1e6
+      const outcome = outcomeFor(reason, res)
+      const fields: LogFields = {
+        operation: decision.operation,
+        requestId,
+        method: req.method,
+        path,
+        statusCode: res.headersSent ? res.statusCode : null,
+        outcome,
+        terminalReason: reason,
+        durationMs: Math.round(durationMs * 1000) / 1000,
+      }
+      // Fire-and-forget: a slow stdout must not keep the socket open. The sink
+      // still applies backpressure to whoever awaits; the request path does
+      // not change its result either way (AC08).
+      void logger[levelFor(outcome)]("http.request.completed", fields).catch(() => {
+        // A logger implementation must never affect the response path.
+      })
+    }
+
+    // Optional idle deadline. Node's own socket timeout destroys the socket
+    // without telling the request which reason won, so the deadline is owned
+    // here: any inbound byte or outbound write re-arms it, and expiry is
+    // recorded as `timeout` before the socket goes away.
+    const idleTimeoutMs = options.idleTimeoutMs
+    let idleTimer: NodeJS.Timeout | undefined
+    const disarm = (): void => {
+      if (idleTimer) {
+        clearTimeout(idleTimer)
+        idleTimer = undefined
+      }
+    }
+    const arm = (): void => {
+      if (idleTimeoutMs === undefined || idleTimeoutMs <= 0 || finalized) return
+      disarm()
+      idleTimer = setTimeout(() => {
+        finalize("timeout")
+        req.socket?.destroy()
+      }, idleTimeoutMs)
+    }
+    if (idleTimeoutMs !== undefined && idleTimeoutMs > 0) {
+      const response = res as unknown as {
+        write: (...args: unknown[]) => boolean
+        end: (...args: unknown[]) => unknown
+      }
+      const originalWrite = response.write.bind(res)
+      const originalEnd = response.end.bind(res)
+      response.write = (...args: unknown[]) => {
+        arm()
+        return originalWrite(...args)
+      }
+      response.end = (...args: unknown[]) => {
+        disarm()
+        return originalEnd(...args)
+      }
+      req.on("data", arm)
+      arm()
+    }
+
+    res.once("finish", () => {
+      disarm()
+      finalize("finish")
+    })
+    res.once("close", () => {
+      disarm()
+      finalize("close")
+    })
+    res.once("error", () => {
+      disarm()
+      finalize("error")
+    })
+
+    storage.run(context, () => next())
+  }
+}
