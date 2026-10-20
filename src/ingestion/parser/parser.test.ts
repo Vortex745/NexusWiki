@@ -11,25 +11,35 @@ test("common documents route to MarkItDown and explicit override records its rea
     selectParser({ fileName: "policy.docx", mimeType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document" }),
     { parser: "markitdown", reason: "extension .docx is supported by MarkItDown" }
   )
+  // Ticket 21: markitdown is the text converter only — a PDF override
+  // normalizes to the type-matched builtin-pdf route with the reason recorded.
   assert.deepEqual(
     selectParser({
       fileName: "paper.pdf",
       mimeType: "application/pdf",
       override: "markitdown",
-    }),
-    { parser: "markitdown", reason: "explicit parser override" }
+    }).parser,
+    "builtin-pdf"
+  )
+  assert.match(
+    selectParser({
+      fileName: "paper.pdf",
+      mimeType: "application/pdf",
+      override: "markitdown",
+    }).reason,
+    /markitdown is not compatible with pdf files/
   )
   assert.deepEqual(
     selectParser({ fileName: "paper.pdf", mimeType: "text/plain" }),
-    { parser: "marker", reason: "PDF documents require layout-aware parsing" }
+    { parser: "builtin-pdf", reason: "PDF documents use text-layer extraction; select ocr-api for OCR" }
   )
   assert.deepEqual(
     selectParser({ fileName: "scan.png", mimeType: "image/png" }),
-    { parser: "mineru", reason: "image documents require OCR-aware parsing" }
+    { parser: "ocr-api", reason: "image documents use the OCR API" }
   )
   assert.deepEqual(
     selectParser({ fileName: "scan.pdf", override: "mineru" }),
-    { parser: "mineru", reason: "explicit parser override" }
+    { parser: "ocr-api", reason: "mineru legacy OCR override mapped to ocr-api" }
   )
 })
 
@@ -78,7 +88,7 @@ test("MarkItDown output becomes validated ordered blocks with stable provenance"
 test("MarkItDown reports an unavailable executable actionably", async () => {
   const parser = new MarkItDownParser({
     command: "kefu-rag-definitely-missing-markitdown",
-    timeoutMs: 1_000,
+    timeoutMs: 10_000,
     inputLimitBytes: 1_024,
     outputLimitBytes: 1_024,
   })
@@ -102,7 +112,7 @@ test("bounded parser processes time out, cancel, and reject oversized output", a
       runBoundedProcess({
         command: process.execPath,
         args: ["-e", "setInterval(() => {}, 1000)"],
-        timeoutMs: 5_000,
+        timeoutMs: 10_000,
         outputLimitBytes: 1_024,
         signal: controller.signal,
       }).then(
@@ -131,7 +141,7 @@ test("bounded parser processes time out, cancel, and reject oversized output", a
     const running = runBoundedProcess({
       command: process.execPath,
       args: ["-e", "setInterval(() => {}, 1000)"],
-      timeoutMs: 5_000,
+      timeoutMs: 10_000,
       outputLimitBytes: 1_024,
       signal: controller.signal,
     })
@@ -144,7 +154,7 @@ test("bounded parser processes time out, cancel, and reject oversized output", a
       runBoundedProcess({
         command: process.execPath,
         args: ["-e", "process.stdout.write('x'.repeat(2048))"],
-        timeoutMs: 1_000,
+        timeoutMs: 10_000,
         outputLimitBytes: 128,
       }),
       /output exceeded 128 bytes/
@@ -159,7 +169,7 @@ test("bounded parser processes time out, cancel, and reject oversized output", a
           "-e",
           "let count=0; const timer=setInterval(() => { if (count++ < 20) process.stderr.write('trace '.repeat(200)); else { clearInterval(timer); process.stderr.write('ROOT_CAUSE incompatible runtime'); process.exit(1); } }, 5)",
         ],
-        timeoutMs: 1_000,
+        timeoutMs: 10_000,
         outputLimitBytes: 1_024,
       }),
       /ROOT_CAUSE incompatible runtime/
@@ -172,7 +182,7 @@ test("MarkItDown invocation is argument-safe and malformed output is rejected", 
     const parser = new MarkItDownParser({
       command: process.execPath,
       commandArgs: ["-e", "process.stdout.write('# Safe output\\n\\nParsed')"],
-      timeoutMs: 1_000,
+      timeoutMs: 10_000,
       inputLimitBytes: 1_024,
       outputLimitBytes: 1_024,
     })
@@ -189,7 +199,7 @@ test("MarkItDown invocation is argument-safe and malformed output is rejected", 
     const parser = new MarkItDownParser({
       command: process.execPath,
       commandArgs: ["-e", "process.stdout.write('```json\\n{')"],
-      timeoutMs: 1_000,
+      timeoutMs: 10_000,
       inputLimitBytes: 1_024,
       outputLimitBytes: 1_024,
     })
@@ -418,7 +428,7 @@ test("Marker CLI is argument-safe, bounded, and fails actionably", async (t) => 
   const parser = new MarkerParser({
     command: process.execPath,
     commandArgs: ["-e", writeArtifact],
-    timeoutMs: 1_000,
+    timeoutMs: 10_000,
     inputLimitBytes: 1_024,
     outputLimitBytes: 1_024,
   })
@@ -433,7 +443,7 @@ test("Marker CLI is argument-safe, bounded, and fails actionably", async (t) => 
   await t.test("unavailable executable", async () => {
     const unavailable = new MarkerParser({
       command: "kefu-rag-definitely-missing-marker",
-      timeoutMs: 1_000,
+      timeoutMs: 10_000,
       inputLimitBytes: 1_024,
       outputLimitBytes: 1_024,
     })
@@ -454,7 +464,7 @@ test("Marker CLI is argument-safe, bounded, and fails actionably", async (t) => 
         "-e",
         "const fs=require('fs'),path=require('path'),a=process.argv.slice(1),o=a[a.indexOf('--output_dir')+1],d=path.join(o,'input');fs.mkdirSync(d,{recursive:true});fs.writeFileSync(path.join(d,'input.json'),'{')",
       ],
-      timeoutMs: 1_000,
+      timeoutMs: 10_000,
       inputLimitBytes: 1_024,
       outputLimitBytes: 1_024,
     })
@@ -475,7 +485,7 @@ test("Marker CLI is argument-safe, bounded, and fails actionably", async (t) => 
         "-e",
         "const fs=require('fs'),path=require('path'),a=process.argv.slice(1),o=a[a.indexOf('--output_dir')+1],d=path.join(o,'input');fs.mkdirSync(d,{recursive:true});fs.writeFileSync(path.join(d,'input.json'),JSON.stringify({block_type:'Document',metadata:{},children:[{id:'/page/0/Text/0',block_type:'Text',html:'<p>ok</p>',bbox:[0,0,1,1],polygon:[[0,0],[1,0],[1,1],[0,1]],children:null}]}));fs.writeFileSync(path.join(d,'extra.bin'),'x'.repeat(2048))",
       ],
-      timeoutMs: 1_000,
+      timeoutMs: 10_000,
       inputLimitBytes: 4_096,
       outputLimitBytes: 1_024,
     })

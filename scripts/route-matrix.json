@@ -1,0 +1,797 @@
+{
+  "source": "evidence/LO-02/coverage-inventory.md",
+  "generatedAt": "2026-10-21",
+  "routes": [
+    {
+      "n": 1,
+      "method": "POST",
+      "path": "/api/ingest/file",
+      "expectRoot": true,
+      "ticket": "LO-06、LO-13"
+    },
+    {
+      "n": 2,
+      "method": "POST",
+      "path": "/api/chat",
+      "expectRoot": true,
+      "ticket": "LO-06、LO-08、LO-09"
+    },
+    {
+      "n": 3,
+      "method": "GET",
+      "path": "/api/chat/runs/:runId",
+      "expectRoot": false,
+      "ticket": "排除（轮询）"
+    },
+    {
+      "n": 4,
+      "method": "POST",
+      "path": "/api/retrieval-debug",
+      "expectRoot": true,
+      "ticket": "LO-06、LO-12"
+    },
+    {
+      "n": 5,
+      "method": "GET",
+      "path": "/api/knowledge-bases",
+      "expectRoot": false,
+      "ticket": "排除（只读列表）"
+    },
+    {
+      "n": 6,
+      "method": "POST",
+      "path": "/api/knowledge-bases",
+      "expectRoot": true,
+      "ticket": "LO-06"
+    },
+    {
+      "n": 7,
+      "method": "PATCH",
+      "path": "/api/knowledge-bases/:id",
+      "expectRoot": true,
+      "ticket": "LO-06"
+    },
+    {
+      "n": 8,
+      "method": "POST",
+      "path": "/api/knowledge-bases/:id/archive",
+      "expectRoot": true,
+      "ticket": "LO-06"
+    },
+    {
+      "n": 9,
+      "method": "POST",
+      "path": "/api/knowledge-bases/:id/restore",
+      "expectRoot": true,
+      "ticket": "LO-06"
+    },
+    {
+      "n": 10,
+      "method": "POST",
+      "path": "/api/knowledge-bases/:id/retire-contents",
+      "expectRoot": true,
+      "ticket": "LO-06、LO-14"
+    },
+    {
+      "n": 11,
+      "method": "GET",
+      "path": "/api/knowledge-base-folders",
+      "expectRoot": false,
+      "ticket": "排除（只读列表）"
+    },
+    {
+      "n": 12,
+      "method": "POST",
+      "path": "/api/knowledge-base-folders",
+      "expectRoot": true,
+      "ticket": "LO-06"
+    },
+    {
+      "n": 13,
+      "method": "PATCH",
+      "path": "/api/knowledge-base-folders/:id",
+      "expectRoot": true,
+      "ticket": "LO-06"
+    },
+    {
+      "n": 14,
+      "method": "DELETE",
+      "path": "/api/knowledge-base-folders/:id",
+      "expectRoot": true,
+      "ticket": "LO-06"
+    },
+    {
+      "n": 15,
+      "method": "PATCH",
+      "path": "/api/knowledge-bases/:id/folder",
+      "expectRoot": true,
+      "ticket": "LO-06"
+    },
+    {
+      "n": 16,
+      "method": "GET",
+      "path": "/api/knowledge-bases/:id/document-folders",
+      "expectRoot": false,
+      "ticket": "排除（只读列表）"
+    },
+    {
+      "n": 17,
+      "method": "POST",
+      "path": "/api/knowledge-bases/:id/document-folders",
+      "expectRoot": true,
+      "ticket": "LO-06"
+    },
+    {
+      "n": 18,
+      "method": "PATCH",
+      "path": "/api/document-folders/:id",
+      "expectRoot": true,
+      "ticket": "LO-06"
+    },
+    {
+      "n": 19,
+      "method": "DELETE",
+      "path": "/api/document-folders/:id",
+      "expectRoot": true,
+      "ticket": "LO-06、LO-14"
+    },
+    {
+      "n": 20,
+      "method": "POST",
+      "path": "/api/chat/sessions/:sessionId/attachments",
+      "expectRoot": true,
+      "ticket": "LO-06、LO-13"
+    },
+    {
+      "n": 21,
+      "method": "GET",
+      "path": "/api/chat/sessions/:sessionId/attachments",
+      "expectRoot": false,
+      "ticket": "排除（只读列表）"
+    },
+    {
+      "n": 22,
+      "method": "POST",
+      "path": "/api/chat/sessions/:sessionId/attachments/:attachmentId/promote",
+      "expectRoot": true,
+      "ticket": "LO-06、LO-13"
+    },
+    {
+      "n": 23,
+      "method": "DELETE",
+      "path": "/api/chat/sessions/:sessionId/attachments/:attachmentId",
+      "expectRoot": true,
+      "ticket": "LO-06"
+    },
+    {
+      "n": 24,
+      "method": "DELETE",
+      "path": "/api/chat/sessions/:sessionId/attachments",
+      "expectRoot": true,
+      "ticket": "LO-06"
+    },
+    {
+      "n": 25,
+      "method": "GET",
+      "path": "/api/documents/:docId",
+      "expectRoot": true,
+      "ticket": "LO-06"
+    },
+    {
+      "n": 26,
+      "method": "GET",
+      "path": "/api/documents/:docId/extraction",
+      "expectRoot": true,
+      "ticket": "LO-06、LO-14"
+    },
+    {
+      "n": 27,
+      "method": "GET",
+      "path": "/api/documents/:docId/preview",
+      "expectRoot": true,
+      "ticket": "LO-06"
+    },
+    {
+      "n": 28,
+      "method": "GET",
+      "path": "/api/documents/:docId/chunks/:chunkId",
+      "expectRoot": true,
+      "ticket": "LO-06"
+    },
+    {
+      "n": 29,
+      "method": "GET",
+      "path": "/api/knowledge-bases/:id/graph/entities",
+      "expectRoot": true,
+      "ticket": "LO-06"
+    },
+    {
+      "n": 30,
+      "method": "GET",
+      "path": "/api/knowledge-bases/:id/graph/relations",
+      "expectRoot": true,
+      "ticket": "LO-06"
+    },
+    {
+      "n": 31,
+      "method": "GET",
+      "path": "/api/knowledge-bases/:id/faqs",
+      "expectRoot": false,
+      "ticket": "排除（只读列表）"
+    },
+    {
+      "n": 32,
+      "method": "POST",
+      "path": "/api/knowledge-bases/:id/faqs",
+      "expectRoot": true,
+      "ticket": "LO-06"
+    },
+    {
+      "n": 33,
+      "method": "POST",
+      "path": "/api/knowledge-bases/:id/faqs/import",
+      "expectRoot": true,
+      "ticket": "LO-06"
+    },
+    {
+      "n": 34,
+      "method": "GET",
+      "path": "/api/knowledge-bases/:id/faqs/:faqId",
+      "expectRoot": false,
+      "ticket": "排除（只读）"
+    },
+    {
+      "n": 35,
+      "method": "PATCH",
+      "path": "/api/knowledge-bases/:id/faqs/:faqId",
+      "expectRoot": true,
+      "ticket": "LO-06"
+    },
+    {
+      "n": 36,
+      "method": "GET",
+      "path": "/api/knowledge-bases/:id/faqs/:faqId/versions",
+      "expectRoot": false,
+      "ticket": "排除（只读）"
+    },
+    {
+      "n": 37,
+      "method": "POST",
+      "path": "/api/knowledge-bases/:id/faqs/:faqId/activate",
+      "expectRoot": true,
+      "ticket": "LO-06"
+    },
+    {
+      "n": 38,
+      "method": "POST",
+      "path": "/api/knowledge-bases/:id/faqs/:faqId/disable",
+      "expectRoot": true,
+      "ticket": "LO-06"
+    },
+    {
+      "n": 39,
+      "method": "GET",
+      "path": "/api/knowledge-bases/:id/wiki/settings",
+      "expectRoot": false,
+      "ticket": "排除（配置读取）"
+    },
+    {
+      "n": 40,
+      "method": "POST",
+      "path": "/api/knowledge-bases/:id/wiki/agent",
+      "expectRoot": true,
+      "ticket": "LO-06、LO-16"
+    },
+    {
+      "n": 41,
+      "method": "PUT",
+      "path": "/api/knowledge-bases/:id/wiki/settings",
+      "expectRoot": true,
+      "ticket": "LO-06"
+    },
+    {
+      "n": 42,
+      "method": "POST",
+      "path": "/api/knowledge-bases/:id/wiki/rebuild",
+      "expectRoot": true,
+      "ticket": "LO-06、LO-16"
+    },
+    {
+      "n": 43,
+      "method": "GET",
+      "path": "/api/knowledge-bases/:id/wiki/pages",
+      "expectRoot": false,
+      "ticket": "排除（只读）"
+    },
+    {
+      "n": 44,
+      "method": "GET",
+      "path": "/api/knowledge-bases/:id/wiki/pages/:slug",
+      "expectRoot": false,
+      "ticket": "排除（只读）"
+    },
+    {
+      "n": 45,
+      "method": "POST",
+      "path": "/api/knowledge-bases/:id/wiki/pages",
+      "expectRoot": true,
+      "ticket": "LO-06"
+    },
+    {
+      "n": 46,
+      "method": "PATCH",
+      "path": "/api/knowledge-bases/:id/wiki/pages/:slug",
+      "expectRoot": true,
+      "ticket": "LO-06"
+    },
+    {
+      "n": 47,
+      "method": "DELETE",
+      "path": "/api/knowledge-bases/:id/wiki/pages/:slug",
+      "expectRoot": true,
+      "ticket": "LO-06"
+    },
+    {
+      "n": 48,
+      "method": "GET",
+      "path": "/api/knowledge-bases/:id/wiki/pages/:slug/revisions",
+      "expectRoot": false,
+      "ticket": "排除（只读）"
+    },
+    {
+      "n": 49,
+      "method": "POST",
+      "path": "/api/knowledge-bases/:id/wiki/pages/:slug/revert",
+      "expectRoot": true,
+      "ticket": "LO-06"
+    },
+    {
+      "n": 50,
+      "method": "GET",
+      "path": "/api/knowledge-bases/:id/sync-data-sources",
+      "expectRoot": false,
+      "ticket": "排除（只读列表）"
+    },
+    {
+      "n": 51,
+      "method": "POST",
+      "path": "/api/knowledge-bases/:id/sync-data-sources",
+      "expectRoot": true,
+      "ticket": "LO-06、LO-15"
+    },
+    {
+      "n": 52,
+      "method": "PATCH",
+      "path": "/api/sync-data-sources/:id",
+      "expectRoot": true,
+      "ticket": "LO-06、LO-15"
+    },
+    {
+      "n": 53,
+      "method": "DELETE",
+      "path": "/api/sync-data-sources/:id",
+      "expectRoot": true,
+      "ticket": "LO-06、LO-15"
+    },
+    {
+      "n": 54,
+      "method": "POST",
+      "path": "/api/sync-data-sources/:id/run",
+      "expectRoot": true,
+      "ticket": "LO-06、LO-15"
+    },
+    {
+      "n": 55,
+      "method": "GET",
+      "path": "/api/sync-data-sources/:id/runs",
+      "expectRoot": false,
+      "ticket": "排除（轮询）"
+    },
+    {
+      "n": 56,
+      "method": "GET",
+      "path": "/api/sync-data-sources/:id/runs/:runId",
+      "expectRoot": false,
+      "ticket": "排除（轮询）"
+    },
+    {
+      "n": 57,
+      "method": "GET",
+      "path": "/api/sync-data-sources/:id/pages",
+      "expectRoot": false,
+      "ticket": "排除（只读）"
+    },
+    {
+      "n": 58,
+      "method": "POST",
+      "path": "/api/sync-data-sources/:id/pages/retire",
+      "expectRoot": true,
+      "ticket": "LO-06、LO-14"
+    },
+    {
+      "n": 59,
+      "method": "GET",
+      "path": "/api/session",
+      "expectRoot": false,
+      "ticket": "排除（身份）"
+    },
+    {
+      "n": 60,
+      "method": "GET",
+      "path": "/api/auth/config",
+      "expectRoot": false,
+      "ticket": "排除（认证配置）"
+    },
+    {
+      "n": 61,
+      "method": "POST",
+      "path": "/api/auth/login",
+      "expectRoot": false,
+      "ticket": "排除（认证/凭据）"
+    },
+    {
+      "n": 62,
+      "method": "GET",
+      "path": "/api/evaluation-datasets",
+      "expectRoot": false,
+      "ticket": "排除（只读列表）"
+    },
+    {
+      "n": 63,
+      "method": "POST",
+      "path": "/api/evaluations",
+      "expectRoot": true,
+      "ticket": "LO-06、LO-17"
+    },
+    {
+      "n": 64,
+      "method": "GET",
+      "path": "/api/evaluations",
+      "expectRoot": false,
+      "ticket": "排除（轮询）"
+    },
+    {
+      "n": 65,
+      "method": "GET",
+      "path": "/api/evaluations/:id",
+      "expectRoot": false,
+      "ticket": "排除（轮询）"
+    },
+    {
+      "n": 66,
+      "method": "GET",
+      "path": "/api/evaluations/:id/export",
+      "expectRoot": false,
+      "ticket": "排除（只读导出）"
+    },
+    {
+      "n": 67,
+      "method": "POST",
+      "path": "/api/evaluations/compare",
+      "expectRoot": true,
+      "ticket": "LO-06"
+    },
+    {
+      "n": 68,
+      "method": "POST",
+      "path": "/api/evaluations/comparison-example",
+      "expectRoot": true,
+      "ticket": "LO-06"
+    },
+    {
+      "n": 69,
+      "method": "POST",
+      "path": "/api/evaluations/:id/cancel",
+      "expectRoot": true,
+      "ticket": "LO-06、LO-17"
+    },
+    {
+      "n": 70,
+      "method": "POST",
+      "path": "/api/chat/runs/:runId/handoff",
+      "expectRoot": true,
+      "ticket": "LO-06"
+    },
+    {
+      "n": 71,
+      "method": "GET",
+      "path": "/api/handoffs",
+      "expectRoot": false,
+      "ticket": "排除（只读列表）"
+    },
+    {
+      "n": 72,
+      "method": "PATCH",
+      "path": "/api/handoffs/:caseId",
+      "expectRoot": true,
+      "ticket": "LO-06"
+    },
+    {
+      "n": 73,
+      "method": "PUT",
+      "path": "/api/chat/runs/:runId/feedback",
+      "expectRoot": true,
+      "ticket": "LO-06"
+    },
+    {
+      "n": 74,
+      "method": "GET",
+      "path": "/api/feedback",
+      "expectRoot": false,
+      "ticket": "排除（只读列表）"
+    },
+    {
+      "n": 75,
+      "method": "GET",
+      "path": "/api/feedback/:id",
+      "expectRoot": false,
+      "ticket": "排除（只读）"
+    },
+    {
+      "n": 76,
+      "method": "PATCH",
+      "path": "/api/feedback/:id",
+      "expectRoot": true,
+      "ticket": "LO-06"
+    },
+    {
+      "n": 77,
+      "method": "POST",
+      "path": "/api/ingest/:docId/review",
+      "expectRoot": true,
+      "ticket": "LO-06、LO-14"
+    },
+    {
+      "n": 78,
+      "method": "POST",
+      "path": "/api/sources/:sourceId/retire",
+      "expectRoot": true,
+      "ticket": "LO-06、LO-14"
+    },
+    {
+      "n": 79,
+      "method": "GET",
+      "path": "/api/sources/:sourceId/status",
+      "expectRoot": false,
+      "ticket": "排除（轮询）"
+    },
+    {
+      "n": 80,
+      "method": "GET",
+      "path": "/api/status",
+      "expectRoot": false,
+      "ticket": "排除（健康探针，且触发真实模型探测）"
+    },
+    {
+      "n": 81,
+      "method": "GET",
+      "path": "/api/models/profiles",
+      "expectRoot": false,
+      "ticket": "排除（配置读取）"
+    },
+    {
+      "n": 82,
+      "method": "PATCH",
+      "path": "/api/models/profiles/:id",
+      "expectRoot": true,
+      "ticket": "LO-06、LO-10"
+    },
+    {
+      "n": 83,
+      "method": "POST",
+      "path": "/api/models/profiles/:id/test",
+      "expectRoot": true,
+      "ticket": "LO-06、LO-10（独立模型调用）"
+    },
+    {
+      "n": 84,
+      "method": "GET",
+      "path": "/api/assistants",
+      "expectRoot": false,
+      "ticket": "排除（只读列表）"
+    },
+    {
+      "n": 85,
+      "method": "POST",
+      "path": "/api/assistants",
+      "expectRoot": true,
+      "ticket": "LO-06"
+    },
+    {
+      "n": 86,
+      "method": "GET",
+      "path": "/api/assistants/:id",
+      "expectRoot": false,
+      "ticket": "排除（只读）"
+    },
+    {
+      "n": 87,
+      "method": "PATCH",
+      "path": "/api/assistants/:id",
+      "expectRoot": true,
+      "ticket": "LO-06"
+    },
+    {
+      "n": 88,
+      "method": "POST",
+      "path": "/api/assistants/:id/archive",
+      "expectRoot": true,
+      "ticket": "LO-06"
+    },
+    {
+      "n": 89,
+      "method": "POST",
+      "path": "/api/assistants/:id/restore",
+      "expectRoot": true,
+      "ticket": "LO-06"
+    },
+    {
+      "n": 90,
+      "method": "DELETE",
+      "path": "/api/assistants/:id",
+      "expectRoot": true,
+      "ticket": "LO-06"
+    },
+    {
+      "n": 91,
+      "method": "PUT",
+      "path": "/api/assistants/:id/sidebar-visible",
+      "expectRoot": true,
+      "ticket": "LO-06"
+    },
+    {
+      "n": 92,
+      "method": "GET",
+      "path": "/api/assistants/:id/versions",
+      "expectRoot": false,
+      "ticket": "排除（只读）"
+    },
+    {
+      "n": 93,
+      "method": "GET",
+      "path": "/api/assistants/:id/versions/:version",
+      "expectRoot": false,
+      "ticket": "排除（只读）"
+    },
+    {
+      "n": 94,
+      "method": "GET",
+      "path": "/api/demo-config/export",
+      "expectRoot": false,
+      "ticket": "排除（配置/安全）"
+    },
+    {
+      "n": 95,
+      "method": "POST",
+      "path": "/api/demo-config/import",
+      "expectRoot": false,
+      "ticket": "排除（配置写入/安全）"
+    },
+    {
+      "n": 96,
+      "method": "GET",
+      "path": "/api/conversations",
+      "expectRoot": false,
+      "ticket": "排除（只读列表）"
+    },
+    {
+      "n": 97,
+      "method": "GET",
+      "path": "/api/conversations/:id",
+      "expectRoot": false,
+      "ticket": "排除（只读）"
+    },
+    {
+      "n": 98,
+      "method": "POST",
+      "path": "/api/conversations/import",
+      "expectRoot": true,
+      "ticket": "LO-06"
+    },
+    {
+      "n": 99,
+      "method": "GET",
+      "path": "/api/memories",
+      "expectRoot": false,
+      "ticket": "排除（只读列表）"
+    },
+    {
+      "n": 100,
+      "method": "POST",
+      "path": "/api/memories",
+      "expectRoot": true,
+      "ticket": "LO-06"
+    },
+    {
+      "n": 101,
+      "method": "PATCH",
+      "path": "/api/memories/:id",
+      "expectRoot": true,
+      "ticket": "LO-06"
+    },
+    {
+      "n": 102,
+      "method": "DELETE",
+      "path": "/api/memories/:id",
+      "expectRoot": true,
+      "ticket": "LO-06"
+    },
+    {
+      "n": 103,
+      "method": "DELETE",
+      "path": "/api/memories",
+      "expectRoot": true,
+      "ticket": "LO-06"
+    },
+    {
+      "n": 104,
+      "method": "GET",
+      "path": "/api/memory-suggestions",
+      "expectRoot": false,
+      "ticket": "排除（只读列表）"
+    },
+    {
+      "n": 105,
+      "method": "POST",
+      "path": "/api/memory-suggestions/:id/accept",
+      "expectRoot": true,
+      "ticket": "LO-06"
+    },
+    {
+      "n": 106,
+      "method": "POST",
+      "path": "/api/memory-suggestions/:id/dismiss",
+      "expectRoot": true,
+      "ticket": "LO-06"
+    },
+    {
+      "n": 107,
+      "method": "GET",
+      "path": "/api/capabilities",
+      "expectRoot": false,
+      "ticket": "排除（能力清单）"
+    },
+    {
+      "n": 108,
+      "method": "POST",
+      "path": "/api/ingest",
+      "expectRoot": true,
+      "ticket": "LO-06、LO-13"
+    },
+    {
+      "n": 109,
+      "method": "POST",
+      "path": "/api/ingest/url",
+      "expectRoot": true,
+      "ticket": "LO-06、LO-13"
+    },
+    {
+      "n": 110,
+      "method": "GET",
+      "path": "/api/ingest/:docId/status",
+      "expectRoot": false,
+      "ticket": "排除（轮询）"
+    },
+    {
+      "n": 111,
+      "method": "POST",
+      "path": "/api/ingest/:docId/cancel",
+      "expectRoot": true,
+      "ticket": "LO-06、LO-13"
+    },
+    {
+      "n": 112,
+      "method": "POST",
+      "path": "/api/ingest/:docId/retry",
+      "expectRoot": true,
+      "ticket": "LO-06、LO-13"
+    },
+    {
+      "n": 113,
+      "method": "POST",
+      "path": "/api/ingest/:docId/reprocess",
+      "expectRoot": true,
+      "ticket": "LO-06、LO-13"
+    }
+  ]
+}

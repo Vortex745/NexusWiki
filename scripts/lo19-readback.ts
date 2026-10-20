@@ -7,13 +7,16 @@
  *
  * Run: node --import tsx scripts/lo19-readback.ts
  */
-import { mkdirSync, writeFileSync } from "node:fs"
+import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs"
+import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { OTLPTraceExporter } from "@opentelemetry/exporter-trace-otlp-proto"
 import type { AddressInfo } from "node:net"
 import { OtelTracingRuntime } from "../src/tracing/otel_runtime"
 import { createApp } from "../src/api/server"
 import { openDb } from "../src/ingestion/tracking/db"
+import { createIngestionLifecycle } from "../src/ingestion/pipeline"
+import type { IngestionStageRunner, StageExecution } from "../src/ingestion/lifecycle"
 import { SilentLogger } from "../src/logging/logger"
 import type { AnswerEventsSource } from "../src/api/chat"
 
@@ -28,6 +31,16 @@ mkdirSync(evidenceDir, { recursive: true })
 const LONG_PROMPT = `用户问题：退款多久到账？\n${"上下文段落。".repeat(1_500)}`
 const LONG_REPLY = `退款在审核通过后三个工作日内到账。${"补充说明。".repeat(2_000)}`
 const PREVIEW_25 = Array.from({ length: 25 }, (_, index) => `#${index + 1} ${"证".repeat(155)}`).join("\n")
+
+/** Same four-stage boundary the acceptance tests use; no providers involved. */
+const COMPLETING_RUNNER: IngestionStageRunner = {
+  close: async () => {},
+  async run(_document, execution: StageExecution): Promise<void> {
+    for (const stage of ["chunk", "wikify", "storeChunks", "storeGraph"] as const) {
+      await execution.runStage(stage, {}, async () => undefined, () => ({ stage }))
+    }
+  },
+}
 
 interface Observation {
   id: string
@@ -128,9 +141,12 @@ async function main(): Promise<void> {
   })
   root.end({ outcome: "ok", attributes: { "answer.terminal_status": "completed" } })
 
-  // LO-19-AC01/AC02: one REAL HTTP request through the production stack, so
-  // the readback also proves the request root and its business child.
-  const db = openDb(":memory:")
+  // LO-19-AC01/AC02: REAL HTTP requests through the production stack. The KB
+  // call proves the request root and its business child; the ingest call plus
+  // one real claim proves the persistent-task handoff end to end.
+  process.env.SQLITE_PATH = join(mkdtempSync(join(tmpdir(), "lo19-readback-")), "ingestion.db")
+  process.env.OPENAI_API_KEY = process.env.OPENAI_API_KEY || "test-key"
+  const db = openDb()
   const app = createApp({
     db,
     logger: new SilentLogger(),
@@ -142,6 +158,9 @@ async function main(): Promise<void> {
   const port = (server.address() as AddressInfo).port
   let httpTraceId: string | null = null
   let requestId: string | null = null
+  let ingestTraceId: string | null = null
+  let ingestDocId: string | null = null
+  let taskSucceeded = false
   try {
     const response = await fetch(`http://127.0.0.1:${port}/api/knowledge-bases`, {
       method: "POST",
@@ -150,9 +169,28 @@ async function main(): Promise<void> {
     })
     httpTraceId = response.headers.get("x-trace-id")
     requestId = response.headers.get("x-request-id")
+
+    const ingest = await fetch(`http://127.0.0.1:${port}/api/ingest`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        title: "LO-19 handoff",
+        content: "异步任务交接：这条内容会被真实 claim 并执行。",
+        source: "lo19 readback",
+      }),
+    })
+    ingestTraceId = ingest.headers.get("x-trace-id")
+    const submission = (await ingest.json()) as { docId?: string }
+    ingestDocId = submission.docId ?? null
+    // The worker's real entry: claim the task the request just persisted and
+    // execute it under the same runtime.
+    const lifecycle = createIngestionLifecycle(db, {
+      stageRunner: COMPLETING_RUNNER,
+      tracing: runtime,
+    })
+    taskSucceeded = (await lifecycle.runNext())?.success === true
   } finally {
     server.close()
-    db.close()
   }
 
   const flushed = await runtime.flush(30_000)
@@ -163,6 +201,10 @@ async function main(): Promise<void> {
   const httpObservations = (httpTrace.observations as Observation[] | undefined) ?? []
   const httpRoot = httpObservations.find((observation) => observation.name === "http.post")
   const httpChild = httpObservations.find((observation) => observation.name === "knowledge_base.create")
+  const ingestTrace = ingestTraceId ? await readTrace(ingestTraceId, 60_000) : {}
+  const ingestObservations = (ingestTrace.observations as Observation[] | undefined) ?? []
+  const ingestRoot = ingestObservations.find((observation) => observation.name === "http.post")
+  const taskSpan = ingestObservations.find((observation) => observation.name === "ingestion.task")
   const observations = (trace.observations as Observation[] | undefined) ?? []
   const byName = new Map(observations.map((observation) => [observation.name ?? "", observation]))
   const chat = byName.get("chat.completions")
@@ -180,6 +222,15 @@ async function main(): Promise<void> {
         Boolean(httpChild) &&
         httpChild?.parentObservationId === httpRoot?.id,
       detail: `httpTrace=${httpTraceId} request_id=${requestId} observations=${httpObservations.map((o) => o.name).join(",")}`,
+    },
+    {
+      id: "AC02 async ingestion task read back",
+      pass:
+        taskSucceeded &&
+        Boolean(ingestRoot) &&
+        Boolean(taskSpan) &&
+        taskSpan?.parentObservationId === ingestRoot?.id,
+      detail: `trace=${ingestTraceId} doc=${ingestDocId} task=${taskSpan?.name ?? "missing"} parent=${taskSpan?.parentObservationId ?? "none"} root=${ingestRoot?.id ?? "missing"} success=${taskSucceeded}`,
     },
     {
       id: "AC01 real trace read back",
@@ -225,10 +276,14 @@ async function main(): Promise<void> {
     },
   ]
 
+  db.close()
+
   const report = {
     generatedAt: new Date().toISOString(),
     backend: { baseUrl: BASE_URL, version: (await (await fetch(`${BASE_URL}/api/public/health`)).json()) as unknown },
     traceId,
+    ingestTraceId,
+    ingestDocId,
     flushed,
     diagnostics,
     observations: observations.map((observation) => ({

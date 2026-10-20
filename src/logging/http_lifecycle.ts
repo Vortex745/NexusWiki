@@ -39,12 +39,30 @@ export interface HttpLogContext {
 export type HttpOutcome = "success" | "rejected" | "error" | "client_closed" | "aborted" | "timeout"
 
 export interface HttpLogPolicy {
-  /** Paths that never produce a terminal record. */
+  /** Paths that never produce a terminal record, whatever the method. */
   excludedPrefixes: readonly string[]
-  /** Collection roots whose plain GET (a read-only list) is excluded. */
+  /** Exact read-only GETs (`:param` matches one segment). */
   excludedGetPaths: readonly string[]
+  /**
+   * Read-only GET families, matched as a SEGMENT PREFIX (`:param` matches one
+   * segment). A prefix here never touches mutations: `PUT /api/feedback/:id`
+   * still gets its root while `GET /api/feedback/:id` stays a plain read.
+   */
+  excludedGetPrefixes: readonly string[]
   /** Ordered prefix → operation mapping (longest match wins). */
   operations: ReadonlyArray<{ prefix: string; operation: string }>
+}
+
+/**
+ * Segment-wise match so `:id` matches exactly one path segment. A plain
+ * `startsWith` would let `/api/models` swallow `/api/models/profiles/:id/test`
+ * and turn a deliberate mutation into a read.
+ */
+function matchesSegments(pattern: string, path: string, prefix: boolean): boolean {
+  const wanted = pattern.split("/").filter(Boolean)
+  const actual = path.split("/").filter(Boolean)
+  if (prefix ? wanted.length > actual.length : wanted.length !== actual.length) return false
+  return wanted.every((segment, index) => segment.startsWith(":") || segment === actual[index])
 }
 
 const storage = new AsyncLocalStorage<HttpLogContext>()
@@ -71,23 +89,32 @@ export const DEFAULT_HTTP_LOG_POLICY: HttpLogPolicy = {
     "/api/auth",
     "/api/demo-config",
     "/api/health",
-    "/api/chat/runs",
-    "/api/models",
     "/api/model-profiles",
   ],
-  excludedGetPaths: [
-    "/api/knowledge-bases",
+  // Exact: the collection read only. A prefix would swallow the graph reads,
+  // which ARE whitelisted operations (they load a whole subgraph).
+  excludedGetPaths: ["/api/knowledge-bases", "/api/documents"],
+  excludedGetPrefixes: [
+    "/api/chat/runs",
+    "/api/chat/sessions/:sessionId/attachments",
+    "/api/knowledge-bases/:id/document-folders",
+    "/api/knowledge-bases/:id/faqs",
+    "/api/knowledge-bases/:id/wiki",
+    "/api/knowledge-bases/:id/sync-data-sources",
     "/api/knowledge-base-folders",
-    "/api/documents",
-    "/api/conversations",
-    "/api/handoffs",
-    "/api/assistants",
-    "/api/faq-entries",
-    "/api/memories",
-    "/api/memory-suggestions",
+    "/api/sync-data-sources",
+    "/api/ingest",
+    "/api/sources",
     "/api/evaluations",
     "/api/evaluation-datasets",
-    "/api/sync-data-sources",
+    "/api/assistants",
+    "/api/conversations",
+    "/api/feedback",
+    "/api/handoffs",
+    "/api/memories",
+    "/api/memory-suggestions",
+    "/api/models/profiles",
+    "/api/faq-entries",
   ],
   operations: [
     { prefix: "/api/chat", operation: "chat.run" },
@@ -134,7 +161,11 @@ export function decideHttpLog(
   if (policy.excludedPrefixes.some((prefix) => normalizedPath === prefix || normalizedPath.startsWith(`${prefix}/`))) {
     return { logged: false, operation: operation?.operation ?? "http.request" }
   }
-  if (normalizedMethod === "GET" && policy.excludedGetPaths.includes(normalizedPath)) {
+  if (
+    normalizedMethod === "GET" &&
+    (policy.excludedGetPaths.some((path) => matchesSegments(path, normalizedPath, false)) ||
+      policy.excludedGetPrefixes.some((path) => matchesSegments(path, normalizedPath, true)))
+  ) {
     return { logged: false, operation: operation?.operation ?? "http.request" }
   }
   return { logged: true, operation: operation?.operation ?? "http.request" }
@@ -307,6 +338,10 @@ export function createHttpLogLifecycle(logger: Logger, options: HttpLogLifecycle
       finalize("error")
     })
 
-    storage.run(context, () => next())
+    // Run the handler with the request span active so provider calls made
+    // inside it (model observation) attach to this root, not to a new one.
+    const runNext = (): void => storage.run(context, () => next())
+    if (operation) operation.runInContext(runNext)
+    else runNext()
   }
 }

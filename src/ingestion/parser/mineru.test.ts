@@ -181,7 +181,7 @@ test("MinerU CLI is argument-safe and reports capability failures", async (t) =>
   const parser = new MinerUParser({
     command: process.execPath,
     commandArgs: ["-e", writeArtifact, "--"],
-    timeoutMs: 1_000,
+    timeoutMs: 10_000,
     inputLimitBytes: 4_096,
     outputLimitBytes: 4_096,
   })
@@ -196,7 +196,7 @@ test("MinerU CLI is argument-safe and reports capability failures", async (t) =>
   await t.test("unavailable executable", async () => {
     const unavailable = new MinerUParser({
       command: "kefu-rag-definitely-missing-mineru",
-      timeoutMs: 1_000,
+      timeoutMs: 10_000,
       inputLimitBytes: 1_024,
       outputLimitBytes: 1_024,
     })
@@ -218,7 +218,7 @@ test("MinerU CLI is argument-safe and reports capability failures", async (t) =>
         "const fs=require('fs'),path=require('path'),a=process.argv.slice(1),o=a[a.indexOf('-o')+1],d=path.join(o,'input','ocr');fs.mkdirSync(d,{recursive:true});fs.writeFileSync(path.join(d,'input_content_list.json'),'{')",
         "--",
       ],
-      timeoutMs: 1_000,
+      timeoutMs: 10_000,
       inputLimitBytes: 1_024,
       outputLimitBytes: 1_024,
     })
@@ -236,7 +236,7 @@ test("MinerU CLI is argument-safe and reports capability failures", async (t) =>
     const missing = new MinerUParser({
       command: process.execPath,
       commandArgs: ["-e", "", "--"],
-      timeoutMs: 1_000,
+      timeoutMs: 10_000,
       inputLimitBytes: 1_024,
       outputLimitBytes: 1_024,
     })
@@ -258,7 +258,7 @@ test("MinerU CLI is argument-safe and reports capability failures", async (t) =>
         "const fs=require('fs'),path=require('path'),a=process.argv.slice(1),o=a[a.indexOf('-o')+1],d=path.join(o,'input','ocr');fs.mkdirSync(d,{recursive:true});fs.writeFileSync(path.join(d,'input_content_list.json'),JSON.stringify([{type:'image',img_path:'images/missing.jpg',image_caption:['missing'],bbox:[0,0,1,1],page_idx:0}]))",
         "--",
       ],
-      timeoutMs: 1_000,
+      timeoutMs: 10_000,
       inputLimitBytes: 1_024,
       outputLimitBytes: 4_096,
     })
@@ -287,7 +287,7 @@ test("MinerU persists referenced image bytes under a content-addressed identity"
   const parser = new MinerUParser({
     command: process.execPath,
     commandArgs: ["-e", writeArtifact, "--"],
-    timeoutMs: 1_000,
+    timeoutMs: 10_000,
     inputLimitBytes: 4_096,
     outputLimitBytes: 4_096,
     assetRoot,

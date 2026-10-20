@@ -188,6 +188,14 @@ node --import tsx --test <file># Focused test file
 # Focused runs need the same promotion:
 #   node --import tsx --import ./scripts/test-env.ts --test <file>
 
+# `npm test` caps file concurrency at 8 (--test-concurrency=8). The parser
+# suites spawn a Node process per fixture; at 12-way parallelism (one per CPU)
+# those spawns starve and hit their own timeouts, which reads as flaky tests.
+
+# Logging/tracing evidence (needs the local stack for the readback):
+node --import tsx scripts/lo20-route-matrix.ts   # 113 routes: root vs excluded
+node --import tsx scripts/lo19-readback.ts       # OTLP -> Langfuse readback
+
 # Release verification (Tickets 03-04)
 npm run release:verify:local   # Run 6 local release gates
 npm run release:verify:production  # Run production release gates
