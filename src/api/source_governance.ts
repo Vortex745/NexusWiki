@@ -5,6 +5,8 @@ import type { CandidateReviewStore } from "../knowledge/candidate_review_store"
 import { InvalidReviewConflictError } from "../knowledge/candidate_review_store"
 import type { RetirementService } from "../knowledge/retirement"
 import type { SourceLifecycleStore } from "../knowledge/source_lifecycle_store"
+import { taskTraceFromScope } from "../tracing/contract"
+import { requestScope } from "../tracing/express"
 import type {
   ReviewDecision,
   SourceLifecycleState,
@@ -35,7 +37,7 @@ import type {
  * Reference: Ticket 09 P5 handoff.ts (same Router + resolveContext pattern).
  */
 
-const MAX_REASON_LENGTH = 1000
+export const MAX_REASON_LENGTH = 1000
 
 const CLEANUP_OPS_LIST = [
   "cleanup_es",
@@ -78,8 +80,12 @@ function requireAdmin(ctx: AccessContext, res: Response): boolean {
 /**
  * Validate a reason string: non-empty, max MAX_REASON_LENGTH chars.
  * Returns true if valid; res sends 400 and returns false otherwise.
+ *
+ * Exported so every destructive command shares ONE limit and one message —
+ * the knowledge-base-wide retirement validates the same field the per-source
+ * retire does.
  */
-function validateReason(reason: unknown, res: Response): reason is string {
+export function validateReason(reason: unknown, res: Response): reason is string {
   if (typeof reason !== "string" || reason.length === 0 || reason.length > MAX_REASON_LENGTH) {
     res
       .status(400)
@@ -229,7 +235,9 @@ export function createSourceGovernanceRouter(deps: SourceGovernanceRouterDeps): 
         ctx.tenantId,
         body.decision,
         body.reason,
-        actor
+        actor,
+        // C4: an approval can enqueue a wiki rebuild; it belongs to THIS trace.
+        taskTraceFromScope(requestScope(res))
       )
       if (!result) {
         // Cross-tenant or non-existent — 404 (never reveal existence)
@@ -263,7 +271,13 @@ export function createSourceGovernanceRouter(deps: SourceGovernanceRouterDeps): 
     // Actor from ctx.subjectId — prevents spoofing via body.actor
     const actor = ctx.subjectId
 
-    const result = retirementService.retire(sourceId, ctx.tenantId, body.reason, actor)
+    const result = retirementService.retire(
+      sourceId,
+      ctx.tenantId,
+      body.reason,
+      actor,
+      taskTraceFromScope(requestScope(res))
+    )
     if (!result) {
       // Cross-tenant or non-existent — 404 (never reveal existence)
       res.status(404).json({ error: "source not found" })

@@ -449,3 +449,187 @@ test("retirement retracts existing Wiki contributions even when generation is di
     assert.deepEqual(jobs, [{ op: "retract" }])
   } finally { db.close() }
 })
+
+// ---------------------------------------------------------------------------
+// retireKnowledgeBaseContents — the knowledge-base-wide wipe.
+//
+// The property worth pinning is that it is a LOOP over the verified per-source
+// path, not a second destruction implementation: same tombstone per source,
+// same idempotent cleanup enqueue, same tenant scoping, and the metadata rows
+// survive (that is what the confirmation dialog promises the user).
+// ---------------------------------------------------------------------------
+
+/** setupSource plus the knowledge-base ownership the wipe selects on. */
+function seedSourceInKb(
+  db: DB,
+  args: {
+    sourceId: string
+    knowledgeBaseId: string
+    tenantId?: string
+    docIds: string[]
+    lifecycleState?: "active" | "quarantined" | "retired"
+  }
+): void {
+  setupSource(db, {
+    sourceId: args.sourceId,
+    tenantId: args.tenantId,
+    docIds: args.docIds,
+    lifecycleState: args.lifecycleState,
+  })
+  db.prepare(`UPDATE sources SET knowledge_base_id = ? WHERE source_id = ?`)
+    .run(args.knowledgeBaseId, args.sourceId)
+  db.prepare(`UPDATE documents SET knowledge_base_id = ? WHERE source_id = ?`)
+    .run(args.knowledgeBaseId, args.sourceId)
+}
+
+function retirementFor(db: DB): RetirementServiceImpl {
+  return new RetirementServiceImpl(db, new SqliteSourceLifecycleStore(db), new TaskRepo(db))
+}
+
+test("a knowledge-base wipe retires every source of that base and only that base", () => {
+  const db = openDb(":memory:")
+  try {
+    seedSourceInKb(db, { sourceId: "src-a1", knowledgeBaseId: "kb-a", docIds: ["doc-a1a", "doc-a1b"] })
+    seedSourceInKb(db, { sourceId: "src-a2", knowledgeBaseId: "kb-a", docIds: ["doc-a2a"] })
+    seedSourceInKb(db, { sourceId: "src-b1", knowledgeBaseId: "kb-b", docIds: ["doc-b1a"] })
+    const retirement = retirementFor(db)
+
+    const result = retirement.retireKnowledgeBaseContents("kb-a", "default", "批量清理", "local")
+
+    // 3 documents x the 4 cleanup ops, all from this call.
+    assert.deepEqual(result, {
+      sources: 2,
+      retired: 2,
+      alreadyRetired: 0,
+      cleanupTasksQueued: 12,
+    })
+
+    const store = new SqliteSourceLifecycleStore(db)
+    assert.equal(store.getSource("src-a1", "default")?.lifecycleState, "retired")
+    assert.equal(store.getSource("src-a2", "default")?.lifecycleState, "retired")
+    assert.equal(store.getSource("src-b1", "default")?.lifecycleState, "active",
+      "another knowledge base is untouched")
+  } finally { db.close() }
+})
+
+test("a wipe keeps the metadata rows and writes one tombstone per source", () => {
+  const db = openDb(":memory:")
+  try {
+    seedSourceInKb(db, { sourceId: "src-a1", knowledgeBaseId: "kb-a", docIds: ["doc-a1a"] })
+    seedSourceInKb(db, { sourceId: "src-a2", knowledgeBaseId: "kb-a", docIds: ["doc-a2a"] })
+
+    retirementFor(db).retireKnowledgeBaseContents("kb-a", "default", "下线旧语料", "local")
+
+    // The audit trail is never deleted — this is what makes past citations
+    // traceable, and what the confirmation dialog tells the user survives.
+    const rows = db.prepare(
+      `SELECT (SELECT COUNT(*) FROM sources) AS sources,
+              (SELECT COUNT(*) FROM documents) AS documents,
+              (SELECT COUNT(*) FROM source_tombstones) AS tombstones`
+    ).get() as { sources: number; documents: number; tombstones: number }
+    assert.deepEqual(rows, { sources: 2, documents: 2, tombstones: 2 })
+  } finally { db.close() }
+})
+
+test("a second wipe reports everything as already retired and queues nothing again", () => {
+  const db = openDb(":memory:")
+  try {
+    seedSourceInKb(db, { sourceId: "src-a1", knowledgeBaseId: "kb-a", docIds: ["doc-a1a"] })
+    seedSourceInKb(db, { sourceId: "src-a2", knowledgeBaseId: "kb-a", docIds: ["doc-a2a"] })
+    const retirement = retirementFor(db)
+
+    retirement.retireKnowledgeBaseContents("kb-a", "default", "第一次", "local")
+    const second = retirement.retireKnowledgeBaseContents("kb-a", "default", "第二次", "local")
+
+    assert.deepEqual(second, {
+      sources: 2,
+      retired: 0,
+      alreadyRetired: 2,
+      cleanupTasksQueued: 0,
+    })
+    const tombstones = (db.prepare(`SELECT COUNT(*) AS n FROM source_tombstones`).get() as { n: number }).n
+    assert.equal(tombstones, 2, "an idempotent re-wipe never appends a second tombstone")
+  } finally { db.close() }
+})
+
+test("a partially retired knowledge base splits the counts honestly", () => {
+  const db = openDb(":memory:")
+  try {
+    seedSourceInKb(db, {
+      sourceId: "src-done", knowledgeBaseId: "kb-a", docIds: ["doc-done"], lifecycleState: "retired",
+    })
+    seedSourceInKb(db, { sourceId: "src-live", knowledgeBaseId: "kb-a", docIds: ["doc-live"] })
+
+    const result = retirementFor(db).retireKnowledgeBaseContents("kb-a", "default", "补齐", "local")
+
+    assert.equal(result.sources, 2)
+    assert.equal(result.retired, 1, "only the source this call actually moved")
+    assert.equal(result.alreadyRetired, 1)
+  } finally { db.close() }
+})
+
+test("another tenant's source under the same knowledge-base id is out of reach", () => {
+  const db = openDb(":memory:")
+  try {
+    seedSourceInKb(db, {
+      sourceId: "src-mine", knowledgeBaseId: "kb-shared", tenantId: "default", docIds: ["doc-mine"],
+    })
+    seedSourceInKb(db, {
+      sourceId: "src-theirs", knowledgeBaseId: "kb-shared", tenantId: "other", docIds: ["doc-theirs"],
+    })
+
+    const result = retirementFor(db).retireKnowledgeBaseContents("kb-shared", "default", "清理", "local")
+
+    assert.equal(result.sources, 1, "only the caller's tenant is selected")
+    assert.equal(result.retired, 1)
+    const store = new SqliteSourceLifecycleStore(db)
+    assert.equal(store.getSource("src-theirs", "other")?.lifecycleState, "active")
+  } finally { db.close() }
+})
+
+test("an unknown knowledge base id wipes nothing", () => {
+  const db = openDb(":memory:")
+  try {
+    seedSourceInKb(db, { sourceId: "src-a1", knowledgeBaseId: "kb-a", docIds: ["doc-a1a"] })
+
+    const result = retirementFor(db).retireKnowledgeBaseContents("kb-nope", "default", "清理", "local")
+
+    assert.deepEqual(result, { sources: 0, retired: 0, alreadyRetired: 0, cleanupTasksQueued: 0 })
+    const store = new SqliteSourceLifecycleStore(db)
+    assert.equal(store.getSource("src-a1", "default")?.lifecycleState, "active")
+  } finally { db.close() }
+})
+
+test("C4: a retirement command hands its trace to the wiki retraction job", () => {
+  const db = openDb(":memory:")
+  try {
+    setupSource(db, { sourceId: "src-wiki-trace", docIds: ["doc-wiki-trace"] })
+    const wiki = new WikiStore(db)
+    const page = wiki.save({
+      tenantId: "default", knowledgeBaseId: "", slug: "concept/traced",
+      title: "Traced", pageType: "concept", status: "published",
+      content: "Source material", summary: "", aliases: [], folderId: "",
+      sourceRefs: ["doc-wiki-trace"], chunkRefs: [], inLinks: [], outLinks: [],
+      lastEditSource: "pipeline",
+    })
+    wiki.upsertContribution({
+      pageId: page.id, documentId: "doc-wiki-trace", sourceId: "src-wiki-trace",
+      content: "Source material", chunkRefs: [],
+    })
+
+    const { service } = makeService(db)
+    const trace = { traceId: "e".repeat(32), spanId: "f".repeat(16), sampled: true }
+    service.retire("src-wiki-trace", "default", "withdrawn", "admin", trace)
+
+    const row = db
+      .prepare("SELECT trace_id, trace_span_id, trace_sampled FROM wiki_jobs WHERE source_id = ?")
+      .get("src-wiki-trace") as Record<string, unknown> | undefined
+    assert.deepEqual(row, {
+      trace_id: trace.traceId,
+      trace_span_id: trace.spanId,
+      trace_sampled: 1,
+    }, "the retraction continues the operator's trace")
+  } finally {
+    db.close()
+  }
+})

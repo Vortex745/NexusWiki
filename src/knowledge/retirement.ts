@@ -1,7 +1,9 @@
 import type { DB } from "../ingestion/tracking/db"
 import { TaskRepo } from "../ingestion/tracking/task_repo"
+import { WikiStore } from "../wiki/store"
 import type { SourceLifecycleState } from "../types/governance"
 import type { SourceLifecycleStore } from "./source_lifecycle_store"
+import type { TaskTraceContext } from "../tracing/contract"
 
 /**
  * Ticket 11 Phase E P4 (spec §11 L1576-1577, L1581): RetirementService.
@@ -78,8 +80,42 @@ export interface RetirementService {
     sourceId: string,
     tenantId: string,
     reason: string,
-    actor: string
+    actor: string,
+    trace?: TaskTraceContext
   ): RetirementResult | null
+
+  /**
+   * Retire EVERY source of one knowledge base — "清空知识库内容".
+   *
+   * It is a loop over {@link retire}, not a new destruction path: every source
+   * gets its own tombstone, its own idempotency check and its own cleanup
+   * enqueue, so a half-finished wipe can be finished by calling it again.
+   *
+   * The knowledge base itself survives, and so do the `sources`/`documents`
+   * rows and their tombstones — the house rule is that the audit trail is never
+   * deleted, which is what keeps past citations traceable. Callers must verify
+   * the knowledge base exists first: an unknown id and an empty one both yield
+   * zero sources here.
+   */
+  retireKnowledgeBaseContents(
+    knowledgeBaseId: string,
+    tenantId: string,
+    reason: string,
+    actor: string,
+    trace?: TaskTraceContext
+  ): KnowledgeBaseRetirementResult
+}
+
+/** Aggregate of one knowledge-base-wide retirement. */
+export interface KnowledgeBaseRetirementResult {
+  /** Sources in the knowledge base, including already-retired ones. */
+  sources: number
+  /** Sources this call moved to retired. */
+  retired: number
+  /** Sources that were already retired before this call. */
+  alreadyRetired: number
+  /** Cleanup tasks newly enqueued across every source. */
+  cleanupTasksQueued: number
 }
 
 export class RetirementServiceImpl implements RetirementService {
@@ -94,7 +130,8 @@ export class RetirementServiceImpl implements RetirementService {
     sourceId: string,
     tenantId: string,
     reason: string,
-    actor: string
+    actor: string,
+    trace?: TaskTraceContext
   ): RetirementResult | null {
     // Step 0: existence check (also cross-tenant gate — getSource returns null
     // for cross-tenant per SourceLifecycleStore's contract).
@@ -111,6 +148,7 @@ export class RetirementServiceImpl implements RetirementService {
       // still enqueue any missing cleanup tasks (handles interrupted prior
       // retire between the transition and the enqueue).
       const enqueued = this.enqueueMissingCleanupTasks(docIds)
+      this.enqueueWikiRetraction(sourceId, tenantId, docIds, trace)
       return {
         sourceId,
         tenantId,
@@ -142,6 +180,8 @@ export class RetirementServiceImpl implements RetirementService {
     // fails, the Source is already retired (safety property, spec L1577).
     const enqueued = this.enqueueMissingCleanupTasks(docIds)
 
+    this.enqueueWikiRetraction(sourceId, tenantId, docIds, trace)
+
     return {
       sourceId,
       tenantId,
@@ -149,6 +189,53 @@ export class RetirementServiceImpl implements RetirementService {
       tombstoneId,
       enqueuedCleanupTasks: enqueued,
       idempotent: false,
+    }
+  }
+
+  retireKnowledgeBaseContents(
+    knowledgeBaseId: string,
+    tenantId: string,
+    reason: string,
+    actor: string,
+    trace?: TaskTraceContext
+  ): KnowledgeBaseRetirementResult {
+    // Deterministic order so a repeat call walks the sources the same way.
+    const rows = this.db.prepare(
+      `SELECT source_id FROM sources
+       WHERE knowledge_base_id = ? AND tenant_id = ?
+       ORDER BY source_id ASC`
+    ).all(knowledgeBaseId, tenantId) as { source_id: string }[]
+
+    let retired = 0
+    let alreadyRetired = 0
+    let cleanupTasksQueued = 0
+    for (const { source_id } of rows) {
+      const result = this.retire(source_id, tenantId, reason, actor)
+      // The row existed one statement ago under the same tenant, so a null can
+      // only mean it went away concurrently. Skip it rather than abandon the
+      // half-finished wipe — the next call picks it up idempotently.
+      if (!result) continue
+      cleanupTasksQueued += result.enqueuedCleanupTasks
+      if (result.idempotent) alreadyRetired++
+      else retired++
+    }
+    return { sources: rows.length, retired, alreadyRetired, cleanupTasksQueued }
+  }
+
+  private enqueueWikiRetraction(sourceId: string, tenantId: string,
+    docIds: string[], trace?: TaskTraceContext): void {
+    const knowledgeBase = this.db.prepare(`SELECT knowledge_base_id FROM sources
+      WHERE source_id = ? AND tenant_id = ?`).get(sourceId, tenantId) as
+      | { knowledge_base_id: string } | undefined
+    if (knowledgeBase && docIds.length) {
+      const wiki = new WikiStore(this.db, this.now)
+      if (wiki.pagesBySource(sourceId).length && !wiki.hasQueuedRetraction(sourceId)) {
+        // LO-16/C4: the retraction continues the operator's trace when this
+        // retirement came from an HTTP command; a cleanup-task retirement has
+        // no scope yet and falls back to the root policy.
+        wiki.enqueue(tenantId, knowledgeBase.knowledge_base_id, docIds.at(-1)!,
+          sourceId, "retract", trace)
+      }
     }
   }
 

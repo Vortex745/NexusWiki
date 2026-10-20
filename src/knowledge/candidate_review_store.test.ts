@@ -25,6 +25,7 @@ import assert from "node:assert/strict"
 import test from "node:test"
 import { openDb, type DB } from "../ingestion/tracking/db"
 import { DocumentRepo } from "../ingestion/tracking/doc_repo"
+import { WikiStore } from "../wiki/store"
 import {
   InvalidReviewConflictError,
   SqliteCandidateReviewStore,
@@ -508,6 +509,63 @@ test("P3 ReviewResult: shape matches interface", () => {
       activatedAsActive: result!.activatedAsActive,
     }
     assert.deepEqual(result, _staticCheck)
+  } finally {
+    db.close()
+  }
+})
+
+test("C4: an approval hands its trace to the wiki job it enqueues", () => {
+  const db = openDb(":memory:")
+  try {
+    setupDoc(db, {
+      docId: "doc-wiki-approve",
+      sourceId: "src-wiki-approve",
+      candidateState: "pending_review",
+    })
+    // The joint activation gate must pass for approval to activate AND
+    // enqueue the wiki rebuild; this is the exact proof shape the gate wants.
+    db.prepare(
+      "UPDATE documents SET knowledge_base_id = ?, candidate_evidence = ? WHERE doc_id = ?"
+    ).run(
+      "kb-wiki-approve",
+      JSON.stringify({
+        schemaVersion: 1,
+        contentProof: {
+          verdict: "pass",
+          reasonCodes: [],
+          bindings: { expectedChunksSha256: "digest-c4", expectedChunkCount: 1 },
+        },
+        indexProof: {
+          verdict: "pass",
+          reasonCodes: [],
+          manifestSha256: "digest-c4",
+          searchVisibleCount: 1,
+        },
+      }),
+      "doc-wiki-approve"
+    )
+    new WikiStore(db).setEnabled("default", "kb-wiki-approve", true)
+
+    const store = new SqliteCandidateReviewStore(db, new DocumentRepo(db))
+    const trace = { traceId: "c".repeat(32), spanId: "d".repeat(16), sampled: true }
+    const result = store.review(
+      "doc-wiki-approve",
+      "default",
+      "approve",
+      "looks good",
+      "admin",
+      trace
+    )
+
+    assert.equal(result?.activatedAsActive, true, "the approval activated the candidate")
+    const row = db
+      .prepare("SELECT trace_id, trace_span_id, trace_sampled FROM wiki_jobs WHERE document_id = ?")
+      .get("doc-wiki-approve") as Record<string, unknown> | undefined
+    assert.deepEqual(row, {
+      trace_id: trace.traceId,
+      trace_span_id: trace.spanId,
+      trace_sampled: 1,
+    }, "the wiki job continues the reviewing request")
   } finally {
     db.close()
   }

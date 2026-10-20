@@ -8,7 +8,8 @@ import {
 } from "../knowledge/knowledge_base_service"
 import type { RetirementService } from "../knowledge/retirement"
 import { NoopTracingRuntime, type TracingRuntime } from "../tracing/contract"
-import { requestOperation } from "../tracing/express"
+import { requestOperation, requestScope } from "../tracing/express"
+import { taskTraceFromScope } from "../tracing/contract"
 import { validateReason } from "./source_governance"
 
 /**
@@ -219,7 +220,9 @@ export function createKnowledgeBaseRouter(options: {
       knowledgeBase.id,
       context.tenantId,
       reason,
-      context.subjectId
+      context.subjectId,
+      // C4: sources retired here enqueue wiki retractions in this trace.
+      taskTraceFromScope(requestScope(res))
     )
     res.json({ knowledgeBaseId: knowledgeBase.id, ...result })
   })

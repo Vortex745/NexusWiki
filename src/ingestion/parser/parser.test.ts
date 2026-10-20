@@ -519,6 +519,9 @@ test("Marker CLI is argument-safe, bounded, and fails actionably", async (t) => 
       }),
       /Marker output exceeded 512 bytes/
     )
-    assert.ok(Date.now() - startedAt < 1_500)
+    // Wall-clock only guards against "waited for the parser timeout instead
+    // of noticing the growing artifact"; the regex above is the real oracle.
+    // Under a loaded suite a child process can take >1s just to start.
+    assert.ok(Date.now() - startedAt < 5_000)
   })
 })

@@ -6,6 +6,7 @@ import type {
   DocumentCandidateState,
   ReviewDecision,
 } from "../types/governance"
+import type { TaskTraceContext } from "../tracing/contract"
 
 /**
  * Ticket 11 Phase E P3 (spec §11 L1573-1575, L1580): CandidateReviewStore.
@@ -106,7 +107,8 @@ export interface CandidateReviewStore {
     tenantId: string,
     decision: ReviewDecision,
     reason: string,
-    actor: string
+    actor: string,
+    trace?: TaskTraceContext
   ): ReviewResult | null
 }
 
@@ -185,7 +187,8 @@ export class SqliteCandidateReviewStore implements CandidateReviewStore {
     tenantId: string,
     decision: ReviewDecision,
     reason: string,
-    actor: string
+    actor: string,
+    trace?: TaskTraceContext
   ): ReviewResult | null {
     const existing = this.db.prepare(
       `SELECT doc_id, tenant_id, source_id, candidate_state,
@@ -258,8 +261,10 @@ export class SqliteCandidateReviewStore implements CandidateReviewStore {
           if (document) {
             const wiki = new WikiStore(this.db, this.now)
             if (wiki.enabled(tenantId, document.knowledgeBaseId ?? "")) {
+              // C4: the approval is an operator action — its wiki job
+              // continues the reviewing request's trace.
               wiki.enqueue(tenantId, document.knowledgeBaseId ?? "", docId,
-                existing.source_id, "ingest")
+                existing.source_id, "ingest", trace)
             }
           }
         }

@@ -104,7 +104,7 @@ function buildHarness(options: {
   const destination = new CaptureDestination()
   const counts = new LogCounters()
   const sink = new BackpressureSink(destination, counts)
-  const logger = createPinoLogger({ level: "info", sink, counts, bindings: { service: "log-acceptance" } })
+  const logger = createPinoLogger({ level: "info", sink, counters: counts, bindings: { service: "log-acceptance" } })
   const app = createApp({
     db,
     logger,
