@@ -110,7 +110,7 @@ test("LO-17-AC02/AC04: an evaluation task continues the submit trace and ends on
     assert.equal((spans[0].attributes as Record<string, unknown>)["evaluation.cases"], 1)
     await runtime.shutdown(300)
   } finally {
-    await service.shutdown(500).catch(() => undefined)
+    await service.shutdown({ timeoutMs: 500 }).catch(() => undefined)
   }
 })
 
@@ -134,6 +134,6 @@ test("LO-17-AC03/AC05: a task without a handoff roots itself; unsampled stays si
     assert.equal(spans[0].parentSpanContext, undefined)
     await runtime.shutdown(300)
   } finally {
-    await service.shutdown(500).catch(() => undefined)
+    await service.shutdown({ timeoutMs: 500 }).catch(() => undefined)
   }
 })
