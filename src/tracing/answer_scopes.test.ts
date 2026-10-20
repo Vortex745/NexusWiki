@@ -19,6 +19,7 @@ class FakeScope implements OperationScope {
   readonly spanId = "1".repeat(16)
   readonly sampled = true
   readonly children: Recorded[] = []
+  readonly childScopes: FakeScope[] = []
   readonly own: Recorded
 
   constructor(name = "root", own?: Recorded) {
@@ -32,7 +33,9 @@ class FakeScope implements OperationScope {
   startChild(name: string): OperationScope {
     const record: Recorded = { name, ended: undefined }
     this.children.push(record)
-    return new FakeScope(name, record)
+    const child = new FakeScope(name, record)
+    this.childScopes.push(child)
+    return child
   }
 
   runInContext<T>(fn: () => T): T {
@@ -104,4 +107,79 @@ test("LO-09: a repeated stage does not open a second span", () => {
   tracker.observe(event({ type: "progress", stage: "validation", message: "b", data: {} }))
   tracker.finish("ok")
   assert.equal(root.children.length, 1)
+})
+
+test("LO-09: a real correction round nests its stages and tool calls", () => {
+  const root = new FakeScope()
+  const tracker = new AnswerScopeTracker(root)
+
+  tracker.observe(event({ type: "progress", stage: "retrieval", message: "first", data: {}, round: 0 }))
+  tracker.observe(event({
+    type: "progress",
+    stage: "retrieval",
+    message: "correction",
+    round: 2,
+    data: { complexLoop: true, iteration: 1, selectedTool: "semantic_lexical_hybrid", resultCount: 3 },
+  }))
+
+  assert.equal(tracker.currentRound, 2)
+  const round = root.childScopes.find((child) => child.own.name === "round.2")
+  assert.ok(round, "round 2 opens only when the run really enters it")
+  const initialStage = root.childScopes.find((child) => child.own.name === "stage.retrieval")
+  assert.ok(initialStage?.own.ended, "the round-0 stage closes when the correction round starts")
+  assert.deepEqual(
+    round.children.map((child) => child.name),
+    ["stage.retrieval"],
+    "the correction stage lives under round 2",
+  )
+  assert.equal(tracker.currentStage, "retrieval")
+
+  tracker.observe(event({ type: "done", stage: "done", round: 2, result: { status: "completed", reply: "ok" } }))
+  assert.equal(round.own.ended?.outcome, "ok", "the round ends once, after its stages")
+  assert.equal(root.children.filter((child) => child.name === "stage.retrieval").length, 1)
+})
+
+test("LO-09: every executed tool call gets one span; a duplicate gets none", () => {
+  const root = new FakeScope()
+  const tracker = new AnswerScopeTracker(root)
+
+  tracker.observe(event({
+    type: "progress",
+    stage: "retrieval",
+    message: "one tool call",
+    data: { complexLoop: true, iteration: 1, selectedTool: "graph_navigation", resultCount: 4 },
+  }))
+  tracker.observe(event({
+    type: "progress",
+    stage: "retrieval",
+    message: "same call again",
+    data: { complexLoop: true, iteration: 2, selectedTool: "graph_navigation", duplicate: true },
+  }))
+  tracker.finish("ok")
+
+  const stage = root.childScopes.find((scope) => scope.own.name === "stage.retrieval")
+  assert.ok(stage)
+  assert.deepEqual(stage.children.map((child) => child.name), ["tool.graph_navigation"])
+  assert.equal(stage.children[0].ended?.outcome, "ok")
+  assert.equal(root.children.length, 1, "the tracker never opens a second root child")
+})
+
+test("LO-09: a business refusal is not a tracing error, a provider failure is", () => {
+  const cases: Array<[string, string]> = [
+    ["completed", "ok"],
+    ["insufficient_evidence", "ok"],
+    ["handoff_required", "ok"],
+    ["clarification_required", "ok"],
+    ["invalid_citation", "ok"],
+    ["provider_error", "error"],
+    ["cancelled", "error"],
+  ]
+  for (const [status, expected] of cases) {
+    const root = new FakeScope()
+    const tracker = new AnswerScopeTracker(root)
+    tracker.observe(event({ type: "progress", stage: "answer", message: "x", data: {} }))
+    tracker.observe(event({ type: "done", stage: "done", result: { status, reply: "" } }))
+    assert.equal(root.children[0].ended?.outcome, expected, `terminal ${status}`)
+    assert.equal(tracker.currentStage, undefined, "the run leaves no open stage")
+  }
 })

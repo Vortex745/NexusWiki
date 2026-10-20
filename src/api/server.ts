@@ -286,7 +286,9 @@ export function createApp(options: {
       options.assistants,
       // Ticket 20 (CONV-01A): the transport appends user turns and assistant
       // terminal turns to the caller's server-owned directory.
-      options.conversationHistory
+      options.conversationHistory,
+      // LO-09: real round/tool/stage scopes under the request root.
+      options.tracing
     )
   )
 

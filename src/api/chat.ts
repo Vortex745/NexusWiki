@@ -15,6 +15,9 @@ import {
 import type { RetrievalScopeResolver } from "../retrieval/scope"
 import type { RetrievalScope } from "../types/retrieval_scope"
 import { resolveScopeOrRespond } from "./scope_http"
+import type { TracingRuntime } from "../tracing/contract"
+import { requestScope } from "../tracing/express"
+import { tracedAnswerSource } from "../tracing/answer_scopes"
 
 interface ChatRequest {
   message: string
@@ -116,8 +119,23 @@ export function createChatRouter(
    * (terminal event, with its terminal status) to the caller's directory.
    */
   conversationHistory?: import("../answer/conversation_history_store").SqliteConversationHistoryStore,
+  /**
+   * LO-09: the neutral tracing runtime. When wired, the run's REAL events
+   * drive round/tool/stage spans under the request root. The event stream the
+   * client receives is byte-for-byte the same; tracing off or failing cannot
+   * change it.
+   */
+  tracing?: TracingRuntime,
 ): Router {
   const router = Router()
+
+  /** LO-09: stage/round/tool scopes, only when the request root was sampled. */
+  const answerSource = (
+    res: Response,
+  ): AnswerEventsSource =>
+    tracing
+      ? tracedAnswerSource(eventsSource, tracing, () => requestScope(res))
+      : eventsSource
 
   // Ticket 21 (CONV-01B): one active run per session, per process. A second
   // run for a session that already has one in flight is refused BEFORE the
@@ -479,6 +497,8 @@ export function createChatRouter(
       scopes: Object.freeze([...accessContext.scopes]),
     }) as AccessContext
 
+    const source = answerSource(res)
+
     if (stream) {
       res.setHeader("Content-Type", "text/event-stream")
       res.setHeader("Cache-Control", "no-cache")
@@ -497,7 +517,7 @@ export function createChatRouter(
       try {
         // The injected source guarantees a terminal event on every path.
         // HTTP only encodes events to SSE.
-        for await (const event of eventsSource(message, {
+        for await (const event of source(message, {
           ...runSnapshot,
           signal: abortController.signal,
           accessContext: runIdentity,
@@ -525,7 +545,7 @@ export function createChatRouter(
       res.on("close", onClientClose)
       try {
         let terminal: Extract<AnswerRunEvent, { type: "done" }> | undefined
-        for await (const event of eventsSource(message, {
+        for await (const event of source(message, {
           ...runSnapshot,
           signal: abortController.signal,
           accessContext: runIdentity,

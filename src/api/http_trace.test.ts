@@ -356,6 +356,98 @@ test("LO-06-AC07: an idle request ends once with timeout and an error status", a
   }
 })
 
+test("LO-09-AC01/AC02: a real chat run emits stage and tool spans under its request root", async () => {
+  const db = openDb(":memory:")
+  const exporter = new FakeExporter()
+  const { runtime } = createTracingRuntime({ env: ENABLED_ENV, exporter })
+  const source: AnswerEventsSource = async function* (_message, options) {
+    const runId = options.runId ?? "run-l09"
+    yield progressEvent(runId)
+    yield {
+      ...progressEvent(runId),
+      stage: "retrieval",
+      message: "retrieving",
+      data: { complexLoop: true, iteration: 1, selectedTool: "semantic_lexical_hybrid", resultCount: 2 },
+      eventId: `${runId}:2`,
+      sequence: 2,
+    } as AnswerRunEvent
+    const terminal = terminalEvent(runId) as Extract<AnswerRunEvent, { type: "done" }>
+    yield {
+      ...terminal,
+      result: { ...terminal.result, status: "insufficient_evidence" },
+    } as AnswerRunEvent
+  }
+  const app = createApp({ db, logger: new SilentLogger(), tracing: runtime, eventsSource: source })
+  const { server, port } = await listen(app)
+  try {
+    const response = await fetch(`http://127.0.0.1:${port}/api/chat`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ message: "hi", stream: true, sessionId: "sess-l09" }),
+    })
+    assert.equal(response.status, 200)
+    assert.ok((await response.text()).includes("event"))
+    await new Promise((resolve) => setTimeout(resolve, 60))
+    await runtime.flush(1_000)
+
+    const root = spansByName(exporter, "http.post")[0]
+    assert.ok(root)
+    const route = spansByName(exporter, "stage.route")
+    const retrieval = spansByName(exporter, "stage.retrieval")
+    const tool = spansByName(exporter, "tool.semantic_lexical_hybrid")
+    assert.equal(route.length, 1, "one real route stage")
+    assert.equal(retrieval.length, 1, "one real retrieval stage")
+    assert.equal(tool.length, 1, "one real tool call")
+    for (const span of [...route, ...retrieval, ...tool]) {
+      assert.equal(span.spanContext().traceId, root.spanContext().traceId)
+    }
+    assert.equal(retrieval[0].parentSpanContext?.spanId, root.spanContext().spanId)
+    assert.equal(tool[0].parentSpanContext?.spanId, retrieval[0].spanContext().spanId)
+    assert.equal((tool[0].attributes as Record<string, unknown>)["tool.result_count"], 2)
+    assert.equal(root.status.code, 1, "a business refusal is not a tracing error")
+    await runtime.shutdown(500)
+  } finally {
+    server.close()
+    db.close()
+  }
+})
+
+test("LO-09-AC05/AC06: tracing off leaves the SSE payload identical", async () => {
+  const tracedDb = openDb(":memory:")
+  const plainDb = openDb(":memory:")
+  const exporter = new FakeExporter()
+  const { runtime } = createTracingRuntime({ env: ENABLED_ENV, exporter })
+  const tracedApp = createApp({ db: tracedDb, logger: new SilentLogger(), tracing: runtime, eventsSource: emptyEventsSource })
+  const plainApp = createApp({ db: plainDb, logger: new SilentLogger(), tracing: new NoopTracingRuntime(), eventsSource: emptyEventsSource })
+  const traced = await listen(tracedApp)
+  const plain = await listen(plainApp)
+  const body = JSON.stringify({ message: "same", stream: false, sessionId: "sess-l09-parity" })
+  try {
+    const [withTrace, without] = await Promise.all([
+      fetch(`http://127.0.0.1:${traced.port}/api/chat`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body,
+      }),
+      fetch(`http://127.0.0.1:${plain.port}/api/chat`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body,
+      }),
+    ])
+    const tracedBody = (await withTrace.json()) as Record<string, unknown>
+    const plainBody = (await without.json()) as Record<string, unknown>
+    assert.deepEqual(Object.keys(tracedBody).sort(), Object.keys(plainBody).sort())
+    assert.equal(tracedBody.reply, plainBody.reply)
+    await runtime.shutdown(500)
+  } finally {
+    traced.server.close()
+    plain.server.close()
+    tracedDb.close()
+    plainDb.close()
+  }
+})
+
 test("LO-06-AC09: tracing off or a broken exporter leaves SSE/JSON and SQLite untouched", async () => {
   const silentDb = openDb(":memory:")
   const failedDb = openDb(":memory:")

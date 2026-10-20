@@ -32,3 +32,15 @@ export function requestOperation(
 export function attachRequestScope(res: Response, scope: OperationScope): void {
   ;(res.locals as Record<string, unknown>)[REQUEST_TRACING_SCOPE] = scope
 }
+
+/**
+ * The request root, when one was attached. Handlers that hand work to a
+ * background task use this to CAPTURE the correlation explicitly — the task
+ * record then carries neutral ids and the worker never reads a global.
+ */
+export function requestScope(res: Response): OperationScope | undefined {
+  const candidate = (res.locals as Record<string, unknown>)[REQUEST_TRACING_SCOPE]
+  return candidate && typeof (candidate as OperationScope).startChild === "function"
+    ? (candidate as OperationScope)
+    : undefined
+}
