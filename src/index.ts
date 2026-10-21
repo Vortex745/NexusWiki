@@ -247,6 +247,8 @@ async function main() {
       // LF-05: the system logger built above is the process's only log runtime;
       // without this injection startServer would build a stdout-only logger.
       logger: logs.system,
+      // LF-07: Answer run metadata goes to the Agent file only (never stdout).
+      agentLogger: logs.agent,
       // Ticket 14 (RET-01): the retrieval-debug endpoint shares chat's search
       // operations (same clients + reranker) — no second retrieval config.
       searchOperations: sharedAnswerEntry.searchOperations,

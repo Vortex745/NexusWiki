@@ -18,6 +18,9 @@ import { resolveScopeOrRespond } from "./scope_http"
 import type { TracingRuntime } from "../tracing/contract"
 import { requestScope } from "../tracing/express"
 import { tracedAnswerSource } from "../tracing/answer_scopes"
+import { currentHttpLogContext } from "../logging/http_lifecycle"
+import { withAgentRunLogging, type AgentRunLogContext } from "../logging/agent_run_log"
+import type { Logger } from "../logging/logger"
 
 interface ChatRequest {
   message: string
@@ -126,6 +129,12 @@ export function createChatRouter(
    * change it.
    */
   tracing?: TracingRuntime,
+  /**
+   * LF-07: the Agent-file logger (Answer run metadata). Injected by the
+   * composition root and never built here; absent in bare mounts, where no
+   * Agent file is created and the event stream is returned unchanged.
+   */
+  agentLogger?: Logger,
 ): Router {
   const router = Router()
 
@@ -136,6 +145,22 @@ export function createChatRouter(
     tracing
       ? tracedAnswerSource(eventsSource, () => requestScope(res))
       : eventsSource
+
+  /**
+   * LF-07: capture the run's correlation once, at run start. The HTTP log
+   * context owns `request_id`; the request root owns `trace_id`/`span_id`.
+   * Missing ids stay absent — nothing is minted or guessed.
+   */
+  const runLogContext = (res: Response, stream: boolean): AgentRunLogContext => {
+    const scope = requestScope(res)
+    const requestId = currentHttpLogContext()?.requestId
+    return {
+      ...(requestId ? { requestId } : {}),
+      ...(scope?.traceId ? { traceId: scope.traceId } : {}),
+      ...(scope?.spanId ? { spanId: scope.spanId } : {}),
+      stream,
+    }
+  }
 
   // Ticket 21 (CONV-01B): one active run per session, per process. A second
   // run for a session that already has one in flight is refused BEFORE the
@@ -497,7 +522,9 @@ export function createChatRouter(
       scopes: Object.freeze([...accessContext.scopes]),
     }) as AccessContext
 
-    const source = answerSource(res)
+    const source = withAgentRunLogging(answerSource(res), agentLogger, {
+      context: runLogContext(res, stream),
+    })
 
     if (stream) {
       res.setHeader("Content-Type", "text/event-stream")

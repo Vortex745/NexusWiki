@@ -93,6 +93,11 @@ export function createApp(options: {
    * uninjected logger can never change a business response.
    */
   logger?: Logger
+  /**
+   * LF-07: the Agent-file logger (Answer run metadata), injected alongside the
+   * system logger. Absent → no Agent file exists and chat behaves identically.
+   */
+  agentLogger?: Logger
   /** LO-04: request-log policy/timeout overrides (tests, probes). */
   httpLog?: HttpLogLifecycleOptions
   /**
@@ -288,7 +293,9 @@ export function createApp(options: {
       // terminal turns to the caller's server-owned directory.
       options.conversationHistory,
       // LO-09: real round/tool/stage scopes under the request root.
-      options.tracing
+      options.tracing,
+      // LF-07: Answer run metadata for the Agent file (file-only, never stdout).
+      options.agentLogger
     )
   )
 
@@ -669,6 +676,11 @@ export async function startServer(
      */
     logger?: Logger
     /**
+     * LF-07: the Agent-file logger. Forwarded to createApp → chat router; when
+     * absent, no Agent file is written and the SSE stream is unchanged.
+     */
+    agentLogger?: Logger
+    /**
      * LO-05: an already-built tracing runtime. When absent, startServer builds
      * it from TRACING_ENABLED / LANGFUSE_SAMPLE_RATE / LANGFUSE_* — the
      * composition root stays the only place that knows the vendor.
@@ -791,6 +803,8 @@ export async function startServer(
     imageAssetPath: config.imageAssetPath,
     logger,
     tracing,
+    // LF-07: the Agent-file logger, forwarded to the chat transport.
+    ...(options.agentLogger ? { agentLogger: options.agentLogger } : {}),
     accessMiddleware,
     ...(ingestAccessMiddleware ? { ingestAccessMiddleware } : {}),
     ...(managementAccessMiddleware ? { managementAccessMiddleware } : {}),
