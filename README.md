@@ -143,6 +143,11 @@ WeKnora 文本文件：`system-YYYY-MM-DD.log`（与 stdout 同源，并吸收 `
 回退：`LOG_FILE=off` 只保留 stdout 且不创建任何文件；`LOG_LEVEL=off` 把
 stdout 与两个文件一并静音。完整变量说明见 `.env.example`。
 
+已知限制：进程被强杀或断电时，最后仍在缓冲区中的少量记录可能丢失；
+日志目录永久不可写时，文件分支在首次诊断后静默降级，stdout 不受影响。
+与 WeKnora 规范的接受偏离：stdout 仍是 JSON 而文件为文本（两者内容不
+一致），且不提供 `LOG_FORMAT` 模板、ANSI 着色、按大小轮转与 LLM 调试文件。
+
 ### 演示数据
 
 ```bash
