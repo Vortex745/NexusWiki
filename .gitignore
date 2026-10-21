@@ -49,6 +49,9 @@ verify.json
 # Runtime data (sqlite db, ragas eval history)
 data/
 
+# LF-05: daily runtime logs (system-YYYY-MM-DD.log / agent-YYYY-MM-DD.log)
+logs/
+
 # Tool state directories and temp artifacts
 .codegraph/
 .omc/

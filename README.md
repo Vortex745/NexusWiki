@@ -133,6 +133,16 @@ npm run dev:web      # Vite 监听 :3000（/api 代理到 :3001）
 MCP、网络搜索与 Langfuse；**未配置的可选项显示「未配置」——不是失败，
 也不是成功**。诊断信息只包含主机名，永不包含凭据或完整 URL。
 
+### 6. 日志
+
+stdout 仍是单行 JSON；默认还会在 `LOG_DIR`（默认 `logs/`）写两个按天轮转的
+WeKnora 文本文件：`system-YYYY-MM-DD.log`（与 stdout 同源，并吸收 `console.*`）
+与 `agent-YYYY-MM-DD.log`（Answer run 执行元数据，不含问题/回答正文与 token）。
+保留最近 7 个自然日（含当日）。
+
+回退：`LOG_FILE=off` 只保留 stdout 且不创建任何文件；`LOG_LEVEL=off` 把
+stdout 与两个文件一并静音。完整变量说明见 `.env.example`。
+
 ### 演示数据
 
 ```bash

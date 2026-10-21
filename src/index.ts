@@ -41,8 +41,20 @@ import {
 } from "./mastra/promotion_gate"
 import { createRealLangfuseClient } from "./answer/langfuse_client"
 import { createWebEvidenceOperations } from "./web/web_evidence"
+import { createProcessLoggers, type ProcessLoggers } from "./logging/composition"
+import { installConsoleMirror } from "./logging/console_mirror"
+
+/** LF-05: held at module scope so the startup-failure path can flush and close. */
+let processLogs: ProcessLoggers | undefined
 
 async function main() {
+  // LF-05: the log runtime is built before config and before the first startup
+  // message, so every `console.*` below (including a config failure) reaches
+  // `system-YYYY-MM-DD.log`. stdout stays the existing single-line JSON.
+  const logs = createProcessLoggers(process.env)
+  processLogs = logs
+  installConsoleMirror(console, logs.systemFile)
+
   const cfg = loadConfig()
   console.log("[kefu-RAG] Config loaded", { esNode: cfg.esNode, neo4jUri: cfg.neo4jUri })
 
@@ -232,6 +244,9 @@ async function main() {
       // spread leaked the three fields as top-level options and the sign-in
       // flow never came up (the root cause recorded in TD-24-01).
       ...(demoAuth ? { demoAuth } : {}),
+      // LF-05: the system logger built above is the process's only log runtime;
+      // without this injection startServer would build a stdout-only logger.
+      logger: logs.system,
       // Ticket 14 (RET-01): the retrieval-debug endpoint shares chat's search
       // operations (same clients + reranker) — no second retrieval config.
       searchOperations: sharedAnswerEntry.searchOperations,
@@ -296,6 +311,10 @@ async function main() {
         // LO-03: flush the runtime logger LAST so the closes above still
         // produce diagnostics, then drain the pipe within its own budget.
         await runtimeLogger.close()
+        // LF-05: after the HTTP server and background runtime have stopped,
+        // close the file runtime last so every accepted line (including the
+        // request terminals above) is flushed and both daily files are closed.
+        await logs.close()
       },
     },
     // P8.2 (Debt #3 fix): close the legacy graph Neo4j driver singleton.
@@ -333,7 +352,14 @@ async function main() {
   installSignalHandlers(shutdownController)
 }
 
-main().catch((err) => {
+main().catch(async (err) => {
   console.error("[kefu-RAG] Startup failed:", err)
+  // LF-05: the mirror already queued this failure for the system file; flush
+  // it before exiting. A logging failure must not replace the startup error.
+  try {
+    await processLogs?.close()
+  } catch {
+    // stderr already carries the original failure.
+  }
   process.exit(1)
 })
