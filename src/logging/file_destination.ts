@@ -24,10 +24,13 @@ import { formatLocalDateKey } from "./weknora_text"
 export const DEFAULT_LOG_DIR = "logs"
 export const DEFAULT_RETENTION_DAYS = 7
 
-/** `LOG_DIR`: blank or missing falls back to `logs` (relative to the cwd). */
+/**
+ * `LOG_DIR`: blank, missing or containing a NUL byte falls back to `logs`
+ * (relative to the cwd); a NUL can never name a real directory.
+ */
 export function resolveLogDir(raw: string | undefined, fallback = DEFAULT_LOG_DIR): string {
   const value = (raw ?? "").trim()
-  return value.length > 0 ? value : fallback
+  return value.length > 0 && !value.includes("\0") ? value : fallback
 }
 
 export interface RotatingFileDestinationOptions {

@@ -34,7 +34,7 @@ const LEVEL_LABELS: Record<LogLevel, string> = {
 }
 
 /** Internal frames that must never be reported as the caller. */
-const INTERNAL_FRAME = /(?:^|[/\\])(?:weknora_text|pino_logger)(?:\.[cm]?[jt]s)?(?:\?|$)/
+const INTERNAL_FRAME = /(?:^|[/\\])(?:weknora_text|pino_logger|tee_logger)(?:\.[cm]?[jt]s)?(?:\?|$)/
 
 export interface WeKnoraLineInput {
   level: LogLevel
