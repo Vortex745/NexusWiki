@@ -69,6 +69,8 @@ export function parseLogFileSetting(raw: string | undefined): LogFileSetting {
 export interface ProcessLoggers {
   /** JSON stdout plus the system text file. */
   system: Logger
+  /** System text file only — the console mirror uses this to avoid duplicating stdout. */
+  systemFile: Logger
   /** Agent run metadata file only; silent when files are disabled. */
   agent: Logger
   /** Flush both logs, close the file streams, then refuse further records. */
@@ -96,7 +98,7 @@ export function createProcessLoggers(
   const level: LogLevelSetting = parseLogLevel(env.LOG_LEVEL, "info")
   if (level === "off") {
     const silent = new SilentLogger()
-    return { system: silent, agent: silent, close: () => Promise.resolve() }
+    return { system: silent, systemFile: silent, agent: silent, close: () => Promise.resolve() }
   }
 
   const closeTimeoutMs = options.closeTimeoutMs
@@ -128,7 +130,12 @@ export function createProcessLoggers(
   )
 
   if (parseLogFileSetting(env.LOG_FILE) === "off") {
-    return { system: stdout, agent: new SilentLogger(), close: () => stdout.close() }
+    return {
+      system: stdout,
+      systemFile: new SilentLogger(),
+      agent: new SilentLogger(),
+      close: () => stdout.close(),
+    }
   }
 
   const dir = resolveLogDir(env.LOG_DIR)
@@ -147,11 +154,13 @@ export function createProcessLoggers(
     return build(counters, destination, "weknora")
   }
 
-  const system = new TeeLogger([stdout, buildFile("system")])
+  const systemFile = buildFile("system")
+  const system = new TeeLogger([stdout, systemFile])
   const agent = buildFile("agent")
   let closePromise: Promise<void> | undefined
   return {
     system,
+    systemFile,
     agent,
     close: () => {
       closePromise ??= (async () => {
