@@ -10,6 +10,14 @@ import {
 } from "./logger"
 import { enforceMaxLineBytes, sanitizeFields, type SanitizeStats } from "./sanitize"
 import type { LogSink } from "./sink"
+import { captureCaller, formatWeKnoraLine, type WeKnoraLine } from "./weknora_text"
+
+/**
+ * `json` is the stdout contract (LO-03). `weknora` is the file-only text line
+ * format added by LF-01; both paths share level filtering, sanitization,
+ * counters and the sink, so only the encoder differs.
+ */
+export type LogFormat = "json" | "weknora"
 
 /**
  * LO-03: the Pino adapter. This is the only file in the codebase that may
@@ -39,10 +47,13 @@ export interface PinoLoggerOptions {
   counters?: LogCounters
   /** Budget for flush-on-close (default 2000 ms). */
   closeTimeoutMs?: number
+  /** Encoder: single-line JSON (stdout) or WeKnora text (files). Default json. */
+  format?: LogFormat
 }
 
 interface SharedState {
   sink: LogSink
+  format: LogFormat
   counters: LogCounters
   sanitize: SanitizeStats
   closePromise?: Promise<void>
@@ -51,58 +62,63 @@ interface SharedState {
 
 export class PinoLogger implements Logger {
   readonly level: LogLevelSetting
-  private readonly serializer: pino.Logger
+  private readonly serializer: pino.Logger | undefined
   private readonly shared: SharedState
   private readonly bindings: LogFields
+  private readonly format: LogFormat
   private captured: string[] = []
 
   constructor(options: PinoLoggerOptions, bindings: LogFields = {}, shared?: SharedState) {
     this.level = options.level
     this.bindings = { ...(options.bindings ?? {}), ...bindings }
+    this.format = shared?.format ?? options.format ?? "json"
     this.shared =
       shared ??
       ({
         sink: options.sink,
+        format: this.format,
         counters: options.counters ?? options.sink.counters,
         sanitize: { redacted: 0 },
         closeTimeoutMs: options.closeTimeoutMs ?? 2000,
       } satisfies SharedState)
-    // Level filtering happens before pino, but pino is configured as well so
-    // a stray direct call cannot emit below the configured threshold.
-    this.serializer = pino(
-      {
-        level: this.level === "off" ? "silent" : this.level,
-        base: undefined,
-        timestamp: pino.stdTimeFunctions.isoTime,
-        messageKey: "event",
-        formatters: { level: (label) => ({ level: label }) },
-        safe: true,
-      },
-      {
-        write: (chunk: string) => {
-          this.captured.push(chunk)
+    if (this.format === "json") {
+      // Level filtering happens before pino, but pino is configured as well so
+      // a stray direct call cannot emit below the configured threshold.
+      this.serializer = pino(
+        {
+          level: this.level === "off" ? "silent" : this.level,
+          base: undefined,
+          timestamp: pino.stdTimeFunctions.isoTime,
+          messageKey: "event",
+          formatters: { level: (label) => ({ level: label }) },
+          safe: true,
         },
-      } as unknown as pino.DestinationStream,
-    )
+        {
+          write: (chunk: string) => {
+            this.captured.push(chunk)
+          },
+        } as unknown as pino.DestinationStream,
+      )
+    }
   }
 
   debug(event: string, fields?: LogFields): Promise<void> {
-    return this.log("debug", event, fields)
+    return this.log("debug", event, fields, this.captureCallerForText())
   }
 
   info(event: string, fields?: LogFields): Promise<void> {
-    return this.log("info", event, fields)
+    return this.log("info", event, fields, this.captureCallerForText())
   }
 
   warn(event: string, fields?: LogFields): Promise<void> {
-    return this.log("warn", event, fields)
+    return this.log("warn", event, fields, this.captureCallerForText())
   }
 
   error(event: string, fields?: LogFields): Promise<void> {
-    return this.log("error", event, fields)
+    return this.log("error", event, fields, this.captureCallerForText())
   }
 
-  async log(level: LogLevel, event: string, fields?: LogFields): Promise<void> {
+  async log(level: LogLevel, event: string, fields?: LogFields, caller?: string): Promise<void> {
     if (!levelEnabled(this.level, level)) return
     const counters = this.shared.counters
     if (counters.closed) {
@@ -112,6 +128,34 @@ export class PinoLogger implements Logger {
     const merged: LogFields = { ...this.bindings, ...(fields ?? {}) }
     const sanitized = sanitizeFields(merged, this.shared.sanitize)
     counters.redacted = this.shared.sanitize.redacted
+
+    if (this.format === "weknora") {
+      let formatted: WeKnoraLine
+      try {
+        formatted = formatWeKnoraLine({
+          level,
+          event,
+          fields: sanitized,
+          caller: caller ?? "",
+        })
+      } catch (error) {
+        // Formatting must never break the caller: emit a minimal honest line.
+        const reason = error instanceof Error ? error.message : String(error)
+        formatted = formatWeKnoraLine({
+          level: "error",
+          event: "log.serialize_failed",
+          fields: { reason, event_name: event },
+          caller: caller ?? "",
+        })
+      }
+      if (formatted.redactions > 0) {
+        this.shared.sanitize.redacted += formatted.redactions
+        counters.redacted = this.shared.sanitize.redacted
+      }
+      if (formatted.truncated) counters.truncated += 1
+      await this.shared.sink.write(formatted.line)
+      return
+    }
 
     let line: string
     try {
@@ -135,7 +179,7 @@ export class PinoLogger implements Logger {
 
   child(bindings: LogFields): Logger {
     return new PinoLogger(
-      { level: this.level, sink: this.shared.sink, counters: this.shared.counters },
+      { level: this.level, sink: this.shared.sink, counters: this.shared.counters, format: this.format },
       { ...this.bindings, ...bindings },
       this.shared,
     )
@@ -172,9 +216,16 @@ export class PinoLogger implements Logger {
     }
   }
 
+  private captureCallerForText(): string | undefined {
+    // Only the text path pays for a stack capture (LF-01-AC06).
+    return this.format === "weknora" ? captureCaller() : undefined
+  }
+
   private encode(level: LogLevel, event: string, fields: LogFields): string {
+    const serializer = this.serializer
+    if (!serializer) throw new Error("json encoder requested without a pino serializer")
     this.captured.length = 0
-    this.serializer[level](fields, event)
+    serializer[level](fields, event)
     return this.captured.join("")
   }
 }
