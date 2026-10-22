@@ -310,7 +310,7 @@ export function summarizeMatrix(
       result.status === "not_configured" ||
       result.status === "not_exercised",
   )
-  const offlineCells = results.filter((result) => result.source === "offline_test")
+  const offlineCells = results.filter((result) => result.source !== "online")
   const offlineComplete =
     offlineCells.length > 0 &&
     offlineCells.every((result) => result.status === "pass/offline") &&

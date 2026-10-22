@@ -204,6 +204,38 @@ test("DR-21: a degraded or malformed capability snapshot never claims coverage",
   )
 })
 
+test("DR-21: a pending capability cell keeps --offline-only incomplete", () => {
+  const capability: CapabilityCellSpec = {
+    id: "rerank.capability",
+    group: "rerank",
+    caseKind: "config",
+    description: "capability report status",
+    ticket: "DR-13",
+    source: "capability",
+    capability: "rerank",
+  }
+  const passed = observed([observationKey(ref), { status: "pass" }])
+
+  const pending = summarizeMatrix(
+    evaluateMatrix([offlineCell, capability], passed, null),
+    { offlineOnly: true },
+  )
+  assert.equal(pending.offlineComplete, false, "a not_configured capability is not offline-complete")
+  assert.equal(pending.status, "incomplete")
+  assert.equal(pending.exitCode, 1)
+  assert.deepEqual(pending.pending, [capability.id])
+
+  const proven = summarizeMatrix(
+    evaluateMatrix([offlineCell, capability], passed, {
+      status: "exercised",
+      configured: true,
+      model: { configured: "bge-reranker-v2-m3", observed: ["bge-reranker-v2-m3"] },
+    }),
+    { offlineOnly: true },
+  )
+  assert.equal(proven.offlineComplete, true)
+})
+
 test("DR-21: one incomplete required cell blocks the overall matrix", () => {
   const cells: Array<typeof offlineCell> = [
     offlineCell,
