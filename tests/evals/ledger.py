@@ -577,6 +577,10 @@ class RunLedger:
             _atomic_write(path, data)
             read_back = _read_json(path)
             self._validate_record(read_back, sample_id)
+        except SampleReadError as exc:
+            raise SampleWriteError(
+                f"sample {sample_id!r} failed write validation: {exc}"
+            ) from exc
         except OSError as exc:
             raise SampleWriteError(
                 f"cannot persist sample {sample_id!r} at {path}: "
@@ -585,6 +589,10 @@ class RunLedger:
         except (UnicodeDecodeError, json.JSONDecodeError) as exc:
             raise SampleWriteError(
                 f"sample {sample_id!r} did not read back as JSON at {path}: {exc}"
+            ) from exc
+        except TypeError as exc:
+            raise SampleWriteError(
+                f"sample {sample_id!r} is not JSON serializable: {exc}"
             ) from exc
         if read_back != data:
             raise SampleWriteError(f"sample {sample_id!r} read-back differs from what was written")
