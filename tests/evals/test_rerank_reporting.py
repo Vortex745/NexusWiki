@@ -296,6 +296,40 @@ def test_dedicated_ordering_with_a_degradation_reason_cannot_prove_clean_coverag
     assert "reranker_unavailable" in rerank["evidence"]["degraded_reasons"]
 
 
+def test_non_rerank_degradation_does_not_block_rerank_clean_coverage(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("RERANK_API_KEY", raising=False)
+    monkeypatch.delenv("RERANK_MODEL", raising=False)
+    pinned_models = dict.fromkeys(run_suite.MODEL_ENV_NAMES)
+    pinned_models["RERANK_MODEL"] = RERANK_MODEL
+    monkeypatch.setattr(run_suite, "model_snapshot", lambda: dict(pinned_models))
+
+    outcome = run_case(
+        tmp_path,
+        CASE_04,
+        events=[
+            # DR-22 distinguishes an absent web capability from a rerank
+            # failure: it must not make the rerank clean-coverage proof
+            # impossible.
+            retrieval_event(
+                {"source": "dedicated_rerank"},
+                reasons=("web_unconfigured",),
+            ),
+            done_event(RERANK_MODEL),
+        ],
+    )
+    report = load_report(outcome)
+
+    rerank = capability(report)
+    assert rerank["status"] == "exercised"
+    assert rerank["coverage"]["status"] == "complete"
+    rows = {row["id"]: row for row in rerank["coverage"]["matrix"]}
+    assert rows["no_degradation"]["status"] == "proven"
+    assert rows["no_degradation"]["counted_as_pass"] is True
+    assert "web_unconfigured" in rerank["evidence"]["degraded_reasons"]
+
+
 def test_malformed_ordering_cannot_claim_coverage_and_keeps_credentials_out(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

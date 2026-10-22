@@ -103,9 +103,9 @@ export function observationKey(ref: MatrixTestRef): string {
 }
 
 /**
- * Parse the TAP stream of ONE test file. A `# SKIP` directive is preserved as
- * its own observation: a skipped test is not evidence that the cell passed, so
- * it must never be counted as `pass`.
+ * Parse the TAP stream of ONE test file. A `# SKIP` or `# TODO` directive is
+ * preserved as its own observation: a deferred test is not evidence that the
+ * cell passed, so it must never be counted as `pass`.
  */
 export function parseTap(output: string): Map<string, TestObservation> {
   const observed = new Map<string, TestObservation>()
@@ -114,7 +114,7 @@ export function parseTap(output: string): Map<string, TestObservation> {
     const match = /^(not ok|ok)\s+\d+\s+-\s+(.*?)\s*$/.exec(line)
     if (!match) continue
     const raw = match[2]
-    const skipped = /(?:^|\s)#\s*SKIP\b/i.test(raw)
+    const skipped = /(?:^|\s)#\s*(SKIP|TODO)\b/i.test(raw)
     const name = raw
       .replace(/\s+#\s+(SKIP|TODO)\b.*$/i, "")
       .replace(/\\\\/g, "\\")

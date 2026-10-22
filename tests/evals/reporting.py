@@ -502,6 +502,10 @@ def _cache_snapshot(environment: Mapping[str, Any]) -> dict:
 RERANK_FUSED_REASONS = frozenset(
     {"not_configured", "below_threshold", "unavailable", "multi_query_aggregation"}
 )
+# DR-22 distinguishes answer-level failures from configuration/scope facts. Only
+# these reasons mean the rerank path itself failed; `web_unconfigured` and
+# `parent_expansion_unavailable` must not block DR-14's clean-coverage proof.
+RERANK_DEGRADATION_REASONS = frozenset({"reranker_unavailable"})
 RERANK_MATRIX = (
     ("provider_call", "the dedicated reranker provider was actually called"),
     ("ordering", "the published final ranking is labelled dedicated_rerank"),
@@ -613,7 +617,14 @@ def _rerank_capability(
     dedicated = [item for item in evidence if item["source"] == "dedicated_rerank"]
     invalid = [item for item in evidence if item["invalid"]]
     unavailable = [item for item in evidence if item["reason"] == "unavailable"]
-    degraded = [item for item in evidence if item["degraded_reasons"]]
+    degraded = [
+        item
+        for item in evidence
+        if any(
+            reason in RERANK_DEGRADATION_REASONS
+            for reason in item["degraded_reasons"]
+        )
+    ]
     fused = [item for item in evidence if item["source"] == "fused"]
     observed_models = sorted(
         {item["rerank_model"] for item in evidence if item["rerank_model"]}

@@ -108,6 +108,34 @@ test("DR-21: a TAP SKIP directive is not a pass and blocks --offline-only", () =
   assert.equal(summary.exitCode, 1)
 })
 
+test("DR-21: a TAP TODO directive is not a pass and blocks --offline-only", () => {
+  const observations = parseTap(
+    "ok 1 - todo behaviour # TODO enable when the provider is available",
+  )
+  assert.deepEqual(observations.get("todo behaviour"), { status: "skip" })
+
+  const keyed = new Map(
+    [...observations].map(([name, entry]) => [observationKey({ file: ref.file, name }), entry]),
+  )
+  const result = evaluateOfflineCell(
+    {
+      ...offlineCell,
+      id: "group.todo",
+      tests: [{ file: ref.file, name: "todo behaviour" }],
+    },
+    keyed,
+  )
+  assert.equal(result.status, "incomplete")
+  assert.equal(result.countedAsPass, false)
+  assert.deepEqual(result.evidence, [
+    { file: ref.file, test: "todo behaviour", result: "not_run" },
+  ])
+
+  const summary = summarizeMatrix([result], { offlineOnly: true })
+  assert.equal(summary.offlineComplete, false)
+  assert.equal(summary.exitCode, 1)
+})
+
 test("DR-21: a cell with no named tests cannot claim evidence", () => {
   const result = evaluateOfflineCell({ ...offlineCell, tests: [] }, observed())
   assert.equal(result.status, "incomplete")
