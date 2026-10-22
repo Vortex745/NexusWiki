@@ -397,19 +397,25 @@ def judge_budget_snapshot() -> dict:
 
 
 def capability_snapshot() -> dict:
-    """Capability availability without recording any credential value."""
+    """Capability availability without recording any credential value.
+
+    This snapshot can only state configuration. The report derives the honest
+    status from each sample's retained ordering evidence; presence here is never
+    coverage.
+    """
     rerank_key = os.environ.get("RERANK_API_KEY") or _dot_env("RERANK_API_KEY")
+    configured = bool(str(rerank_key or "").strip())
     return {
         "rerank": {
-            "status": (
-                "configured_not_exercised" if rerank_key else "not_configured"
-            ),
+            "status": "not_exercised" if configured else "not_configured",
+            "configured": configured,
+            "skipped": not configured,
             "counted_as_pass": False,
             "detail": (
                 "RERANK_API_KEY is not configured; rerank is not exercised and "
                 "is not counted as covered"
-                if not rerank_key
-                else "RERANK_API_KEY is configured but this baseline does not "
+                if not configured
+                else "RERANK_API_KEY is configured but this snapshot cannot "
                 "prove a real rerank call; not counted as covered"
             ),
         }

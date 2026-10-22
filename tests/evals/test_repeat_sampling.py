@@ -265,7 +265,7 @@ def test_campaign_rejects_model_endpoint_timeout_and_budget_drift_before_samplin
         baseline_status = read_json(
             baseline.run_dir / "environment.json"
         )["configuration"]["capabilities"]["rerank"]["status"]
-        opposite = "configured_not_exercised" if baseline_status == "not_configured" else "not_configured"
+        opposite = "not_exercised" if baseline_status == "not_configured" else "not_configured"
         monkeypatch.setattr(run_suite, "capability_snapshot", lambda: {
             "rerank": {"status": opposite, "counted_as_pass": False, "detail": "changed"}})
         with pytest.raises(ValueError, match="capabilities differ"):

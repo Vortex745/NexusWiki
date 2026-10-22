@@ -499,9 +499,239 @@ def _cache_snapshot(environment: Mapping[str, Any]) -> dict:
     }
 
 
+RERANK_FUSED_REASONS = frozenset(
+    {"not_configured", "below_threshold", "unavailable", "multi_query_aggregation"}
+)
+RERANK_MATRIX = (
+    ("provider_call", "the dedicated reranker provider was actually called"),
+    ("ordering", "the published final ranking is labelled dedicated_rerank"),
+    ("model_snapshot", "the terminal run snapshot names the rerank model used"),
+    ("no_degradation", "no rerank fallback or unavailable degradation was observed"),
+)
+
+
+def _rerank_sample_evidence(record: Mapping[str, Any]) -> dict:
+    """One sample's rerank facts, read only from the retained Agent payload.
+
+    The final retrieval event carries the published ordering; the terminal event
+    carries the non-secret model snapshot. Answer text is deliberately ignored:
+    a reply that mentions rerank cannot prove that the provider ran.
+    """
+    agent = record.get("agent")
+    payload = agent.get("raw_payload") if isinstance(agent, Mapping) else None
+    events = payload.get("events") if isinstance(payload, Mapping) else None
+    ordering = None
+    ordering_seen = False
+    degraded_reasons: list[str] = []
+    rerank_model: str | None = None
+    if isinstance(events, Sequence) and not isinstance(events, (str, bytes)):
+        for event in events:
+            if not isinstance(event, Mapping):
+                continue
+            if event.get("type") == "progress" and event.get("stage") == "retrieval":
+                data = event.get("data")
+                if not isinstance(data, Mapping):
+                    continue
+                reasons = data.get("degradedReasons")
+                if isinstance(reasons, list):
+                    degraded_reasons.extend(
+                        item for item in reasons if isinstance(item, str)
+                    )
+                if "finalContextOrdering" in data:
+                    ordering = data.get("finalContextOrdering")
+                    ordering_seen = True
+            elif event.get("type") == "done":
+                result = event.get("result")
+                profile = result.get("modelProfile") if isinstance(result, Mapping) else None
+                model = profile.get("rerankModel") if isinstance(profile, Mapping) else None
+                if isinstance(model, str) and model.strip():
+                    rerank_model = model.strip()
+    source: str | None = None
+    reason: str | None = None
+    invalid: str | None = None
+    if ordering_seen:
+        if not isinstance(ordering, Mapping):
+            invalid = "final ordering evidence is not an object"
+        else:
+            candidate_source = ordering.get("source")
+            candidate_reason = ordering.get("reason")
+            if candidate_source == "dedicated_rerank" and candidate_reason is None:
+                source = "dedicated_rerank"
+            elif (
+                candidate_source == "fused"
+                and candidate_reason in RERANK_FUSED_REASONS
+            ):
+                source = "fused"
+                reason = candidate_reason
+            else:
+                invalid = "final ordering has an unrecognized source/reason pair"
+    return {
+        "source": source,
+        "reason": reason,
+        "degraded_reasons": degraded_reasons,
+        "rerank_model": rerank_model,
+        "invalid": invalid,
+        "observed": bool(ordering_seen or rerank_model or degraded_reasons),
+    }
+
+
+def _configured_rerank_model(environment: Mapping[str, Any]) -> str | None:
+    models = ((environment.get("configuration") or {}).get("models") or {})
+    value = models.get("RERANK_MODEL")
+    return value.strip() if isinstance(value, str) and value.strip() else None
+
+
+def _rerank_capability(
+    environment: Mapping[str, Any],
+    snapshot: Mapping[str, Any],
+    planned: Sequence[Mapping[str, Any]],
+    records: Mapping[str, Mapping[str, Any]],
+) -> dict:
+    """Separate rerank execution coverage from answer correctness and config.
+
+    Statuses are evidence-first:
+      * ``not_configured``: no provider configured and no run evidence;
+      * ``not_exercised``: configured, but no sample proves a provider call;
+      * ``degraded``: the provider failed and the published order stayed fused;
+      * ``exercised``: a controlled run published dedicated-rerank ordering;
+      * ``invalid``: the ordering evidence is unrecognized, so no claim is made.
+    """
+    configured_model = _configured_rerank_model(environment)
+    stored_status = snapshot.get("status")
+    configured = bool(snapshot.get("configured")) or stored_status not in {
+        None,
+        "",
+        "not_configured",
+        "skipped",
+    }
+
+    evidence = [
+        _rerank_sample_evidence(records[item["sample_id"]])
+        for item in planned
+        if isinstance(records.get(item.get("sample_id")), Mapping)
+    ]
+    dedicated = [item for item in evidence if item["source"] == "dedicated_rerank"]
+    invalid = [item for item in evidence if item["invalid"]]
+    unavailable = [item for item in evidence if item["reason"] == "unavailable"]
+    fused = [item for item in evidence if item["source"] == "fused"]
+    observed_models = sorted(
+        {item["rerank_model"] for item in evidence if item["rerank_model"]}
+    )
+    configured = configured or bool(observed_models) or bool(dedicated)
+
+    if invalid:
+        status = "invalid"
+    elif dedicated:
+        status = "exercised"
+    elif unavailable:
+        status = "degraded"
+    elif configured:
+        status = "not_exercised"
+    else:
+        status = "not_configured"
+
+    model_matches = bool(observed_models) and (
+        configured_model is None or observed_models == [configured_model]
+    )
+    proven = {
+        "provider_call": bool(dedicated),
+        "ordering": bool(dedicated) and not invalid,
+        "model_snapshot": bool(dedicated) and model_matches,
+        "no_degradation": bool(dedicated) and not invalid and not unavailable,
+    }
+    matrix = [
+        {
+            "id": identifier,
+            "required": True,
+            "status": "proven" if proven[identifier] else "incomplete",
+            "counted_as_pass": proven[identifier],
+            "detail": (
+                requirement
+                if proven[identifier]
+                else f"required evidence is missing: {requirement}"
+            ),
+        }
+        for identifier, requirement in RERANK_MATRIX
+    ]
+    coverage_complete = all(proven.values())
+
+    if status == "not_configured":
+        detail = (
+            "no rerank provider is configured; the capability is skipped and "
+            "configuration presence or an answer mentioning rerank is not coverage"
+        )
+    elif status == "not_exercised":
+        detail = (
+            "a rerank provider is configured but no sample proves a provider "
+            "call; configured presence is not coverage"
+        )
+    elif status == "degraded":
+        detail = (
+            "the rerank provider failed and the published ranking kept the "
+            "explicit fused/degraded source; it is not a dedicated-rerank success"
+        )
+    elif status == "exercised":
+        detail = (
+            "a controlled run published dedicated_rerank ordering with a "
+            "matching model snapshot; this proves the protocol/report branch "
+            "only, online rerank acceptance remains not run"
+        )
+    else:
+        detail = (
+            "the retained ordering evidence is malformed or unrecognized; "
+            "coverage is not claimed from configuration or model snapshots"
+        )
+
+    return {
+        "status": status,
+        "configured": configured,
+        "skipped": status == "not_configured",
+        "counted_as_pass": False,
+        "source": (
+            "dedicated_rerank"
+            if status == "exercised"
+            else ("fused" if fused or unavailable else None)
+        ),
+        "degradation_reason": "unavailable" if status == "degraded" else None,
+        "model": {
+            "configured": configured_model,
+            "observed": observed_models,
+        },
+        "evidence": {
+            "samples": len(evidence),
+            "observed": sum(1 for item in evidence if item["observed"]),
+            "dedicated_rerank": len(dedicated),
+            "fused": len(fused),
+            "fused_reasons": {
+                reason: sum(1 for item in evidence if item["reason"] == reason)
+                for reason in sorted(RERANK_FUSED_REASONS)
+                if any(item["reason"] == reason for item in evidence)
+            },
+            "degraded_reasons": sorted(
+                {
+                    reason
+                    for item in evidence
+                    for reason in item["degraded_reasons"]
+                }
+            ),
+            "invalid_samples": len(invalid),
+        },
+        "coverage": {
+            "status": "complete" if coverage_complete else "incomplete",
+            "counted_as_pass": False,
+            "matrix": matrix,
+        },
+        "coverage_scope": "controlled" if coverage_complete else "none",
+        "online_acceptance": "not_run",
+        "detail": detail,
+    }
+
+
 def _capabilities(
     environment: Mapping[str, Any],
     capability_snapshot: Mapping[str, Any] | None,
+    planned: Sequence[Mapping[str, Any]] = (),
+    records: Mapping[str, Mapping[str, Any]] | None = None,
 ) -> dict:
     stored = (environment.get("configuration") or {}).get("capabilities") or {}
     combined = {**dict(stored), **dict(capability_snapshot or {})}
@@ -509,13 +739,15 @@ def _capabilities(
     if not isinstance(rerank, Mapping):
         rerank = {
             "status": "not_configured",
+            "configured": False,
             "counted_as_pass": False,
             "detail": (
                 "no rerank capability snapshot was recorded; absence of a "
                 "configured rerank provider is not coverage"
             ),
         }
-    capabilities = {"rerank": _redact(dict(rerank))}
+    projected = _rerank_capability(environment, rerank, planned, records or {})
+    capabilities = {"rerank": _redact(projected)}
     capabilities["cache"] = _cache_snapshot(environment)
     return capabilities
 
@@ -922,7 +1154,9 @@ def build_report(
         ],
     }
 
-    capabilities_section = _capabilities(environment, capabilities)
+    capabilities_section = _capabilities(
+        environment, capabilities, planned=planned, records=records
+    )
     capabilities_section["judge"] = _redact(
         {
             "model": (model or {}).get("model"),
