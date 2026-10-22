@@ -205,3 +205,11 @@
 - Rebuild with `run_suite.py --rebuild <run-dir>`. It regenerates report/metric projections from only that run's manifest, environment and sample records, verifies the frozen environment digest, and does not rewrite samples. Missing, truncated and skipped samples cannot inherit an earlier passing result.
 
 DR-08 source: `tests/evals/run_suite.py`, `reporting.py`, `test_reporting.py`. Local evidence: `C:/Users/14253/dr-wt/evidence/DR-08.md`. The parent agent owns the real twenty-case backend/Jev baseline; offline fixtures do not close that live requirement.
+
+## Continuation verified on 2026-10-22
+
+- The authoritative local ticket queue is still `C:/Users/14253/Desktop/Agentic RAG/.scratch/deepeval-agent-repair-tickets/`. Its publication snapshot does not describe the already merged DR-01–08 implementation. Reuse this integration worktree and its branches instead of creating a second queue.
+- The actual DR-08 baseline is `C:/Users/14253/dr-wt/evidence/DR-08-live/runs/20261022T083341451543Z-ef9f91`: 20 planned/attempted/persisted/scored, 0 execution or judge errors, 59 applicable metrics scored and one not applicable. Deterministic product results are 3/6 hard and 14/14 ordinary, with `incomplete=false`; product failures do not invalidate the evaluation infrastructure.
+- A running backend does not prove its retrieval services are alive. At continuation `/api/status` returned disconnected ES/Neo4j even though port 3001 was listening. Docker Desktop had stopped; starting the engine and the existing `op-local-es`/`op-local-neo4j` containers restored `mode=full` and `hasKnowledgeBaseContent=true` without recreating storage or restarting the backend. Verify health before online evidence collection.
+- Rechecked at integration tip `679c171`: `npm run build` passed; the converter/gate Node tests passed 62/62; Python contracts, per-case metrics, ledger, retries, calibration and reporting tests passed 91/91. These are infrastructure regressions, not P1 or latency acceptance.
+- The existing private `C:/Users/14253/dr-wt/.rerank.env` contains a configured reranker. Keep the P0 baseline and repetitions on their frozen configuration; apply the existing provider settings only to the later dedicated online rerank acceptance. Never print or commit its values.
