@@ -1,0 +1,1045 @@
+"""Complete baseline report for one evaluation run (DR-08).
+
+The report is a pure projection of the frozen manifest, the environment
+snapshot and the per-sample records. It never invents a result for a sample
+that has no record and it never borrows results from another run.
+
+Layout (``report.json`` in the run directory):
+
+  snapshots   dataset/rubric/model/config/scope/environment (no secret values)
+  counts      planned, attempted, scored, error, skipped, not_applicable,
+              not_started plus metric-level denominators
+  thresholds  6 hard all pass, 10/14 others, 16/20 overall; judge 0.5 and the
+              0.7 retest trigger
+  gate        incomplete / passed / failed / complete, never a silent green
+  sections    facts, citations, isolation, judge, capabilities, latency
+  cases       per-case behaviour and judge results
+  raw         per-sample projection sufficient to recompute every count
+
+Behaviour is the deterministic v2 gate (DR-03) persisted with each sample;
+judge results are the per-case Jev metrics (DR-06). They are reported
+separately, and a high judge score can never turn a failed behaviour result
+into a pass. ``not_applicable`` metrics have no score and are excluded from
+the case score; missing records are ``not_started`` and keep the run
+incomplete.
+
+Latency is the Agent chat request wall time only (``agent.duration_ms``);
+judge time is reported elsewhere and excluded from the latency section.
+"""
+
+from __future__ import annotations
+
+import json
+import math
+import os
+from collections import OrderedDict
+from pathlib import Path
+from typing import Any, Iterable, Mapping, Sequence
+
+import ledger
+
+SCHEMA = "eval-baseline-report"
+REPORT_VERSION = 1
+TICKET = "DR-08"
+
+JUDGE_THRESHOLD = 0.5
+RETEST_TRIGGER = 0.7
+HARD_REQUIRED = 6
+OTHERS_REQUIRED = 10
+OVERALL_REQUIRED = 16
+
+# Cases the parent spec puts into retest regardless of their first result.
+PRESELECTED_RETEST = (
+    "hard-03",
+    "hard-04",
+    "hard-06",
+    "case-16",
+)
+
+V2_KINDS = frozenset({"answer", "refuse", "memory-not-cited"})
+
+FACT_CHECKS = (
+    "contract_version",
+    "result_shape",
+    "answer_points_configured",
+    "answer_points",
+    "terminal_status",
+    "prohibited_assertions_configured",
+    "prohibited_assertions",
+    "forbidden_reference_content_configured",
+    "forbidden_reference_content",
+)
+CITATION_CHECKS = (
+    "inline_citation_present",
+    "inline_citation_parseable",
+    "inline_citation_resolved",
+)
+ISOLATION_CHECKS = (
+    "honest_refusal",
+    "clarification_is_not_refusal",
+    "empty_scope",
+    "reply_length",
+    "memory_constraint_configured",
+    "memory_not_in_references",
+    "owner_viewing_allowed",
+)
+
+
+def _redact(value: Any) -> Any:
+    if isinstance(value, str):
+        return ledger.redact_text(value)
+    if isinstance(value, Mapping):
+        return {str(key): _redact(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_redact(item) for item in value]
+    return value
+
+
+def _is_v2(metadata: Mapping[str, Any] | None) -> bool:
+    metadata = metadata or {}
+    return (
+        metadata.get("contract_version") == 2
+        and metadata.get("kind") in V2_KINDS
+    )
+
+
+def _is_score(value: Any) -> bool:
+    return (
+        isinstance(value, (int, float))
+        and not isinstance(value, bool)
+        and 0 <= float(value) <= 1
+    )
+
+
+def _metric_entries(record: Mapping[str, Any]) -> list[dict]:
+    judge = record.get("judge") or {}
+    found = judge.get("metrics")
+    if not isinstance(found, list):
+        details = judge.get("details")
+        found = details.get("metrics") if isinstance(details, Mapping) else None
+    return [dict(item) for item in (found or []) if isinstance(item, Mapping)]
+
+
+def _rubric_from_record(record: Mapping[str, Any]) -> dict | None:
+    judge = record.get("judge") or {}
+    candidates = [judge.get("rubric")]
+    details = judge.get("details")
+    if isinstance(details, Mapping):
+        candidates.extend([details.get("rubric"), details])
+    for candidate in candidates:
+        if not isinstance(candidate, Mapping):
+            continue
+        version = candidate.get("version") or candidate.get("rubric_version")
+        digest = candidate.get("digest") or candidate.get("rubric_digest")
+        if isinstance(version, str) and isinstance(digest, str):
+            return {
+                "version": version,
+                "digest": digest,
+                "threshold": candidate.get("threshold", JUDGE_THRESHOLD),
+                "evidence_scope": candidate.get("evidence_scope"),
+            }
+    return None
+
+
+def _model_from_record(record: Mapping[str, Any]) -> dict | None:
+    judge = record.get("judge") or {}
+    details = judge.get("details")
+    if not isinstance(details, Mapping):
+        return None
+    model = details.get("model")
+    if not isinstance(model, str):
+        return None
+    return {
+        "model": model,
+        "model_source": details.get("model_source"),
+        "base_url": ledger.safe_url(details.get("base_url") or ""),
+        "budget": details.get("budget"),
+    }
+
+
+def project_metric_results(records: Iterable[Mapping[str, Any]]) -> list[dict]:
+    """Flatten per-metric results from sample records in plan order."""
+    projected: list[dict] = []
+    for record in records:
+        for item in _metric_entries(record):
+            projected.append(
+                {
+                    "sample_id": record.get("sample_id"),
+                    "case_id": record.get("case_id"),
+                    "metric": item.get("metric"),
+                    "applicability": item.get("applicability"),
+                    "score": item.get("score"),
+                    "success": item.get("success"),
+                    "reason": _redact(item.get("reason")),
+                    "error": _redact(item.get("error")),
+                    "termination": item.get("termination"),
+                    "request_count": item.get("request_count"),
+                }
+            )
+    return projected
+
+
+def project_rubric(records: Iterable[Mapping[str, Any]]) -> dict | None:
+    for record in records:
+        rubric = _rubric_from_record(record)
+        if rubric is not None:
+            return rubric
+    return None
+
+
+def _behaviour_for(
+    record: Mapping[str, Any] | None,
+    metadata: Mapping[str, Any] | None,
+    status: str,
+) -> dict:
+    if status not in {"not_started", "corrupt", "skipped", "agent_error"} and record is not None and isinstance(record.get("behaviour"), Mapping):
+        return dict(record["behaviour"])
+    required = _is_v2(metadata)
+    if status == "not_started":
+        return {
+            "schema": "eval-behaviour-status",
+            "status": "not_started",
+            "passed": False,
+            "required": required,
+            "failures": ["no sample record was written; the case was not started"],
+            "checks": {},
+        }
+    if status == "corrupt":
+        return {
+            "schema": "eval-behaviour-status",
+            "status": "corrupt",
+            "passed": False,
+            "required": required,
+            "failures": ["the sample record is missing or truncated"],
+            "checks": {},
+        }
+    if status == "skipped":
+        return {
+            "schema": "eval-behaviour-status",
+            "status": "skipped",
+            "passed": False,
+            "required": required,
+            "failures": ["the sample was skipped; a skip is not a pass"],
+            "checks": {},
+        }
+    if status == "agent_error":
+        return {
+            "schema": "eval-behaviour-status",
+            "status": "error",
+            "passed": False,
+            "required": required,
+            "failures": ["the Agent request failed"],
+            "checks": {},
+        }
+    if required:
+        return {
+            "schema": "eval-behaviour-status",
+            "status": "missing",
+            "passed": False,
+            "required": True,
+            "failures": ["the v2 case has no deterministic behaviour record"],
+            "checks": {},
+        }
+    return {
+        "schema": "eval-behaviour-status",
+        "status": "not_configured",
+        "passed": None,
+        "required": False,
+        "failures": [],
+        "checks": {},
+    }
+
+
+def _judge_projection(
+    record: Mapping[str, Any] | None, status: str
+) -> dict:
+    if record is None:
+        return {
+            "status": "not_attempted",
+            "score": None,
+            "metric": None,
+            "success": None,
+            "reason": None,
+            "error": None,
+            "duration_ms": None,
+            "request_count": 0,
+            "rubric": None,
+            "metrics": [],
+            "metric_status": status,
+        }
+    judge = record.get("judge") or {}
+    details = judge.get("details") if isinstance(judge.get("details"), Mapping) else {}
+    entries = _metric_entries(record)
+    return {
+        "status": judge.get("status"),
+        "score": judge.get("score"),
+        "metric": judge.get("metric"),
+        "success": judge.get("success"),
+        "reason": _redact(judge.get("reason")),
+        "error": _redact(judge.get("error")),
+        "duration_ms": judge.get("duration_ms"),
+        "request_count": details.get("request_count"),
+        "rubric": _rubric_from_record(record),
+        "metrics": [
+            {
+                "metric": item.get("metric"),
+                "applicability": item.get("applicability"),
+                "score": item.get("score"),
+                "success": item.get("success"),
+                "reason": _redact(item.get("reason")),
+                "error": _redact(item.get("error")),
+                "termination": item.get("termination"),
+                "request_count": item.get("request_count"),
+            }
+            for item in entries
+        ],
+    }
+
+
+def _sample_projection(
+    planned: Mapping[str, Any],
+    record: Mapping[str, Any] | None,
+    status: str,
+) -> dict:
+    metadata = planned.get("metadata") or {}
+    agent = (record or {}).get("agent") or {}
+    behaviour = _behaviour_for(record, metadata, status)
+    judge = _judge_projection(record, status)
+    not_applicable = sum(
+        1
+        for item in judge["metrics"]
+        if item.get("applicability") == "not_applicable"
+    )
+    return {
+        "sample_id": planned.get("sample_id"),
+        "case_id": planned.get("case_id"),
+        "sample_index": planned.get("sample_index"),
+        "status": status,
+        "session_id": (record or {}).get("session_id"),
+        "input_sha256": (planned.get("input_sha256") or (record or {}).get("planned", {}).get("input_sha256")),
+        "agent_http_status": agent.get("http_status"),
+        "agent_backend_status": agent.get("backend_status"),
+        "agent_duration_ms": agent.get("duration_ms"),
+        "answer_sha256": agent.get("answer_sha256"),
+        "reference_count": len(agent.get("references") or []),
+        "behaviour_status": behaviour.get("status"),
+        "behaviour_passed": behaviour.get("passed"),
+        "judge_status": judge.get("status"),
+        "judge_score": judge.get("score"),
+        "judge_duration_ms": judge.get("duration_ms"),
+        "metric_count": len(judge["metrics"]),
+        "not_applicable_count": not_applicable,
+        "error": _redact((record or {}).get("error")),
+    }
+
+
+def _case_behaviour(
+    samples: Sequence[Mapping[str, Any]],
+) -> dict:
+    if not samples:
+        return {"status": "missing", "passed": False, "failures": ["no planned sample"]}
+    statuses = [sample["behaviour_status"] for sample in samples]
+    failures = [
+        failure
+        for sample in samples
+        for failure in (sample.get("behaviour_failures") or [])
+    ]
+    passed = bool(samples) and all(
+        sample.get("behaviour_passed") is True for sample in samples
+    )
+    if "not_configured" in statuses and all(
+        status == "not_configured" for status in statuses
+    ):
+        status = "not_configured"
+        passed = None
+    elif passed:
+        status = "passed"
+    elif "not_started" in statuses:
+        status = "not_started"
+    elif "corrupt" in statuses:
+        status = "corrupt"
+    elif "skipped" in statuses:
+        status = "skipped"
+    elif "error" in statuses:
+        status = "error"
+    elif "missing" in statuses:
+        status = "missing"
+    else:
+        status = "failed"
+    return {"status": status, "passed": passed, "failures": failures}
+
+
+def _case_judge(samples: Sequence[Mapping[str, Any]]) -> dict:
+    metrics = [
+        entry
+        for sample in samples
+        for entry in sample.get("judge_metrics") or []
+    ]
+    applicable = [
+        item for item in metrics if item.get("applicability") == "applicable"
+    ]
+    scored = [
+        item for item in applicable if _is_score(item.get("score"))
+    ]
+    errors = [
+        item
+        for item in applicable
+        if item.get("error") is not None or not _is_score(item.get("score"))
+    ]
+    passed = (
+        bool(applicable)
+        and not errors
+        and all(float(item["score"]) >= JUDGE_THRESHOLD for item in scored)
+    )
+    return {
+        "status": "scored" if scored and not errors else ("error" if errors else "not_scored"),
+        "passed": passed,
+        "applicable": len(applicable),
+        "scored": len(scored),
+        "errors": len(errors),
+        "not_applicable": sum(
+            1 for item in metrics if item.get("applicability") == "not_applicable"
+        ),
+        "score": (
+            min(float(item["score"]) for item in scored) if scored else None
+        ),
+    }
+
+
+def _nearest_rank(values: Sequence[float], percentile: float) -> float | None:
+    if not values:
+        return None
+    ordered = sorted(values)
+    rank = max(1, math.ceil(percentile * len(ordered)))
+    return ordered[rank - 1]
+
+
+def _latency_stats(values: Sequence[float]) -> dict:
+    ordered = sorted(values)
+    if not ordered:
+        return {
+            "count": 0,
+            "min_ms": None,
+            "mean_ms": None,
+            "median_ms": None,
+            "p95_ms": None,
+            "max_ms": None,
+        }
+    return {
+        "count": len(ordered),
+        "min_ms": ordered[0],
+        "mean_ms": round(sum(ordered) / len(ordered), 1),
+        "median_ms": _nearest_rank(ordered, 0.5),
+        "p95_ms": _nearest_rank(ordered, 0.95),
+        "max_ms": ordered[-1],
+    }
+
+
+def _failure_reasons(scan: Mapping[str, Any]) -> list[dict]:
+    reasons: list[dict] = []
+    for item in scan.get("reasons") or []:
+        if not isinstance(item, Mapping):
+            continue
+        reasons.append(_redact(dict(item)))
+    return reasons
+
+
+def _cache_snapshot(environment: Mapping[str, Any]) -> dict:
+    configured = ((environment.get("configuration") or {}).get("cache") or {})
+    return {
+        "reading": configured.get("reading", "disabled"),
+        "writing": configured.get("writing", "disabled"),
+        "enabled": bool(configured.get("enabled", False)),
+    }
+
+
+def _capabilities(
+    environment: Mapping[str, Any],
+    capability_snapshot: Mapping[str, Any] | None,
+) -> dict:
+    stored = (environment.get("configuration") or {}).get("capabilities") or {}
+    combined = {**dict(stored), **dict(capability_snapshot or {})}
+    rerank = combined.get("rerank")
+    if not isinstance(rerank, Mapping):
+        rerank = {
+            "status": "not_configured",
+            "counted_as_pass": False,
+            "detail": (
+                "no rerank capability snapshot was recorded; absence of a "
+                "configured rerank provider is not coverage"
+            ),
+        }
+    capabilities = {"rerank": _redact(dict(rerank))}
+    capabilities["cache"] = _cache_snapshot(environment)
+    return capabilities
+
+
+def build_report(
+    *,
+    manifest: Mapping[str, Any],
+    environment: Mapping[str, Any],
+    planned: Sequence[Mapping[str, Any]],
+    records: Mapping[str, Mapping[str, Any]],
+    scan: Mapping[str, Any],
+    baseline: bool = False,
+    capabilities: Mapping[str, Any] | None = None,
+    rubric: Mapping[str, Any] | None = None,
+    judge_configuration: Mapping[str, Any] | None = None,
+) -> dict:
+    """Build the complete report from the frozen plan and raw sample records."""
+    baseline = bool(baseline or (manifest.get("run") or {}).get("baseline"))
+    metadata_by_id = {
+        item.get("sample_id"): item.get("metadata") or {} for item in planned
+    }
+    scan_by_id = {
+        item.get("sample_id"): item for item in scan.get("samples") or []
+    }
+
+    sample_projections: list[dict] = []
+    case_order: "OrderedDict[str, dict]" = OrderedDict()
+    for item in planned:
+        sample_id = item.get("sample_id")
+        case_id = item.get("case_id")
+        metadata = metadata_by_id.get(sample_id) or {}
+        scan_item = scan_by_id.get(sample_id) or {}
+        status = scan_item.get("status") or "not_started"
+        record = records.get(sample_id)
+        if status in {"scored", "agent_error", "judge_error", "pending_judge", "skipped"}:
+            pass
+        elif record is None:
+            status = "not_started" if sample_id in (scan.get("missing") or []) else status
+        sample = _sample_projection(item, record, status)
+        sample["behaviour_failures"] = (
+            (_behaviour_for(record, metadata, status).get("failures") or [])
+        )
+        sample["judge_metrics"] = (
+            _judge_projection(record, status).get("metrics") or []
+        )
+        sample_projections.append(sample)
+
+        case = case_order.setdefault(
+            case_id,
+            {
+                "case_id": case_id,
+                "hard": bool(metadata.get("hard")),
+                "kind": metadata.get("kind"),
+                "scope": item.get("scope"),
+                "samples": [],
+            },
+        )
+        case["samples"].append(sample)
+
+    cases: list[dict] = []
+    for case in case_order.values():
+        samples = case["samples"]
+        behaviour = _case_behaviour(samples)
+        judge = _case_judge(samples)
+        durations = [
+            float(sample["agent_duration_ms"])
+            for sample in samples
+            if isinstance(sample.get("agent_duration_ms"), (int, float))
+        ]
+        cases.append(
+            {
+                **case,
+                "behaviour": behaviour,
+                "judge": judge,
+                "errors": [
+                    sample["error"] for sample in samples if sample.get("error")
+                ],
+                "latency_ms": durations,
+                "retest": {"selected": False, "reasons": []},
+            }
+        )
+
+    # Counts: sample-level denominators plus metric-level applicability.
+    metrics = [
+        item
+        for sample in sample_projections
+        for item in sample.get("judge_metrics") or []
+    ]
+    applicable_metrics = [
+        item for item in metrics if item.get("applicability") == "applicable"
+    ]
+    scored_metrics = [
+        item for item in applicable_metrics if _is_score(item.get("score"))
+    ]
+    metric_errors = [
+        item
+        for item in applicable_metrics
+        if item.get("error") is not None or not _is_score(item.get("score"))
+    ]
+    not_applicable = sum(
+        1 for item in metrics if item.get("applicability") == "not_applicable"
+    )
+    statuses = [sample["status"] for sample in sample_projections]
+    counts = {
+        "planned": len(planned),
+        "attempted": sum(
+            1
+            for status in statuses
+            if status in {"scored", "agent_error", "judge_error", "pending_judge"}
+        ),
+        "scored": sum(1 for status in statuses if status == "scored"),
+        "error": sum(
+            1
+            for status in statuses
+            if status in {"agent_error", "judge_error", "pending_judge", "corrupt"}
+        ),
+        "skipped": sum(1 for status in statuses if status == "skipped"),
+        "not_applicable": not_applicable,
+        "not_started": sum(1 for status in statuses if status == "not_started"),
+        "persisted": sum(1 for status in statuses if status != "not_started"),
+        "cases": len(cases),
+        "hard_cases": sum(1 for case in cases if case["hard"]),
+        "other_cases": sum(1 for case in cases if not case["hard"]),
+        "error_breakdown": {
+            "agent": sum(1 for status in statuses if status == "agent_error"),
+            "judge": sum(1 for status in statuses if status == "judge_error"),
+            "pending": sum(1 for status in statuses if status == "pending_judge"),
+            "corrupt": sum(1 for status in statuses if status == "corrupt"),
+        },
+        "metric_results": {
+            "applicable": len(applicable_metrics),
+            "scored": len(scored_metrics),
+            "error": len(metric_errors),
+            "not_applicable": not_applicable,
+        },
+    }
+
+    # Behaviour thresholds over unique cases.
+    hard = [case for case in cases if case["hard"]]
+    others = [case for case in cases if not case["hard"]]
+    passed_hard = sum(1 for case in hard if case["behaviour"]["passed"] is True)
+    passed_others = sum(1 for case in others if case["behaviour"]["passed"] is True)
+    passed_overall = passed_hard + passed_others
+    thresholds_evaluated = bool(baseline and len(cases) == 20 and len(hard) == 6)
+    thresholds = {
+        "evaluated": thresholds_evaluated,
+        "hard": {
+            "required": HARD_REQUIRED,
+            "total": len(hard),
+            "passed": passed_hard,
+            "met": passed_hard == HARD_REQUIRED and len(hard) == HARD_REQUIRED,
+        },
+        "others": {
+            "required": OTHERS_REQUIRED,
+            "total": len(others),
+            "passed": passed_others,
+            "met": passed_others >= OTHERS_REQUIRED and len(others) == 14,
+        },
+        "overall": {
+            "required": OVERALL_REQUIRED,
+            "total": len(cases),
+            "passed": passed_overall,
+            "met": passed_overall >= OVERALL_REQUIRED and len(cases) == 20,
+        },
+        "judge_threshold": JUDGE_THRESHOLD,
+        "retest_trigger": RETEST_TRIGGER,
+    }
+
+    # Retest selection: preselected cases, behaviour failures and first-round
+    # applicable Task Resolution/Grounding below 0.7. DR-09 executes repeats.
+    for case in cases:
+        reasons: list[str] = []
+        if any(
+            case["case_id"] == prefix or case["case_id"].startswith(prefix + "-")
+            for prefix in PRESELECTED_RETEST
+        ):
+            reasons.append("preselected by the parent spec")
+        if case["behaviour"]["passed"] is not True:
+            reasons.append("behaviour did not pass")
+        for metric in case["samples"]:
+            for entry in metric.get("judge_metrics") or []:
+                if entry.get("metric") not in {"Task Resolution", "Grounding"}:
+                    continue
+                if entry.get("applicability") != "applicable":
+                    continue
+                score = entry.get("score")
+                if _is_score(score) and float(score) < RETEST_TRIGGER:
+                    reasons.append(
+                        f"{entry['metric']} {float(score):.3f} below {RETEST_TRIGGER}"
+                    )
+        case["retest"] = {"selected": bool(reasons), "reasons": reasons}
+
+    # Snapshot: rubric/model/config/scope/dataset/environment.
+    projected_rubric = dict(rubric) if isinstance(rubric, Mapping) else None
+    if projected_rubric is None:
+        for record in records.values():
+            projected_rubric = _rubric_from_record(record)
+            if projected_rubric is not None:
+                break
+    model = None
+    if isinstance(judge_configuration, Mapping):
+        model = {
+            "model": judge_configuration.get("model"),
+            "model_source": judge_configuration.get("model_source"),
+            "base_url": ledger.safe_url(
+                judge_configuration.get("base_url") or ""
+            ),
+            "threshold": judge_configuration.get("threshold"),
+        }
+    if model is None:
+        for record in records.values():
+            model = _model_from_record(record)
+            if model is not None:
+                break
+    dataset = dict(manifest.get("dataset") or {})
+    configuration = dict(environment.get("configuration") or {})
+    budgets = configuration.get("budgets") or {}
+    config_snapshot = {
+        "suite_version": environment.get("suite_version"),
+        "baseline": baseline,
+        "base_url": ledger.safe_url(configuration.get("base_url") or ""),
+        "judge": (manifest.get("run") or {}).get("judge"),
+        "workers": (manifest.get("run") or {}).get("workers"),
+        "chat_timeout_s": (manifest.get("run") or {}).get("chat_timeout_s"),
+        "budgets": budgets,
+        "cache": _cache_snapshot(environment),
+        "models": _redact(configuration.get("models") or {}),
+        "dataset_sha256": dataset.get("sha256") or configuration.get("dataset_sha256"),
+        "evidence_scope": (manifest.get("run") or {}).get(
+            "evidence_scope", configuration.get("evidence_scope")
+        ),
+    }
+    snapshots = {
+        "dataset": _redact(dataset),
+        "rubric": _redact(projected_rubric),
+        "model": _redact(model),
+        "config": _redact(config_snapshot),
+        "scope": {
+            "selection": _redact(dict(manifest.get("selection") or {})),
+            "cases": [
+                {
+                    "case_id": case["case_id"],
+                    "scope": case["scope"],
+                    "hard": case["hard"],
+                    "kind": case["kind"],
+                }
+                for case in cases
+            ],
+        },
+        "environment": _redact(
+            {
+                "interpreter": environment.get("interpreter"),
+                "packages": environment.get("packages"),
+                "platform": environment.get("platform"),
+                "run_version": environment.get("run_version"),
+                "requirements_lock": environment.get("requirements_lock"),
+            }
+        ),
+    }
+
+    # Incomplete is driven by real execution/record problems, not by product
+    # failures. Missing required behaviour, rubric or metric records are also
+    # record problems for a baseline.
+    reasons = _failure_reasons(scan)
+    if baseline:
+        for sample in sample_projections:
+            if sample["behaviour_status"] in {"missing", "not_started", "corrupt", "error", "skipped"}:
+                reasons.append(
+                    {
+                        "kind": "behaviour_missing",
+                        "sample_id": sample["sample_id"],
+                        "detail": f"behaviour status {sample['behaviour_status']}",
+                    }
+                )
+            if sample["status"] == "scored" and sample["metric_count"] == 0:
+                reasons.append(
+                    {
+                        "kind": "metric_records_missing",
+                        "sample_id": sample["sample_id"],
+                        "detail": "a scored sample has no per-metric record",
+                    }
+                )
+        if projected_rubric is None:
+            reasons.append(
+                {"kind": "rubric_missing", "detail": "no rubric snapshot was recorded"}
+            )
+    incomplete = bool(scan.get("incomplete")) or any(
+        reason.get("kind")
+        in {
+            "behaviour_missing",
+            "metric_records_missing",
+            "rubric_missing",
+        }
+        for reason in reasons
+    )
+    judge_gate = bool(cases) and all(
+        case["judge"]["passed"] for case in cases
+    ) and counts["scored"] == counts["planned"]
+    behaviour_gate = (
+        thresholds["hard"]["met"]
+        and thresholds["others"]["met"]
+        and thresholds["overall"]["met"]
+        if thresholds_evaluated
+        else None
+    )
+    if incomplete:
+        status = "incomplete"
+    elif baseline:
+        status = "passed" if behaviour_gate and judge_gate else "failed"
+    else:
+        status = "complete"
+    gate = {
+        "status": status,
+        "passed": status == "passed",
+        "incomplete": incomplete,
+        "score": None if incomplete else scan.get("score"),
+        "behaviour_passed": behaviour_gate,
+        "judge_passed": judge_gate if counts["planned"] else None,
+        "reasons": reasons,
+    }
+
+    # Sections keep execution, behaviour, judge, capability and latency facts
+    # separate; no single "pass" hides another dimension.
+    facts = []
+    citations = []
+    isolation = []
+    for case in cases:
+        behaviour = case.get("behaviour") or {}
+        checks = {}
+        for sample in case["samples"]:
+            record = records.get(sample["sample_id"]) or {}
+            raw_behaviour = record.get("behaviour") if isinstance(record, Mapping) else None
+            if isinstance(raw_behaviour, Mapping):
+                checks.update(raw_behaviour.get("checks") or {})
+        entry = {
+            "case_id": case["case_id"],
+            "kind": case["kind"],
+            "status": behaviour.get("status"),
+            "passed": behaviour.get("passed"),
+            "failures": _redact(behaviour.get("failures") or []),
+            "checks": _redact(
+                {key: checks[key] for key in FACT_CHECKS if key in checks}
+            ),
+        }
+        facts.append(entry)
+        citations.append(
+            {
+                "case_id": case["case_id"],
+                "reference_count": sum(
+                    sample.get("reference_count") or 0 for sample in case["samples"]
+                ),
+                "checks": _redact(
+                    {key: checks[key] for key in CITATION_CHECKS if key in checks}
+                ),
+            }
+        )
+        if checks and any(key in checks for key in ISOLATION_CHECKS):
+            isolation.append(
+                {
+                    "case_id": case["case_id"],
+                    "kind": case["kind"],
+                    "checks": _redact(
+                        {key: checks[key] for key in ISOLATION_CHECKS if key in checks}
+                    ),
+                }
+            )
+
+    latency_values = [
+        float(sample["agent_duration_ms"])
+        for sample in sample_projections
+        if isinstance(sample.get("agent_duration_ms"), (int, float))
+    ]
+    latency = {
+        "scope": (
+            "Agent chat request wall time only (agent.duration_ms); judge time "
+            "is excluded from every latency statistic"
+        ),
+        "judge_excluded": True,
+        **_latency_stats(latency_values),
+        "missing": sum(
+            1
+            for sample in sample_projections
+            if sample.get("agent_duration_ms") is None
+        ),
+        "cases": [
+            {
+                "case_id": case["case_id"],
+                "chat_ms": (
+                    case["latency_ms"][0] if case["latency_ms"] else None
+                ),
+            }
+            for case in cases
+        ],
+    }
+
+    capabilities_section = _capabilities(environment, capabilities)
+    capabilities_section["judge"] = _redact(
+        {
+            "model": (model or {}).get("model"),
+            "model_source": (model or {}).get("model_source"),
+            "threshold": JUDGE_THRESHOLD,
+        }
+    )
+
+    report = {
+        "schema": SCHEMA,
+        "report_version": REPORT_VERSION,
+        "ticket": TICKET,
+        "run_id": manifest.get("run_id"),
+        "generated_at": ledger.utc_now(),
+        "baseline": baseline,
+        "counts": counts,
+        "thresholds": thresholds,
+        "gate": gate,
+        "sections": {
+            "facts": {"cases": facts},
+            "citations": {"cases": citations},
+            "isolation": {"cases": isolation},
+            "judge": {
+                "threshold": JUDGE_THRESHOLD,
+                "retest_trigger": RETEST_TRIGGER,
+                "metrics": _redact(
+                    [
+                        {
+                            "sample_id": sample["sample_id"],
+                            "case_id": sample["case_id"],
+                            **entry,
+                        }
+                        for sample in sample_projections
+                        for entry in sample.get("judge_metrics") or []
+                    ]
+                ),
+                "cases": [
+                    {
+                        "case_id": case["case_id"],
+                        **case["judge"],
+                    }
+                    for case in cases
+                ],
+                "retest_plan": [
+                    {
+                        "case_id": case["case_id"],
+                        "reasons": case["retest"]["reasons"],
+                    }
+                    for case in cases
+                    if case["retest"]["selected"]
+                ],
+            },
+            "capabilities": capabilities_section,
+            "latency": latency,
+        },
+        "cases": [
+            {
+                "case_id": case["case_id"],
+                "hard": case["hard"],
+                "kind": case["kind"],
+                "scope": case["scope"],
+                "behaviour": _redact(case["behaviour"]),
+                "judge": _redact(case["judge"]),
+                "errors": _redact(case["errors"]),
+                "latency_ms": case["latency_ms"],
+                "retest": _redact(case["retest"]),
+                "samples": [sample["sample_id"] for sample in case["samples"]],
+            }
+            for case in cases
+        ],
+        "snapshots": snapshots,
+        "raw": {
+            "samples_dir": str(Path(scan.get("run_dir") or "").resolve())
+            if scan.get("run_dir")
+            else None,
+            "samples": _redact(sample_projections),
+            "metric_results": _redact(project_metric_results(records.values())),
+            "unexpected": list(scan.get("unexpected") or []),
+        },
+    }
+    return report
+
+
+def render_markdown(report: Mapping[str, Any]) -> str:
+    """Human-readable summary of the same JSON report."""
+    counts = report.get("counts") or {}
+    gate = report.get("gate") or {}
+    thresholds = report.get("thresholds") or {}
+    lines = [
+        f"# Evaluation baseline report {report.get('run_id')}",
+        "",
+        f"- status: **{gate.get('status')}**",
+        f"- incomplete: {gate.get('incomplete')}",
+        f"- score: {gate.get('score')}",
+        f"- baseline: {report.get('baseline')}",
+        "",
+        "## Counts",
+        "",
+        "| planned | attempted | scored | error | skipped | not_applicable | not_started |",
+        "|---|---|---|---|---|---|---|",
+        "| {planned} | {attempted} | {scored} | {error} | {skipped} | "
+        "{not_applicable} | {not_started} |".format(**counts),
+        "",
+        "## Behaviour thresholds",
+        "",
+        f"- evaluated: {thresholds.get('evaluated')}",
+        f"- hard: {thresholds.get('hard', {}).get('passed')}/"
+        f"{thresholds.get('hard', {}).get('total')} "
+        f"(required {thresholds.get('hard', {}).get('required')})",
+        f"- others: {thresholds.get('others', {}).get('passed')}/"
+        f"{thresholds.get('others', {}).get('total')} "
+        f"(required {thresholds.get('others', {}).get('required')})",
+        f"- overall: {thresholds.get('overall', {}).get('passed')}/"
+        f"{thresholds.get('overall', {}).get('total')} "
+        f"(required {thresholds.get('overall', {}).get('required')})",
+        f"- judge threshold: {thresholds.get('judge_threshold')}; "
+        f"retest trigger: {thresholds.get('retest_trigger')}",
+        "",
+        "## Cases",
+        "",
+        "| case | hard | behaviour | judge | chat ms | retest |",
+        "|---|---|---|---|---|---|",
+    ]
+    for case in report.get("cases") or []:
+        behaviour = case.get("behaviour") or {}
+        judge = case.get("judge") or {}
+        latency = case.get("latency_ms") or []
+        lines.append(
+            "| {case} | {hard} | {behaviour} | {judge} | {latency} | {retest} |".format(
+                case=case.get("case_id"),
+                hard=case.get("hard"),
+                behaviour=behaviour.get("status"),
+                judge=judge.get("status"),
+                latency=latency[0] if latency else "",
+                retest=", ".join(case.get("retest", {}).get("reasons") or []),
+            )
+        )
+    lines.extend(
+        [
+            "",
+            "## Capabilities",
+            "",
+            json.dumps(report.get("sections", {}).get("capabilities") or {}, ensure_ascii=False),
+            "",
+            "## Incomplete reasons",
+            "",
+        ]
+    )
+    for reason in gate.get("reasons") or []:
+        lines.append(f"- {reason.get('kind')}: {reason.get('sample_id') or ''} "
+                     f"{reason.get('detail') or ''}".rstrip())
+    return "\n".join(lines) + "\n"
+
+
+def write_report(run_dir: str | Path, report: Mapping[str, Any]) -> dict:
+    """Write report.json/report.md atomically and read the JSON back."""
+    directory = Path(run_dir)
+    directory.mkdir(parents=True, exist_ok=True)
+    json_path = directory / "report.json"
+    markdown_path = directory / "report.md"
+    payload = dict(report)
+    encoded = json.dumps(payload, ensure_ascii=False, indent=2)
+    tmp = json_path.with_name(json_path.name + ".tmp")
+    with open(tmp, "w", encoding="utf-8", newline="\n") as handle:
+        handle.write(encoded)
+        handle.flush()
+        os.fsync(handle.fileno())
+    os.replace(tmp, json_path)
+    markdown_path.write_text(render_markdown(payload), encoding="utf-8")
+    reread = json.loads(json_path.read_text(encoding="utf-8"))
+    if reread != payload:
+        raise OSError(f"report at {json_path} did not read back intact")
+    return {
+        "json": str(json_path),
+        "markdown": str(markdown_path),
+        "sha256": ledger.sha256_file(json_path),
+    }

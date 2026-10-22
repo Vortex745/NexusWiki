@@ -30,8 +30,10 @@ Evidence boundary: the Grounding retrieval context is built from the returned
 reference titles and excerpts (600 characters each). Those are cited-evidence
 summaries, not the full generation context.
 
-Exit codes: 0 complete, 1 run incomplete, 2 the run could not start or the
-summary could not be written (both non-zero, both score=null).
+Exit codes: 0 complete (and baseline gates passed when selected), 1 baseline
+gate failed or run incomplete, 2 the run could not start or artifacts could
+not be written. Incomplete runs always have score=null; complete baselines
+keep the observed score even when product gates fail.
 """
 
 from __future__ import annotations
@@ -53,10 +55,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import requests
 
+import contracts
 import ledger
+import reporting
 
-TICKET = "DR-04"
-SUITE_VERSION = "dr-06.1"
+TICKET = "DR-08"
+SUITE_VERSION = "dr-08.1"
 EXIT_OK = 0
 EXIT_INCOMPLETE = 1
 EXIT_FATAL = 2
@@ -97,13 +101,24 @@ class RunOutcome:
     run_errors: list[str] = field(default_factory=list)
     metric_results: list[dict] = field(default_factory=list)
     rubric: dict | None = None
+    environment: dict | None = None
+    report: dict | None = None
+    report_paths: dict | None = None
+    capabilities: dict | None = None
+    judge_configuration: dict | None = None
 
     @property
     def score(self):
+        if self.report is not None:
+            return self.report["gate"]["score"]
         return None if self.summary is None else self.summary.get("score")
 
     @property
     def incomplete(self) -> bool:
+        if self.report is not None:
+            gate = self.report.get("gate") or {}
+            if gate.get("incomplete"):
+                return True
         if self.summary is not None:
             return bool(self.summary.get("incomplete"))
         return True
@@ -122,9 +137,11 @@ class RunOutcome:
             for key in (
                 "planned",
                 "persisted",
+                "attempted",
                 "scored",
                 "agent_errors",
                 "judge_errors",
+                "skipped",
                 "not_started",
                 "pending",
             ):
@@ -136,6 +153,15 @@ class RunOutcome:
         payload["metrics"] = self.metric_results
         payload["rubric"] = self.rubric
         payload["evidence_scope"] = EVIDENCE_SCOPE
+        payload["environment"] = self.environment
+        payload["capabilities"] = self.capabilities
+        payload["judge_configuration"] = self.judge_configuration
+        if self.report_paths:
+            payload["report_paths"] = self.report_paths
+        if self.report is not None:
+            payload["report"] = self.report
+            for key in ("planned", "attempted", "scored", "skipped", "not_started", "not_applicable", "error"):
+                payload[key if key != "error" else "error_count"] = self.report["counts"][key]
         if self.run_errors:
             payload["run_errors"] = [ledger.redact_text(item) for item in self.run_errors]
         return payload
@@ -323,6 +349,187 @@ def _judge_scored(result: Any, scrubber: ledger.SecretScrubber, judge_name: str)
 
 
 # ---------------------------------------------------------------------------
+# frozen snapshots, capabilities and the deterministic behaviour gate
+# ---------------------------------------------------------------------------
+
+def rubric_snapshot() -> dict | None:
+    """Frozen rubric facts for the report, without importing Jev internals."""
+    try:
+        import metrics as metrics_module
+    except Exception:
+        return None
+    return {
+        "version": metrics_module.RUBRIC_VERSION,
+        "digest": metrics_module.rubric_digest(),
+        "threshold": metrics_module.DEFAULT_THRESHOLD,
+        "evidence_scope": metrics_module.EVIDENCE_SCOPE,
+    }
+
+
+def capability_snapshot() -> dict:
+    """Capability availability without recording any credential value."""
+    rerank_key = os.environ.get("RERANK_API_KEY") or _dot_env("RERANK_API_KEY")
+    return {
+        "rerank": {
+            "status": (
+                "configured_not_exercised" if rerank_key else "not_configured"
+            ),
+            "counted_as_pass": False,
+            "detail": (
+                "RERANK_API_KEY is not configured; rerank is not exercised and "
+                "is not counted as covered"
+                if not rerank_key
+                else "RERANK_API_KEY is configured but this baseline does not "
+                "prove a real rerank call; not counted as covered"
+            ),
+        }
+    }
+
+
+def _is_v2_metadata(metadata: Mapping[str, Any] | None) -> bool:
+    metadata = metadata or {}
+    return (
+        metadata.get("contract_version") == 2
+        and metadata.get("kind") in {"answer", "refuse", "memory-not-cited"}
+    )
+
+
+def behaviour_verdict(
+    metadata: Mapping[str, Any] | None,
+    payload: Mapping[str, Any] | None,
+    *,
+    error: Any = None,
+) -> dict:
+    """Deterministic v2 behaviour result persisted before the judge.
+
+    Non-v2 datasets keep a ``not_configured`` status instead of pretending a
+    gate ran. A v2 case always gets an explicit status so a missing record can
+    never look like a pass.
+    """
+    metadata = metadata or {}
+    if not _is_v2_metadata(metadata):
+        return {
+            "schema": "eval-behaviour-status",
+            "status": "not_configured",
+            "passed": None,
+            "required": False,
+            "failures": [],
+            "checks": {},
+        }
+    if error is not None or not isinstance(payload, Mapping):
+        return {
+            "schema": "eval-behaviour-status",
+            "status": "error",
+            "passed": False,
+            "required": True,
+            "failures": [f"deterministic gate not evaluated: {error or 'no chat payload'}"],
+            "checks": {},
+        }
+    verdict = contracts.evaluate_case(metadata, payload)
+    verdict = dict(verdict)
+    verdict["status"] = "passed" if verdict.get("passed") else "failed"
+    return verdict
+
+
+def _read_environment(run_dir: Path) -> dict | None:
+    path = run_dir / "environment.json"
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+
+
+def _read_records(
+    run_ledger: ledger.RunLedger, summary: Mapping[str, Any]
+) -> dict[str, dict]:
+    """Read every valid sample record in frozen plan order."""
+    records: dict[str, dict] = {}
+    statuses = {
+        item.get("sample_id"): item.get("status")
+        for item in summary.get("samples") or []
+    }
+    for sample_id in run_ledger.planned_sample_ids:
+        if statuses.get(sample_id) in {"not_started", "corrupt"}:
+            continue
+        try:
+            records[sample_id] = run_ledger.read_sample(sample_id)
+        except ledger.SampleReadError:
+            continue
+    return records
+
+
+def _build_and_write_report(
+    run_ledger: ledger.RunLedger,
+    summary: Mapping[str, Any],
+    environment: Mapping[str, Any] | None,
+    *,
+    baseline: bool,
+    capabilities: Mapping[str, Any] | None = None,
+    rubric: Mapping[str, Any] | None = None,
+    judge_configuration: Mapping[str, Any] | None = None,
+) -> tuple[dict, dict]:
+    environment = environment or {}
+    records = _read_records(run_ledger, summary)
+    scan = dict(summary)
+    scan["run_dir"] = str(run_ledger.run_dir)
+    report = reporting.build_report(
+        manifest=run_ledger.manifest,
+        environment=environment,
+        planned=run_ledger.manifest["planned"],
+        records=records,
+        scan=scan,
+        baseline=baseline,
+        capabilities=capabilities,
+        rubric=rubric,
+        judge_configuration=judge_configuration,
+    )
+    paths = reporting.write_report(run_ledger.run_dir, report)
+    return report, paths
+
+
+def _finish_report(outcome: RunOutcome, run_ledger: ledger.RunLedger) -> None:
+    """Rebuild every public projection from this run's durable records."""
+    outcome.environment = _read_environment(run_ledger.run_dir)
+    configuration = (outcome.environment or {}).get("configuration") or {}
+    environment_path = run_ledger.run_dir / "environment.json"
+    try:
+        environment_intact = (
+            outcome.environment is not None
+            and ledger.sha256_file(environment_path) == run_ledger.manifest.get("environment_sha256")
+        )
+    except OSError:
+        environment_intact = False
+    if not environment_intact:
+        outcome.exit_code = EXIT_INCOMPLETE
+        outcome.error = "environment snapshot is missing, corrupt or changed from the frozen manifest"
+        outcome.summary = dict(outcome.summary or {})
+        outcome.summary.update(incomplete=True, score=None)
+        outcome.summary.setdefault("reasons", []).append({"kind": "environment_snapshot_changed"})
+    records = _read_records(run_ledger, outcome.summary or {})
+    outcome.metric_results = reporting.project_metric_results(records.values())
+    outcome.rubric = reporting.project_rubric(records.values()) or configuration.get("rubric")
+    outcome.capabilities = configuration.get("capabilities")
+    outcome.judge_configuration = configuration.get("judge_configuration")
+    try:
+        outcome.report, outcome.report_paths = _build_and_write_report(
+            run_ledger,
+            outcome.summary or {},
+            outcome.environment,
+            baseline=bool((run_ledger.manifest.get("run") or {}).get("baseline")),
+            capabilities=outcome.capabilities,
+            rubric=outcome.rubric,
+            judge_configuration=outcome.judge_configuration,
+        )
+        if outcome.report["gate"]["incomplete"] or outcome.report["gate"]["status"] == "failed":
+            outcome.exit_code = EXIT_INCOMPLETE
+    except (OSError, ValueError, TypeError) as exc:
+        outcome.exit_code = EXIT_FATAL
+        outcome.error = ledger.redact_text(f"cannot write report: {exc}")
+        if outcome.summary is not None:
+            outcome.summary.update(incomplete=True, score=None)
+
+
+# ---------------------------------------------------------------------------
 # HTTP client
 # ---------------------------------------------------------------------------
 
@@ -487,6 +694,8 @@ def _agent_record(
         )
     if error is not None:
         agent["error"] = error
+    metadata = planned.get("metadata") or {}
+    payload = result["payload"] if result is not None else None
     return {
         "sample_id": planned["sample_id"],
         "case_id": planned["case_id"],
@@ -499,6 +708,9 @@ def _agent_record(
             "expected_output": planned.get("expected_output"),
         },
         "agent": agent,
+        # The deterministic v2 result is persisted before the judge runs, so
+        # a judge error or a high judge score can never erase it (DR-03/DR-08).
+        "behaviour": behaviour_verdict(metadata, payload, error=error),
         "judge": {"status": "not_attempted", "score": None, "error": None},
         "status": "agent_error" if error is not None else "pending_judge",
         "error": error,
@@ -535,6 +747,7 @@ def execute_run(
     chat_timeout_s: float | None = None,
     suite_version: str = SUITE_VERSION,
     repo_root: Path | None = None,
+    baseline: bool = False,
 ) -> RunOutcome:
     """Run the frozen plan once, persisting answers before judging."""
     scrubber = ledger.SecretScrubber.from_environment()
@@ -551,6 +764,12 @@ def execute_run(
     try:
         all_cases = load_dataset(dataset_path)
         selected = select_cases(all_cases, cases)
+        if baseline and (
+            len(selected) != 20
+            or sum(bool(item["metadata"].get("hard")) for item in selected) != 6
+            or not all(_is_v2_metadata(item["metadata"]) for item in selected)
+        ):
+            raise ValueError("a baseline requires all twenty v2 cases, including six hard cases")
         judge_fn, judge_name = load_judge(judge)
     except Exception as exc:  # includes ImportError from a bad plugin spec
         return RunOutcome(EXIT_FATAL, None, None, None, None, scrubber.scrub(exc))
@@ -578,6 +797,12 @@ def execute_run(
         ),
         "judge_sdk_retries": False,
     }
+    judge_config_fn = getattr(judge_fn, "configuration", None)
+    if not callable(judge_config_fn):
+        judge_config_fn = getattr(judge_fn, "__globals__", {}).get("configuration")
+    judge_config = _scrubbed_json(judge_config_fn(), scrubber) if callable(judge_config_fn) else None
+    capabilities = capability_snapshot()
+    frozen_rubric = rubric_snapshot()
     environment = ledger.build_environment_snapshot(
         suite_version=suite_version,
         base_url=ledger.safe_url(base_url),
@@ -589,6 +814,14 @@ def execute_run(
             "cases": [item["name"] for item in selected],
             "samples_per_case": samples,
             "evidence_scope": EVIDENCE_SCOPE,
+            "cache": {"reading": "disabled", "writing": "disabled", "enabled": False},
+            "capabilities": capabilities,
+            "rubric": frozen_rubric,
+            "judge_configuration": judge_config,
+            "models": {
+                name: os.environ.get(name) or _dot_env(name) or None
+                for name in ("OPENAI_CHAT_MODEL", "EMBEDDING_MODEL", "RERANK_MODEL", "DECISION_PROVIDER")
+            },
         },
         repo_root=repo_root,
     )
@@ -609,6 +842,7 @@ def execute_run(
             "judge": judge_name,
             "workers": 1,
             "evidence_scope": EVIDENCE_SCOPE,
+            "baseline": baseline,
         },
     }
 
@@ -788,14 +1022,15 @@ def execute_run(
 
     outcome.summary = summary
     outcome.exit_code = EXIT_INCOMPLETE if summary["incomplete"] else EXIT_OK
+    _finish_report(outcome, run_ledger)
     state_error = outcome.error
     if state_error is None and summary["incomplete"] and summary.get("reasons"):
         state_error = json.dumps(summary["reasons"][:5], ensure_ascii=False)
     try:
         run_ledger.write_run_state(
-            "incomplete" if summary["incomplete"] else "complete",
+            "incomplete" if outcome.incomplete else "complete",
             error=state_error,
-            score=summary["score"],
+            score=outcome.score,
         )
     except OSError as exc:
         outcome.run_errors.append(scrubber.scrub(f"cannot record final run state: {exc}"))
@@ -835,11 +1070,12 @@ def rebuild_run(run_dir: str | Path) -> RunOutcome:
         summary,
         run_ledger.manifest,
     )
+    _finish_report(outcome, run_ledger)
     try:
         run_ledger.write_run_state(
-            "incomplete" if summary["incomplete"] else "complete",
+            "incomplete" if outcome.incomplete else "complete",
             error=None,
-            score=summary["score"],
+            score=outcome.score,
         )
     except OSError as exc:
         outcome.run_errors.append(scrubber.scrub(f"cannot record run state: {exc}"))
@@ -871,7 +1107,7 @@ def _print_payload(payload: dict, json_out: str | None) -> None:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
-        description="Run or rebuild one durable NexusRAG evaluation run (DR-04)"
+        description="Run or rebuild one durable NexusRAG evaluation baseline (DR-08)"
     )
     parser.add_argument("--runs-root", default=str(DEFAULT_RUNS_ROOT))
     parser.add_argument("--dataset", default=str(DEFAULT_DATASET))
@@ -888,6 +1124,7 @@ def main(argv: list[str] | None = None) -> int:
         help="judge plugin as module:function or file.py:function (required for a run)",
     )
     parser.add_argument("--base-url", default=None)
+    parser.add_argument("--baseline", action="store_true", help="require the complete frozen twenty-case v2 baseline")
     parser.add_argument("--timeout", type=float, default=None)
     parser.add_argument(
         "--rebuild", metavar="RUN_DIR", help="rebuild summary.json from sample records"
@@ -924,6 +1161,7 @@ def main(argv: list[str] | None = None) -> int:
         judge=args.judge,
         base_url=args.base_url,
         chat_timeout_s=args.timeout,
+        baseline=args.baseline,
     )
     payload = outcome.public_payload()
     _print_payload(payload, args.json_out)

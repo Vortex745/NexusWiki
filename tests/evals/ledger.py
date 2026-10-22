@@ -47,9 +47,9 @@ TICKET = "DR-04"
 SUMMARY_LOCK_TIMEOUT_S = 0
 
 SAMPLE_STATUSES = frozenset(
-    {"pending_judge", "scored", "judge_error", "agent_error"}
+    {"pending_judge", "scored", "judge_error", "agent_error", "skipped"}
 )
-JUDGE_STATUSES = frozenset({"pending", "scored", "error", "not_attempted"})
+JUDGE_STATUSES = frozenset({"pending", "scored", "error", "not_attempted", "skipped"})
 
 SENSITIVE_ENV_NAME = re.compile(
     r"(API_?KEY|ACCESS_?TOKEN|AUTH_?TOKEN|SECRET|PASSWORD|CREDENTIAL|COOKIE)",
