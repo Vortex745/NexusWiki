@@ -8,6 +8,11 @@ import { SqliteConversationHistoryStore } from "../answer/conversation_history_s
 import type { AnswerRunEvent, AnswerRunResult } from "../types"
 import { openDb } from "../ingestion/tracking/db"
 import { createMastraChatEventAdapter } from "../mastra/chat_event_adapter"
+import type { MastraRunner } from "../mastra/chat_event_adapter"
+import { createFaqExactMatchRunner } from "../mastra/faq_exact_runner"
+import { FaqEntryServiceImpl } from "../faq/faq_entry_service"
+import { SqliteFaqEntryRepo } from "../faq/faq_entry_repo"
+import { SqliteConversationStore } from "../answer/conversation_store"
 import { ConversationImpl } from "../frontend/conversation"
 
 /**
@@ -365,6 +370,177 @@ test("approved answer basis survives real adapter, SSE, JSON, SQLite history and
       assert.deepEqual(message.references.map(({ id }) => id), ["manual-1"])
       assert.deepEqual(message.traceEvents.find((event) => event.stage === "validation")?.data?.answerBasis, basis)
     }
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()))
+    db.close()
+  }
+})
+
+const HARD04_ANSWER =
+  "标准商品自签收之日起 30 个自然日内可申请退货（演示标准答案，引用虚构政策文档）。"
+
+test("DR-10: a unique exact FAQ hit carries one parseable citation through JSON, SSE, history and memory", async () => {
+  const db = openDb(":memory:")
+  let generated = 0
+  const faq = new FaqEntryServiceImpl({
+    repo: new SqliteFaqEntryRepo(db),
+    now: () => new Date("2026-10-22T00:00:00.000Z"),
+    generateId: () => `faq-hard-04-${++generated}`,
+  })
+  const entry = faq.create("tenant-a", "kb-1", {
+    question: "退货期限是多久？",
+    answer: HARD04_ANSWER,
+    variants: ["退货多久能退"],
+  }, "admin")
+  // A second in-scope standard answer for the same normalized question stays
+  // ambiguous and must fall through to the normal path.
+  faq.create("tenant-a", "kb-2", {
+    question: "退货期限是多久？",
+    answer: "7 个自然日。",
+  }, "admin")
+  const memory = new SqliteConversationStore(db)
+  let innerCalls = 0
+  const inner: MastraRunner = async () => {
+    innerCalls += 1
+    return {
+      reply: "normal-path answer",
+      status: "completed",
+      references: [],
+      degradation: { status: "none", unavailableChannels: [] },
+      tokens: ["normal-path answer"],
+      routeTrace: {},
+      retrievalTrace: {},
+      contextTrace: {},
+      validationTrace: {},
+    }
+  }
+  const runner = createFaqExactMatchRunner(
+    {
+      faq,
+      conversationStore: memory,
+      resolveTenantId: (context) => context.tenantId,
+    },
+    inner
+  )
+  const repository = new AnswerTraceRepository(db)
+  const source = createMastraChatEventAdapter({
+    runner,
+    traceObserver: repository,
+    // Any provider call would reject the run: a direct FAQ answer is model-free.
+    resourceBudget: { limits: { maxModelCalls: 0 } },
+  })
+  const app = express()
+  app.use(express.json())
+  app.use((req, res, next) => {
+    res.locals.accessContext = {
+      tenantId: String(req.headers["x-tenant"] ?? "tenant-a"),
+      subjectId: "user-1",
+      groups: [],
+      scopes: ["chat"],
+    }
+    next()
+  })
+  app.use("/api", createChatRouter(repository, source, undefined, (_context, requested) => ({
+    knowledgeBaseIds: Array.isArray(requested) ? requested.map(String) : [],
+  })))
+  const { server, port } = await listen(app)
+  const base = `http://127.0.0.1:${port}`
+  const sent = async (body: Record<string, unknown>, headers: Record<string, string> = {}) => {
+    const response = await fetch(`${base}/api/chat`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...headers },
+      body: JSON.stringify(body),
+    })
+    assert.equal(response.status, 200)
+    return response
+  }
+  try {
+    const answers: Array<{ reply: string; referenceIds: string[] }> = []
+    for (const stream of [false, true]) {
+      const runId = `dr10-${stream ? "sse" : "json"}`
+      const sessionId = `dr10-session-${stream ? "sse" : "json"}`
+      const response = await sent({
+        message: "退货期限是多久？", stream, runId, sessionId, knowledgeBaseIds: ["kb-1"],
+      })
+      let events: AnswerRunEvent[]
+      let jsonReply: string | undefined
+      let jsonReferences: AnswerRunResult["references"] | undefined
+      if (stream) {
+        events = (await response.text()).split(/\r?\n/)
+          .filter((line) => line.startsWith("data: "))
+          .map((line) => JSON.parse(line.slice(6)).event as AnswerRunEvent)
+      } else {
+        const body = await response.json() as {
+          reply: string
+          references: AnswerRunResult["references"]
+          events: AnswerRunEvent[]
+        }
+        events = body.events
+        jsonReply = body.reply
+        jsonReferences = body.references
+      }
+      const done = events.filter((event): event is Extract<AnswerRunEvent, { type: "done" }> =>
+        event.type === "done"
+      )
+      assert.equal(done.length, 1)
+      const result = done[0].result
+      if (jsonReply !== undefined) {
+        assert.equal(jsonReply, result.reply)
+        assert.deepEqual(jsonReferences, result.references)
+      }
+      const streamed = events.filter((event) => event.type === "answer_delta")
+        .map((event) => event.type === "answer_delta" ? event.token : "").join("")
+      assert.equal(streamed, result.reply)
+      assert.equal(result.reply.startsWith(HARD04_ANSWER), true)
+      const markers = [...result.reply.matchAll(/\[cite:([^\]]+)\]/g)]
+      assert.equal(markers.length, 1)
+      assert.deepEqual(result.references.map(({ id }) => id), [markers[0][1]])
+      assert.equal(result.references[0].origin, "faq")
+      assert.equal(result.references[0].faqEntryId, entry.id)
+      assert.equal(result.references[0].faqVersion, 1)
+      const history = await fetch(`${base}/api/chat/runs/${runId}`)
+      assert.deepEqual((await history.json() as { events: AnswerRunEvent[] }).events, events)
+      const turns = memory.loadRecentTurns(sessionId, "tenant-a", 10)
+      assert.equal(turns.length, 2)
+      assert.equal(turns[1].content, result.reply)
+      answers.push({ reply: result.reply, referenceIds: result.references.map(({ id }) => id) })
+    }
+    assert.deepEqual(answers[0], answers[1])
+    assert.equal(innerCalls, 0, "an exact FAQ hit must not run routing, generation or validation")
+
+    // A variant hit keeps the same entry/version citation.
+    const variant = await sent({
+      message: "退货多久能退", stream: false, runId: "dr10-variant", sessionId: "dr10-variant",
+      knowledgeBaseIds: ["kb-1"],
+    })
+    const variantBody = await variant.json() as {
+      reply: string
+      references: AnswerRunResult["references"]
+    }
+    assert.equal(variantBody.reply, answers[0].reply)
+    assert.deepEqual(variantBody.references.map(({ id }) => id), answers[0].referenceIds)
+    assert.equal(innerCalls, 0)
+
+    // Cross-knowledge ambiguity and cross-tenant scope fall through untouched.
+    for (const [headers, knowledgeBaseIds] of [
+      [{}, ["kb-1", "kb-2"]],
+      [{ "x-tenant": "tenant-b" }, ["kb-1"]],
+    ] as Array<[Record<string, string>, string[]]>) {
+      const response = await sent({
+        message: "退货期限是多久？", stream: false,
+        runId: `dr10-fallthrough-${innerCalls}`, sessionId: `dr10-fallthrough-${innerCalls}`,
+        knowledgeBaseIds,
+      }, headers)
+      const body = await response.json() as {
+        reply: string
+        references: AnswerRunResult["references"]
+      }
+      assert.equal(body.reply, "normal-path answer")
+      assert.deepEqual(body.references, [])
+      assert.equal(innerCalls, headers["x-tenant"] ? 2 : 1)
+    }
+    // The stored standard answer is never decorated or rewritten.
+    assert.equal(faq.listActive("tenant-a", ["kb-1"])[0].answer, HARD04_ANSWER)
   } finally {
     await new Promise<void>((resolve) => server.close(() => resolve()))
     db.close()

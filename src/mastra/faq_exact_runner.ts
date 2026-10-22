@@ -37,16 +37,19 @@ export interface FaqExactMatchRunnerDeps {
 }
 
 function faqOutput(
-  input: Parameters<MastraRunner>[0],
   row: FaqActiveIdentityRow,
   viaVariant: boolean
 ): MastraRunnerOutput {
+  // The stored standard answer is never rewritten; the runtime body appends
+  // the one inline citation the citation parser resolves to this FAQ version.
+  const evidence = buildFaqEvidence(row)
+  const reply = `${row.answer} [cite:${evidence.id}]`
   return {
-    reply: row.answer,
+    reply,
     status: "completed",
-    references: [buildFaqEvidence(row)],
+    references: [evidence],
     degradation: { status: "none", unavailableChannels: [] },
-    tokens: [row.answer],
+    tokens: [reply],
     routeTrace: {
       faqMatch: {
         entryId: row.entryId,
@@ -84,18 +87,20 @@ export function createFaqExactMatchRunner(
     )
     if (!match) return inner(input)
 
+    const output = faqOutput(match.row, match.viaVariant)
     if (deps.conversationStore && deps.resolveTenantId) {
-      // The same validated pair any completed answer records.
+      // The same validated pair any completed answer records — the same cited
+      // body the transport published, so history and display agree.
       saveValidatedTurnPair(
         deps.conversationStore,
         input.sessionId,
         tenantId,
         input.runId,
         input.message,
-        match.row.answer,
+        output.reply,
         deps.now ?? (() => new Date())
       )
     }
-    return faqOutput(input, match.row, match.viaVariant)
+    return output
   }
 }

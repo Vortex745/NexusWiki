@@ -166,12 +166,14 @@ test("Ticket 31: disabled and cross-knowledge entries cannot match", () => {
   assert.equal(matchExactFaq(service.listActive("tenant-a", ["kb-1"]), "发票怎么开？"), null)
 })
 
-test("Ticket 31: the exact-match runner publishes the standard answer without the normal path", async () => {
+test("Ticket 31: the exact-match runner publishes the cited standard answer without the normal path", async () => {
   const { service } = buildFaqService()
   const entry = service.create("tenant-a", "kb-1", {
     question: "退款多久到账？",
     answer: "3 个工作日内原路退回。",
   }, "admin")
+  const row = service.listActive("tenant-a", ["kb-1"])[0]
+  const expectedReply = `${row.answer} [cite:${buildFaqEvidence(row).id}]`
   const { inner, calls } = innerRecording()
   const { store, saved } = recordingMemoryStore()
   const runner = createFaqExactMatchRunner(
@@ -184,7 +186,7 @@ test("Ticket 31: the exact-match runner publishes the standard answer without th
   }))
   assert.equal(calls.length, 0, "the normal path must not run for a direct FAQ hit")
   assert.equal(output.status, "completed")
-  assert.equal(output.reply, "3 个工作日内原路退回。")
+  assert.equal(output.reply, expectedReply)
   assert.equal(output.references.length, 1)
   assert.equal(output.references[0].origin, "faq")
   assert.equal(output.references[0].faqEntryId, entry.id)
@@ -201,8 +203,34 @@ test("Ticket 31: the exact-match runner publishes the standard answer without th
     saved.map(({ role }) => role),
     ["user", "assistant"]
   )
-  assert.equal(saved[1].content, "3 个工作日内原路退回。")
+  assert.equal(saved[1].content, expectedReply)
   assert.equal(saved[1].runId, "run-1")
+})
+
+test("DR-10: a unique variant hit publishes the same cited standard answer", async () => {
+  const { service } = buildFaqService()
+  service.create("tenant-a", "kb-1", {
+    question: "退款多久到账？",
+    answer: "3 个工作日内原路退回。",
+    variants: ["退款几天能到"],
+  }, "admin")
+  const row = service.listActive("tenant-a", ["kb-1"])[0]
+  const { inner, calls } = innerRecording()
+  const runner = createFaqExactMatchRunner(
+    { faq: service, resolveTenantId: (ctx) => ctx.tenantId },
+    inner
+  )
+
+  const output = await runner(runnerInput({
+    message: "退款几天能到！",
+    retrievalScope: { knowledgeBaseIds: ["kb-1"] },
+  }))
+  assert.equal(calls.length, 0)
+  assert.equal(output.reply, `${row.answer} [cite:${buildFaqEvidence(row).id}]`)
+  assert.equal(output.references.length, 1)
+  assert.equal(output.references[0].faqEntryId, row.entryId)
+  assert.equal(output.references[0].faqVersion, 1)
+  assert.equal(output.routeTrace.faqMatch?.viaVariant, true)
 })
 
 test("Ticket 31: no match, ambiguous match or empty scope falls through to the normal runner", async () => {

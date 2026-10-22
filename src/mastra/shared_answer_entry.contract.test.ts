@@ -558,7 +558,11 @@ test("Clef-enabled shared entry still answers an exact FAQ with zero provider bu
     const done = terminals(events)
     assert.equal(done.length, 1)
     assert.equal(done[0].result.status, "completed")
-    assert.equal(done[0].result.reply, "九点到五点")
+    assert.equal(
+      done[0].result.reply,
+      `九点到五点 [cite:${done[0].result.references[0].id}]`
+    )
+    assert.equal(done[0].result.references[0].origin, "faq")
     const route = events.find((event) => event.type === "progress" && event.stage === "route" && event.data.faqMatch)
     assert.ok(route?.type === "progress" && route.stage === "route")
     assert.equal(route.data.faqMatch?.entryId, "faq-clef")
