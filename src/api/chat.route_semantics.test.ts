@@ -100,11 +100,18 @@ function statesIntentOnlyPolicy(instructions: string): boolean {
     && /essential referent or parameter/i.test(instructions)
 }
 
-function classify(message: string, instructions: string): Decision {
+/**
+ * The controlled classifier routes from the scenario's own question, never
+ * from the wording of the prompt it happens to receive. Route assertions stay
+ * about intent; the separate AC06 test still pins the prompt policy below.
+ */
+function classify(message: string): Decision {
   if (message === GREETING) return "direct"
   if (message === MISSING_PARAMETER) return "ambiguous"
   if (message === MULTI_PART) return "complex"
-  return statesIntentOnlyPolicy(instructions) ? "simple" : "ambiguous"
+  // Focused factual questions are factual by intent, whether or not the
+  // authorized scope happens to cover them.
+  return "simple"
 }
 
 function chunk(id: string, content: string): Chunk {
@@ -246,7 +253,7 @@ function chatStub(): ChatStub {
 
     if (system.includes("Classify the query")) {
       classificationPrompts.push(system)
-      return { choices: [{ message: { content: classify(lastUser, system) } }] }
+      return { choices: [{ message: { content: classify(lastUser) } }] }
     }
     if (system.includes("retrieval strategy selector")) {
       return { choices: [{ message: {} }] }
@@ -353,7 +360,7 @@ async function harness(provider: Provider): Promise<Harness> {
         instructions: request.questions.route.instructions,
         criteria: request.questions.route.criteria,
       })
-      const choice = classify(request.state.query, request.questions.route.instructions)
+      const choice = classify(request.state.query)
       return Response.json({
         success: true,
         result: {
