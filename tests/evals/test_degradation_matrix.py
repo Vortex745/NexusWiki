@@ -29,10 +29,54 @@ sys.path.insert(0, str(EVAL_DIR))
 
 import run_suite  # noqa: E402
 from test_judge_contract import CASES, make_judge  # noqa: E402
-from test_ledger import stub_backend, write_dataset  # noqa: E402
+from test_ledger import all_run_text, stub_backend, write_dataset  # noqa: E402
 from test_reporting import case_reply, load_report  # noqa: E402
 
 CASE = "hard-04-faq-exact-answer"
+SECRET = "synthetic-rerank-canary-DO-NOT-PERSIST"
+
+
+def _blank_dot_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(run_suite, "_dot_env", lambda key: "")
+
+
+@pytest.fixture(autouse=True)
+def _no_ambient_dot_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A local repo-root .env must not change what this module proves."""
+    _blank_dot_env(monkeypatch)
+
+
+def test_a_dot_env_key_cannot_change_not_configured(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("RERANK_API_KEY", raising=False)
+    # Simulate a repo-root .env that holds RERANK_API_KEY through the reader
+    # itself — no real .env file is created — then apply this module's
+    # isolation. The ambient value must not reach the capability snapshot.
+    monkeypatch.setattr(
+        run_suite,
+        "_dot_env",
+        lambda key: SECRET if key == "RERANK_API_KEY" else "",
+    )
+    _blank_dot_env(monkeypatch)
+    assert run_suite._dot_env("RERANK_API_KEY") == ""
+
+    outcome = run_case(
+        tmp_path,
+        [
+            retrieval_event(
+                reasons=("reranker_not_configured",),
+                ordering={"source": "fused", "reason": "not_configured"},
+            ),
+            done_event("completed", {"status": "none", "unavailableChannels": []}),
+        ],
+    )
+    report = load_report(outcome)
+
+    rerank = report["sections"]["capabilities"]["rerank"]
+    assert rerank["status"] == "not_configured"
+    assert row(report)["classification"] == "rerank_not_configured"
+    assert SECRET not in all_run_text(outcome.run_dir)
 
 
 def retrieval_event(reasons: tuple[str, ...] = (), ordering: dict | None = None) -> dict:
