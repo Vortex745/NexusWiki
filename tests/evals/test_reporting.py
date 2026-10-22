@@ -31,6 +31,7 @@ sys.path.insert(0, str(EVAL_DIR))
 
 import reporting  # noqa: E402
 import run_suite  # noqa: E402
+from metrics import RUBRIC_VERSION  # noqa: E402
 from test_judge_contract import CASES, make_judge  # noqa: E402
 from test_ledger import (  # noqa: E402
     TOKEN,
@@ -170,7 +171,7 @@ def test_report_lists_behaviour_judge_errors_capabilities_and_latency(
         (tmp_path / "dataset.json").read_bytes()
     ).hexdigest()
     assert snapshots["dataset"]["sha256"] == expected_sha
-    assert snapshots["rubric"]["version"] == "dr-06.2"
+    assert snapshots["rubric"]["version"] == RUBRIC_VERSION
     assert len(snapshots["rubric"]["digest"]) == 64
     assert snapshots["scope"]["cases"]
     assert snapshots["config"]["cache"]["reading"] == "disabled"
@@ -226,7 +227,7 @@ def test_rebuild_reprojects_metrics_rubric_environment_and_report(
     payload = rebuilt.public_payload()
     assert payload["report"]["counts"] == original["counts"]
     assert payload["metrics"] == original_metrics
-    assert payload["rubric"]["version"] == "dr-06.2"
+    assert payload["rubric"]["version"] == RUBRIC_VERSION
     assert payload["environment"]["configuration"]["base_url"].startswith("http://127.0.0.1:")
     assert payload["report"]["sections"]["judge"]["metrics"] == original[
         "sections"

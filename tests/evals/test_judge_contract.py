@@ -239,12 +239,12 @@ class ControlledJev(DeepEvalBaseSystemOneModel):
                 return "admits_gap_or_refuses"
             return "answers_from_evidence"
         if "generic_clarification_for_a_clear_question" in options:
+            if _is_refusal(reply):
+                return "answered_or_refused_with_source_support"
             if _is_targeted_clarification(reply):
                 return "asked_targeted_clarification_for_missing_parameters"
             if _is_generic_clarification(reply):
                 return "generic_clarification_for_a_clear_question"
-            if _is_refusal(reply):
-                return "answered_or_refused_with_source_support"
             if any(marker in reply for marker in DEFLECTION_MARKERS):
                 return "deflected_or_ignored"
             return "answered_or_refused_with_source_support"
@@ -748,7 +748,7 @@ def test_invention_is_judged_only_where_evidence_is_available() -> None:
     choice made Jev flag a correct FAQ standard answer merely because the
     standard answer names a fictional demo policy.
     """
-    assert metrics.RUBRIC_VERSION == "dr-06.2"
+    assert metrics.RUBRIC_VERSION == "dr-06.3"
     assert "fabricated_beyond_sources" not in metrics.BEHAVIOR_OPTIONS
     assert "invents_details" in metrics.GROUNDING_OPTIONS
     for name in ("case-10-fusion-rerank", "hard-05-no-fabrication", "hard-06-memory-never-cited"):
@@ -762,3 +762,45 @@ def test_invention_is_judged_only_where_evidence_is_available() -> None:
                     assert metric_name == "Grounding"
                 if "generic_clarification_for_a_clear_question" in question["options"]:
                     assert "fabricated_beyond_sources" not in question["options"]
+
+
+@pytest.mark.parametrize("case_id", [
+    "hard-01-isolation-policy-blocked", "hard-02-isolation-project-blocked",
+])
+def test_refusal_choices_explain_optional_supplement_invitation(case_id: str) -> None:
+    """The public rubric must disambiguate admission + invitation from invitation alone.
+
+    This validates instructions sent to Jev, not an offline claim about real
+    Jev accuracy; the frozen positive/negative probes own that live check.
+    """
+    plan = metrics.build_case_metrics(golden_metadata(case_id), case_id=case_id)
+    for name in ("Task Resolution", "Response Conduct"):
+        choices = [question for question in plan.describe()["metrics"][name]["questions"]
+                   if question["type"] == "choice"]
+        assert choices
+        for question in choices:
+            assert "admission that available evidence is insufficient" in question["text"]
+            assert "optional invitation" in question["text"]
+            assert "without refusing or admitting a gap" in question["text"]
+            assert question["options"]["generic_clarification_for_a_clear_question"] == 0.0
+    assert all(metric.threshold == 0.5 for metric in plan.metrics)
+
+
+def test_controlled_refusal_with_optional_invitation_keeps_refusal_conduct() -> None:
+    """Controlled wiring check; frozen real-Jev probes verify model accuracy."""
+    positive = "现有证据不足以支持可靠回答，请补充资料或调整问题。"
+    negative = "请补充资料或调整问题。"
+    golden = CASES["hard-01-isolation-policy-blocked"]
+    judge = make_judge()
+    for reply, expected_option in [
+        (positive, "answered_or_refused_with_source_support"),
+        (negative, "generic_clarification_for_a_clear_question"),
+    ]:
+        result = judge(make_record(
+            golden["name"], golden["input"], reply, golden_metadata(golden["name"]),
+            golden["expected_output"], references=[],
+        ), {})
+        for name in ("Task Resolution", "Response Conduct"):
+            choice = next(item for item in metric_entry(result, name)["breakdown"]
+                          if item["type"] == "choice")
+            assert choice["probabilities"][expected_option] == 1.0

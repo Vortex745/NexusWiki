@@ -39,7 +39,7 @@ from deepeval.metrics import JevEval
 from deepeval.metrics.jev_eval import Choice, Noul, Score
 from deepeval.test_case import SingleTurnParams
 
-RUBRIC_VERSION = "dr-06.2"
+RUBRIC_VERSION = "dr-06.3"
 DEFAULT_THRESHOLD = 0.5
 
 TASK_RESOLUTION = "Task Resolution"
@@ -93,10 +93,20 @@ ENGAGEMENT_QUESTION = (
     "reason, or asking a targeted clarification - rather than ignoring or "
     "deflecting it."
 )
+REFUSAL_CONDUCT_RULE = (
+    "An explicit refusal or admission that available evidence is insufficient "
+    "remains a refusal even when followed by an optional invitation to supply "
+    "material or adjust the question. Classify that reply as "
+    "answered_or_refused_with_source_support: this option includes honest "
+    "evidence-gap admissions and does not require citations for them. Use "
+    "generic_clarification_for_a_clear_question only for a broad clarification "
+    "without refusing or admitting a gap."
+)
 CLARIFICATION_CONDUCT_QUESTION = (
     "The reply does not substitute a generic clarification for a clear "
     "question. Only a targeted clarification for truly missing parameters may "
-    "earn clarification credit, and it is judged by its own option."
+    "earn clarification credit, and it is judged by its own option. "
+    + REFUSAL_CONDUCT_RULE
 )
 
 BEHAVIOR_OPTIONS = {
@@ -337,7 +347,11 @@ def _task_resolution_questions(
                 REFUSAL_LEVELS,
                 2.0,
             ),
-            _choice("What best describes the reply?", BEHAVIOR_OPTIONS, 1.0),
+            _choice(
+                "What best describes the reply? " + REFUSAL_CONDUCT_RULE,
+                BEHAVIOR_OPTIONS,
+                1.0,
+            ),
         ]
     if kind == "memory-not-cited":
         return [
@@ -387,7 +401,7 @@ def _conduct_questions() -> list[dict]:
         _choice(
             "What did the reply do with the input? A generic clarification for "
             "a clear question earns nothing; a targeted clarification for truly "
-            "missing parameters is judged by its own option.",
+            "missing parameters is judged by its own option. " + REFUSAL_CONDUCT_RULE,
             BEHAVIOR_OPTIONS,
             1.0,
         ),

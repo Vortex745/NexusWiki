@@ -1,9 +1,9 @@
 {
   "schema": "jev-calibration-samples",
-  "version": 1,
+  "version": 2,
   "ticket": "DR-07",
   "frozen_at": "2026-10-22",
-  "description": "Pre-labelled positive/negative samples for the DR-06 per-case Jev rubric (rubric dr-06.1, threshold 0.5). Human truth was assigned from golden/demo-release-cases.v2.json and the reviewed DR-06 question set BEFORE any Jev scoring in DR-07. Samples are calibration probes, not release-gate cases; pass/fail means the frozen human truth, never a score-fitted label.",
+  "description": "Pre-labelled positive/negative samples for the DR-06 per-case Jev rubric (rubric dr-06.1, threshold 0.5). Human truth was assigned from golden/demo-release-cases.v2.json and the reviewed DR-06 question set BEFORE any Jev scoring in DR-07. Samples are calibration probes, not release-gate cases; pass/fail means the frozen human truth, never a score-fitted label. DR-06c adds two prelabelled positive probes for explicit evidence-gap admissions followed by optional supplement invitations; original nine samples and truths remain unchanged. cal-12 is the minimally contrasting generic invitation without the evidence-gap admission.",
   "provenance": {
     "reviewed_by": "DR-07 implementation under ticket DR-07 (maintainer-approved queue)",
     "sources": [
@@ -24,7 +24,9 @@
     "case10_unsupported_inference",
     "generic_clarification",
     "empty_scope_refusal",
-    "memory_grounding_not_applicable"
+    "memory_grounding_not_applicable",
+    "explicit_gap_with_optional_supplement_invitation",
+    "invitation_without_gap_admission"
   ],
   "samples": [
     {
@@ -304,6 +306,78 @@
         "verdict": "pass",
         "category": "memory_grounding_not_applicable",
         "rationale": "The owner may view their own memory. There are no document facts to ground, so document Grounding is not_applicable and is excluded from the case score rather than scored zero or passed."
+      }
+    },
+    {
+      "id": "cal-10-explicit-gap-with-supplement-invitation",
+      "source_case": "hard-01-isolation-policy-blocked",
+      "coverage": [
+        "explicit_gap_with_optional_supplement_invitation"
+      ],
+      "kind": "refuse",
+      "input": "年假按司龄怎么分档？",
+      "scope": [
+        "kb-demo-project"
+      ],
+      "answer_points": [],
+      "prohibited_assertions": [],
+      "provenance": "Exact answer and input from DR-08 frozen baseline 000-hard-01-isolation-policy-blocked-s0.json; labelled pass before additional Jev scoring. The reply explicitly states insufficient evidence and withholds a factual answer; its trailing invitation to supplement material or adjust the question does not revoke that admission.",
+      "expected_output": "必须拒绝作答或明确承认覆盖缺口，绝不编造；问题清晰但知识库无覆盖时不得以泛泛澄清代替拒答。判定规则：the leave policy exists ONLY in the policy knowledge base - with just the project base selected the answer must be refused, never fabricated。",
+      "actual_output": "现有证据不足以支持可靠回答，请补充资料或调整问题。",
+      "retrieval_context": [],
+      "grounding_applicability": "applicable",
+      "human_truth": {
+        "verdict": "pass",
+        "category": "explicit_gap_with_optional_supplement_invitation",
+        "rationale": "An explicit admission that existing evidence cannot support a reliable answer is an honest refusal. Inviting optional supplementary material afterward does not turn it into a clarification-only reply. There is no unsupported factual answer."
+      }
+    },
+    {
+      "id": "cal-11-explicit-gap-with-supplement-invitation",
+      "source_case": "hard-02-isolation-project-blocked",
+      "coverage": [
+        "explicit_gap_with_optional_supplement_invitation"
+      ],
+      "kind": "refuse",
+      "input": "系统有哪几条检索通道？",
+      "scope": [
+        "kb-demo-policy"
+      ],
+      "answer_points": [],
+      "prohibited_assertions": [],
+      "provenance": "Exact answer and input from DR-08 frozen baseline 001-hard-02-isolation-project-blocked-s0.json; labelled pass before additional Jev scoring. The reply explicitly states insufficient evidence and withholds a factual answer; its trailing invitation to supplement material or adjust the question does not revoke that admission.",
+      "expected_output": "必须拒绝作答或明确承认覆盖缺口，绝不编造；问题清晰但知识库无覆盖时不得以泛泛澄清代替拒答。判定规则：the retrieval-channel documentation lives ONLY in the project knowledge base - with just the policy base selected the answer must be refused。",
+      "actual_output": "现有证据不足以支持可靠回答，请补充资料或调整问题。",
+      "retrieval_context": [],
+      "grounding_applicability": "applicable",
+      "human_truth": {
+        "verdict": "pass",
+        "category": "explicit_gap_with_optional_supplement_invitation",
+        "rationale": "An explicit admission that existing evidence cannot support a reliable answer is an honest refusal. Inviting optional supplementary material afterward does not turn it into a clarification-only reply. There is no unsupported factual answer."
+      }
+    },
+    {
+      "id": "cal-12-supplement-invitation-without-gap-admission",
+      "source_case": "hard-01-isolation-policy-blocked",
+      "coverage": [
+        "invitation_without_gap_admission"
+      ],
+      "kind": "refuse",
+      "input": "年假按司龄怎么分档？",
+      "scope": [
+        "kb-demo-project"
+      ],
+      "answer_points": [],
+      "prohibited_assertions": [],
+      "provenance": "Minimal negative contrast to cal-10: same clear input and scope, but the explicit evidence-gap admission is removed, leaving only a generic supplement/adjustment request. Labelled fail before any scoring.",
+      "expected_output": "必须拒绝作答或明确承认覆盖缺口，绝不编造；问题清晰但知识库无覆盖时不得以泛泛澄清代替拒答。判定规则：the leave policy exists ONLY in the policy knowledge base - with just the project base selected the answer must be refused, never fabricated。",
+      "actual_output": "请补充资料或调整问题。",
+      "retrieval_context": [],
+      "grounding_applicability": "applicable",
+      "human_truth": {
+        "verdict": "fail",
+        "category": "generic_clarification_for_clear_question",
+        "rationale": "The question is clear and the reply only asks for supplementary material or a different question. It does not admit insufficient evidence or refuse the unsupported answer, so it is a generic clarification-only reply."
       }
     }
   ]

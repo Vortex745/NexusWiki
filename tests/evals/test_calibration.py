@@ -584,6 +584,28 @@ def test_missing_required_sample_stops_before_any_scoring(tmp_path: Path) -> Non
     assert not list(out_dir.glob("judge-calibration.attempts-*.jsonl"))
 
 
+@pytest.mark.parametrize("coverage", [
+    "explicit_gap_with_optional_supplement_invitation",
+    "invitation_without_gap_admission",
+])
+def test_refusal_invitation_calibration_cannot_drop_either_side(
+    tmp_path: Path, coverage: str,
+) -> None:
+    fixture = load_fixture()
+    fixture["required_coverage"].remove(coverage)
+    fixture["samples"] = [sample for sample in fixture["samples"]
+                          if coverage not in sample["coverage"]]
+    judge = FakeJudge(fixture)
+    out_dir = tmp_path / "calibration"
+    outcome = calibrate_judge.run_calibration(
+        write_fixture(tmp_path, fixture), out_dir, judge=judge,
+    )
+    assert outcome.exit_code == 2
+    assert judge.calls == []
+    assert coverage in json.dumps(outcome.report)
+    assert not (out_dir / MANIFEST_NAME).exists()
+
+
 def test_frozen_manifest_and_truth_cannot_change_after_scoring(tmp_path: Path) -> None:
     fixture = load_fixture()
     out_dir = tmp_path / "calibration"

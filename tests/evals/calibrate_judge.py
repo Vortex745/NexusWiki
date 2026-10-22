@@ -82,6 +82,8 @@ MINIMUM_COVERAGE = (
     "generic_clarification",
     "empty_scope_refusal",
     "memory_grounding_not_applicable",
+    "explicit_gap_with_optional_supplement_invitation",
+    "invitation_without_gap_admission",
 )
 
 KINDS = frozenset({"answer", "refuse", "memory-not-cited"})
