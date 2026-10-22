@@ -40,6 +40,12 @@ SECRET = "synthetic-rerank-canary-DO-NOT-PERSIST"
 RERANK_MODEL = "bge-reranker-v2-m3"
 
 
+@pytest.fixture(autouse=True)
+def _no_ambient_dot_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A local repo-root .env must not change what this module proves."""
+    monkeypatch.setattr(run_suite, "_dot_env", lambda key: "")
+
+
 def retrieval_event(ordering: dict, reasons: tuple[str, ...] = ()) -> dict:
     return {
         "type": "progress",
@@ -222,6 +228,11 @@ def test_controlled_dedicated_ordering_proves_only_the_protocol_branch(
 ) -> None:
     monkeypatch.delenv("RERANK_API_KEY", raising=False)
     monkeypatch.delenv("RERANK_MODEL", raising=False)
+    # The recorded snapshot is pinned so the model-match row proves the branch
+    # regardless of the machine's ambient model configuration.
+    pinned_models = dict.fromkeys(run_suite.MODEL_ENV_NAMES)
+    pinned_models["RERANK_MODEL"] = RERANK_MODEL
+    monkeypatch.setattr(run_suite, "model_snapshot", lambda: dict(pinned_models))
 
     outcome = run_case(
         tmp_path,
