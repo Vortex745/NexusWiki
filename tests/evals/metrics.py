@@ -39,7 +39,7 @@ from deepeval.metrics import JevEval
 from deepeval.metrics.jev_eval import Choice, Noul, Score
 from deepeval.test_case import SingleTurnParams
 
-RUBRIC_VERSION = "dr-06.1"
+RUBRIC_VERSION = "dr-06.2"
 DEFAULT_THRESHOLD = 0.5
 
 TASK_RESOLUTION = "Task Resolution"
@@ -104,7 +104,6 @@ BEHAVIOR_OPTIONS = {
     "asked_targeted_clarification_for_missing_parameters": 0.7,
     "generic_clarification_for_a_clear_question": 0.0,
     "deflected_or_ignored": 0.0,
-    "fabricated_beyond_sources": 0.0,
 }
 ANSWER_BEHAVIOR_OPTIONS = {
     "answered": 1.0,

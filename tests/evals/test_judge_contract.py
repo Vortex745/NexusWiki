@@ -738,3 +738,27 @@ def test_controlled_run_emits_per_case_metrics_applicability_and_reasons(
     environment = read_json(outcome.run_dir / "environment.json")
     assert "cited-evidence" in json.dumps(environment, ensure_ascii=False)
     assert "not the full generation context" in json.dumps(environment, ensure_ascii=False)
+
+
+def test_invention_is_judged_only_where_evidence_is_available() -> None:
+    """Response Conduct has no evidence channel, so it must not rule on invention.
+
+    Fabrication is a Grounding question (it receives the cited excerpts);
+    keeping a "fabricated" option in the evidence-free conduct/behaviour
+    choice made Jev flag a correct FAQ standard answer merely because the
+    standard answer names a fictional demo policy.
+    """
+    assert metrics.RUBRIC_VERSION == "dr-06.2"
+    assert "fabricated_beyond_sources" not in metrics.BEHAVIOR_OPTIONS
+    assert "invents_details" in metrics.GROUNDING_OPTIONS
+    for name in ("case-10-fusion-rerank", "hard-05-no-fabrication", "hard-06-memory-never-cited"):
+        plan = metrics.build_case_metrics(golden_metadata(name), case_id=name)
+        described = plan.describe()["metrics"]
+        for metric_name, metric_desc in described.items():
+            for question in metric_desc["questions"]:
+                if question["type"] != "choice":
+                    continue
+                if "invents_details" in question["options"]:
+                    assert metric_name == "Grounding"
+                if "generic_clarification_for_a_clear_question" in question["options"]:
+                    assert "fabricated_beyond_sources" not in question["options"]
