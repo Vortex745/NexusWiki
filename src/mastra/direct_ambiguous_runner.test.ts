@@ -216,7 +216,7 @@ test("T09 #1 direct route: router.decide called with input.message", async () =>
 // expiry, and terminal behavior as legacy path.
 // ---------------------------------------------------------------------------
 
-test("T09 #2 ambiguous route: returns status=clarification_required with legacy reply", async () => {
+test("T09 #2 ambiguous route: returns status=clarification_required with the targeted clarification reply", async () => {
   const runner = createDirectAmbiguousMastraRunner({
     router: makeFakeRouter("ambiguous"),
     streamDirectReply: makeScriptedStream([]),
@@ -225,8 +225,8 @@ test("T09 #2 ambiguous route: returns status=clarification_required with legacy 
   assert.equal(output.status, "clarification_required", "terminal status must match legacy (T09 #2)")
   assert.equal(
     output.reply,
-    "仅凭当前信息我还无法作答，请您补充更多问题细节。",
-    "clarification reply must match AMBIGUOUS_CLARIFICATION_REPLY exactly (T09 #2 terminal behavior)"
+    "请补充问题所指的具体对象或参数（例如具体政策、系统或流程），我才能继续回答。",
+    "clarification reply must name the missing referent/parameter (DR-11)"
   )
   assert.deepEqual(output.tokens, [output.reply], "clarification reply emitted as single token (matches legacy answer_delta)")
   assert.equal(output.routeTrace.decision, "ambiguous")
@@ -458,19 +458,20 @@ test("T09 #1 direct route: degradation status=none (no retrieval to degrade)", a
 })
 
 // ---------------------------------------------------------------------------
-// T09 #2 — Ambiguous route reply matches legacy exactly (terminal behavior).
+// T09 #2 — Ambiguous route reply is the targeted clarification copy (DR-11).
 // ---------------------------------------------------------------------------
 
-test("T09 #2 ambiguous route: reply matches legacy generation.ts:659 exactly", async () => {
+test("T09 #2 ambiguous route: reply is the targeted clarification copy", async () => {
   const runner = createDirectAmbiguousMastraRunner({
     router: makeFakeRouter("ambiguous"),
     streamDirectReply: makeScriptedStream([]),
   })
   const output = await runner(makeRunnerInput())
   // The reply is user-facing copy and must stay in sync with
-  // AMBIGUOUS_CLARIFICATION_REPLY in direct_ambiguous_runner.ts.
-  const legacyReply = "仅凭当前信息我还无法作答，请您补充更多问题细节。"
-  assert.equal(output.reply, legacyReply)
+  // AMBIGUOUS_CLARIFICATION_REPLY in direct_ambiguous_runner.ts. DR-11 made it
+  // name the missing referent/parameter instead of asking for "more details".
+  const targetedReply = "请补充问题所指的具体对象或参数（例如具体政策、系统或流程），我才能继续回答。"
+  assert.equal(output.reply, targetedReply)
 })
 
 // ---------------------------------------------------------------------------
