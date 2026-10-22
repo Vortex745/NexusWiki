@@ -456,23 +456,26 @@ for (const provider of ["chat", "clef"] as const) {
   test(`DR-11 ${provider}: a clear out-of-domain question retrieves and admits the coverage gap`, async () => {
     const built = await harness(provider)
     try {
-      const { status, json } = await built.post({
-        message: OUT_OF_DOMAIN,
-        stream: false,
-        sessionId: `dr11-gap-${provider}`,
-        knowledgeBaseIds: built.scopeIds,
-      })
-      assert.equal(status, 200)
-      assert.equal(json?.status, "insufficient_evidence", "no route-level coverage guess may turn this into clarification")
-      assert.equal(json?.reply, "现有证据不足以支持可靠回答，请补充资料或调整问题。")
-      assert.deepEqual(json?.references, [])
-      assert.equal(
-        String(json?.reply).includes("补充更多问题细节"),
-        false,
-        "the generic clarification copy must never answer a clear factual question"
-      )
-      const events = eventsOf(json)
-      assert.equal(routeDecision(events), "simple", "the question is factual by intent, coverage is decided by evidence")
+      // AC03: the recorded hard-05 question is replayed three times.
+      for (let attempt = 0; attempt < 3; attempt += 1) {
+        const { status, json } = await built.post({
+          message: OUT_OF_DOMAIN,
+          stream: false,
+          sessionId: `dr11-gap-${provider}-${attempt}`,
+          knowledgeBaseIds: built.scopeIds,
+        })
+        assert.equal(status, 200)
+        assert.equal(json?.status, "insufficient_evidence", "no route-level coverage guess may turn this into clarification")
+        assert.equal(json?.reply, "现有证据不足以支持可靠回答，请补充资料或调整问题。")
+        assert.deepEqual(json?.references, [])
+        assert.equal(
+          String(json?.reply).includes("补充更多问题细节"),
+          false,
+          "the generic clarification copy must never answer a clear factual question"
+        )
+        const events = eventsOf(json)
+        assert.equal(routeDecision(events), "simple", "the question is factual by intent, coverage is decided by evidence")
+      }
       assertScopeLocked(built.searches, built.scopeIds, "out-of-domain")
       assert.equal(built.conversation.pending.size, 0, "no pending clarification is recorded")
     } finally {
