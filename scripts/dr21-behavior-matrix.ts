@@ -26,6 +26,7 @@ import { pathToFileURL } from "node:url"
 
 import {
   evaluateMatrix,
+  parseTap,
   summarizeMatrix,
   type CapabilityCellSpec,
   type CellResult,
@@ -113,30 +114,9 @@ function normalizeFile(file: string): string {
 }
 
 /**
- * Parse the TAP stream of ONE test file. Every `ok/not ok N - name` line is an
- * observation; a file-level `not ok` (or a non-zero exit without any failing
- * test) makes every observation from that file unreliable.
+ * A file-level `not ok` (or a non-zero exit without any failing test) makes
+ * every pass observation from that file unreliable.
  */
-function parseTap(output: string): Map<string, TestObservation> {
-  const observed = new Map<string, TestObservation>()
-  const lines = output.split(/\r?\n/)
-  for (const line of lines) {
-    const match = /^(not ok|ok)\s+\d+\s+-\s+(.*?)\s*$/.exec(line)
-    if (!match) continue
-    const name = match[2]
-      .replace(/\s+#\s+(SKIP|TODO)\b.*$/i, "")
-      .replace(/\\\\/g, "\\")
-      .trim()
-    if (!name || name.includes(".test.")) continue
-    if (match[1] === "ok") {
-      if (!observed.has(name)) observed.set(name, { status: "pass" })
-    } else {
-      observed.set(name, { status: "fail" })
-    }
-  }
-  return observed
-}
-
 function isIoErrorFileLevel(line: string): boolean {
   return /^(not ok|ok)\s+\d+\s+-\s+.*\.test\.[cm]?[jt]sx?\s*$/.test(line)
 }
@@ -190,7 +170,8 @@ function runFile(
   const output = `${result.stdout ?? ""}\n${result.stderr ?? ""}`
   const observed = parseTap(output)
   const failed = [...observed.values()].filter((entry) => entry.status === "fail").length
-  const passed = observed.size - failed
+  const skipped = [...observed.values()].filter((entry) => entry.status === "skip").length
+  const passed = observed.size - failed - skipped
   const exitCode = typeof result.status === "number" ? result.status : null
   const fileLevelFailure = output
     .split(/\r?\n/)
@@ -206,8 +187,11 @@ function runFile(
 
   // A file that exits non-zero (or reports a file-level not ok) cannot lend
   // passing evidence even if it printed some green lines before crashing.
-  if ((exitCode !== 0 || fileLevelFailure) && failed === 0 && observed.size > 0) {
-    for (const [name] of observed) observed.set(name, { status: "fail" })
+  const unreliable = (exitCode !== 0 || fileLevelFailure) && failed === 0 && observed.size > 0
+  if (unreliable) {
+    for (const [name, entry] of observed) {
+      if (entry.status === "pass") observed.set(name, { status: "fail" })
+    }
   }
   return {
     observed,
@@ -215,8 +199,8 @@ function runFile(
       file,
       exitCode,
       tests: observed.size,
-      passed: failed === 0 && (exitCode !== 0 || fileLevelFailure) ? 0 : passed,
-      failed: failed === 0 && (exitCode !== 0 || fileLevelFailure) ? observed.size : failed,
+      passed: unreliable ? 0 : passed,
+      failed: unreliable ? observed.size - skipped : failed,
       durationMs,
       ...(note ? { note } : {}),
     },

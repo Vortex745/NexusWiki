@@ -24,7 +24,7 @@ export interface MatrixTestRef {
 }
 
 export interface TestObservation {
-  status: "pass" | "fail"
+  status: "pass" | "fail" | "skip"
   durationMs?: number
 }
 
@@ -102,6 +102,34 @@ export function observationKey(ref: MatrixTestRef): string {
   return `${ref.file}::${ref.name}`
 }
 
+/**
+ * Parse the TAP stream of ONE test file. A `# SKIP` directive is preserved as
+ * its own observation: a skipped test is not evidence that the cell passed, so
+ * it must never be counted as `pass`.
+ */
+export function parseTap(output: string): Map<string, TestObservation> {
+  const observed = new Map<string, TestObservation>()
+  const lines = output.split(/\r?\n/)
+  for (const line of lines) {
+    const match = /^(not ok|ok)\s+\d+\s+-\s+(.*?)\s*$/.exec(line)
+    if (!match) continue
+    const raw = match[2]
+    const skipped = /(?:^|\s)#\s*SKIP\b/i.test(raw)
+    const name = raw
+      .replace(/\s+#\s+(SKIP|TODO)\b.*$/i, "")
+      .replace(/\\\\/g, "\\")
+      .trim()
+    if (!name || name.includes(".test.")) continue
+    if (match[1] === "ok") {
+      if (observed.has(name)) continue
+      observed.set(name, { status: skipped ? "skip" : "pass" })
+    } else {
+      observed.set(name, { status: "fail" })
+    }
+  }
+  return observed
+}
+
 export function evaluateOfflineCell(
   cell: OfflineCellSpec,
   observed: ReadonlyMap<string, TestObservation>,
@@ -113,11 +141,17 @@ export function evaluateOfflineCell(
   const evidence: CellEvidence[] = []
   const missing: string[] = []
   const failed: string[] = []
+  const skipped: string[] = []
   for (const ref of cell.tests) {
     const observation = observed.get(observationKey(ref))
     if (!observation) {
       missing.push(ref.name)
       evidence.push({ file: ref.file, test: ref.name, result: "incomplete" })
+      continue
+    }
+    if (observation.status === "skip") {
+      skipped.push(ref.name)
+      evidence.push({ file: ref.file, test: ref.name, result: "not_run" })
       continue
     }
     if (observation.status === "fail") failed.push(ref.name)
@@ -138,6 +172,15 @@ export function evaluateOfflineCell(
       missing,
       failed,
     })
+  }
+  if (skipped.length > 0) {
+    return result(
+      cell,
+      "incomplete",
+      `skipped this run: ${skipped.join("; ")}`,
+      evidence,
+      { missing, failed },
+    )
   }
   return result(cell, "pass/offline", `observed passing in this run: ${cell.tests.length} test(s)`, evidence)
 }

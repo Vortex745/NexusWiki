@@ -15,6 +15,7 @@ import {
   evaluateMatrix,
   evaluateOnlineCell,
   observationKey,
+  parseTap,
   summarizeMatrix,
   type CapabilityCellSpec,
   type OfflineCellSpec,
@@ -71,6 +72,40 @@ test("DR-21: a failing named test marks the cell error and is not a pass", () =>
   assert.deepEqual(result.evidence, [
     { file: ref.file, test: ref.name, result: "fail" },
   ])
+})
+
+test("DR-21: a TAP SKIP directive is not a pass and blocks --offline-only", () => {
+  const observations = parseTap(
+    [
+      "ok 1 - skipped behaviour # SKIP provider is not configured",
+      "ok 2 - observed behaviour",
+    ].join("\n"),
+  )
+  assert.deepEqual(observations.get("skipped behaviour"), { status: "skip" })
+  assert.deepEqual(observations.get("observed behaviour"), { status: "pass" })
+
+  const keyed = new Map(
+    [...observations].map(([name, entry]) => [observationKey({ file: ref.file, name }), entry]),
+  )
+  const result = evaluateOfflineCell(
+    {
+      ...offlineCell,
+      id: "group.skipped",
+      tests: [{ file: ref.file, name: "skipped behaviour" }],
+    },
+    keyed,
+  )
+  assert.equal(result.status, "incomplete")
+  assert.equal(result.countedAsPass, false)
+  assert.match(result.detail, /skipped/)
+  assert.deepEqual(result.evidence, [
+    { file: ref.file, test: "skipped behaviour", result: "not_run" },
+  ])
+
+  const summary = summarizeMatrix([result], { offlineOnly: true })
+  assert.equal(summary.status, "incomplete")
+  assert.equal(summary.offlineComplete, false)
+  assert.equal(summary.exitCode, 1)
 })
 
 test("DR-21: a cell with no named tests cannot claim evidence", () => {
