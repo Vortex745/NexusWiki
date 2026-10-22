@@ -20,8 +20,11 @@ BEFORE assert_test, so a deterministic failure remains visible when the judge
 errors and cannot be erased by a high judge score. The judge only adds the
 semantic judgment; it does not replace the deterministic result.
 
-Metrics: SINGLE_TURN_TRACE_METRICS from metrics.py — all JevEval
-(Jev-native), so every judgment comes from jev, never an LLM verdict.
+Metrics: per-case plans from metrics.build_case_metrics — every case gets
+fresh JevEval instances (Noul/Score/Choice, threshold 0.5) with explicit
+standard-answer questions. Applicability is recorded before judging, so a
+pure memory view reports document Grounding as not_applicable instead of a
+zero or a pass; such a metric is never passed to assert_test.
 
 Run:
   $env:NEXUSRAG_SMOKE_IDS = 'hard-04,hard-01'
@@ -29,6 +32,7 @@ Run:
   deepeval test run tests/evals/test_nexusrag.py --num-processes 5 --identifier "round-1"
 """
 
+import json
 import os
 import sys
 from importlib import import_module
@@ -42,7 +46,7 @@ from deepeval import assert_test
 from deepeval.dataset import EvaluationDataset, Golden
 
 import contracts
-from metrics import SINGLE_TURN_TRACE_METRICS
+from metrics import build_case_metrics
 
 ai_app = import_module("ai_app")
 
@@ -106,16 +110,35 @@ def _run_and_capture_raw(golden: Golden) -> tuple[str, dict]:
     return reply, payload
 
 
+def _write_metric_plan(plan, directory: Path) -> Path:
+    """Persist the applicability/rubric plan before any judge request."""
+    safe = "".join(
+        char if char.isalnum() or char in "._-" else "-"
+        for char in str(plan.case_id or "case")
+    ).strip("-") or "case"
+    path = directory / f"{safe}.metrics-plan.json"
+    payload = plan.describe()
+    directory.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(path.name + ".tmp")
+    with open(tmp, "w", encoding="utf-8") as handle:
+        json.dump(payload, handle, ensure_ascii=False, indent=2, sort_keys=True)
+        handle.flush()
+        os.fsync(handle.fileno())
+    os.replace(tmp, path)
+    return path
+
+
 @pytest.mark.parametrize("golden", goldens, ids=[g.name or g.input[:24] for g in goldens])
 def test_nexusrag(golden: Golden):
     _, payload = _run_and_capture_raw(golden)
+    metadata = getattr(golden, "additional_metadata", None) or {}
 
     # Independent deterministic result first: answer points, inline
     # citations, prohibited assertions, refusal/coverage-gap and memory
     # rules. It is persisted before any judge request, so a judge error
     # cannot erase it and a high judge score cannot override it.
     verdict, result_path = contracts.evaluate_and_record(
-        getattr(golden, "additional_metadata", None) or {},
+        metadata,
         payload,
         DETERMINISTIC_DIR,
     )
@@ -126,4 +149,20 @@ def test_nexusrag(golden: Golden):
     )
     contracts.require_passed(verdict)
 
-    assert_test(golden=golden, metrics=SINGLE_TURN_TRACE_METRICS)
+    # Fresh metric instances per case; a not_applicable metric is recorded
+    # as such and is never sent to the judge (so it is neither a zero nor a
+    # pass). A deterministic failure above has already stopped this test.
+    plan = build_case_metrics(metadata, case_id=golden.name)
+    plan_path = _write_metric_plan(plan, DETERMINISTIC_DIR)
+    for item in plan.applicability:
+        print(
+            f"[eval-metrics] {golden.name} {item.metric}: {item.status} — "
+            f"{item.reason} ({plan_path.name}, rubric {plan.rubric_version} "
+            f"{plan.rubric_digest[:12]})"
+        )
+    assert plan.metrics, f"{golden.name}: no applicable metric"
+    assert all(
+        metric.threshold == 0.5 for metric in plan.metrics
+    ), "per-case metrics must keep the 0.5 threshold"
+
+    assert_test(golden=golden, metrics=list(plan.metrics))

@@ -92,13 +92,14 @@ class _StubHandler(BaseHTTPRequestHandler):
                 )
                 return
             reply = self.server.replies.get(message, "unexpected question")
+            references = self.server.references.get(message)
+            if references is None:
+                references = [{"id": "doc-1", "title": "Doc", "excerpt": "evidence"}]
             self._send(
                 200,
                 {
                     "reply": reply,
-                    "references": [
-                        {"id": "doc-1", "title": "Doc", "excerpt": "evidence"}
-                    ],
+                    "references": references,
                     "runId": f"backend-run-{index}",
                     "status": "completed",
                 },
@@ -114,6 +115,7 @@ class StubBackend:
         self.server.requests = []
         self.server.chat_requests = 0
         self.server.replies = {}
+        self.server.references = {}
         self.server.fail_messages = set()
         self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
 
@@ -143,10 +145,15 @@ class StubBackend:
 
 
 @contextmanager
-def stub_backend(replies: dict[str, str], fail_messages: set[str] | None = None):
+def stub_backend(
+    replies: dict[str, str],
+    fail_messages: set[str] | None = None,
+    references: dict[str, list[dict]] | None = None,
+):
     backend = StubBackend()
     backend.server.replies = dict(replies)
     backend.server.fail_messages = set(fail_messages or ())
+    backend.server.references = dict(references or {})
     with backend:
         yield backend
 

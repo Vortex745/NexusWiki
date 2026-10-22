@@ -22,6 +22,13 @@ Contract:
   * any Agent/judge/write failure, missing/truncated/corrupt row or summary
     write failure yields score=null, ``incomplete`` and a non-zero exit
   * ``--rebuild`` recomputes the summary from per-sample records only
+  * per-metric results (metric, applicability, score, reason, error) are kept
+    in each sample's judge verdict and exposed in the run payload; a
+    ``not_applicable`` metric is neither a zero nor a pass (DR-06)
+
+Evidence boundary: the Grounding retrieval context is built from the returned
+reference titles and excerpts (600 characters each). Those are cited-evidence
+summaries, not the full generation context.
 
 Exit codes: 0 complete, 1 run incomplete, 2 the run could not start or the
 summary could not be written (both non-zero, both score=null).
@@ -49,10 +56,19 @@ import requests
 import ledger
 
 TICKET = "DR-04"
-SUITE_VERSION = "dr-05.1"
+SUITE_VERSION = "dr-06.1"
 EXIT_OK = 0
 EXIT_INCOMPLETE = 1
 EXIT_FATAL = 2
+
+# Mirrors metrics.EVIDENCE_SCOPE without importing DeepEval into the
+# orchestrator; the judge persists the authoritative rubric digest.
+EVIDENCE_SCOPE = (
+    "retrieval excerpts are cited-evidence summaries: bounded reference "
+    "titles and excerpts (up to 600 characters per reference), not the full "
+    "generation context. Grounding judges support against these cited "
+    "excerpts only."
+)
 
 EVAL_DIR = Path(__file__).resolve().parent
 REPO_ROOT = EVAL_DIR.parent.parent
@@ -79,6 +95,8 @@ class RunOutcome:
     manifest: dict | None
     error: str | None = None
     run_errors: list[str] = field(default_factory=list)
+    metric_results: list[dict] = field(default_factory=list)
+    rubric: dict | None = None
 
     @property
     def score(self):
@@ -115,6 +133,9 @@ class RunOutcome:
             payload["samples"] = self.summary.get("samples")
         elif self.manifest is not None:
             payload["planned"] = len(self.manifest.get("planned") or [])
+        payload["metrics"] = self.metric_results
+        payload["rubric"] = self.rubric
+        payload["evidence_scope"] = EVIDENCE_SCOPE
         if self.run_errors:
             payload["run_errors"] = [ledger.redact_text(item) for item in self.run_errors]
         return payload
@@ -189,6 +210,10 @@ def load_dataset(path: str | Path) -> list[dict]:
                 "input": message,
                 "scope": scope,
                 "kind": metadata.get("kind"),
+                # The judge builds per-case metrics and explicit standard-answer
+                # questions from these reviewed facts (DR-06).
+                "metadata": metadata,
+                "expected_output": item.get("expected_output"),
             }
         )
     return cases
@@ -280,6 +305,9 @@ def _judge_scored(result: Any, scrubber: ledger.SecretScrubber, judge_name: str)
         }
         if result.get("details") is not None:
             verdict["details"] = _scrubbed_json(result.get("details"), scrubber)
+        for key in ("metrics", "applicability", "rubric", "evidence_scope"):
+            if result.get(key) is not None:
+                verdict[key] = _scrubbed_json(result.get(key), scrubber)
         return verdict
     if _is_score(result):
         return {
@@ -407,6 +435,8 @@ def build_plan(
                     "input": item["input"],
                     "input_sha256": ledger.sha256_text(item["input"]),
                     "scope": item["scope"],
+                    "metadata": item.get("metadata") or {},
+                    "expected_output": item.get("expected_output"),
                 }
             )
     return planned
@@ -465,6 +495,8 @@ def _agent_record(
         "planned": {
             "input_sha256": planned["input_sha256"],
             "scope": planned["scope"],
+            "metadata": planned.get("metadata") or {},
+            "expected_output": planned.get("expected_output"),
         },
         "agent": agent,
         "judge": {"status": "not_attempted", "score": None, "error": None},
@@ -473,13 +505,21 @@ def _agent_record(
     }
 
 
-def _judge_context(ledger_instance: ledger.RunLedger, sample_id: str) -> dict:
+def _judge_context(
+    ledger_instance: ledger.RunLedger,
+    sample_id: str,
+    *,
+    metadata: Mapping[str, Any] | None = None,
+    expected_output: str | None = None,
+) -> dict:
     return {
         "run_id": ledger_instance.run_id,
         "run_dir": str(ledger_instance.run_dir),
         "sample_id": sample_id,
         "sample_path": str(ledger_instance.sample_path(sample_id)),
         "read_answer": lambda: ledger_instance.read_answer(sample_id),
+        "metadata": metadata or {},
+        "expected_output": expected_output,
     }
 
 
@@ -548,6 +588,7 @@ def execute_run(
             "judge": judge_name,
             "cases": [item["name"] for item in selected],
             "samples_per_case": samples,
+            "evidence_scope": EVIDENCE_SCOPE,
         },
         repo_root=repo_root,
     )
@@ -567,6 +608,7 @@ def execute_run(
             "chat_timeout_s": timeout_s,
             "judge": judge_name,
             "workers": 1,
+            "evidence_scope": EVIDENCE_SCOPE,
         },
     }
 
@@ -663,7 +705,12 @@ def execute_run(
         if stored["status"] == "agent_error":
             continue
 
-        context = _judge_context(run_ledger, planned_item["sample_id"])
+        context = _judge_context(
+            run_ledger,
+            planned_item["sample_id"],
+            metadata=planned_item.get("metadata"),
+            expected_output=planned_item.get("expected_output"),
+        )
         started_at = ledger.utc_now()
         started = time.monotonic()
         try:
@@ -698,6 +745,25 @@ def execute_run(
         stored["judge"] = verdict
         if stored["status"] == "judge_error":
             stored["error"] = verdict["error"]
+        container = verdict if isinstance(verdict.get("metrics"), list) else verdict.get("details")
+        if isinstance(container, Mapping):
+            for item in container.get("metrics") or []:
+                if not isinstance(item, Mapping):
+                    continue
+                outcome.metric_results.append(
+                    {
+                        "sample_id": planned_item["sample_id"],
+                        "case_id": planned_item["case_id"],
+                        "metric": item.get("metric"),
+                        "applicability": item.get("applicability"),
+                        "score": item.get("score"),
+                        "success": item.get("success"),
+                        "reason": item.get("reason"),
+                        "error": item.get("error"),
+                    }
+                )
+            if outcome.rubric is None and isinstance(container.get("rubric"), Mapping):
+                outcome.rubric = dict(container["rubric"])
         try:
             run_ledger.write_sample(stored)
         except ledger.SampleWriteError as exc:
