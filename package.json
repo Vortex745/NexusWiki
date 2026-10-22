@@ -19,6 +19,8 @@
     "release:verify:production": "node --import tsx scripts/release-verify.ts production ./release-verification-production.json",
     "release:promotion-check": "node --import tsx scripts/release-promotion-check.ts",
     "release:smoke": "node --import tsx scripts/smoke-cli.ts",
+    "eval:residue": "node --import tsx scripts/eval-residue.ts",
+    "eval:latency": "node --import tsx scripts/latency-eval.ts",
     "demo:rebuild": "node --import tsx scripts/demo-rebuild.ts",
     "demo:seed": "node --import tsx scripts/demo-seed.ts",
     "demo:reset": "node --import tsx scripts/demo-reset.ts",
