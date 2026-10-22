@@ -493,6 +493,11 @@ def _metric_specs(metadata: Mapping[str, Any]) -> list[dict]:
     return specs
 
 
+def expected_metric_applicability(metadata: Mapping[str, Any]) -> dict[str, str]:
+    """Return the stable result contract without constructing DeepEval metrics."""
+    return {item["name"]: item["applicability"] for item in _metric_specs(metadata)}
+
+
 def rubric_definition() -> dict:
     """The frozen, case-independent rubric facts used for the digest."""
     return {

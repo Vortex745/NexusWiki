@@ -55,6 +55,10 @@ SENSITIVE_ENV_NAME = re.compile(
     r"(API_?KEY|ACCESS_?TOKEN|AUTH_?TOKEN|SECRET|PASSWORD|CREDENTIAL|COOKIE)",
     re.IGNORECASE,
 )
+SENSITIVE_FIELD_NAME = re.compile(
+    r"(?i)(api[_-]?key|access[_-]?token|auth[_-]?token|refresh[_-]?token|"
+    r"authorization|cookie|client[_-]?secret|secret|password|credential)"
+)
 
 # Headers and key/value pairs that must never reach an artifact. Applied to
 # every error/diagnostic string before it is persisted.
@@ -151,6 +155,10 @@ class SecretScrubber:
     def __init__(self, values: Iterable[str] = ()) -> None:
         self._values = tuple(sorted({v for v in values if v and len(v) >= 4}, key=len, reverse=True))
 
+    def register(self, value: Any) -> None:
+        if isinstance(value, str) and value and len(value) >= 4:
+            self._values = tuple(sorted({*self._values, value}, key=len, reverse=True))
+
     @classmethod
     def from_environment(cls) -> "SecretScrubber":
         return cls(
@@ -161,6 +169,19 @@ class SecretScrubber:
 
     def scrub(self, text: Any) -> str:
         return redact_text(text, self._values)
+
+    def scrub_json(self, value: Any) -> Any:
+        if isinstance(value, Mapping):
+            return {
+                str(key): "[REDACTED]" if SENSITIVE_FIELD_NAME.search(str(key))
+                else self.scrub_json(item)
+                for key, item in value.items()
+            }
+        if isinstance(value, (list, tuple)):
+            return [self.scrub_json(item) for item in value]
+        if isinstance(value, str):
+            return self.scrub(value)
+        return value
 
 
 def _fsync_directory(path: Path) -> None:

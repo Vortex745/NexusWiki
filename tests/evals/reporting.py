@@ -386,8 +386,10 @@ def _case_judge(samples: Sequence[Mapping[str, Any]]) -> dict:
         for item in applicable
         if item.get("error") is not None or not _is_score(item.get("score"))
     ]
+    integrity_ok = all(sample.get("metric_contract_valid") is True for sample in samples)
     passed = (
-        bool(applicable)
+        integrity_ok
+        and bool(applicable)
         and not errors
         and all(float(item["score"]) >= JUDGE_THRESHOLD for item in scored)
     )
@@ -401,9 +403,53 @@ def _case_judge(samples: Sequence[Mapping[str, Any]]) -> dict:
             1 for item in metrics if item.get("applicability") == "not_applicable"
         ),
         "score": (
-            min(float(item["score"]) for item in scored) if scored else None
+            min(float(item["score"]) for item in scored)
+            if scored and integrity_ok else None
         ),
     }
+
+
+def _expected_metric_contract(planned: Mapping[str, Any], rubric: Mapping[str, Any] | None) -> dict | None:
+    frozen = planned.get("expected_metrics")
+    if isinstance(frozen, Mapping) and frozen:
+        return dict(frozen)
+    if not _is_v2(planned.get("metadata")):
+        return None
+    version = (rubric or {}).get("version")
+    if not isinstance(version, str) or not version.startswith("dr-06."):
+        return None
+    try:
+        import metrics as metrics_module
+        return metrics_module.expected_metric_applicability(planned.get("metadata") or {})
+    except Exception:
+        return None
+
+
+def _metric_contract_error(planned: Mapping[str, Any], record: Mapping[str, Any] | None,
+                           rubric: Mapping[str, Any] | None, *, baseline: bool,
+                           status: str) -> str | None:
+    expected = _expected_metric_contract(planned, rubric)
+    if expected is None:
+        # A baseline must prove its metric contract. Legacy ad-hoc runs keep
+        # their previous single-score judge shape.
+        return "expected metric contract is not frozen or recognized" if baseline else None
+    if record is None or status not in {"scored", "judge_error"}:
+        # Missing records and Agent failures have no judge rows; their own
+        # missing/error reasons already keep the run incomplete.
+        return None
+    entries = _metric_entries(record or {})
+    actual: dict[str, str] = {}
+    for entry in entries:
+        name = entry.get("metric")
+        applicability = entry.get("applicability")
+        if not isinstance(name, str) or name in actual:
+            return "metric rows contain an invalid or duplicate name"
+        if applicability not in {"applicable", "not_applicable"}:
+            return f"metric {name} has invalid applicability"
+        actual[name] = applicability
+    if actual != expected:
+        return "metric rows do not match the frozen name/applicability set"
+    return None
 
 
 def _nearest_rank(values: Sequence[float], percentile: float) -> float | None:
@@ -509,6 +555,12 @@ def build_report(
         elif record is None:
             status = "not_started" if sample_id in (scan.get("missing") or []) else status
         sample = _sample_projection(item, record, status)
+        contract_error = _metric_contract_error(
+            item, record, rubric, baseline=baseline, status=status
+        )
+        sample["metric_contract_valid"] = contract_error is None
+        if contract_error:
+            sample["metric_contract_error"] = contract_error
         sample["behaviour_failures"] = (
             (_behaviour_for(record, metadata, status).get("failures") or [])
         )
@@ -756,11 +808,16 @@ def build_report(
             reasons.append(
                 {"kind": "rubric_missing", "detail": "no rubric snapshot was recorded"}
             )
+    for sample in sample_projections:
+        if not sample["metric_contract_valid"]:
+            reasons.append({"kind": "metric_contract_invalid", "sample_id": sample["sample_id"],
+                            "detail": sample.get("metric_contract_error")})
     incomplete = bool(scan.get("incomplete")) or any(
         reason.get("kind")
         in {
             "behaviour_missing",
             "metric_records_missing",
+            "metric_contract_invalid",
             "rubric_missing",
         }
         for reason in reasons

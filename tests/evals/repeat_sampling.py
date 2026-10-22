@@ -113,6 +113,19 @@ def _checked_snapshot(directory, manifest, key):
     return _read(path)
 
 
+def _expected_metrics(item):
+    expected = item.get("expected_metrics")
+    if isinstance(expected, Mapping) and expected:
+        return dict(expected)
+    if not run_suite._is_v2_metadata(item.get("metadata")):
+        return None
+    try:
+        import metrics
+        return metrics.expected_metric_applicability(item.get("metadata") or {})
+    except Exception:
+        return None
+
+
 def run_campaign(baseline_dir, out, *, judge, base_url=None, password=None,
                  chat_timeout_s=None):
     """Freeze first observations, then run two Agent and two fixed-answer repeats.
@@ -136,24 +149,73 @@ def run_campaign(baseline_dir, out, *, judge, base_url=None, password=None,
     frozen_rubric = environment.get("configuration", {}).get("rubric")
     if frozen_rubric != run_suite.rubric_snapshot():
         raise ValueError("repeat rubric differs from the frozen baseline")
-    active_base_url = base_url or source.manifest["run"]["base_url"]
-    timeout_s = chat_timeout_s or source.manifest["run"]["chat_timeout_s"]
+    baseline_run = source.manifest.get("run", {})
+    baseline_base_url = baseline_run.get("base_url")
+    if base_url is not None and ledger.safe_url(base_url) != baseline_base_url:
+        raise ValueError("repeat base URL differs from the frozen baseline")
+    active_base_url = baseline_base_url or base_url
+    baseline_timeout = baseline_run.get("chat_timeout_s")
+    if chat_timeout_s is not None:
+        if not isinstance(baseline_timeout, (int, float)) or float(chat_timeout_s) != float(baseline_timeout):
+            raise ValueError("repeat chat timeout differs from the frozen baseline")
+    timeout_s = baseline_timeout
     scrubber = ledger.SecretScrubber.from_environment()
     configuration_fn = getattr(fn, "configuration", None)
     if not callable(configuration_fn):
         configuration_fn = getattr(fn, "__globals__", {}).get("configuration")
     judge_configuration = (run_suite._scrubbed_json(configuration_fn(), scrubber)
                            if callable(configuration_fn) else None)
+    baseline_configuration = environment.get("configuration", {}).get("judge_configuration")
+    configuration_comparison = "unknown"
+    baseline_has_config = isinstance(baseline_configuration, Mapping)
+    current_has_config = isinstance(judge_configuration, Mapping)
+    if baseline_has_config != current_has_config:
+        raise ValueError("repeat judge configuration availability differs from baseline")
+    if baseline_has_config:
+        if dict(baseline_configuration) != dict(judge_configuration):
+            raise ValueError("repeat judge configuration differs from baseline")
+        configuration_comparison = "verified"
+    baseline_judge = baseline_run.get("judge")
+    if baseline_judge and baseline_judge != judge_name:
+        raise ValueError("repeat judge differs from baseline")
+    baseline_models = environment.get("configuration", {}).get("models")
+    model_comparison = "unknown"
+    if isinstance(baseline_models, Mapping):
+        if dict(baseline_models) != run_suite.model_snapshot():
+            raise ValueError("repeat model configuration differs from baseline")
+        model_comparison = "verified"
+    baseline_budgets = environment.get("configuration", {}).get("budgets")
+    budget_comparison = "unknown"
+    if isinstance(baseline_budgets, Mapping):
+        current_judge_budgets = run_suite.judge_budget_snapshot()
+        if {key: baseline_budgets.get(key) for key in current_judge_budgets} != current_judge_budgets:
+            raise ValueError("repeat judge budget differs from baseline")
+        budget_comparison = "verified"
+    baseline_capabilities = environment.get("configuration", {}).get("capabilities") or {}
+    current_capabilities = run_suite.capability_snapshot()
+    capability_comparison = "unknown"
+    if isinstance(baseline_capabilities, Mapping):
+        baseline_rerank = baseline_capabilities.get("rerank") or {}
+        current_rerank = current_capabilities.get("rerank") or {}
+        if isinstance(baseline_rerank, Mapping) and isinstance(current_rerank, Mapping):
+            for key in ("status", "counted_as_pass"):
+                if baseline_rerank.get(key) != current_rerank.get(key):
+                    raise ValueError("repeat capabilities differ from baseline")
+            capability_comparison = "verified"
     repeat_environment = ledger.build_environment_snapshot(
         suite_version="dr-09.1", base_url=active_base_url,
         budgets={"samples_per_group": 3, "new_agent_samples_per_case": 2,
                  "new_fixed_judge_samples_per_case": 2, "chat_timeout_s": timeout_s},
         configuration={"rubric": frozen_rubric, "judge": judge_name,
             "judge_configuration": judge_configuration,
+            "judge_configuration_comparison": configuration_comparison,
+            "model_comparison": model_comparison,
+            "judge_budget_comparison": budget_comparison,
+            "capability_comparison": capability_comparison,
             "dataset_sha256": source.manifest["dataset"]["sha256"],
             "baseline_manifest_sha256": source.manifest_digest,
             "cache": {"reading": "disabled", "writing": "disabled", "enabled": False},
-            "capabilities": run_suite.capability_snapshot()})
+            "capabilities": current_capabilities})
     destination = Path(out).resolve()
     destination.mkdir(parents=True, exist_ok=False)
     baseline = {"manifest": source.manifest, "environment": environment,
@@ -262,6 +324,7 @@ def _rebuild_campaign(out):
     groups = {}
     incomplete = False
     product_failed = False
+    plan_by_case = {item["case_id"]: item for item in baseline["manifest"]["planned"]}
     for group in manifest["groups"]:
         cases = {}
         for choice in manifest["selection"]:
@@ -278,9 +341,26 @@ def _rebuild_campaign(out):
                     except (ledger.SampleReadError, ValueError) as exc:
                         rows.append(None)
                         errors.append(str(exc))
-            metric_names = dict.fromkeys(["Task Resolution", "Grounding"] + [
+            expected_metrics = _expected_metrics(plan_by_case[case_id]) or {}
+            metric_names = dict.fromkeys([*expected_metrics, "Task Resolution", "Grounding"] + [
                 entry["metric"] for row in rows if row for entry in metric_entries(row)
                 if isinstance(entry.get("metric"), str)])
+            metric_integrity_errors = []
+            for row in rows:
+                if row is None or row.get("status") not in {"scored", "judge_error"}:
+                    # Agent failures carry no judge rows; their own error and
+                    # missing observation reasons keep the case incomplete.
+                    continue
+                entries = metric_entries(row)
+                actual = {}
+                for entry in entries:
+                    name = entry.get("metric")
+                    if not isinstance(name, str) or name in actual:
+                        metric_integrity_errors.append("duplicate or invalid metric name")
+                        continue
+                    actual[name] = entry.get("applicability")
+                if expected_metrics and actual != expected_metrics:
+                    metric_integrity_errors.append("metric rows differ from frozen expected set")
             metrics = {name: distribution([_metric_row(row, name, metadata[case_id]) for row in rows])
                        for name in metric_names}
             failures = [{"sample_id": row["sample_id"], "verdict": row["behaviour"]}
@@ -289,8 +369,8 @@ def _rebuild_campaign(out):
             unstable = bool(failures) or any(value["unstable"] or value["error"] for value in metrics.values())
             cases[case_id] = {"selection_reasons": choice["reasons"], "metrics": metrics,
                 "behaviour": {"failed_samples": failures}, "unstable": unstable,
-                "incomplete": missing or any(value["incomplete"] for value in metrics.values()),
-                "errors": errors, "samples": [
+                "incomplete": missing or bool(metric_integrity_errors) or any(value["incomplete"] for value in metrics.values()),
+                "errors": errors + metric_integrity_errors, "samples": [
                     {"sample_id": row["sample_id"], "session_id": row.get("session_id"),
                      "answer_sha256": row["agent"].get("answer_sha256"),
                      "status": row["status"], "score": row["judge"].get("score")}

@@ -102,6 +102,7 @@ class _StubHandler(BaseHTTPRequestHandler):
                     "references": references,
                     "runId": f"backend-run-{index}",
                     "status": "completed",
+                    **self.server.extra_payload,
                 },
             )
             return
@@ -116,6 +117,7 @@ class StubBackend:
         self.server.chat_requests = 0
         self.server.replies = {}
         self.server.references = {}
+        self.server.extra_payload = {}
         self.server.fail_messages = set()
         self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
 
@@ -182,6 +184,40 @@ def all_run_text(run_dir: Path) -> str:
         if path.is_file():
             chunks.append(path.read_text(encoding="utf-8", errors="replace"))
     return "\n".join(chunks)
+
+
+def test_success_payload_is_scrubbed_before_persistence_and_judging(tmp_path: Path, monkeypatch) -> None:
+    secret = "environment-secret-canary-9481"
+    monkeypatch.setenv("DR_TEST_API_KEY", secret)
+    dataset = write_dataset(tmp_path / "dataset.json", [case("case-a", "question-a")])
+    observed = []
+
+    def judge(record, context):
+        stored = context["read_answer"]()
+        observed.append((record["agent"]["answer"], stored["answer"], stored["answer_sha256"]))
+        return {"score": 1.0, "metrics": [{"metric": "Task Resolution", "applicability": "applicable", "score": 1.0}]}
+
+    with stub_backend({"question-a": "answer-a"}) as backend:
+        backend.server.extra_payload = {
+            "debug": {"api_key": "nested-api-canary", "headers": {
+                "Authorization": "Bearer nested-auth-canary", "Cookie": "session=nested-cookie-canary"},
+                "trace": secret},
+            "references": [{"id": "ref", "title": "Doc", "excerpt": "evidence",
+                            "metadata": {"client_secret": "nested-secret-canary"}}],
+        }
+        outcome = run_suite.execute_run(tmp_path / "runs", dataset_path=dataset, judge=judge,
+                                        base_url=backend.base_url, password="stub-password")
+    assert outcome.exit_code == 0, outcome.error
+    assert observed[0][0] == observed[0][1] == "answer-a"
+    assert observed[0][2] == hashlib.sha256(b"answer-a").hexdigest()
+    sample = read_json(next((outcome.run_dir / "samples").glob("*.json")))
+    assert sample["agent"]["answer_sha256"] == hashlib.sha256(b"answer-a").hexdigest()
+    assert sample["agent"]["raw_payload"]["debug"]["api_key"] == "[REDACTED]"
+    assert sample["agent"]["references"][0]["metadata"]["client_secret"] == "[REDACTED]"
+    artifacts = all_run_text(outcome.run_dir)
+    for canary in (secret, TOKEN, "nested-api-canary", "nested-auth-canary",
+                   "nested-cookie-canary", "nested-secret-canary"):
+        assert canary not in artifacts
 
 
 def test_answer_is_persisted_before_first_judge_and_readable_after_judge_failure(

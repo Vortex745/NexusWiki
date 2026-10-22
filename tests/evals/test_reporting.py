@@ -345,3 +345,35 @@ def test_connection_failure_accounts_for_every_planned_case(tmp_path: Path) -> N
     assert report["counts"]["scored"] == 0
     assert report["counts"]["not_started"] == 0
     assert len(list((outcome.run_dir / "samples").glob("*.json"))) == 2
+
+
+@pytest.mark.parametrize("damage", ["missing", "duplicate", "unexpected", "applicability", "not_applicable"])
+def test_rebuild_rejects_incomplete_metric_membership(tmp_path: Path, damage: str) -> None:
+    outcome = run_cases(tmp_path, ["hard-06-memory-never-cited"])
+    assert outcome.exit_code == 0
+    sample_path = next((outcome.run_dir / "samples").glob("*.json"))
+    record = read_json(sample_path)
+    entries = record["judge"]["metrics"]
+    # A stale mirror must never repair the authoritative metric list.
+    record["judge"].setdefault("details", {})["metrics"] = copy.deepcopy(entries)
+    if damage == "missing":
+        entries[:] = [row for row in entries if row["metric"] != "Response Conduct"]
+    elif damage == "duplicate":
+        entries.append(copy.deepcopy(entries[0]))
+    elif damage == "unexpected":
+        entries.append({"metric": "Unknown", "applicability": "applicable", "score": 1})
+    elif damage == "applicability":
+        entries[0]["applicability"] = "not_applicable"
+    else:
+        entries[:] = [row for row in entries if row["metric"] != "Grounding"]
+    sample_path.write_text(json.dumps(record), encoding="utf-8")
+    rebuilt = run_suite.rebuild_run(outcome.run_dir)
+    assert rebuilt.incomplete is True
+    assert rebuilt.exit_code != 0
+    assert rebuilt.score is None
+    report = load_report(rebuilt)
+    assert report["gate"]["judge_passed"] is False
+    assert report["cases"][0]["judge"]["score"] is None
+    assert any(reason["kind"] == "metric_contract_invalid" for reason in report["gate"]["reasons"])
+    assert read_json(outcome.run_dir / "manifest.json")["planned"][0]["expected_metrics"] == {
+        "Task Resolution": "applicable", "Grounding": "not_applicable", "Response Conduct": "applicable"}

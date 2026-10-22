@@ -366,6 +366,36 @@ def rubric_snapshot() -> dict | None:
     }
 
 
+MODEL_ENV_NAMES = (
+    "OPENAI_CHAT_MODEL",
+    "EMBEDDING_MODEL",
+    "RERANK_MODEL",
+    "DECISION_PROVIDER",
+)
+
+
+def model_snapshot() -> dict:
+    """Effective model names, recorded without any credential value."""
+    return {
+        name: os.environ.get(name) or _dot_env(name) or None
+        for name in MODEL_ENV_NAMES
+    }
+
+
+def judge_budget_snapshot() -> dict:
+    """Effective judge attempt/wait ceilings that shape one scoring call."""
+    return {
+        "judge_attempts": _env_number("DEEPEVAL_RETRY_MAX_ATTEMPTS", 3, int),
+        "judge_attempt_timeout_s": _env_number(
+            "DEEPEVAL_PER_ATTEMPT_TIMEOUT_SECONDS_OVERRIDE", 10.0, float
+        ),
+        "judge_task_timeout_s": _env_number(
+            "DEEPEVAL_PER_TASK_TIMEOUT_SECONDS_OVERRIDE", 45.0, float
+        ),
+        "judge_sdk_retries": False,
+    }
+
+
 def capability_snapshot() -> dict:
     """Capability availability without recording any credential value."""
     rerank_key = os.environ.get("RERANK_API_KEY") or _dot_env("RERANK_API_KEY")
@@ -522,6 +552,9 @@ def _finish_report(outcome: RunOutcome, run_ledger: ledger.RunLedger) -> None:
         )
         if outcome.report["gate"]["incomplete"] or outcome.report["gate"]["status"] == "failed":
             outcome.exit_code = EXIT_INCOMPLETE
+        if outcome.report["gate"]["incomplete"]:
+            outcome.summary = dict(outcome.summary or {})
+            outcome.summary.update(incomplete=True, score=None)
     except (OSError, ValueError, TypeError) as exc:
         outcome.exit_code = EXIT_FATAL
         outcome.error = ledger.redact_text(f"cannot write report: {exc}")
@@ -581,6 +614,7 @@ class ChatClient:
         if not token:
             raise ChatError("demo sign-in returned no accessToken")
         self._token = token
+        self._scrubber.register(token)
 
     def chat(self, message: str, session_id: str, scope) -> dict:
         self.ensure_login()
@@ -615,7 +649,7 @@ class ChatClient:
         if not isinstance(payload, dict):
             raise ChatError("chat backend returned a non-object JSON body")
         return {
-            "payload": payload,
+            "payload": self._scrubber.scrub_json(payload),
             "http_status": response.status_code,
             "started_at": started_at,
             "finished_at": finished_at,
@@ -630,22 +664,30 @@ class ChatClient:
 def build_plan(
     selected: Sequence[dict], samples_per_case: int
 ) -> list[dict]:
+    import metrics as metrics_module
+
     planned: list[dict] = []
     for ordinal, item in enumerate(selected):
         for index in range(samples_per_case):
-            planned.append(
-                {
-                    "sample_id": f"{ordinal:03d}-{item['name']}-s{index}",
-                    "case_id": item["name"],
-                    "case_ordinal": ordinal,
-                    "sample_index": index,
-                    "input": item["input"],
-                    "input_sha256": ledger.sha256_text(item["input"]),
-                    "scope": item["scope"],
-                    "metadata": item.get("metadata") or {},
-                    "expected_output": item.get("expected_output"),
-                }
-            )
+            metadata = item.get("metadata") or {}
+            entry = {
+                "sample_id": f"{ordinal:03d}-{item['name']}-s{index}",
+                "case_id": item["name"],
+                "case_ordinal": ordinal,
+                "sample_index": index,
+                "input": item["input"],
+                "input_sha256": ledger.sha256_text(item["input"]),
+                "scope": item["scope"],
+                "metadata": metadata,
+                "expected_output": item.get("expected_output"),
+            }
+            # Only v2 cases have a frozen per-metric judge contract; legacy
+            # ad-hoc runs keep their previous single-score shape.
+            if _is_v2_metadata(metadata):
+                entry["expected_metrics"] = metrics_module.expected_metric_applicability(
+                    metadata
+                )
+            planned.append(entry)
     return planned
 
 
@@ -788,14 +830,7 @@ def execute_run(
         "summary_lock_timeout_s": ledger.SUMMARY_LOCK_TIMEOUT_S,
         # DR-05: judge retries reuse DeepEval's provider policy; the SDK retry
         # layer stays disabled so request/wait ceilings cannot multiply.
-        "judge_attempts": _env_number("DEEPEVAL_RETRY_MAX_ATTEMPTS", 3, int),
-        "judge_attempt_timeout_s": _env_number(
-            "DEEPEVAL_PER_ATTEMPT_TIMEOUT_SECONDS_OVERRIDE", 10.0, float
-        ),
-        "judge_task_timeout_s": _env_number(
-            "DEEPEVAL_PER_TASK_TIMEOUT_SECONDS_OVERRIDE", 45.0, float
-        ),
-        "judge_sdk_retries": False,
+        **judge_budget_snapshot(),
     }
     judge_config_fn = getattr(judge_fn, "configuration", None)
     if not callable(judge_config_fn):
@@ -818,10 +853,7 @@ def execute_run(
             "capabilities": capabilities,
             "rubric": frozen_rubric,
             "judge_configuration": judge_config,
-            "models": {
-                name: os.environ.get(name) or _dot_env(name) or None
-                for name in ("OPENAI_CHAT_MODEL", "EMBEDDING_MODEL", "RERANK_MODEL", "DECISION_PROVIDER")
-            },
+            "models": model_snapshot(),
         },
         repo_root=repo_root,
     )
