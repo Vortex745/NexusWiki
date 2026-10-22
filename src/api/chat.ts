@@ -460,6 +460,15 @@ export function createChatRouter(
       if (activeRuns.get(sessionId) === runId) activeRuns.delete(sessionId)
     }
 
+    // DR-17: an event may only be published by the run/session that produced
+    // it. A shared or replayed source that hands this request another
+    // session's answer, citation or terminal must never leak it into this
+    // response — the same identity rule the run trace already enforces.
+    const ownsEvent = (event: AnswerRunEvent): boolean =>
+      event.runId === runId &&
+      event.sessionId === sessionId &&
+      (event.type !== "done" || event.result.runId === runId)
+
     // Ticket 20 (CONV-01A): server-owned history — the directory is ensured
     // when the run starts (title from the first message). The turns
     // themselves are recorded once the run settles: completed runs are
@@ -614,6 +623,7 @@ export function createChatRouter(
       res.on("close", onClientClose)
       let streamTerminal: Extract<AnswerRunEvent, { type: "done" }> | undefined
       let streamFailed = false
+      let sawForeignTerminal = false
       try {
         // The injected source guarantees a terminal event on every path.
         // HTTP only encodes events to SSE.
@@ -622,6 +632,11 @@ export function createChatRouter(
           signal: abortController.signal,
           accessContext: runIdentity,
         })) {
+          if (!ownsEvent(event)) {
+            if (event.type === "done") sawForeignTerminal = true
+            console.error("[chat] event run/session does not match this request; not published")
+            continue
+          }
           if (event.type === "done") streamTerminal = event
           if (clientGone.value || res.writableEnded) break
           res.write(`data: ${JSON.stringify(streamPayload(event, sessionId))}\n\n`)
@@ -630,7 +645,11 @@ export function createChatRouter(
         streamFailed = true
         if (!clientGone.value) console.error("[chat] Error:", err)
       }
-      recordTerminal(streamTerminal, streamFailed, abortController.signal.aborted)
+      // A foreign terminal means this request produced no terminal of its own;
+      // recording one would invent a run, and it was never published.
+      if (streamTerminal || !sawForeignTerminal) {
+        recordTerminal(streamTerminal, streamFailed, abortController.signal.aborted)
+      }
       res.off("close", onClientClose)
       if (!res.writableEnded) res.end()
     } else {
@@ -642,6 +661,7 @@ export function createChatRouter(
         abortController.abort()
       }
       const events: AnswerRunEvent[] = []
+      let sawForeignTerminal = false
       res.on("close", onClientClose)
       try {
         let terminal: Extract<AnswerRunEvent, { type: "done" }> | undefined
@@ -650,6 +670,11 @@ export function createChatRouter(
           signal: abortController.signal,
           accessContext: runIdentity,
         })) {
+          if (!ownsEvent(event)) {
+            if (event.type === "done") sawForeignTerminal = true
+            console.error("[chat] event run/session does not match this request; not published")
+            continue
+          }
           events.push(event)
           if (event.type === "done") terminal = event
         }
@@ -669,7 +694,9 @@ export function createChatRouter(
         })
       } catch (err) {
         if (!clientGone.value) console.error("[chat] Error:", err)
-        recordTerminal(undefined, true, abortController.signal.aborted)
+        if (!sawForeignTerminal) {
+          recordTerminal(undefined, true, abortController.signal.aborted)
+        }
         if (!clientGone.value && !res.writableEnded) {
           res.status(500).json({
             error: "Internal error",
