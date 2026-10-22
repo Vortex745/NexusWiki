@@ -1,9 +1,11 @@
 """One evaluation run through the real HTTP Agent, persisted before judging.
 
-Usage (DR-04; DR-08 extends selection/reporting):
+Usage (DR-04/DR-05; DR-08 extends selection/reporting):
 
   python tests/evals/run_suite.py --case hard-04 --samples 1 \
       --judge path/to/judge.py:judge --runs-root .tmp/eval-runs
+
+  python tests/evals/run_suite.py --judge tests/evals/judge_runtime.py:judge
 
   python tests/evals/run_suite.py --rebuild .tmp/eval-runs/<run-id>
 
@@ -14,6 +16,9 @@ Contract:
     ``NEXUSRAG_BASE_URL`` (default http://localhost:3001)
   * the raw Agent answer is written and read back *before* the judge is
     called; a judge failure keeps that answer and marks the run incomplete
+  * judge diagnostics (per-attempt statuses/waits/budget) returned in a
+    ``details`` mapping are persisted with the verdict; a judge exception may
+    carry ``details`` too, so the attempt record survives a failure (DR-05)
   * any Agent/judge/write failure, missing/truncated/corrupt row or summary
     write failure yields score=null, ``incomplete`` and a non-zero exit
   * ``--rebuild`` recomputes the summary from per-sample records only
@@ -44,7 +49,7 @@ import requests
 import ledger
 
 TICKET = "DR-04"
-SUITE_VERSION = "dr-04.1"
+SUITE_VERSION = "dr-05.1"
 EXIT_OK = 0
 EXIT_INCOMPLETE = 1
 EXIT_FATAL = 2
@@ -136,6 +141,16 @@ def resolve_password(explicit: str | None = None) -> str:
     if not password:
         raise ChatError("DEMO_OIDC_PASSWORD is not set; cannot sign in to the demo tenant")
     return password
+
+
+def _env_number(name: str, default, cast):
+    raw = os.environ.get(name)
+    if raw is None or not str(raw).strip():
+        return default
+    try:
+        return cast(raw)
+    except (TypeError, ValueError):
+        return default
 
 
 def load_dataset(path: str | Path) -> list[dict]:
@@ -231,13 +246,28 @@ def _is_score(value: Any) -> bool:
     )
 
 
+def _scrubbed_json(value: Any, scrubber: ledger.SecretScrubber) -> Any:
+    """Keep judge diagnostics JSON-safe and free of credential values."""
+    if isinstance(value, Mapping):
+        return {
+            str(key): _scrubbed_json(item, scrubber) for key, item in value.items()
+        }
+    if isinstance(value, (list, tuple)):
+        return [_scrubbed_json(item, scrubber) for item in value]
+    if isinstance(value, str):
+        return scrubber.scrub(value)
+    if isinstance(value, (int, float, bool)) or value is None:
+        return value
+    return scrubber.scrub(str(value))
+
+
 def _judge_scored(result: Any, scrubber: ledger.SecretScrubber, judge_name: str) -> dict:
     if isinstance(result, Mapping):
         score = result.get("score")
         if not _is_score(score):
             raise JudgeError("judge result needs a numeric score between 0 and 1")
         success = result.get("success")
-        return {
+        verdict = {
             "status": "scored",
             "score": float(score),
             "metric": str(result.get("metric") or "unspecified"),
@@ -248,6 +278,9 @@ def _judge_scored(result: Any, scrubber: ledger.SecretScrubber, judge_name: str)
             "error": None,
             "judge": judge_name,
         }
+        if result.get("details") is not None:
+            verdict["details"] = _scrubbed_json(result.get("details"), scrubber)
+        return verdict
     if _is_score(result):
         return {
             "status": "scored",
@@ -494,7 +527,16 @@ def execute_run(
         "planned_samples": len(planned),
         "chat_timeout_s": timeout_s,
         "summary_lock_timeout_s": ledger.SUMMARY_LOCK_TIMEOUT_S,
-        "judge_attempts": 1,
+        # DR-05: judge retries reuse DeepEval's provider policy; the SDK retry
+        # layer stays disabled so request/wait ceilings cannot multiply.
+        "judge_attempts": _env_number("DEEPEVAL_RETRY_MAX_ATTEMPTS", 3, int),
+        "judge_attempt_timeout_s": _env_number(
+            "DEEPEVAL_PER_ATTEMPT_TIMEOUT_SECONDS_OVERRIDE", 10.0, float
+        ),
+        "judge_task_timeout_s": _env_number(
+            "DEEPEVAL_PER_TASK_TIMEOUT_SECONDS_OVERRIDE", 45.0, float
+        ),
+        "judge_sdk_retries": False,
     }
     environment = ledger.build_environment_snapshot(
         suite_version=suite_version,
@@ -650,6 +692,9 @@ def execute_run(
                 "finished_at": ledger.utc_now(),
                 "duration_ms": int((time.monotonic() - started) * 1000),
             }
+            details = getattr(exc, "details", None)
+            if details is not None:
+                verdict["details"] = _scrubbed_json(details, scrubber)
         stored["judge"] = verdict
         if stored["status"] == "judge_error":
             stored["error"] = verdict["error"]
