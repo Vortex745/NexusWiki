@@ -1,0 +1,828 @@
+{
+  "schema": "dr21-behavior-matrix",
+  "schemaVersion": 1,
+  "ticket": "DR-21",
+  "groups": [
+    {
+      "id": "multi_turn",
+      "title": "Multi-turn continuation (DR-15)",
+      "required": true,
+      "cells": [
+        {
+          "id": "multi_turn.clarification_continuation",
+          "caseKind": "normal",
+          "description": "A clarification is continued by supplying the missing parameter inside the locked scope",
+          "ticket": "DR-15",
+          "source": "offline_test",
+          "tests": [
+            { "file": "src/api/chat.multi_turn_continuation.test.ts", "name": "DR-15: a clarification is continued with the missing parameter inside the locked scope" }
+          ]
+        },
+        {
+          "id": "multi_turn.correction_replaces_old_conclusion",
+          "caseKind": "normal",
+          "description": "Correcting a key condition replaces the old conclusion with new evidence",
+          "ticket": "DR-15",
+          "source": "offline_test",
+          "tests": [
+            { "file": "src/api/chat.multi_turn_continuation.test.ts", "name": "DR-15: correcting a key condition replaces the old conclusion with new evidence" }
+          ]
+        },
+        {
+          "id": "multi_turn.empty_scope_never_widens",
+          "caseKind": "boundary",
+          "description": "An empty first-turn scope stays empty when a later turn selects a knowledge base",
+          "ticket": "DR-15",
+          "source": "offline_test",
+          "tests": [
+            { "file": "src/api/chat.multi_turn_continuation.test.ts", "name": "DR-15: an empty first-turn scope stays empty when a later turn selects a knowledge base" }
+          ]
+        },
+        {
+          "id": "multi_turn.cross_tenant_scope_refused",
+          "caseKind": "error",
+          "description": "A cross-tenant scope change is refused before any run and keeps the pending continuation alive",
+          "ticket": "DR-15",
+          "source": "offline_test",
+          "tests": [
+            { "file": "src/api/chat.multi_turn_continuation.test.ts", "name": "DR-15: a cross-tenant scope change is refused and keeps the pending continuation alive" }
+          ]
+        },
+        {
+          "id": "multi_turn.owner_isolation",
+          "caseKind": "error",
+          "description": "A second owner's correction never reads the first owner's session state",
+          "ticket": "DR-15",
+          "source": "offline_test",
+          "tests": [
+            { "file": "src/api/chat.multi_turn_continuation.test.ts", "name": "DR-15: a second owner's correction never reads the first owner's session state" }
+          ]
+        },
+        {
+          "id": "multi_turn.first_message_locks_scope",
+          "caseKind": "normal",
+          "description": "The first message locks the assistant version and knowledge subset against later requests",
+          "ticket": "DR-15",
+          "source": "offline_test",
+          "tests": [
+            { "file": "src/api/chat.conversation_scope.test.ts", "name": "the first message locks the assistant version and knowledge subset against later requests" }
+          ]
+        },
+        {
+          "id": "multi_turn.unresolvable_scope_fails_closed",
+          "caseKind": "error",
+          "description": "A locked knowledge subset that cannot be resolved fails closed instead of widening",
+          "ticket": "DR-15",
+          "source": "offline_test",
+          "tests": [
+            { "file": "src/api/chat.conversation_scope.test.ts", "name": "a locked knowledge subset that cannot be resolved fails closed instead of widening" }
+          ]
+        },
+        {
+          "id": "multi_turn.overlapping_run_refused",
+          "caseKind": "boundary",
+          "description": "An overlapping run for the same session is refused before any answer work",
+          "ticket": "DR-15",
+          "source": "offline_test",
+          "tests": [
+            { "file": "src/api/chat.conversation_scope.test.ts", "name": "an overlapping run for the same session is refused before any answer work" }
+          ]
+        },
+        {
+          "id": "multi_turn.foreign_terminal_not_recorded",
+          "caseKind": "error",
+          "description": "A terminal event carrying another run's id is not recorded",
+          "ticket": "DR-15",
+          "source": "offline_test",
+          "tests": [
+            { "file": "src/api/chat.conversation_scope.test.ts", "name": "a terminal event carrying another run's id is not recorded" }
+          ]
+        },
+        {
+          "id": "multi_turn.online_real_model",
+          "caseKind": "online",
+          "description": "Real Jev/answer multi-turn sample for this group (online only)",
+          "ticket": "T1-AC10",
+          "source": "online",
+          "gate": "G-P0"
+        }
+      ]
+    },
+    {
+      "id": "transport",
+      "title": "JSON/SSE transport parity (DR-16)",
+      "required": true,
+      "cells": [
+        {
+          "id": "transport.json_sse_identical",
+          "caseKind": "normal",
+          "description": "Approved knowledge sample is identical over JSON and SSE",
+          "ticket": "DR-16",
+          "source": "offline_test",
+          "tests": [
+            { "file": "src/api/chat.publication.test.ts", "name": "DR-16-AC01 approved knowledge sample is identical over JSON and SSE" }
+          ]
+        },
+        {
+          "id": "transport.faq_parity",
+          "caseKind": "normal",
+          "description": "The FAQ standard answer keeps the same fact and citation over JSON and SSE",
+          "ticket": "DR-16",
+          "source": "offline_test",
+          "tests": [
+            { "file": "src/api/chat.publication.test.ts", "name": "DR-16-AC03 the FAQ standard answer keeps the same fact and citation over JSON and SSE" }
+          ]
+        },
+        {
+          "id": "transport.event_contract",
+          "caseKind": "normal",
+          "description": "Complete chat JSON and SSE preserve the Answer event contract",
+          "ticket": "DR-16",
+          "source": "offline_test",
+          "tests": [
+            { "file": "src/api/chat.test.ts", "name": "complete chat JSON and SSE preserve the Answer event contract" }
+          ]
+        },
+        {
+          "id": "transport.rejected_draft_invisible",
+          "caseKind": "error",
+          "description": "A validation-rejected draft stays out of JSON, SSE, trace and history",
+          "ticket": "DR-16",
+          "source": "offline_test",
+          "tests": [
+            { "file": "src/api/chat.publication.test.ts", "name": "DR-16-AC02 validation-rejected draft stays out of JSON, SSE, trace and history" }
+          ]
+        },
+        {
+          "id": "transport.cancelled_draft_invisible",
+          "caseKind": "error",
+          "description": "A cancelled draft stays out of JSON, SSE, trace and history",
+          "ticket": "DR-16",
+          "source": "offline_test",
+          "tests": [
+            { "file": "src/api/chat.publication.test.ts", "name": "DR-16-AC02 cancelled draft stays out of JSON, SSE, trace and history" }
+          ]
+        },
+        {
+          "id": "transport.runner_token_draft_invisible",
+          "caseKind": "error",
+          "description": "A rejected draft carried in runner tokens never reaches an event",
+          "ticket": "DR-16",
+          "source": "offline_test",
+          "tests": [
+            { "file": "src/api/chat.publication.test.ts", "name": "DR-16-AC02 a rejected draft carried in runner tokens never reaches an event" }
+          ]
+        },
+        {
+          "id": "transport.provider_failure_parity",
+          "caseKind": "error",
+          "description": "Provider failure publishes the same safe terminal over JSON and SSE",
+          "ticket": "DR-16",
+          "source": "offline_test",
+          "tests": [
+            { "file": "src/api/chat.publication.test.ts", "name": "DR-16-AC03 provider failure publishes the same safe terminal over JSON and SSE" }
+          ]
+        },
+        {
+          "id": "transport.empty_message_rejected",
+          "caseKind": "boundary",
+          "description": "An empty chat message is rejected with 400",
+          "ticket": "DR-16",
+          "source": "offline_test",
+          "tests": [
+            { "file": "src/api/chat.transport.test.ts", "name": "POST /api/chat with empty message returns 400" }
+          ]
+        },
+        {
+          "id": "transport.sse_framing",
+          "caseKind": "boundary",
+          "description": "SSE transport encodes every event as data: <json> with correct fields",
+          "ticket": "DR-16",
+          "source": "offline_test",
+          "tests": [
+            { "file": "src/api/chat.transport.test.ts", "name": "SSE transport encodes every event as `data: <json>\\n\\n` with correct fields" }
+          ]
+        },
+        {
+          "id": "transport.unknown_run_404",
+          "caseKind": "boundary",
+          "description": "GET /api/chat/runs/:runId returns 404 when the run is not in the trace repository",
+          "ticket": "DR-16",
+          "source": "offline_test",
+          "tests": [
+            { "file": "src/api/chat.transport.test.ts", "name": "GET /api/chat/runs/:runId returns 404 when run not in trace repository" }
+          ]
+        },
+        {
+          "id": "transport.online_real_model",
+          "caseKind": "online",
+          "description": "Real Jev/answer transport sample for this group (online only)",
+          "ticket": "T1-AC10",
+          "source": "online",
+          "gate": "G-P0"
+        }
+      ]
+    },
+    {
+      "id": "concurrency",
+      "title": "Concurrent sessions (DR-17)",
+      "required": true,
+      "cells": [
+        {
+          "id": "concurrency.three_sessions_isolated",
+          "caseKind": "normal",
+          "description": "Three sessions behind a shared barrier keep answer, citation and memory apart",
+          "ticket": "DR-17",
+          "source": "offline_test",
+          "tests": [
+            { "file": "src/api/chat.three_session_isolation.test.ts", "name": "three sessions released behind a shared barrier keep answer, citation and memory apart" }
+          ]
+        },
+        {
+          "id": "concurrency.foreign_terminal_rejected",
+          "caseKind": "error",
+          "description": "A replayed terminal from another session is neither published nor recorded",
+          "ticket": "DR-17",
+          "source": "offline_test",
+          "tests": [
+            { "file": "src/api/chat.three_session_isolation.test.ts", "name": "a replayed terminal from another session is neither published nor recorded" }
+          ]
+        },
+        {
+          "id": "concurrency.overlapping_run_refused",
+          "caseKind": "boundary",
+          "description": "A second run overlapping the same session is refused before answer work",
+          "ticket": "DR-17",
+          "source": "offline_test",
+          "tests": [
+            { "file": "src/api/chat.conversation_scope.test.ts", "name": "an overlapping run for the same session is refused before any answer work" }
+          ]
+        },
+        {
+          "id": "concurrency.online_real_model",
+          "caseKind": "online",
+          "description": "Real Jev/answer concurrency sample for this group (online only)",
+          "ticket": "T1-AC10",
+          "source": "online",
+          "gate": "G-P0"
+        }
+      ]
+    },
+    {
+      "id": "permissions",
+      "title": "Permissions and tenant boundaries (DR-18)",
+      "required": true,
+      "cells": [
+        {
+          "id": "permissions.owner_reads_succeed",
+          "caseKind": "normal",
+          "description": "Run, conversation and memory reads succeed for the owner only",
+          "ticket": "DR-18",
+          "source": "offline_test",
+          "tests": [
+            { "file": "src/api/authorization_boundaries.test.ts", "name": "DR-18: run, conversation and memory reads succeed for the owner only" }
+          ]
+        },
+        {
+          "id": "permissions.unauthenticated_denied",
+          "caseKind": "error",
+          "description": "Unauthenticated calls are denied on every exact read surface",
+          "ticket": "DR-18",
+          "source": "offline_test",
+          "tests": [
+            { "file": "src/api/authorization_boundaries.test.ts", "name": "DR-18: unauthenticated calls are denied on every exact read surface" }
+          ]
+        },
+        {
+          "id": "permissions.forbidden_indistinguishable",
+          "caseKind": "error",
+          "description": "Unknown and forbidden run, conversation and memory reads are indistinguishable",
+          "ticket": "DR-18",
+          "source": "offline_test",
+          "tests": [
+            { "file": "src/api/authorization_boundaries.test.ts", "name": "DR-18: unknown and forbidden run, conversation and memory reads are indistinguishable" }
+          ]
+        },
+        {
+          "id": "permissions.document_group_visibility",
+          "caseKind": "boundary",
+          "description": "Documents and citations obey tenant and group visibility with 404 parity",
+          "ticket": "DR-18",
+          "source": "offline_test",
+          "tests": [
+            { "file": "src/api/authorization_boundaries.test.ts", "name": "DR-18: documents and citations obey tenant and group visibility with 404 parity" }
+          ]
+        },
+        {
+          "id": "permissions.online_real_model",
+          "caseKind": "online",
+          "description": "Real Jev/answer permission sample for this group (online only)",
+          "ticket": "T1-AC10",
+          "source": "online",
+          "gate": "G-P0"
+        }
+      ]
+    },
+    {
+      "id": "memory",
+      "title": "Memory contract (DR-19)",
+      "required": true,
+      "cells": [
+        {
+          "id": "memory.owner_recall_with_citation",
+          "caseKind": "normal",
+          "description": "Owner sees own memory while the answer keeps its document citation",
+          "ticket": "DR-19",
+          "source": "offline_test",
+          "tests": [
+            { "file": "src/api/memory_contract_matrix.test.ts", "name": "DR-19: owner sees own memory; the answer keeps the document citation and still validates it" }
+          ]
+        },
+        {
+          "id": "memory.other_owner_and_tenant_isolated",
+          "caseKind": "boundary",
+          "description": "Another owner and another tenant recall only their own memories",
+          "ticket": "DR-19",
+          "source": "offline_test",
+          "tests": [
+            { "file": "src/api/memory_contract_matrix.test.ts", "name": "DR-19: another owner and another tenant recall only their own memories" }
+          ]
+        },
+        {
+          "id": "memory.disabled_recalls_nothing",
+          "caseKind": "boundary",
+          "description": "Disabling memory by request or by assistant version recalls nothing",
+          "ticket": "DR-19",
+          "source": "offline_test",
+          "tests": [
+            { "file": "src/api/memory_contract_matrix.test.ts", "name": "DR-19: disabling memory by request or by assistant version recalls nothing" }
+          ]
+        },
+        {
+          "id": "memory.assistant_pinned_isolated",
+          "caseKind": "normal",
+          "description": "Assistant-pinned memory is read only by that assistant",
+          "ticket": "DR-19",
+          "source": "offline_test",
+          "tests": [
+            { "file": "src/api/memory_contract_matrix.test.ts", "name": "DR-19: assistant-pinned memory is read only by that assistant" }
+          ]
+        },
+        {
+          "id": "memory.online_real_model",
+          "caseKind": "online",
+          "description": "Real Jev/answer memory sample for this group (online only)",
+          "ticket": "T1-AC10",
+          "source": "online",
+          "gate": "G-P0"
+        }
+      ]
+    },
+    {
+      "id": "mcp",
+      "title": "Local MCP tool boundary (DR-20)",
+      "required": true,
+      "cells": [
+        {
+          "id": "mcp.discovery_and_call",
+          "caseKind": "normal",
+          "description": "The compatible MCP client discovers and calls the local capability server through the tool boundary",
+          "ticket": "DR-20",
+          "source": "offline_test",
+          "tests": [
+            { "file": "src/mcp/capability_server.test.ts", "name": "Ticket 35: the compatible MCP client discovers and calls the local capability server through the tool boundary" }
+          ]
+        },
+        {
+          "id": "mcp.args_cannot_carry_identity",
+          "caseKind": "normal",
+          "description": "MCP tool args cannot carry tenant, subject or scope",
+          "ticket": "DR-20",
+          "source": "offline_test",
+          "tests": [
+            { "file": "src/mcp/capability_server.test.ts", "name": "DR-20 AC01: MCP tool args cannot carry tenant, subject or scope" }
+          ]
+        },
+        {
+          "id": "mcp.hung_tool_bounded",
+          "caseKind": "error",
+          "description": "A local MCP tool that never answers is bounded by the invocation deadline",
+          "ticket": "DR-20",
+          "source": "offline_test",
+          "tests": [
+            { "file": "src/mcp/tool_boundary.test.ts", "name": "DR-20 AC02: a local MCP tool that never answers is bounded by the invocation deadline" }
+          ]
+        },
+        {
+          "id": "mcp.chat_answers_after_timeout",
+          "caseKind": "error",
+          "description": "Ordinary HTTP chat still answers a timed-out MCP tool call",
+          "ticket": "DR-20",
+          "source": "offline_test",
+          "tests": [
+            { "file": "src/mcp/tool_boundary.test.ts", "name": "DR-20 AC02/AC03: ordinary HTTP chat still answers a timed-out MCP tool call" }
+          ]
+        },
+        {
+          "id": "mcp.unreachable_server_bounded",
+          "caseKind": "error",
+          "description": "An unreachable MCP server leaves ordinary HTTP chat answering, with a visible status",
+          "ticket": "DR-20",
+          "source": "offline_test",
+          "tests": [
+            { "file": "src/mcp/tool_boundary.test.ts", "name": "DR-20 AC02: an unreachable MCP server leaves ordinary HTTP chat answering, with a visible status" }
+          ]
+        },
+        {
+          "id": "mcp.disablement_spawns_nothing",
+          "caseKind": "boundary",
+          "description": "Disablement is a config decision: nothing spawns, nothing registers",
+          "ticket": "DR-20",
+          "source": "offline_test",
+          "tests": [
+            { "file": "src/mcp/capability_server.test.ts", "name": "Ticket 35: disablement is a config decision — nothing spawns, nothing registers" }
+          ]
+        },
+        {
+          "id": "mcp.online_real_model",
+          "caseKind": "online",
+          "description": "Real Jev/answer MCP sample for this group (online only)",
+          "ticket": "T1-AC10",
+          "source": "online",
+          "gate": "G-P0"
+        }
+      ]
+    },
+    {
+      "id": "faq_routing_pageindex",
+      "title": "FAQ / routing / PageIndex (DR-10, DR-11, DR-12)",
+      "required": true,
+      "cells": [
+        {
+          "id": "faq.exact_hit_citation_all_surfaces",
+          "caseKind": "normal",
+          "description": "A unique exact FAQ hit carries one parseable citation through JSON, SSE, history and memory",
+          "ticket": "DR-10",
+          "source": "offline_test",
+          "tests": [
+            { "file": "src/api/chat.transport.test.ts", "name": "DR-10: a unique exact FAQ hit carries one parseable citation through JSON, SSE, history and memory" }
+          ]
+        },
+        {
+          "id": "faq.variant_hit_answer",
+          "caseKind": "normal",
+          "description": "A unique variant hit publishes the same cited standard answer",
+          "ticket": "DR-10",
+          "source": "offline_test",
+          "tests": [
+            { "file": "src/faq/faq_answer.test.ts", "name": "DR-10: a unique variant hit publishes the same cited standard answer" }
+          ]
+        },
+        {
+          "id": "faq.ambiguous_never_direct",
+          "caseKind": "boundary",
+          "description": "Ambiguous exact matches never answer directly",
+          "ticket": "DR-10",
+          "source": "offline_test",
+          "tests": [
+            { "file": "src/faq/faq_answer.test.ts", "name": "Ticket 31: ambiguous exact matches (same question in two in-scope knowledge bases) never answer directly" }
+          ]
+        },
+        {
+          "id": "faq.disabled_and_cross_kb_cannot_match",
+          "caseKind": "error",
+          "description": "Disabled and cross-knowledge entries cannot match",
+          "ticket": "DR-10",
+          "source": "offline_test",
+          "tests": [
+            { "file": "src/faq/faq_answer.test.ts", "name": "Ticket 31: disabled and cross-knowledge entries cannot match" }
+          ]
+        },
+        {
+          "id": "routing.in_domain_with_citation",
+          "caseKind": "normal",
+          "description": "An in-domain question with evidence still answers with a citation",
+          "ticket": "DR-11",
+          "source": "offline_test",
+          "tests": [
+            { "file": "src/api/chat.route_semantics.test.ts", "name": "DR-11 chat: an in-domain question with evidence still answers with a citation" }
+          ]
+        },
+        {
+          "id": "routing.missing_referent_clarified",
+          "caseKind": "boundary",
+          "description": "A question missing its referent still receives a targeted clarification",
+          "ticket": "DR-11",
+          "source": "offline_test",
+          "tests": [
+            { "file": "src/api/chat.route_semantics.test.ts", "name": "DR-11 chat: a question missing its referent still receives a targeted clarification" }
+          ]
+        },
+        {
+          "id": "routing.multi_part_and_greeting",
+          "caseKind": "boundary",
+          "description": "Multi-part questions reach the complex route and greetings never retrieve",
+          "ticket": "DR-11",
+          "source": "offline_test",
+          "tests": [
+            { "file": "src/api/chat.route_semantics.test.ts", "name": "DR-11 chat: multi-part questions reach the complex route and greetings never retrieve" }
+          ]
+        },
+        {
+          "id": "routing.out_of_domain_gap",
+          "caseKind": "error",
+          "description": "A clear out-of-domain question retrieves and admits the coverage gap",
+          "ticket": "DR-11",
+          "source": "offline_test",
+          "tests": [
+            { "file": "src/api/chat.route_semantics.test.ts", "name": "DR-11 clef: a clear out-of-domain question retrieves and admits the coverage gap" }
+          ]
+        },
+        {
+          "id": "routing.shared_four_route_policy",
+          "caseKind": "normal",
+          "description": "Chat and Clef classification requests carry the same four-route intent policy",
+          "ticket": "DR-11",
+          "source": "offline_test",
+          "tests": [
+            { "file": "src/api/chat.route_semantics.test.ts", "name": "DR-11: Chat and Clef classification requests carry the same four-route intent policy" }
+          ]
+        },
+        {
+          "id": "pageindex.explicit_navigation_executes",
+          "caseKind": "normal",
+          "description": "Explicit page, section and table-of-contents navigation still executes PageIndex",
+          "ticket": "DR-12",
+          "source": "offline_test",
+          "tests": [
+            { "file": "src/api/chat.pageindex_applicability.test.ts", "name": "DR-12 AC03: explicit page, section and table-of-contents navigation still executes PageIndex" }
+          ]
+        },
+        {
+          "id": "pageindex.conceptual_replaced",
+          "caseKind": "boundary",
+          "description": "Case-10 conceptual query replaces PageIndex before the executor",
+          "ticket": "DR-12",
+          "source": "offline_test",
+          "tests": [
+            { "file": "src/api/chat.pageindex_applicability.test.ts", "name": "DR-12 AC01/AC05: case-10 conceptual query replaces PageIndex before the executor" }
+          ]
+        },
+        {
+          "id": "pageindex.non_navigation_stays_hybrid",
+          "caseKind": "boundary",
+          "description": "Concepts, definitions, general steps and a bare document mention stay on hybrid",
+          "ticket": "DR-12",
+          "source": "offline_test",
+          "tests": [
+            { "file": "src/api/chat.pageindex_applicability.test.ts", "name": "DR-12 AC02/AC04: concepts, definitions, general steps and a bare 文档 mention stay on hybrid" }
+          ]
+        },
+        {
+          "id": "pageindex.zero_result_single_fallback",
+          "caseKind": "error",
+          "description": "A qualified PageIndex zero-result falls back to default exactly once",
+          "ticket": "DR-12",
+          "source": "offline_test",
+          "tests": [
+            { "file": "src/api/chat.pageindex_applicability.test.ts", "name": "DR-12 AC06: a qualified PageIndex zero-result falls back to default exactly once" }
+          ]
+        },
+        {
+          "id": "pageindex.no_extra_model_request",
+          "caseKind": "boundary",
+          "description": "The replacement adds no model request and keeps identity, scope and query",
+          "ticket": "DR-12",
+          "source": "offline_test",
+          "tests": [
+            { "file": "src/api/chat.pageindex_applicability.test.ts", "name": "DR-12 AC07/AC09: the replacement adds no model request and keeps identity, scope and query" }
+          ]
+        },
+        {
+          "id": "pageindex.cancelled_not_converted",
+          "caseKind": "error",
+          "description": "A cancelled run is not converted into an applicability fallback",
+          "ticket": "DR-12",
+          "source": "offline_test",
+          "tests": [
+            { "file": "src/api/chat.pageindex_applicability.test.ts", "name": "DR-12 AC08: a cancelled run is not converted into an applicability fallback" }
+          ]
+        },
+        {
+          "id": "faq_routing_pageindex.online_real_model",
+          "caseKind": "online",
+          "description": "Real Jev/answer FAQ, routing and PageIndex sample for this group (online only)",
+          "ticket": "T1-AC10",
+          "source": "online",
+          "gate": "G-P0"
+        }
+      ]
+    },
+    {
+      "id": "rerank",
+      "title": "Rerank protocol, markers and real rerank-on coverage (DR-13, DR-14)",
+      "required": true,
+      "cells": [
+        {
+          "id": "rerank.protocol_order",
+          "caseKind": "normal",
+          "description": "Sends the verified rerank protocol and publishes provider order by index",
+          "ticket": "DR-14",
+          "source": "offline_test",
+          "tests": [
+            { "file": "src/retrieval/search/dedicated_reranker.test.ts", "name": "sends the verified rerank protocol and publishes provider order by index" }
+          ]
+        },
+        {
+          "id": "rerank.provider_prefix",
+          "caseKind": "boundary",
+          "description": "Keeps every candidate when the provider ranks only a prefix",
+          "ticket": "DR-14",
+          "source": "offline_test",
+          "tests": [
+            { "file": "src/retrieval/search/dedicated_reranker.test.ts", "name": "keeps every candidate when the provider ranks only a prefix" }
+          ]
+        },
+        {
+          "id": "rerank.bad_index_rejected",
+          "caseKind": "error",
+          "description": "Rejects an out-of-range or duplicated provider index instead of reordering",
+          "ticket": "DR-14",
+          "source": "offline_test",
+          "tests": [
+            { "file": "src/retrieval/search/dedicated_reranker.test.ts", "name": "rejects an out-of-range or duplicated provider index instead of reordering" }
+          ]
+        },
+        {
+          "id": "rerank.malformed_body_rejected",
+          "caseKind": "error",
+          "description": "Rejects non-finite scores and malformed bodies explicitly",
+          "ticket": "DR-14",
+          "source": "offline_test",
+          "tests": [
+            { "file": "src/retrieval/search/dedicated_reranker.test.ts", "name": "rejects non-finite scores and malformed bodies explicitly" }
+          ]
+        },
+        {
+          "id": "rerank.status_without_credential",
+          "caseKind": "error",
+          "description": "Surfaces provider status and reason without leaking the credential",
+          "ticket": "DR-14",
+          "source": "offline_test",
+          "tests": [
+            { "file": "src/retrieval/search/dedicated_reranker.test.ts", "name": "surfaces provider status and reason without leaking the credential" }
+          ]
+        },
+        {
+          "id": "rerank.cancellation_propagates",
+          "caseKind": "boundary",
+          "description": "Cancellation is never swallowed: an aborted signal rejects with the abort reason",
+          "ticket": "DR-14",
+          "source": "offline_test",
+          "tests": [
+            { "file": "src/retrieval/search/dedicated_reranker.test.ts", "name": "cancellation is never swallowed: aborted signal rejects with the abort reason" }
+          ]
+        },
+        {
+          "id": "rerank.hung_provider_bounded",
+          "caseKind": "boundary",
+          "description": "A hung provider is bounded by the per-call ceiling",
+          "ticket": "DR-14",
+          "source": "offline_test",
+          "tests": [
+            { "file": "src/retrieval/search/dedicated_reranker.test.ts", "name": "a hung provider is bounded by the per-call ceiling" }
+          ]
+        },
+        {
+          "id": "rerank.text_truncated",
+          "caseKind": "boundary",
+          "description": "Truncates over-long candidate text to the configured cap",
+          "ticket": "DR-14",
+          "source": "offline_test",
+          "tests": [
+            { "file": "src/retrieval/search/dedicated_reranker.test.ts", "name": "truncates over-long candidate text to the configured cap" }
+          ]
+        },
+        {
+          "id": "rerank.budget_settled",
+          "caseKind": "boundary",
+          "description": "Reserves and settles the run budget with provider-reported usage",
+          "ticket": "DR-14",
+          "source": "offline_test",
+          "tests": [
+            { "file": "src/retrieval/search/dedicated_reranker.test.ts", "name": "reserves and settles the run budget with provider-reported usage" }
+          ]
+        },
+        {
+          "id": "rerank.unknown_usage_fails_closed",
+          "caseKind": "error",
+          "description": "Unknown provider usage fails closed when a token budget is configured",
+          "ticket": "DR-14",
+          "source": "offline_test",
+          "tests": [
+            { "file": "src/retrieval/search/dedicated_reranker.test.ts", "name": "unknown provider usage fails closed when a token budget is configured" }
+          ]
+        },
+        {
+          "id": "rerank.no_run_no_accounting",
+          "caseKind": "boundary",
+          "description": "Outside a run context the adapter performs no budget accounting",
+          "ticket": "DR-14",
+          "source": "offline_test",
+          "tests": [
+            { "file": "src/retrieval/search/dedicated_reranker.test.ts", "name": "outside a run context the adapter performs no budget accounting" }
+          ]
+        },
+        {
+          "id": "rerank.unconfigured_seam",
+          "caseKind": "config",
+          "description": "createDedicatedReranker returns undefined when no key is configured",
+          "ticket": "DR-14",
+          "source": "offline_test",
+          "tests": [
+            { "file": "src/retrieval/search/dedicated_reranker.test.ts", "name": "createDedicatedReranker returns undefined when no key is configured" }
+          ]
+        },
+        {
+          "id": "rerank.marker_not_configured",
+          "caseKind": "boundary",
+          "description": "Without a configured reranker the seam reports not_configured",
+          "ticket": "DR-13",
+          "source": "offline_test",
+          "tests": [
+            { "file": "src/retrieval/search/rerank_ordering.test.ts", "name": "without a configured reranker the seam reports not_configured" }
+          ]
+        },
+        {
+          "id": "rerank.marker_dedicated_source",
+          "caseKind": "normal",
+          "description": "A successful controlled dedicated rerank is labelled as the score source",
+          "ticket": "DR-13",
+          "source": "offline_test",
+          "tests": [
+            { "file": "src/retrieval/search/rerank_ordering.test.ts", "name": "a successful dedicated rerank is labelled as the score source" }
+          ]
+        },
+        {
+          "id": "rerank.marker_below_threshold",
+          "caseKind": "boundary",
+          "description": "A single candidate is not sent to the provider and is labelled below_threshold",
+          "ticket": "DR-13",
+          "source": "offline_test",
+          "tests": [
+            { "file": "src/retrieval/search/rerank_ordering.test.ts", "name": "a single candidate is not sent to the provider and is labelled below_threshold" }
+          ]
+        },
+        {
+          "id": "rerank.marker_degraded",
+          "caseKind": "error",
+          "description": "A provider failure degrades visibly to the fused order",
+          "ticket": "DR-13",
+          "source": "offline_test",
+          "tests": [
+            { "file": "src/retrieval/search/rerank_ordering.test.ts", "name": "a provider failure degrades visibly to the fused order" }
+          ]
+        },
+        {
+          "id": "rerank.one_adapter_one_config",
+          "caseKind": "normal",
+          "description": "The dedicated reranker keeps one adapter and one config surface",
+          "ticket": "DR-13",
+          "source": "offline_test",
+          "tests": [
+            { "file": "src/evaluation/rerank_parity.test.ts", "name": "the dedicated reranker keeps one adapter and one config surface" }
+          ]
+        },
+        {
+          "id": "rerank.capability_report_status",
+          "caseKind": "config",
+          "description": "The eval capability report derives rerank coverage from retained ordering evidence, never from configuration presence or answer text",
+          "ticket": "DR-13",
+          "source": "capability",
+          "capability": "rerank"
+        },
+        {
+          "id": "rerank.real_provider_coverage",
+          "caseKind": "online",
+          "description": "A real provider call publishes dedicated_rerank ordering with a matching model snapshot and no degradation",
+          "ticket": "DR-21",
+          "source": "online",
+          "gate": "G-RERANK-LIVE"
+        },
+        {
+          "id": "rerank.real_jev_answer",
+          "caseKind": "online",
+          "description": "A real rerank-on answer sample through the evaluation runner (online only)",
+          "ticket": "G-RERANK-LIVE",
+          "source": "online",
+          "gate": "G-RERANK-LIVE"
+        }
+      ]
+    }
+  ],
+  "rerank": {
+    "onlineGate": "G-RERANK-LIVE",
+    "modelExpectation": "the observed rerank model snapshot must equal the configured RERANK_MODEL",
+    "onlineAcceptance": "not_run"
+  }
+}

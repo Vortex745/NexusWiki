@@ -26,6 +26,7 @@
     "demo:reset": "node --import tsx scripts/demo-reset.ts",
     "auth:ui-smoke": "node scripts/auth-ui-smoke.cjs",
     "release:quality-gate": "node --import tsx scripts/release-quality-gate.ts",
+    "matrix:dr21": "node --import tsx scripts/dr21-behavior-matrix.ts",
     "check:dead": "knip"
   },
   "keywords": [],
