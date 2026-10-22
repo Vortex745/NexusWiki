@@ -27,6 +27,7 @@ import type {
 import {
   RETRIEVAL_TOOLS,
   validateToolArgs,
+  resolveToolApplicability,
   toolToSearchOptions,
   type RetrievalToolName,
   type RetrievalToolArgs,
@@ -426,7 +427,7 @@ const COMPLEX_LOOP_SYSTEM_PROMPT =
   "Available retrieval tools (call ONE per turn):\n" +
   "- semantic_lexical_hybrid({query}): vector + BM25 hybrid search — best for factual/keyword queries\n" +
   "- graph_navigation({query, seeds?}): knowledge-graph traversal — best for multi-hop relational queries\n" +
-  "- pageindex_hierarchy({query}): PageIndex hierarchical lookup — best for page-oriented queries\n\n" +
+  "- pageindex_hierarchy({query}): PageIndex hierarchical lookup — ONLY for questions naming a page, section, chapter, or table-of-contents location; definitional, conceptual and general-procedure questions use semantic_lexical_hybrid\n\n" +
   "- wiki_search({query}): search reusable Wiki topics and their source evidence\n" +
   "- wiki_read_page({query}): read a Wiki page using its exact slug from wiki_search\n\n" +
   "Stop tool:\n" +
@@ -632,9 +633,19 @@ export async function runComplexLoop(
       break
     }
 
-    // 3. Normalize + dedup check (criterion #3)
-    const tool = decision.tool!
-    const args = decision.args!
+    // 3. Executor-side applicability gate (DR-12): the same intent semantics
+    // the prompts state, applied BEFORE this iteration can call any tool. An
+    // inapplicable PageIndex pick becomes the default hybrid tool with the
+    // original query, so the misselection never reaches a provider.
+    const applicable = resolveToolApplicability({
+      tool: decision.tool!,
+      args: decision.args!,
+    })
+    const tool = applicable.selection.tool
+    const args = applicable.selection.args
+    const fallbackReason = applicable.reason ?? decision.fallbackReason
+
+    // 4. Normalize + dedup check (criterion #3)
     const normalized = normalizeToolCall(tool, args)
     const isDuplicate = state.priorToolCalls.some(
       (c) => c.tool === normalized.tool && c.argsKey === normalized.argsKey
@@ -652,7 +663,7 @@ export async function runComplexLoop(
         unavailableChannels: [],
         durationMs: 0,
         compressionRan: false,
-        ...(decision.fallbackReason ? { fallbackReason: decision.fallbackReason } : {}),
+        ...(fallbackReason ? { fallbackReason } : {}),
       })
       continue
     }
@@ -816,7 +827,7 @@ export async function runComplexLoop(
       ...(compressionDroppedEvidenceIds !== undefined
         ? { compressionDroppedEvidenceIds }
         : {}),
-      ...(decision.fallbackReason ? { fallbackReason: decision.fallbackReason } : {}),
+      ...(fallbackReason ? { fallbackReason } : {}),
     })
   }
 

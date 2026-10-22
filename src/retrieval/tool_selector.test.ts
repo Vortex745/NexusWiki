@@ -6,6 +6,9 @@ import {
   toolToSearchOptions,
   formatToolInputSummary,
   fallbackSelection,
+  hasHierarchicalNavigationIntent,
+  resolveToolApplicability,
+  PAGEINDEX_INAPPLICABLE_REASON,
   ToolSelectorImpl,
   type RetrievalToolName,
   type RetrievalToolSelection,
@@ -107,6 +110,79 @@ test("validateToolArgs rejects non-object args", () => {
   assert.equal(validateToolArgs("semantic_lexical_hybrid", "string"), null)
   assert.equal(validateToolArgs("semantic_lexical_hybrid", 123), null)
   assert.equal(validateToolArgs("semantic_lexical_hybrid", []), null)
+})
+
+// ---------------------------------------------------------------------------
+// DR-12 — executor-side applicability gate
+// ---------------------------------------------------------------------------
+
+test("DR-12: hierarchical navigation intent covers page, section, TOC and English markers", () => {
+  for (const query of [
+    "第3页讲了什么？",
+    "12 页的退货流程",
+    "第二章的主要内容是什么？",
+    "第3节的结论",
+    "目录里有哪些章节？",
+    "文档的层级结构是怎样的？",
+    "which page describes refunds?",
+    "see section 4",
+  ]) {
+    assert.equal(hasHierarchicalNavigationIntent(query), true, query)
+  }
+})
+
+test("DR-12: definitions, concepts, general procedures and a bare 文档 mention are not navigation", () => {
+  for (const query of [
+    "四路结果融合之后还有什么处理？",
+    "什么是检索增强生成？",
+    "系统的定义是什么？",
+    "部署的一般步骤有哪些？",
+    "这份文档主要讲了什么？",
+  ]) {
+    assert.equal(hasHierarchicalNavigationIntent(query), false, query)
+  }
+})
+
+test("DR-12: an inapplicable PageIndex selection is replaced with hybrid before execution", () => {
+  const result = resolveToolApplicability({
+    tool: "pageindex_hierarchy",
+    args: { query: "四路结果融合之后还有什么处理？" },
+  })
+  assert.equal(result.selection.tool, "semantic_lexical_hybrid")
+  assert.equal(result.selection.args.query, "四路结果融合之后还有什么处理？")
+  assert.equal(result.selection.args.seeds, undefined)
+  assert.equal(result.replacedFrom, "pageindex_hierarchy")
+  assert.equal(result.reason, PAGEINDEX_INAPPLICABLE_REASON)
+})
+
+test("DR-12: a qualified PageIndex selection is left untouched", () => {
+  const selection: RetrievalToolSelection = {
+    tool: "pageindex_hierarchy",
+    args: { query: "目录第3页" },
+  }
+  const result = resolveToolApplicability(selection)
+  assert.equal(result.selection, selection)
+  assert.equal(result.replacedFrom, undefined)
+  assert.equal(result.reason, undefined)
+})
+
+test("DR-12: non-PageIndex selections are left untouched", () => {
+  const selection: RetrievalToolSelection = {
+    tool: "graph_navigation",
+    args: { query: "什么是检索增强生成？", seeds: ["RAG"] },
+  }
+  const result = resolveToolApplicability(selection)
+  assert.equal(result.selection, selection)
+  assert.equal(result.reason, undefined)
+})
+
+test("DR-12: the PageIndex tool description states the hierarchical-only applicability", () => {
+  const pageIndex = RETRIEVAL_TOOLS.find(
+    (tool) => tool.function.name === "pageindex_hierarchy"
+  )
+  assert.ok(pageIndex)
+  assert.match(pageIndex!.function.description, /ONLY when the question names a page, section, chapter, or table-of-contents/i)
+  assert.match(pageIndex!.function.description, /semantic_lexical_hybrid/)
 })
 
 // ---------------------------------------------------------------------------
@@ -357,6 +433,34 @@ test("ToolSelectorImpl passes the query text as the user message to the LLM", as
   assert.equal(capturedMessages[0].role, "system")
   assert.equal(capturedMessages[1].role, "user")
   assert.equal(capturedMessages[1].content, "用户的问题")
+})
+
+test("DR-12: the selector prompt states the same PageIndex applicability as the executor gate", async () => {
+  let capturedMessages: any[] = []
+  const mock: any = {
+    chat: {
+      completions: {
+        create: async (params: any) => {
+          capturedMessages = params.messages
+          return {
+            choices: [{
+              message: {
+                tool_calls: [{
+                  type: "function",
+                  function: { name: "pageindex_hierarchy", arguments: JSON.stringify({ query: "四路融合之后" }) },
+                }],
+              },
+            }],
+          }
+        },
+      },
+    },
+  }
+  const selector = new ToolSelectorImpl(mock as unknown as OpenAI, "test-model")
+  await selector.selectTool({ text: "四路融合之后" })
+  const system = capturedMessages.find((message) => message.role === "system").content
+  assert.match(system, /pageindex_hierarchy is applicable ONLY when the query asks for a page, section, chapter, or table-of-contents location/)
+  assert.match(system, /definitional, conceptual and general-procedure questions must use semantic_lexical_hybrid/)
 })
 
 test("ToolSelectorImpl passes tools and tool_choice=auto to the LLM (criterion #1)", async () => {

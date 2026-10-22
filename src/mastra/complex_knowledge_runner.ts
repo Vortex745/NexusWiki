@@ -972,6 +972,11 @@ export function createComplexKnowledgeMastraRunner(
                   }),
                 }
               : {}),
+            // DR-12: when the loop's first pick was replaced before execution
+            // (inapplicable PageIndex), the route trace says so explicitly.
+            ...(complexLoopResult.toolCalls[0]?.fallbackReason
+              ? { toolFallbackReason: complexLoopResult.toolCalls[0].fallbackReason }
+              : {}),
           }
         : {}),
     }

@@ -108,7 +108,7 @@ export const RETRIEVAL_TOOLS = [
     function: {
       name: "pageindex_hierarchy" as const,
       description:
-        "Search using PageIndex hierarchical document structure. Best for page-oriented queries, section-level lookups, and table-of-contents navigation.",
+        "Search using PageIndex hierarchical document structure. Use ONLY when the question names a page, section, chapter, or table-of-contents location (e.g. 第3页, 第二章, 目录). Definitional, conceptual and general-procedure questions must use semantic_lexical_hybrid.",
       parameters: {
         type: "object",
         properties: {
@@ -206,6 +206,77 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
 }
 
 // ---------------------------------------------------------------------------
+// Executor-side applicability gate (DR-12)
+// ---------------------------------------------------------------------------
+
+/**
+ * PageIndex is a hierarchical navigation channel: it can only answer a
+ * question that points at a page, a section/chapter, or a table of contents.
+ * A definition, a concept or a general procedure has no such location, so a
+ * selector that proposes PageIndex for one of those is a misselection. The
+ * word "文档" on its own proves nothing either — plenty of conceptual questions
+ * mention a document.
+ *
+ * This is the SAME intent semantics the tool descriptions and the selector
+ * prompts state, applied once before execution instead of after a failed
+ * provider round.
+ */
+const HIERARCHICAL_NAVIGATION_PATTERNS: RegExp[] = [
+  // Explicit page reference: 第3页 / 12 页 / page 3 / p. 3.
+  /第?\s*\d+\s*页/,
+  /页码/,
+  /\bpage\s*\d+\b/i,
+  /\bp\.\s*\d+\b/i,
+  /\b(?:which|what)\s+(?:page|section|chapter|part)\b/i,
+  // Section / chapter / article reference: 第二章 / 第3节 / 第12条.
+  /第\s*[0-9零一二三四五六七八九十百千]+\s*(?:章|节|篇|部|条)/,
+  // Table of contents, outline, section-level structure.
+  /章节|小节|附录|目录|大纲|目录结构|章节结构|文档结构|层级结构|标题层级|结构树/,
+  // "which page/section/chapter/part" navigation questions.
+  /(?:哪|那)(?:一)?(?:页|章|节|部分|篇)/,
+  // Explicit navigation verbs followed by a location.
+  /(?:翻到|跳到|跳转(?:到|至)?|定位到|打开)(?:第)?\s*(?:\d+|[零一二三四五六七八九十百千]+)\s*(?:页|章|节|部分|篇)?/,
+  /\b(?:section|chapter|appendix|table of contents|toc)\b/i,
+]
+
+export function hasHierarchicalNavigationIntent(text: string): boolean {
+  return HIERARCHICAL_NAVIGATION_PATTERNS.some((pattern) => pattern.test(text))
+}
+
+/** The bounded reason recorded when an inapplicable PageIndex pick is replaced. */
+export const PAGEINDEX_INAPPLICABLE_REASON =
+  "inapplicable_tool: pageindex_hierarchy requires hierarchical navigation intent; using semantic_lexical_hybrid"
+
+export interface ToolApplicabilityResult {
+  /** The selection that may actually execute. */
+  selection: RetrievalToolSelection
+  /** Present only when the selector's original pick was replaced. */
+  replacedFrom?: RetrievalToolName
+  /** Present only when the selector's original pick was replaced. */
+  reason?: string
+}
+
+/**
+ * Replace an inapplicable PageIndex selection with the default hybrid tool
+ * BEFORE any executor call. The query is carried through verbatim (no rewrite,
+ * no model call, no identity/scope change).
+ */
+export function resolveToolApplicability(
+  selection: RetrievalToolSelection
+): ToolApplicabilityResult {
+  if (selection.tool !== "pageindex_hierarchy") return { selection }
+  if (hasHierarchicalNavigationIntent(selection.args.query)) return { selection }
+  return {
+    selection: {
+      tool: "semantic_lexical_hybrid",
+      args: { query: selection.args.query },
+    },
+    replacedFrom: "pageindex_hierarchy",
+    reason: PAGEINDEX_INAPPLICABLE_REASON,
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Tool → SearchOptions mapping
 // ---------------------------------------------------------------------------
 
@@ -290,7 +361,9 @@ export class ToolSelectorImpl implements ToolSelector {
               role: "system",
               content:
                 "You are a retrieval strategy selector. Choose the ONE read-only retrieval tool that best fits the user's query. " +
-                "Call the function with the user's query text. If no tool fits, call semantic_lexical_hybrid.",
+                "Call the function with the user's query text. If no tool fits, call semantic_lexical_hybrid. " +
+                "pageindex_hierarchy is applicable ONLY when the query asks for a page, section, chapter, or table-of-contents location; " +
+                "definitional, conceptual and general-procedure questions must use semantic_lexical_hybrid.",
             },
             { role: "user", content: query.text },
           ],

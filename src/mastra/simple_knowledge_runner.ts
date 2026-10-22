@@ -77,6 +77,7 @@ import type {
 } from "../retrieval/tool_selector"
 import {
   formatToolInputSummary,
+  resolveToolApplicability,
   toolToSearchOptions,
 } from "../retrieval/tool_selector"
 import type { Validator } from "../critic/validator/interface"
@@ -576,10 +577,15 @@ export function createSimpleKnowledgeMastraRunner(
         toolSelector.selectTool({ text: contextualizedQuery }, signal),
         signal
       )
-      selectedTool = toolResult.selection.tool
-      toolInputSummary = formatToolInputSummary(toolResult.selection)
-      toolFallbackReason = toolResult.fallbackReason
-      perQueryOptions = { ...perQueryOptions, ...toolToSearchOptions(toolResult.selection) }
+      // DR-12: PageIndex is a hierarchical navigation channel. A definition,
+      // concept or general procedure has no page/section/TOC location, so an
+      // inapplicable proposal is replaced BEFORE this runner issues any search
+      // — never after a PageIndex round has already failed.
+      const applicable = resolveToolApplicability(toolResult.selection)
+      selectedTool = applicable.selection.tool
+      toolInputSummary = formatToolInputSummary(applicable.selection)
+      toolFallbackReason = applicable.reason ?? toolResult.fallbackReason
+      perQueryOptions = { ...perQueryOptions, ...toolToSearchOptions(applicable.selection) }
     }
 
     // -------------------------------------------------------------------------
@@ -622,14 +628,22 @@ export function createSimpleKnowledgeMastraRunner(
     // ["pageIndex"], graph_navigation → ["graph"]). When that channel has no
     // match — the pageIndex node lookup is a whole-query title/summary LIKE
     // and graph entities exist only for wikified KBs — the narrowed search
-    // legitimately returns nothing while the unselected channels (vector,
+    // legitimately returns nothing while the default hybrid channels (vector,
     // bm25) would have hits, turning one bad LLM pick into a hard
-    // insufficient_evidence terminal for ordinary questions. Retry once with
-    // the default (un-narrowed) channels and keep the fallback traceable.
-    if (resultGroups[0].length === 0 && selectedTool) {
-      toolFallbackReason = `${toolFallbackReason ? toolFallbackReason + "; " : ""}selected tool ${selectedTool} returned 0 results; retried with default channels`
+    // insufficient_evidence terminal for ordinary questions. DR-12: retry at
+    // most ONCE, explicitly on the default hybrid channels — never by re-running
+    // the un-narrowed set (which would execute the same PageIndex lookup a
+    // second time). A hybrid selection has nothing to widen, so it is not
+    // retried.
+    if (
+      resultGroups[0].length === 0 &&
+      selectedTool &&
+      selectedTool !== "semantic_lexical_hybrid"
+    ) {
+      toolFallbackReason = `${toolFallbackReason ? toolFallbackReason + "; " : ""}selected tool ${selectedTool} returned 0 results; retried with default hybrid retrieval`
       const fallbackOutcome = await abortable(
         searcher.search(query, {
+          channels: ["vector", "bm25"],
           accessContext,
           ...(retrievalScope ? { retrievalScope } : {}),
           ...(sessionId ? { attachments: { sessionId } } : {}),

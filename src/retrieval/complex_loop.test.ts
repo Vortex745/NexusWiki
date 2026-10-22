@@ -806,6 +806,50 @@ test("runComplexLoop: ≥2 different tools in one run (criterion #8)", async () 
   assert.ok(distinctTools.has("graph_navigation"))
 })
 
+test("DR-12: an inapplicable PageIndex decision is replaced before the executor runs", async () => {
+  const query = "四路结果融合之后还有什么处理？"
+  const controller = scriptController([
+    decisionTool("pageindex_hierarchy", query),
+    decisionSufficient,
+  ])
+  const searcher = scriptSearcher([{ results: [makeResult("r1")] }])
+  const result = await runComplexLoop(
+    { controller, searcher: searcher as any, assembler: mockAssembler() },
+    { query }
+  )
+
+  assert.equal(searcher.calls.length, 1, "the loop executed exactly one search")
+  assert.deepEqual(
+    searcher.calls[0].options.channels,
+    ["vector", "bm25"],
+    "the default hybrid channels ran instead of PageIndex"
+  )
+  assert.equal(result.toolCalls[0].tool, "semantic_lexical_hybrid")
+  assert.equal(result.toolCalls[0].args.query, query)
+  assert.match(
+    result.toolCalls[0].fallbackReason ?? "",
+    /inapplicable_tool: pageindex_hierarchy/
+  )
+})
+
+test("DR-12: a hierarchical-navigation decision still executes PageIndex in the loop", async () => {
+  const query = "第3页的退货流程是什么？"
+  const controller = scriptController([
+    decisionTool("pageindex_hierarchy", query),
+    decisionSufficient,
+  ])
+  const searcher = scriptSearcher([{ results: [makeResult("r1")] }])
+  const result = await runComplexLoop(
+    { controller, searcher: searcher as any, assembler: mockAssembler() },
+    { query }
+  )
+
+  assert.equal(searcher.calls.length, 1)
+  assert.deepEqual(searcher.calls[0].options.channels, ["pageIndex"])
+  assert.equal(result.toolCalls[0].tool, "pageindex_hierarchy")
+  assert.equal(result.toolCalls[0].fallbackReason, undefined)
+})
+
 test("runComplexLoop: guaranteed termination within 3 iterations + 4 tool calls (criterion #8)", async () => {
   // LLM never declares sufficient — loop must terminate on budget
   const controller = scriptController([
@@ -1051,12 +1095,12 @@ test("T09 §criterion#6: priorToolCalls + all-duplicate decisions → determinis
   const priorToolCalls: NormalizedToolCall[] = [
     normalizeToolCall("semantic_lexical_hybrid", { query: "q1" }),
     normalizeToolCall("graph_navigation", { query: "q2" }),
-    normalizeToolCall("pageindex_hierarchy", { query: "q3" }),
+    normalizeToolCall("pageindex_hierarchy", { query: "第3页 q3" }),
   ]
   const controller = scriptController([
     decisionTool("semantic_lexical_hybrid", "q1"), // duplicate
     decisionTool("graph_navigation", "q2"), // duplicate
-    decisionTool("pageindex_hierarchy", "q3"), // duplicate
+    decisionTool("pageindex_hierarchy", "第3页 q3"), // duplicate
   ])
   const searcher = scriptSearcher([{ results: [makeResult("r1")] }])
   const deps: ComplexLoopDeps = {
@@ -1090,7 +1134,7 @@ test("T09 §criterion#2+#6: shared budget across runs — prior run used 2 itera
     normalizeToolCall("graph_navigation", { query: "initial-q2" }),
   ]
   const controller = scriptController([
-    decisionTool("pageindex_hierarchy", "correction-q1"), // new, non-duplicate
+    decisionTool("pageindex_hierarchy", "第3页 correction-q1"), // new, non-duplicate
     decisionTool("semantic_lexical_hybrid", "correction-q2"), // would be new but budget exhausted
   ])
   const searcher = scriptSearcher([{ results: [makeResult("r1")] }])
