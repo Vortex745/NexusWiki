@@ -97,6 +97,12 @@ export interface AssistantRunSnapshot {
    * Part of the immutable version snapshot, so a run cannot widen it.
    */
   toolPolicy: AssistantToolPolicy
+  /**
+   * The immutable version's memory setting. Present on every server-resolved
+   * assistant snapshot; `false` disables long-term memory recall for runs of
+   * this assistant. Absent (legacy/evaluation snapshots) keeps recall enabled.
+   */
+  memoryEnabled?: boolean
 }
 
 export class InvalidAssistantCommandError extends Error {

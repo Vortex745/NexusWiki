@@ -6,8 +6,9 @@
  *  - Scope: the caller's own (tenant, subject) via AccessContext, plus the
  *    assistant being run — global memories and that assistant's pinned
  *    memories, nothing else (the store's `recall` IS the scoping rule).
- *  - Disable: `useMemory === false` on the run skips recall entirely;
- *    ordinary answering is unaffected.
+ *  - Disable: `useMemory === false` on the run, or `memoryEnabled === false`
+ *    on the assistant version being run, skips recall entirely; ordinary
+ *    answering is unaffected.
  *  - Trace: when memories were recalled, the output carries `memoryUsed`
  *    (ids + count). Memory never appears in references — it is not evidence.
  *  - Extraction: ONLY a COMPLETED answer produces extraction suggestions,
@@ -35,7 +36,12 @@ export function createMemoryRecallRunner(
   inner: MastraRunner
 ): MastraRunner {
   return async function memoryRecallRunner(input) {
-    if (!deps.memories || input.useMemory === false || input.signal.aborted) {
+    if (
+      !deps.memories ||
+      input.useMemory === false ||
+      input.assistant?.memoryEnabled === false ||
+      input.signal.aborted
+    ) {
       return inner(input)
     }
     const tenantId = deps.resolveTenantId(input.accessContext)
