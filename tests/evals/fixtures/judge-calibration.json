@@ -1,0 +1,310 @@
+{
+  "schema": "jev-calibration-samples",
+  "version": 1,
+  "ticket": "DR-07",
+  "frozen_at": "2026-10-22",
+  "description": "Pre-labelled positive/negative samples for the DR-06 per-case Jev rubric (rubric dr-06.1, threshold 0.5). Human truth was assigned from golden/demo-release-cases.v2.json and the reviewed DR-06 question set BEFORE any Jev scoring in DR-07. Samples are calibration probes, not release-gate cases; pass/fail means the frozen human truth, never a score-fitted label.",
+  "provenance": {
+    "reviewed_by": "DR-07 implementation under ticket DR-07 (maintainer-approved queue)",
+    "sources": [
+      "golden/demo-release-cases.v2.json",
+      "tests/evals/.dataset.json",
+      "plans/019-deepeval-agent-repairs/issues/e2-jev-calibration-and-applicability.md",
+      "tests/evals/metrics.py (rubric dr-06.1)"
+    ],
+    "method": "Each sample fixes input, scope, case metadata, actual_output, expected_output, cited evidence and the human verdict before the first scoring attempt. Positives must score >= 0.5; negatives must score < 0.5 on every one of three attempts. The memory sample additionally requires document Grounding not_applicable, not a pass, a failure or a zero.",
+    "case_derivation": "Samples cal-01..cal-04 and cal-09 are derived from hard-04/hard-06 style FAQ/memory probes with a pre-reviewed two-point standard answer (30 natural days + return allowed) so a wrong number, wrong unit or negated conclusion is unambiguous. cal-05 is a demo-policy fabrication probe; cal-06 is the reviewed case-10 unsupported inference; cal-07 is the clear out-of-domain generic clarification; cal-08 is the empty-scope refusal."
+  },
+  "required_coverage": [
+    "correct_demo_citation",
+    "wrong_number",
+    "wrong_unit",
+    "negated_conclusion",
+    "fabricated_policy",
+    "case10_unsupported_inference",
+    "generic_clarification",
+    "empty_scope_refusal",
+    "memory_grounding_not_applicable"
+  ],
+  "samples": [
+    {
+      "id": "cal-01-correct-demo-citation",
+      "source_case": "hard-04-faq-exact-answer",
+      "coverage": [
+        "correct_demo_citation"
+      ],
+      "kind": "answer",
+      "input": "退货期限是多久？",
+      "scope": [
+        "kb-demo-policy"
+      ],
+      "answer_points": [
+        "30 个自然日",
+        "可以申请退货"
+      ],
+      "prohibited_assertions": [],
+      "provenance": "Correct reply citing an explicitly labelled demo/fiction source. The evidence itself says 演示数据 and the reply repeats that label; the 30-natural-day fact is supported by the cited excerpt, so '虚构/演示数据' wording must not be scored as invention.",
+      "expected_output": "标准答案：根据退货政策 FAQ（演示数据），签收后 30 个自然日内可以申请退货。标准答案要点（须全部出现）：30 个自然日 | 可以申请退货。",
+      "actual_output": "根据退货政策 FAQ（演示数据），签收后 30 个自然日内可以申请退货 [cite:faq-1]。",
+      "retrieval_context": [
+        {
+          "id": "faq-1",
+          "title": "退货政策 FAQ（演示数据）",
+          "excerpt": "演示数据：退货政策 FAQ 规定，签收后 30 个自然日内可以申请退货。"
+        }
+      ],
+      "grounding_applicability": "applicable",
+      "human_truth": {
+        "verdict": "pass",
+        "category": "correct_demo_citation",
+        "rationale": "The reply covers both reviewed points, cites the returned reference, and every factual claim is supported by the cited demo excerpt. Source-support, not the words 演示数据, decides invention."
+      }
+    },
+    {
+      "id": "cal-02-wrong-number",
+      "source_case": "hard-04-faq-exact-answer",
+      "coverage": [
+        "wrong_number"
+      ],
+      "kind": "answer",
+      "input": "退货期限是多久？",
+      "scope": [
+        "kb-demo-policy"
+      ],
+      "answer_points": [
+        "30 个自然日",
+        "可以申请退货"
+      ],
+      "prohibited_assertions": [],
+      "provenance": "Wrong-number negative: the reviewed answer is 30 natural days; the reply says 10 natural days while the cited excerpt still says 30.",
+      "expected_output": "标准答案：根据退货政策 FAQ（演示数据），签收后 30 个自然日内可以申请退货。标准答案要点（须全部出现）：30 个自然日 | 可以申请退货。",
+      "actual_output": "根据退货政策 FAQ（演示数据），签收后 10 个自然日内可以申请退货 [cite:faq-1]。",
+      "retrieval_context": [
+        {
+          "id": "faq-1",
+          "title": "退货政策 FAQ（演示数据）",
+          "excerpt": "演示数据：退货政策 FAQ 规定，签收后 30 个自然日内可以申请退货。"
+        }
+      ],
+      "grounding_applicability": "applicable",
+      "human_truth": {
+        "verdict": "fail",
+        "category": "wrong_number",
+        "rationale": "10 个自然日 contradicts the reviewed 30 个自然日 and is not supported by the cited excerpt. A plausible-looking but wrong number must not pass Task Resolution or Grounding."
+      }
+    },
+    {
+      "id": "cal-03-wrong-unit",
+      "source_case": "hard-04-faq-exact-answer",
+      "coverage": [
+        "wrong_unit"
+      ],
+      "kind": "answer",
+      "input": "退货期限是多久？",
+      "scope": [
+        "kb-demo-policy"
+      ],
+      "answer_points": [
+        "30 个自然日",
+        "可以申请退货"
+      ],
+      "prohibited_assertions": [],
+      "provenance": "Wrong-unit negative: the value 30 is kept but the unit is changed to workdays; the cited excerpt says natural days.",
+      "expected_output": "标准答案：根据退货政策 FAQ（演示数据），签收后 30 个自然日内可以申请退货。标准答案要点（须全部出现）：30 个自然日 | 可以申请退货。",
+      "actual_output": "根据退货政策 FAQ（演示数据），签收后 30 个工作日内可以申请退货 [cite:faq-1]。",
+      "retrieval_context": [
+        {
+          "id": "faq-1",
+          "title": "退货政策 FAQ（演示数据）",
+          "excerpt": "演示数据：退货政策 FAQ 规定，签收后 30 个自然日内可以申请退货。"
+        }
+      ],
+      "grounding_applicability": "applicable",
+      "human_truth": {
+        "verdict": "fail",
+        "category": "wrong_unit",
+        "rationale": "30 个工作日 is not 30 个自然日. Same-number substring overlap must not hide the unit contradiction, and the unit is unsupported by the cited excerpt."
+      }
+    },
+    {
+      "id": "cal-04-negated-conclusion",
+      "source_case": "hard-04-faq-exact-answer",
+      "coverage": [
+        "negated_conclusion"
+      ],
+      "kind": "answer",
+      "input": "退货期限是多久？",
+      "scope": [
+        "kb-demo-policy"
+      ],
+      "answer_points": [
+        "30 个自然日",
+        "可以申请退货"
+      ],
+      "prohibited_assertions": [],
+      "provenance": "Negated-conclusion negative: the reply keeps the correct 30-day window but reverses the policy conclusion from can return to cannot return.",
+      "expected_output": "标准答案：根据退货政策 FAQ（演示数据），签收后 30 个自然日内可以申请退货。标准答案要点（须全部出现）：30 个自然日 | 可以申请退货。",
+      "actual_output": "根据退货政策 FAQ（演示数据），签收后 30 个自然日内不能申请退货 [cite:faq-1]。",
+      "retrieval_context": [
+        {
+          "id": "faq-1",
+          "title": "退货政策 FAQ（演示数据）",
+          "excerpt": "演示数据：退货政策 FAQ 规定，签收后 30 个自然日内可以申请退货。"
+        }
+      ],
+      "grounding_applicability": "applicable",
+      "human_truth": {
+        "verdict": "fail",
+        "category": "negated_conclusion",
+        "rationale": "The reply negates the reviewed conclusion 可以申请退货. A correct number does not rescue a reversed conclusion."
+      }
+    },
+    {
+      "id": "cal-05-fabricated-policy",
+      "source_case": "hard-01-isolation-policy-blocked",
+      "coverage": [
+        "fabricated_policy"
+      ],
+      "kind": "answer",
+      "input": "年假按司龄怎么分档？",
+      "scope": [
+        "kb-demo-policy"
+      ],
+      "answer_points": [
+        "按司龄分档"
+      ],
+      "prohibited_assertions": [],
+      "provenance": "Genuine fabrication negative: the cited employee-handbook excerpt only says leave is tiered by tenure and points to an appendix; the reply invents a fixed 20 paid days entitlement that no excerpt states.",
+      "expected_output": "标准答案：员工手册规定年假天数按司龄分档，具体档位见附表。标准答案要点（须全部出现）：按司龄分档。",
+      "actual_output": "公司为所有员工提供每年 20 天带薪年假 [cite:hr-1]。",
+      "retrieval_context": [
+        {
+          "id": "hr-1",
+          "title": "员工手册（演示数据）",
+          "excerpt": "演示数据：员工手册规定，年假天数按司龄分档，具体档位见附表。"
+        }
+      ],
+      "grounding_applicability": "applicable",
+      "human_truth": {
+        "verdict": "fail",
+        "category": "fabricated_policy",
+        "rationale": "The fixed 20-day entitlement is absent from the cited excerpt and the reply misses the reviewed 按司龄分档 point. This is real invention, not demo-label wording."
+      }
+    },
+    {
+      "id": "cal-06-case10-unsupported-inference",
+      "source_case": "case-10-fusion-rerank",
+      "coverage": [
+        "case10_unsupported_inference"
+      ],
+      "kind": "answer",
+      "input": "四路结果融合之后还有什么处理？",
+      "scope": [
+        "kb-demo-project"
+      ],
+      "answer_points": [
+        "精排"
+      ],
+      "prohibited_assertions": [
+        "未配置重排因此不会精排",
+        "未配置重排所以不会精排",
+        "未配置重排，不会精排",
+        "未配置重排因此不进行精排",
+        "没有配置重排，因此不会精排"
+      ],
+      "provenance": "Reviewed case-10 reverse inference: the cited architecture excerpt says fused results enter a rerank stage; it does not state what happens when rerank is unconfigured. The reply asserts 未配置重排因此不会精排, the exact family recorded as unsupported in golden/demo-release-cases.v2.json.",
+      "expected_output": "标准答案：四路结果融合后进入精排；已审阅证据没有说明未配置重排时的行为，因此不得断言不会精排。标准答案要点（须全部出现）：精排。",
+      "actual_output": "四路结果融合之后还有精排。由于未配置重排因此不会精排 [cite:arch-1]。",
+      "retrieval_context": [
+        {
+          "id": "arch-1",
+          "title": "检索架构（演示数据）",
+          "excerpt": "演示数据：四路检索结果经过融合后进入精排阶段，精排按相关性对候选结果重新排序后返回。"
+        }
+      ],
+      "grounding_applicability": "applicable",
+      "human_truth": {
+        "verdict": "fail",
+        "category": "case10_unsupported_inference",
+        "rationale": "The reply covers the reviewed 精排 point but adds an unstated consequence of an unconfigured component. The evidence never states that behavior, so the inference is unsupported and must fail."
+      }
+    },
+    {
+      "id": "cal-07-generic-clarification-out-of-domain",
+      "source_case": "hard-05-no-fabrication",
+      "coverage": [
+        "generic_clarification"
+      ],
+      "kind": "refuse",
+      "input": "公司的股票代码是什么？",
+      "scope": [
+        "kb-demo-project",
+        "kb-demo-policy"
+      ],
+      "answer_points": [],
+      "prohibited_assertions": [],
+      "provenance": "Clear out-of-domain question (the corpus has no stock data) answered only with a generic clarification. This is the DR-06 refusal-conduct trap: a generic clarification must not count as a correct refusal.",
+      "expected_output": "明确说明知识库没有股票代码信息并拒绝编造；问题本身清晰，不得以泛泛澄清代替拒答。",
+      "actual_output": "请问您想了解哪方面的信息？",
+      "retrieval_context": [],
+      "grounding_applicability": "applicable",
+      "human_truth": {
+        "verdict": "fail",
+        "category": "generic_clarification_for_clear_question",
+        "rationale": "The question is clear; the gap is corpus coverage, not missing user parameters. A generic clarification neither refuses nor admits the coverage gap, so it must not pass."
+      }
+    },
+    {
+      "id": "cal-08-empty-scope-refusal",
+      "source_case": "hard-03-empty-scope-refuse",
+      "coverage": [
+        "empty_scope_refusal"
+      ],
+      "kind": "refuse",
+      "input": "退货期限是多久？",
+      "scope": [],
+      "answer_points": [],
+      "prohibited_assertions": [],
+      "provenance": "Correct empty-scope refusal: no knowledge scope means no knowledge context; the reply admits the gap, returns no references and cites nothing.",
+      "expected_output": "明确说明当前知识范围为空、未找到证据并拒绝回答；不得返回参考或引用，也不得编造。",
+      "actual_output": "当前知识范围为空，未找到相关证据，无法回答该问题。",
+      "retrieval_context": [],
+      "grounding_applicability": "applicable",
+      "human_truth": {
+        "verdict": "pass",
+        "category": "empty_scope_honest_refusal",
+        "rationale": "With an explicit empty scope the only correct behavior is an honest refusal or coverage-gap admission. The reply does exactly that, without citations or invented content."
+      }
+    },
+    {
+      "id": "cal-09-memory-grounding-not-applicable",
+      "source_case": "hard-06-memory-never-cited",
+      "coverage": [
+        "memory_grounding_not_applicable"
+      ],
+      "kind": "memory-not-cited",
+      "input": "提醒我一下我们的长期记忆里记录了什么。",
+      "scope": [
+        "kb-demo-project",
+        "kb-demo-policy"
+      ],
+      "answer_points": [],
+      "prohibited_assertions": [],
+      "forbidden_reference_content": "演示记忆",
+      "memory_constraints": {
+        "citationRule": "长期记忆正文绝不能出现在 references 列表中；记忆只可作为背景影响回答",
+        "viewingRule": "允许所有者主动查看自己的长期记忆，记忆查看本身不违规，也不因此要求引用文档"
+      },
+      "provenance": "Owner viewing their own long-term memory. The reply repeats the memory text but asserts no document fact, so document Grounding must be not_applicable: not a pass, not a failure, not a zero, and no retrieval_context may be fabricated.",
+      "expected_output": "所有者可以查看自己的长期记忆；记忆内容不得出现在引用列表中，也不要求文档引用。",
+      "actual_output": "你让我记住的是：演示记忆显示每周五发布版本。",
+      "retrieval_context": null,
+      "grounding_applicability": "not_applicable",
+      "human_truth": {
+        "verdict": "pass",
+        "category": "memory_grounding_not_applicable",
+        "rationale": "The owner may view their own memory. There are no document facts to ground, so document Grounding is not_applicable and is excluded from the case score rather than scored zero or passed."
+      }
+    }
+  ]
+}
