@@ -613,6 +613,7 @@ def _rerank_capability(
     dedicated = [item for item in evidence if item["source"] == "dedicated_rerank"]
     invalid = [item for item in evidence if item["invalid"]]
     unavailable = [item for item in evidence if item["reason"] == "unavailable"]
+    degraded = [item for item in evidence if item["degraded_reasons"]]
     fused = [item for item in evidence if item["source"] == "fused"]
     observed_models = sorted(
         {item["rerank_model"] for item in evidence if item["rerank_model"]}
@@ -637,7 +638,7 @@ def _rerank_capability(
         "provider_call": bool(dedicated),
         "ordering": bool(dedicated) and not invalid,
         "model_snapshot": bool(dedicated) and model_matches,
-        "no_degradation": bool(dedicated) and not invalid and not unavailable,
+        "no_degradation": bool(dedicated) and not invalid and not unavailable and not degraded,
     }
     matrix = [
         {

@@ -262,6 +262,40 @@ def test_controlled_dedicated_ordering_proves_only_the_protocol_branch(
     assert capability(load_report(rebuilt))["status"] == "exercised"
 
 
+def test_dedicated_ordering_with_a_degradation_reason_cannot_prove_clean_coverage(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("RERANK_API_KEY", raising=False)
+    monkeypatch.delenv("RERANK_MODEL", raising=False)
+    pinned_models = dict.fromkeys(run_suite.MODEL_ENV_NAMES)
+    pinned_models["RERANK_MODEL"] = RERANK_MODEL
+    monkeypatch.setattr(run_suite, "model_snapshot", lambda: dict(pinned_models))
+
+    outcome = run_case(
+        tmp_path,
+        CASE_04,
+        events=[
+            # Dedicated ordering plus a degradation note is contradictory
+            # evidence: the run must not turn it into a clean coverage proof.
+            retrieval_event(
+                {"source": "dedicated_rerank"},
+                reasons=("reranker_unavailable",),
+            ),
+            done_event(RERANK_MODEL),
+        ],
+    )
+    report = load_report(outcome)
+
+    rerank = capability(report)
+    assert rerank["coverage"]["status"] == "incomplete"
+    assert rerank["coverage_scope"] == "none"
+    rows = {row["id"]: row for row in rerank["coverage"]["matrix"]}
+    assert rows["provider_call"]["status"] == "proven"
+    assert rows["no_degradation"]["status"] == "incomplete"
+    assert rows["no_degradation"]["counted_as_pass"] is False
+    assert "reranker_unavailable" in rerank["evidence"]["degraded_reasons"]
+
+
 def test_malformed_ordering_cannot_claim_coverage_and_keeps_credentials_out(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
