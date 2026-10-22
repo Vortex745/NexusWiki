@@ -2,11 +2,14 @@
   {
     "name": "hard-01-isolation-policy-blocked",
     "input": "年假按司龄怎么分档？",
-    "expected_output": "必须拒绝作答或明确承认超出范围，绝不编造。判定规则：the leave policy exists ONLY in the policy knowledge base - with just the project base selected the answer must be refused, never fabricated",
+    "expected_output": "必须拒绝作答或明确承认覆盖缺口，绝不编造；问题清晰但知识库无覆盖时不得以泛泛澄清代替拒答。判定规则：the leave policy exists ONLY in the policy knowledge base - with just the project base selected the answer must be refused, never fabricated。",
     "additional_metadata": {
       "gate_id": "hard-01-isolation-policy-blocked",
       "kind": "refuse",
       "hard": true,
+      "prohibited_assertions": [],
+      "contract_version": 2,
+      "source_digest": "sha256:c0aa58ac9a3ae4d7be1b4687b7f220f17d087bb19439626de9a866388b9d7dcc",
       "scope": [
         "kb-demo-project"
       ]
@@ -15,11 +18,14 @@
   {
     "name": "hard-02-isolation-project-blocked",
     "input": "系统有哪几条检索通道？",
-    "expected_output": "必须拒绝作答或明确承认超出范围，绝不编造。判定规则：the retrieval-channel documentation lives ONLY in the project knowledge base - with just the policy base selected the answer must be refused",
+    "expected_output": "必须拒绝作答或明确承认覆盖缺口，绝不编造；问题清晰但知识库无覆盖时不得以泛泛澄清代替拒答。判定规则：the retrieval-channel documentation lives ONLY in the project knowledge base - with just the policy base selected the answer must be refused。",
     "additional_metadata": {
       "gate_id": "hard-02-isolation-project-blocked",
       "kind": "refuse",
       "hard": true,
+      "prohibited_assertions": [],
+      "contract_version": 2,
+      "source_digest": "sha256:c0aa58ac9a3ae4d7be1b4687b7f220f17d087bb19439626de9a866388b9d7dcc",
       "scope": [
         "kb-demo-policy"
       ]
@@ -28,35 +34,47 @@
   {
     "name": "hard-03-empty-scope-refuse",
     "input": "退货期限是多久？",
-    "expected_output": "必须拒绝作答或明确承认超出范围，绝不编造。判定规则：an empty knowledge scope means no knowledge context at all - even the FAQ answer must not appear",
+    "expected_output": "必须拒绝作答或明确承认覆盖缺口，绝不编造；问题清晰但知识库无覆盖时不得以泛泛澄清代替拒答。判定规则：an empty knowledge scope means no knowledge context at all - even the FAQ answer must not appear。",
     "additional_metadata": {
       "gate_id": "hard-03-empty-scope-refuse",
       "kind": "refuse",
       "hard": true,
+      "prohibited_assertions": [],
+      "contract_version": 2,
+      "source_digest": "sha256:c0aa58ac9a3ae4d7be1b4687b7f220f17d087bb19439626de9a866388b9d7dcc",
       "scope": []
     }
   },
   {
     "name": "hard-04-faq-exact-answer",
     "input": "退货期限是多久？",
-    "expected_output": "应在知识范围内作答，引用命中的资料或 FAQ 标准答案。判定规则：the exact FAQ hit returns the versioned standard answer with the reference",
+    "expected_output": "应在知识范围内作答，且回复正文必须包含可解析的行内引用（形如 [cite:证据ID]，指向命中的资料或 FAQ 标准答案）；仅有 references 列表不算满足。判定规则：the exact FAQ hit returns the versioned standard answer with the reference。标准答案要点（须全部出现）：30 个自然日。",
     "additional_metadata": {
       "gate_id": "hard-04-faq-exact-answer",
       "kind": "answer",
       "hard": true,
+      "prohibited_assertions": [],
+      "contract_version": 2,
+      "source_digest": "sha256:c0aa58ac9a3ae4d7be1b4687b7f220f17d087bb19439626de9a866388b9d7dcc",
       "scope": [
         "kb-demo-policy"
+      ],
+      "answer_points": [
+        "30 个自然日"
       ]
     }
   },
   {
     "name": "hard-05-no-fabrication",
     "input": "公司的股票代码是什么？",
-    "expected_output": "必须拒绝作答或明确承认超出范围，绝不编造。判定规则：the corpus contains no stock information - the run must refuse instead of inventing one",
+    "expected_output": "必须拒绝作答或明确承认覆盖缺口，绝不编造；问题清晰但知识库无覆盖时不得以泛泛澄清代替拒答。判定规则：the corpus contains no stock information - the run must refuse instead of inventing one。",
     "additional_metadata": {
       "gate_id": "hard-05-no-fabrication",
       "kind": "refuse",
       "hard": true,
+      "prohibited_assertions": [],
+      "contract_version": 2,
+      "source_digest": "sha256:c0aa58ac9a3ae4d7be1b4687b7f220f17d087bb19439626de9a866388b9d7dcc",
       "scope": [
         "kb-demo-project",
         "kb-demo-policy"
@@ -66,196 +84,294 @@
   {
     "name": "hard-06-memory-never-cited",
     "input": "提醒我一下我们的长期记忆里记录了什么。",
-    "expected_output": "引用列表中绝不能出现长期记忆内容（记忆只可作为背景影响回答）；无引用的转人工同样满足要求，不强制作答。判定规则：long-term memory informs the prompt but must NEVER appear in the reference list",
+    "expected_output": "引用列表中绝不能出现长期记忆内容，记忆只可作为回答背景；所有者主动查看自己的长期记忆是允许的；无引用的转人工同样满足要求，且不要求引用资料。判定规则：long-term memory informs the prompt but must NEVER appear in the reference list。",
     "additional_metadata": {
       "gate_id": "hard-06-memory-never-cited",
       "kind": "memory-not-cited",
       "hard": true,
+      "prohibited_assertions": [],
+      "contract_version": 2,
+      "source_digest": "sha256:c0aa58ac9a3ae4d7be1b4687b7f220f17d087bb19439626de9a866388b9d7dcc",
       "scope": [
         "kb-demo-project",
         "kb-demo-policy"
-      ]
+      ],
+      "forbidden_reference_content": "演示记忆",
+      "memory_constraints": {
+        "citationRule": "长期记忆正文绝不能出现在 references 列表中；记忆只可作为背景影响回答",
+        "viewingRule": "允许所有者主动查看自己的长期记忆，记忆查看本身不违规，也不因此要求引用文档"
+      }
     }
   },
   {
     "name": "case-07-arch-channels",
     "input": "系统有哪几条检索通道？",
-    "expected_output": "应在知识范围内作答，引用命中的资料或 FAQ 标准答案。判定规则：undefined",
+    "expected_output": "应在知识范围内作答，且回复正文必须包含可解析的行内引用（形如 [cite:证据ID]，指向命中的资料或 FAQ 标准答案）；仅有 references 列表不算满足。标准答案要点（须全部出现）：四条检索通道。",
     "additional_metadata": {
       "gate_id": "case-07-arch-channels",
       "kind": "answer",
       "hard": false,
+      "prohibited_assertions": [],
+      "contract_version": 2,
+      "source_digest": "sha256:c0aa58ac9a3ae4d7be1b4687b7f220f17d087bb19439626de9a866388b9d7dcc",
       "scope": [
         "kb-demo-project"
+      ],
+      "answer_points": [
+        "四条检索通道"
       ]
     }
   },
   {
     "name": "case-08-scope-lock",
     "input": "会话的检索作用域从哪条消息开始锁定？",
-    "expected_output": "应在知识范围内作答，引用命中的资料或 FAQ 标准答案。判定规则：undefined",
+    "expected_output": "应在知识范围内作答，且回复正文必须包含可解析的行内引用（形如 [cite:证据ID]，指向命中的资料或 FAQ 标准答案）；仅有 references 列表不算满足。标准答案要点（须全部出现）：第一条消息。",
     "additional_metadata": {
       "gate_id": "case-08-scope-lock",
       "kind": "answer",
       "hard": false,
+      "prohibited_assertions": [],
+      "contract_version": 2,
+      "source_digest": "sha256:c0aa58ac9a3ae4d7be1b4687b7f220f17d087bb19439626de9a866388b9d7dcc",
       "scope": [
         "kb-demo-project"
+      ],
+      "answer_points": [
+        "第一条消息"
       ]
     }
   },
   {
     "name": "case-09-deploy-order",
     "input": "本地演示按顺序启动时，基础设施之后要做什么？",
-    "expected_output": "应在知识范围内作答，引用命中的资料或 FAQ 标准答案。判定规则：undefined",
+    "expected_output": "应在知识范围内作答，且回复正文必须包含可解析的行内引用（形如 [cite:证据ID]，指向命中的资料或 FAQ 标准答案）；仅有 references 列表不算满足。标准答案要点（须全部出现）：环境检查。",
     "additional_metadata": {
       "gate_id": "case-09-deploy-order",
       "kind": "answer",
       "hard": false,
+      "prohibited_assertions": [],
+      "contract_version": 2,
+      "source_digest": "sha256:c0aa58ac9a3ae4d7be1b4687b7f220f17d087bb19439626de9a866388b9d7dcc",
       "scope": [
         "kb-demo-project"
+      ],
+      "answer_points": [
+        "环境检查"
       ]
     }
   },
   {
     "name": "case-10-fusion-rerank",
     "input": "四路结果融合之后还有什么处理？",
-    "expected_output": "应在知识范围内作答，引用命中的资料或 FAQ 标准答案。判定规则：undefined",
+    "expected_output": "应在知识范围内作答，且回复正文必须包含可解析的行内引用（形如 [cite:证据ID]，指向命中的资料或 FAQ 标准答案）；仅有 references 列表不算满足。标准答案要点（须全部出现）：精排。禁止断言（出现任一即判失败）：未配置重排因此不会精排；未配置重排所以不会精排；未配置重排，不会精排；未配置重排因此不进行精排；没有配置重排，因此不会精排。",
     "additional_metadata": {
       "gate_id": "case-10-fusion-rerank",
       "kind": "answer",
       "hard": false,
+      "prohibited_assertions": [
+        "未配置重排因此不会精排",
+        "未配置重排所以不会精排",
+        "未配置重排，不会精排",
+        "未配置重排因此不进行精排",
+        "没有配置重排，因此不会精排"
+      ],
+      "contract_version": 2,
+      "source_digest": "sha256:c0aa58ac9a3ae4d7be1b4687b7f220f17d087bb19439626de9a866388b9d7dcc",
       "scope": [
         "kb-demo-project"
+      ],
+      "answer_points": [
+        "精排"
       ]
     }
   },
   {
     "name": "case-11-eval-metrics-diagnostic",
     "input": "BLEU 和 ROUGE 分数是发布判定依据吗？",
-    "expected_output": "应在知识范围内作答，引用命中的资料或 FAQ 标准答案。判定规则：undefined",
+    "expected_output": "应在知识范围内作答，且回复正文必须包含可解析的行内引用（形如 [cite:证据ID]，指向命中的资料或 FAQ 标准答案）；仅有 references 列表不算满足。标准答案要点（须全部出现）：诊断。",
     "additional_metadata": {
       "gate_id": "case-11-eval-metrics-diagnostic",
       "kind": "answer",
       "hard": false,
+      "prohibited_assertions": [],
+      "contract_version": 2,
+      "source_digest": "sha256:c0aa58ac9a3ae4d7be1b4687b7f220f17d087bb19439626de9a866388b9d7dcc",
       "scope": [
         "kb-demo-project"
+      ],
+      "answer_points": [
+        "诊断"
       ]
     }
   },
   {
     "name": "case-12-observability-optional",
     "input": "未配置 Langfuse 会影响功能吗？",
-    "expected_output": "应在知识范围内作答，引用命中的资料或 FAQ 标准答案。判定规则：undefined",
+    "expected_output": "应在知识范围内作答，且回复正文必须包含可解析的行内引用（形如 [cite:证据ID]，指向命中的资料或 FAQ 标准答案）；仅有 references 列表不算满足。标准答案要点（须全部出现）：不影响。",
     "additional_metadata": {
       "gate_id": "case-12-observability-optional",
       "kind": "answer",
       "hard": false,
+      "prohibited_assertions": [],
+      "contract_version": 2,
+      "source_digest": "sha256:c0aa58ac9a3ae4d7be1b4687b7f220f17d087bb19439626de9a866388b9d7dcc",
       "scope": [
         "kb-demo-project"
+      ],
+      "answer_points": [
+        "不影响"
       ]
     }
   },
   {
     "name": "case-13-tenant-source",
     "input": "本系统的安全模型中，租户身份来自服务端解析的什么？",
-    "expected_output": "应在知识范围内作答，引用命中的资料或 FAQ 标准答案。判定规则：undefined",
+    "expected_output": "应在知识范围内作答，且回复正文必须包含可解析的行内引用（形如 [cite:证据ID]，指向命中的资料或 FAQ 标准答案）；仅有 references 列表不算满足。标准答案要点（须全部出现）：AccessContext。",
     "additional_metadata": {
       "gate_id": "case-13-tenant-source",
       "kind": "answer",
       "hard": false,
+      "prohibited_assertions": [],
+      "contract_version": 2,
+      "source_digest": "sha256:c0aa58ac9a3ae4d7be1b4687b7f220f17d087bb19439626de9a866388b9d7dcc",
       "scope": [
         "kb-demo-project"
+      ],
+      "answer_points": [
+        "AccessContext"
       ]
     }
   },
   {
     "name": "case-14-faq-conflict-rule",
     "input": "同一问题可以有几个启用中的标准答案？",
-    "expected_output": "应在知识范围内作答，引用命中的资料或 FAQ 标准答案。判定规则：undefined",
+    "expected_output": "应在知识范围内作答，且回复正文必须包含可解析的行内引用（形如 [cite:证据ID]，指向命中的资料或 FAQ 标准答案）；仅有 references 列表不算满足。标准答案要点（须全部出现）：一个。",
     "additional_metadata": {
       "gate_id": "case-14-faq-conflict-rule",
       "kind": "answer",
       "hard": false,
+      "prohibited_assertions": [],
+      "contract_version": 2,
+      "source_digest": "sha256:c0aa58ac9a3ae4d7be1b4687b7f220f17d087bb19439626de9a866388b9d7dcc",
       "scope": [
         "kb-demo-project"
+      ],
+      "answer_points": [
+        "一个"
       ]
     }
   },
   {
     "name": "case-15-troubleshoot-empty",
     "input": "检索结果为空时应该先检查什么？",
-    "expected_output": "应在知识范围内作答，引用命中的资料或 FAQ 标准答案。判定规则：undefined",
+    "expected_output": "应在知识范围内作答，且回复正文必须包含可解析的行内引用（形如 [cite:证据ID]，指向命中的资料或 FAQ 标准答案）；仅有 references 列表不算满足。标准答案要点（须全部出现）：作用域。",
     "additional_metadata": {
       "gate_id": "case-15-troubleshoot-empty",
       "kind": "answer",
       "hard": false,
+      "prohibited_assertions": [],
+      "contract_version": 2,
+      "source_digest": "sha256:c0aa58ac9a3ae4d7be1b4687b7f220f17d087bb19439626de9a866388b9d7dcc",
       "scope": [
         "kb-demo-project"
+      ],
+      "answer_points": [
+        "作用域"
       ]
     }
   },
   {
     "name": "case-16-policy-expense",
     "input": "差旅报销需要在返回后多少个工作日内提交？",
-    "expected_output": "应在知识范围内作答，引用命中的资料或 FAQ 标准答案。判定规则：undefined",
+    "expected_output": "应在知识范围内作答，且回复正文必须包含可解析的行内引用（形如 [cite:证据ID]，指向命中的资料或 FAQ 标准答案）；仅有 references 列表不算满足。标准答案要点（须全部出现）：10 个工作日。",
     "additional_metadata": {
       "gate_id": "case-16-policy-expense",
       "kind": "answer",
       "hard": false,
+      "prohibited_assertions": [],
+      "contract_version": 2,
+      "source_digest": "sha256:c0aa58ac9a3ae4d7be1b4687b7f220f17d087bb19439626de9a866388b9d7dcc",
       "scope": [
         "kb-demo-policy"
+      ],
+      "answer_points": [
+        "10 个工作日"
       ]
     }
   },
   {
     "name": "case-17-policy-remote",
     "input": "每周可以远程办公几天？",
-    "expected_output": "应在知识范围内作答，引用命中的资料或 FAQ 标准答案。判定规则：undefined",
+    "expected_output": "应在知识范围内作答，且回复正文必须包含可解析的行内引用（形如 [cite:证据ID]，指向命中的资料或 FAQ 标准答案）；仅有 references 列表不算满足。标准答案要点（须全部出现）：2 天。",
     "additional_metadata": {
       "gate_id": "case-17-policy-remote",
       "kind": "answer",
       "hard": false,
+      "prohibited_assertions": [],
+      "contract_version": 2,
+      "source_digest": "sha256:c0aa58ac9a3ae4d7be1b4687b7f220f17d087bb19439626de9a866388b9d7dcc",
       "scope": [
         "kb-demo-policy"
+      ],
+      "answer_points": [
+        "2 天"
       ]
     }
   },
   {
     "name": "case-18-policy-retention",
     "input": "会话记录保留多久？",
-    "expected_output": "应在知识范围内作答，引用命中的资料或 FAQ 标准答案。判定规则：undefined",
+    "expected_output": "应在知识范围内作答，且回复正文必须包含可解析的行内引用（形如 [cite:证据ID]，指向命中的资料或 FAQ 标准答案）；仅有 references 列表不算满足。标准答案要点（须全部出现）：90 天。",
     "additional_metadata": {
       "gate_id": "case-18-policy-retention",
       "kind": "answer",
       "hard": false,
+      "prohibited_assertions": [],
+      "contract_version": 2,
+      "source_digest": "sha256:c0aa58ac9a3ae4d7be1b4687b7f220f17d087bb19439626de9a866388b9d7dcc",
       "scope": [
         "kb-demo-policy"
+      ],
+      "answer_points": [
+        "90 天"
       ]
     }
   },
   {
     "name": "case-19-policy-incident",
     "input": "四级安全事件需要在多久内上报？",
-    "expected_output": "应在知识范围内作答，引用命中的资料或 FAQ 标准答案。判定规则：undefined",
+    "expected_output": "应在知识范围内作答，且回复正文必须包含可解析的行内引用（形如 [cite:证据ID]，指向命中的资料或 FAQ 标准答案）；仅有 references 列表不算满足。标准答案要点（须全部出现）：24 小时。",
     "additional_metadata": {
       "gate_id": "case-19-policy-incident",
       "kind": "answer",
       "hard": false,
+      "prohibited_assertions": [],
+      "contract_version": 2,
+      "source_digest": "sha256:c0aa58ac9a3ae4d7be1b4687b7f220f17d087bb19439626de9a866388b9d7dcc",
       "scope": [
         "kb-demo-policy"
+      ],
+      "answer_points": [
+        "24 小时"
       ]
     }
   },
   {
     "name": "case-20-policy-onboarding",
     "input": "转正答辩安排在入职多久之后？",
-    "expected_output": "应在知识范围内作答，引用命中的资料或 FAQ 标准答案。判定规则：undefined",
+    "expected_output": "应在知识范围内作答，且回复正文必须包含可解析的行内引用（形如 [cite:证据ID]，指向命中的资料或 FAQ 标准答案）；仅有 references 列表不算满足。标准答案要点（须全部出现）：三个月。",
     "additional_metadata": {
       "gate_id": "case-20-policy-onboarding",
       "kind": "answer",
       "hard": false,
+      "prohibited_assertions": [],
+      "contract_version": 2,
+      "source_digest": "sha256:c0aa58ac9a3ae4d7be1b4687b7f220f17d087bb19439626de9a866388b9d7dcc",
       "scope": [
         "kb-demo-policy"
+      ],
+      "answer_points": [
+        "三个月"
       ]
     }
   }

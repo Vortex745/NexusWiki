@@ -1,19 +1,26 @@
 /**
  * Convert the committed TS golden set (src/evaluation/golden/fixtures.ts)
- * into DeepEval ConversationalGoldens at tests/evals/.dataset.json.
+ * into DeepEval ConversationalGoldens at
+ * tests/evals/.conversational-dataset.json.
  *
  * This is a format migration of an existing reviewed dataset, not new
  * hand-written goldens: every scenario/expected_outcome below is derived
  * mechanically from the TS case fields (category, userMessage,
  * expectedRoute, requiredCoverageCriteria, handoffAcceptable, notes).
  *
- * Usage: npx tsx tests/evals/convert_ts_goldens.mts
+ * Output ownership: this converter owns `.conversational-dataset.json`
+ * only. The single-turn demo-gate converter owns `.dataset.json`; running
+ * either converter never overwrites the other's output, and old generated
+ * files are left in place.
+ *
+ * Usage:
+ *   npx tsx tests/evals/convert_ts_goldens.mts [--out <path>]
  */
-import { writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
-import { GOLDEN_SET } from "../../src/evaluation/golden/fixtures.js";
-import type { GoldenCase } from "../../src/evaluation/types.js";
+import { writeFileSync } from "node:fs"
+import { dirname, join, resolve } from "node:path"
+import { fileURLToPath } from "node:url"
+import { GOLDEN_SET } from "../../src/evaluation/golden/fixtures.js"
+import type { GoldenCase } from "../../src/evaluation/types.js"
 
 const SITUATION: Record<GoldenCase["category"], string> = {
   direct: "用户向企业知识助手闲聊或询问常识",
@@ -22,33 +29,57 @@ const SITUATION: Record<GoldenCase["category"], string> = {
   ambiguous: "用户只发了一句含糊、没有明确主题的消息，其真实需求需要追问才能明确",
   insufficient: "员工询问的政策在知识库中可能缺失、过期或不完整",
   correction: "员工提出复杂问题，并会在多轮对话中追问、纠正、补全细节",
-};
+}
 
 function toScenario(c: GoldenCase): string {
-  return `[${c.id}] ${SITUATION[c.category]}。用户首句话：“${c.userMessage}”`;
+  return `[${c.id}] ${SITUATION[c.category]}。用户首句话：“${c.userMessage}”`
 }
 
 function toExpectedOutcome(c: GoldenCase): string {
-  const parts: string[] = [];
-  if (c.expectedRoute) parts.push(`预期路由为 ${c.expectedRoute}`);
+  const parts: string[] = []
+  if (c.expectedRoute) parts.push(`预期路由为 ${c.expectedRoute}`)
   if (c.requiredCoverageCriteria?.length) {
-    parts.push(`回答应覆盖要点：${c.requiredCoverageCriteria.join("、")}`);
+    parts.push(`回答应覆盖要点：${c.requiredCoverageCriteria.join("、")}`)
   }
   parts.push(
     c.handoffAcceptable
       ? "若证据不足或问题超出知识范围，承认缺口或转人工是可接受的终态"
       : "不应转人工，应直接给出答案",
-  );
-  if (c.notes) parts.push(`备注：${c.notes}`);
-  return parts.join("；");
+  )
+  if (c.notes) parts.push(`备注：${c.notes}`)
+  return parts.join("；")
 }
 
-const goldens = GOLDEN_SET.cases.map((c) => ({
-  scenario: toScenario(c),
-  expected_outcome: toExpectedOutcome(c),
-  user_description: "使用中文的企业知识库用户",
-}));
+function parseOutPath(argv: string[]): string {
+  const defaultOut = join(
+    dirname(fileURLToPath(import.meta.url)),
+    ".conversational-dataset.json",
+  )
+  if (argv.length === 0) return defaultOut
+  if (argv.length === 2 && argv[0] === "--out" && argv[1] && !argv[1].startsWith("--")) {
+    return resolve(argv[1])
+  }
+  throw new Error("usage: convert_ts_goldens.mts [--out <path>]")
+}
 
-const outDir = dirname(fileURLToPath(import.meta.url));
-writeFileSync(join(outDir, ".dataset.json"), JSON.stringify(goldens, null, 2), "utf-8");
-console.log(`wrote ${goldens.length} conversational goldens (dataset ${GOLDEN_SET.version})`);
+function main(argv: string[]): number {
+  try {
+    const out = parseOutPath(argv)
+    const goldens = GOLDEN_SET.cases.map((c) => ({
+      scenario: toScenario(c),
+      expected_outcome: toExpectedOutcome(c),
+      user_description: "使用中文的企业知识库用户",
+    }))
+    writeFileSync(out, JSON.stringify(goldens, null, 2), "utf-8")
+    console.log(
+      `wrote ${goldens.length} conversational goldens to ${out} (dataset ${GOLDEN_SET.version})`,
+    )
+    return 0
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error)
+    console.error(`[convert-ts-goldens] failed: ${message}`)
+    return 1
+  }
+}
+
+process.exitCode = main(process.argv.slice(2))
