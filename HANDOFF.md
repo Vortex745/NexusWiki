@@ -192,3 +192,16 @@
 - 环境动作：按计划重启了本仓库 3001 开发后端以加载新路由（同一命令、同一 `.env`；演示 OIDC 端口 3900 仍由它持有）；临时启动过本仓库 vite（5175，代理到 3001）用于验收，已停止。未修改 `.env`、数据库结构、依赖或 `package.json`。`src/ingestion/lifecycle*`、`source_identity.ts` 等既有未提交修改未被触碰。
 - 回滚：只回退本功能补丁并重启后端、刷新前端；无文档/索引/配置迁移。历史轨迹中可选的 `requestedReasoningEffort` 保留，旧读者可忽略，不清洗 SQLite。
 - 仍未验证/未执行：真实 provider 12 次固定剧本（RE-06，not_run）；模型内部是否遵守档位、质量/延迟差异、p95；生产部署。上线前必须用新后端+新前端成套发布，回滚也成套。
+
+---
+
+# DR integration handoff
+
+## Verified evaluation pitfalls (DR-08, 2026-10-22)
+
+- Run evaluation tests with `.venv-evals/Scripts/python.exe`; the installed base Python 3.12 interpreter does not have pytest. The isolated environment preflight validates Windows locking before collection.
+- An evaluation can be complete while product gates fail. `run_suite.py --baseline` returns exit 1 for a complete failing baseline and keeps its observed score; execution/record/snapshot failures are `incomplete` with score null. Read `report.json.gate.incomplete` separately from the exit code.
+- `--baseline` requires all twenty v2 cases including six hard cases. Use non-baseline selection for focused repeats. Each Agent sample gets a fresh session; scoring uses `metric.measure` directly, bypassing the DeepEval evaluation cache.
+- Rebuild with `run_suite.py --rebuild <run-dir>`. It regenerates report/metric projections from only that run's manifest, environment and sample records, verifies the frozen environment digest, and does not rewrite samples. Missing, truncated and skipped samples cannot inherit an earlier passing result.
+
+DR-08 source: `tests/evals/run_suite.py`, `reporting.py`, `test_reporting.py`. Local evidence: `C:/Users/14253/dr-wt/evidence/DR-08.md`. The parent agent owns the real twenty-case backend/Jev baseline; offline fixtures do not close that live requirement.
