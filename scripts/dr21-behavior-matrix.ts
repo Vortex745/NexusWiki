@@ -343,9 +343,18 @@ function main(): void {
   const commit = git("rev-parse", "HEAD")
   const branch = git("rev-parse", "--abbrev-ref", "HEAD")
   const dirty = git("status", "--porcelain").trim() !== ""
+  const generatedAt = new Date().toISOString()
+  const runIdentity = {
+    commit,
+    branch,
+    generatedAt,
+    dirty,
+    evidencePath: parsed.outPath,
+  }
+  const withRun = (cell: CellResult) => ({ ...cell, run: runIdentity })
 
   const groups = manifest.groups.map((group) => {
-    const cells = results.filter((cell) => cell.group === group.id)
+    const cells = results.filter((cell) => cell.group === group.id).map(withRun)
     return {
       id: group.id,
       title: group.title,
@@ -360,7 +369,7 @@ function main(): void {
     schemaVersion: 1,
     run: {
       ticket: "DR-21",
-      generatedAt: new Date().toISOString(),
+      generatedAt,
       commit,
       branch,
       dirty,
@@ -391,7 +400,7 @@ function main(): void {
     },
     summary,
     groups,
-    cells: results,
+    cells: results.map(withRun),
   }
 
   mkdirSync(dirname(parsed.outPath), { recursive: true })
