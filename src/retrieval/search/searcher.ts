@@ -994,6 +994,9 @@ export class SearcherImpl implements Searcher {
         // No channel failed — none ran. Reporting them as unavailable would
         // blame the channels for a scope decision the caller made.
         unavailableChannels: [],
+        // DR-22: an empty scope is not an outage. The explicit reason lets the
+        // trace distinguish "nothing was read" from "every channel failed".
+        degradationReasons: ["no_knowledge_scope"],
         ...(unselectedChannels.length > 0 ? { unselectedChannels } : {}),
         ...(debug ? { debug: { channels: [], fused: { elapsedMs: 0, rawCandidateCount: 0, distinctCount: 0, candidates: [] }, totalMs: performance.now() - searchStarted } } : {}),
       }
@@ -1121,6 +1124,8 @@ export class SearcherImpl implements Searcher {
         status: "insufficient",
         results: [],
         unavailableChannels,
+        // DR-22: same explicit scope decision as the early return above.
+        degradationReasons: ["no_knowledge_scope"],
         ...(unselectedChannels.length > 0 ? { unselectedChannels } : {}),
         ...(debug
           ? {
@@ -1224,7 +1229,17 @@ export class SearcherImpl implements Searcher {
       : undefined
     const degradationReasons: string[] = []
     if (parentExpansionFailed) degradationReasons.push("parent_expansion_unavailable")
-    if (rerankerFailed) degradationReasons.push("reranker_unavailable")
+    // DR-22: a missing rerank configuration and a provider failure are different
+    // facts. The published ordering already carries `not_configured` vs
+    // `unavailable`; the trace reason must agree with it instead of collapsing
+    // both into one "unavailable" string.
+    if (rerankerFailed) {
+      degradationReasons.push(
+        ordering.source === "fused" && ordering.reason === "not_configured"
+          ? "reranker_not_configured"
+          : "reranker_unavailable"
+      )
+    }
     // Ticket 36 (WEB-01): web search that was asked for but not configured is
     // reported honestly — it is an absence of capability, not a channel
     // failure, so the other channels are unaffected and the status only

@@ -846,11 +846,13 @@ export function createMastraChatEventAdapter(
           degradation: {
             status: "insufficient",
             unavailableChannels: [],
+            // DR-22: a provider failure is a provider failure. It used to be
+            // labelled `no_cited_claims`, which claims the answer was rejected
+            // for missing citations — something that never ran. The terminal
+            // status (`provider_error`) is the honest reason here.
             reason: isResourceBudgetError
               ? "resource_budget_exceeded"
-              : isAbort
-                ? undefined
-                : "no_cited_claims",
+              : undefined,
           },
           ...(runOptions?.reasoningEffort
             ? { requestedReasoningEffort: runOptions.reasoningEffort }

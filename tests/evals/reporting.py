@@ -752,6 +752,243 @@ def _capabilities(
     return capabilities
 
 
+DEGRADATION_MATRIX_SCHEMA = "degradation-status-matrix-v1"
+
+# DR-22: retrieval reasons that mean the answer was generated from a degraded
+# read. A missing capability (`reranker_not_configured`, `web_unconfigured`) or
+# an empty scope (`no_knowledge_scope`) is a configuration/scope fact and must
+# not be counted as an answer degradation.
+DEGRADATION_FAILURE_REASONS = frozenset(
+    {"parent_expansion_unavailable", "reranker_unavailable"}
+)
+
+
+def _is_degradation_failure(reason: Any) -> bool:
+    return isinstance(reason, str) and (
+        reason in DEGRADATION_FAILURE_REASONS or reason.endswith(" unavailable")
+    )
+
+
+def _degradation_sample_evidence(record: Mapping[str, Any]) -> dict:
+    """Terminal state and stage reasons from the retained Agent payload."""
+    agent = record.get("agent")
+    agent = agent if isinstance(agent, Mapping) else {}
+    payload = agent.get("raw_payload")
+    events = payload.get("events") if isinstance(payload, Mapping) else None
+    degraded_reasons: list[str] = []
+    ordering: Any = None
+    ordering_seen = False
+    terminal_status: str | None = None
+    degradation: dict | None = None
+    observed = False
+    if isinstance(events, Sequence) and not isinstance(events, (str, bytes)):
+        for event in events:
+            if not isinstance(event, Mapping):
+                continue
+            if event.get("type") == "progress" and event.get("stage") == "retrieval":
+                data = event.get("data")
+                if isinstance(data, Mapping):
+                    reasons = data.get("degradedReasons")
+                    if isinstance(reasons, list):
+                        degraded_reasons.extend(
+                            item for item in reasons if isinstance(item, str)
+                        )
+                    if "finalContextOrdering" in data:
+                        ordering = data.get("finalContextOrdering")
+                        ordering_seen = True
+                    observed = True
+            elif event.get("type") == "done":
+                result = event.get("result")
+                if isinstance(result, Mapping):
+                    status = result.get("status")
+                    if isinstance(status, str):
+                        terminal_status = status
+                    state = result.get("degradation")
+                    if isinstance(state, Mapping):
+                        degradation = dict(state)
+                    observed = True
+    if terminal_status is None:
+        backend_status = agent.get("backend_status")
+        terminal_status = (
+            backend_status if isinstance(backend_status, str) else "not_started"
+        )
+    ordering_value = ordering if isinstance(ordering, Mapping) else None
+    return {
+        "terminal_status": terminal_status,
+        "degradation": degradation or {},
+        "stage_reasons": degraded_reasons,
+        "ordering": dict(ordering_value) if ordering_value is not None else None,
+        "ordering_seen": ordering_seen,
+        "observed": observed,
+    }
+
+
+def _degradation_classification(
+    terminal_status: str,
+    degradation: Mapping[str, Any],
+    reasons: Sequence[str],
+    ordering: Mapping[str, Any] | None,
+) -> str:
+    if terminal_status == "insufficient_evidence":
+        return (
+            "refusal"
+            if degradation.get("reason") in {"no_results", "no_context_evidence"}
+            else "insufficient_evidence"
+        )
+    if terminal_status == "insufficient_retrieval":
+        if "no_knowledge_scope" in reasons or not degradation.get("unavailableChannels"):
+            return "empty_scope"
+        return "retrieval_outage"
+    if terminal_status == "provider_error":
+        return "provider_error"
+    if terminal_status == "cancelled":
+        return "cancelled"
+    if terminal_status == "completed":
+        source = (ordering or {}).get("source")
+        reason = (ordering or {}).get("reason")
+        if source == "dedicated_rerank":
+            return "rerank_dedicated"
+        if reason == "not_configured":
+            return "rerank_not_configured"
+        if reason == "unavailable" or any(
+            _is_degradation_failure(item) for item in reasons
+        ):
+            return "rerank_failure"
+        return "completed"
+    return terminal_status or "unknown"
+
+
+def _degradation_row(
+    planned: Mapping[str, Any], record: Mapping[str, Any]
+) -> dict:
+    agent = record.get("agent")
+    agent = agent if isinstance(agent, Mapping) else {}
+    evidence = _degradation_sample_evidence(record)
+    reasons = evidence["stage_reasons"]
+    ordering = evidence["ordering"]
+    degradation = evidence["degradation"]
+    terminal_status = evidence["terminal_status"]
+
+    failures: list[str] = []
+    retrieval_degraded = any(_is_degradation_failure(item) for item in reasons) or (
+        (ordering or {}).get("reason") == "unavailable"
+    )
+    if terminal_status == "completed" and retrieval_degraded:
+        if degradation.get("status") != "partial":
+            failures.append("silent_degradation")
+    if (
+        terminal_status == "completed"
+        and (ordering or {}).get("source") == "dedicated_rerank"
+        and any(_is_degradation_failure(item) for item in reasons)
+    ):
+        failures.append("silent_degradation")
+    if (
+        terminal_status == "provider_error"
+        and degradation.get("reason") == "no_cited_claims"
+    ):
+        failures.append("provider_failure_mislabelled")
+
+    return {
+        "sample_id": planned.get("sample_id"),
+        "case_id": planned.get("case_id"),
+        "request": _redact(agent.get("request") or {}),
+        "terminal_status": terminal_status,
+        "degradation": _redact(degradation),
+        "stage_reasons": list(reasons),
+        "ordering": _redact(ordering),
+        "classification": _degradation_classification(
+            terminal_status, degradation, reasons, ordering
+        ),
+        "offline": {
+            "status": "observed" if evidence["observed"] else "not_observed",
+            "degraded": retrieval_degraded,
+            "failures": failures,
+        },
+        "online": {
+            # DR-22-AC03: real online rerank status is owned by the performance
+            # ticket. Until it runs, this column can only be pending.
+            "status": "pending",
+            "evidence": None,
+        },
+    }
+
+
+def _degradation_status_matrix(
+    planned: Sequence[Mapping[str, Any]],
+    records: Mapping[str, Mapping[str, Any]],
+) -> dict:
+    rows: list[dict] = []
+    for item in planned:
+        record = records.get(item.get("sample_id"))
+        if not isinstance(record, Mapping):
+            continue
+        rows.append(_degradation_row(item, record))
+
+    observed = [row for row in rows if row["offline"]["status"] == "observed"]
+    failed_rows = [
+        row
+        for row in rows
+        if any(
+            kind in {"silent_degradation", "provider_failure_mislabelled"}
+            for kind in row["offline"]["failures"]
+        )
+    ]
+    silent_ids = [
+        row["sample_id"]
+        for row in rows
+        if "silent_degradation" in row["offline"]["failures"]
+    ]
+    gate_reasons = [
+        {
+            "kind": kind,
+            "sample_id": row["sample_id"],
+            "detail": (
+                "the answer's retrieval degraded but the terminal reported no "
+                "degradation"
+                if kind == "silent_degradation"
+                else "a provider failure was labelled as a citation failure"
+            ),
+        }
+        for row in failed_rows
+        for kind in row["offline"]["failures"]
+        if kind in {"silent_degradation", "provider_failure_mislabelled"}
+    ]
+    if not observed:
+        gate_status = "incomplete"
+    elif gate_reasons:
+        gate_status = "failed"
+    else:
+        gate_status = "passed"
+    return {
+        "schema": DEGRADATION_MATRIX_SCHEMA,
+        "offline": {
+            "status": "controlled",
+            "results": rows,
+            "counted_as_pass": False,
+        },
+        "online": {
+            "status": "not_run",
+            "results": [],
+            "counted_as_pass": False,
+            "detail": (
+                "real online rerank/provider status is pending and is owned by "
+                "the performance ticket; it is never inferred from this run"
+            ),
+        },
+        "silent_degradation": {
+            "failed": bool(silent_ids),
+            "sample_ids": silent_ids,
+        },
+        "gate": {
+            "status": gate_status,
+            "passed": gate_status == "passed",
+            "counted_as_pass": False,
+            "reasons": gate_reasons,
+        },
+        "counted_as_pass": False,
+    }
+
+
 def build_report(
     *,
     manifest: Mapping[str, Any],
@@ -1014,10 +1251,17 @@ def build_report(
         ),
     }
 
+    # DR-22: the state matrix is projected from retained sample records only.
+    # It keeps the original request, the terminal state and the stage reasons,
+    # and it lists the offline controlled results separately from the online
+    # column (which stays pending/not_run).
+    degradation_status = _degradation_status_matrix(planned, records)
+
     # Incomplete is driven by real execution/record problems, not by product
     # failures. Missing required behaviour, rubric or metric records are also
     # record problems for a baseline.
     reasons = _failure_reasons(scan)
+    reasons.extend(degradation_status["gate"]["reasons"])
     if baseline:
         for sample in sample_projections:
             if sample["behaviour_status"] in {"missing", "not_started", "corrupt", "error", "skipped"}:
@@ -1064,10 +1308,18 @@ def build_report(
         if thresholds_evaluated
         else None
     )
+    degradation_failed = degradation_status["gate"]["status"] == "failed"
     if incomplete:
         status = "incomplete"
     elif baseline:
-        status = "passed" if behaviour_gate and judge_gate else "failed"
+        status = (
+            "passed"
+            if behaviour_gate and judge_gate and not degradation_failed
+            else "failed"
+        )
+    elif degradation_failed:
+        # DR-22: a silent degradation is a failure, never a green run.
+        status = "failed"
     else:
         status = "complete"
     gate = {
@@ -1077,6 +1329,7 @@ def build_report(
         "score": None if incomplete else scan.get("score"),
         "behaviour_passed": behaviour_gate,
         "judge_passed": judge_gate if counts["planned"] else None,
+        "degradation_passed": degradation_status["gate"]["passed"],
         "reasons": reasons,
     }
 
@@ -1211,6 +1464,7 @@ def build_report(
             },
             "capabilities": capabilities_section,
             "latency": latency,
+            "degradation_status": degradation_status,
         },
         "cases": [
             {
@@ -1245,6 +1499,7 @@ def render_markdown(report: Mapping[str, Any]) -> str:
     counts = report.get("counts") or {}
     gate = report.get("gate") or {}
     thresholds = report.get("thresholds") or {}
+    degradation = report.get("sections", {}).get("degradation_status") or {}
     lines = [
         f"# Evaluation baseline report {report.get('run_id')}",
         "",
@@ -1300,6 +1555,27 @@ def render_markdown(report: Mapping[str, Any]) -> str:
             "## Capabilities",
             "",
             json.dumps(report.get("sections", {}).get("capabilities") or {}, ensure_ascii=False),
+            "",
+            "## Degradation status",
+            "",
+            f"- offline controlled: {degradation.get('gate', {}).get('status')}",
+            f"- online: {degradation.get('online', {}).get('status')}",
+            "",
+            "| case | terminal | classification | stage reasons |",
+            "|---|---|---|---|",
+        ]
+    )
+    for row in degradation.get("offline", {}).get("results") or []:
+        lines.append(
+            "| {case} | {terminal} | {classification} | {reasons} |".format(
+                case=row.get("case_id"),
+                terminal=row.get("terminal_status"),
+                classification=row.get("classification"),
+                reasons=", ".join(row.get("stage_reasons") or []),
+            )
+        )
+    lines.extend(
+        [
             "",
             "## Incomplete reasons",
             "",

@@ -83,7 +83,9 @@ test("a search without a dedicated reranker publishes the fused order and says w
 
   assert.equal(outcome.status, "degraded")
   assert.deepEqual(outcome.unavailableChannels, [])
-  assert.deepEqual(outcome.degradationReasons, ["reranker_unavailable"])
+  // DR-22: a missing configuration is not a provider failure; the trace says
+  // which of the two happened.
+  assert.deepEqual(outcome.degradationReasons, ["reranker_not_configured"])
   assert.deepEqual(outcome.ordering, { source: "fused", reason: "not_configured" })
 })
 
@@ -152,5 +154,6 @@ test("a provider failure degrades visibly to the fused order", async () => {
   assert.equal(outcome.status, "degraded")
   assert.deepEqual(outcome.unavailableChannels, [])
   assert.deepEqual(outcome.ordering, { source: "fused", reason: "unavailable" })
+  assert.deepEqual(outcome.degradationReasons, ["reranker_unavailable"])
   assert.deepEqual(outcome.results.map((r) => r.chunk.id), ["a", "b"])
 })
