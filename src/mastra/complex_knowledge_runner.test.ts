@@ -537,6 +537,31 @@ test("DR-22 review: a complex-path rerank failure is a partial answer, not none"
   const unconfigured = await build(["reranker_not_configured"])(makeRunnerInput())
   assert.equal(unconfigured.status, "completed")
   assert.equal(unconfigured.degradation.status, "none")
+
+  // The production loop path (Path A) reports the same reason it receives.
+  const loopFailed = await createComplexKnowledgeMastraRunner({
+    router: makeFakeRouter("complex"),
+    createSearcher: () =>
+      makeFakeSearcher({
+        status: "degraded",
+        results: [result],
+        unavailableChannels: [],
+        degradationReasons: ["reranker_unavailable"],
+      }),
+    assembler: makeFakeAssembler(),
+    validator: makeFakeValidator({ passed: true, hallucination: false, completeness: true }),
+    replanner: makeFakeRePlanner([]),
+    streamAnswerDraft: makeScriptedDraftStream([buildCitedAnswer(evidence)]),
+    complexLoopController: makeFakeComplexLoopController([
+      { sufficient: false, tool: "semantic_lexical_hybrid", args: { query: "policy" } },
+      { sufficient: true },
+    ]),
+  })(makeRunnerInput())
+  assert.equal(loopFailed.status, "completed")
+  assert.equal(loopFailed.degradation.status, "partial")
+  assert.ok(
+    (loopFailed.retrievalTrace.degradedReasons ?? []).includes("reranker_unavailable"),
+  )
 })
 
 test("P1 regression: early complex terminal preserves prepared and planner route trace fields", async () => {
@@ -1757,7 +1782,11 @@ test("PT-02 AC03: with no attachment and no other permitted source the complex r
   assert.equal(stack.calls.length, 1, "the session was read once")
   assert.deepEqual(stack.calls[0].options?.attachments, { sessionId: "sess-with-no-files" })
   assert.deepEqual(output.references, [], "nothing is invented")
-  assert.equal(output.retrievalTrace.degradedReasons, undefined, "an empty session blames no channel")
+  assert.deepEqual(
+    output.retrievalTrace.degradedReasons,
+    ["no_knowledge_scope"],
+    "an empty session blames no channel; only the empty scope is named",
+  )
   assert.equal(draft.prompts.length, 0, "no generation runs over an insufficient retrieval")
 })
 
@@ -1910,7 +1939,11 @@ test("PT-02 AC05: attachment capability missing, source failure and zero results
     makeRunnerInput({ sessionId: "sess-complex", retrievalScope: emptyScope })
   )
   assert.equal(capabilityOutput.status, "insufficient_retrieval")
-  assert.deepEqual(capabilityOutput.retrievalTrace.degradedReasons, undefined, "absent capability blames no channel")
+  assert.deepEqual(
+    capabilityOutput.retrievalTrace.degradedReasons,
+    ["no_knowledge_scope"],
+    "absent attachment capability blames no channel; only the empty scope is named",
+  )
 
   // 2. The attachment source itself fails — that is a named degradation.
   const failingAttachments: AttachmentChannelArg = {
@@ -1950,7 +1983,11 @@ test("PT-02 AC05: attachment capability missing, source failure and zero results
     makeRunnerInput({ sessionId: "sess-complex", retrievalScope: emptyScope })
   )
   assert.equal(emptyResults.status, "insufficient_retrieval")
-  assert.deepEqual(emptyResults.retrievalTrace.degradedReasons, undefined)
+  assert.deepEqual(
+    emptyResults.retrievalTrace.degradedReasons,
+    ["no_knowledge_scope"],
+    "a healthy source with zero results still names only the empty scope",
+  )
 })
 
 test("PT-02 AC05: cancellation, the per-tool deadline and the loop's budgets still bound the complex route", async () => {
@@ -2254,7 +2291,11 @@ test("PT-03 AC05: allowed Web answers an empty scope; missing capability, failur
     makeRunnerInput({ sessionId: "sess-web", retrievalScope: emptyScope, useWeb: true })
   )
   assert.equal(capabilityOutput.status, "insufficient_retrieval")
-  assert.deepEqual(capabilityOutput.retrievalTrace.degradedReasons, undefined)
+  assert.deepEqual(
+    capabilityOutput.retrievalTrace.degradedReasons,
+    ["no_knowledge_scope"],
+    "an empty scope is reported as a scope fact, never as a channel blame",
+  )
   assert.deepEqual(capabilityOutput.references, [])
 
   // 2. Provider failure → the same honest terminal, with the source named.

@@ -97,6 +97,7 @@ export function createComplexLoopToolInvoker(
       const result = invocation.result as {
         results: RetrievalResult[]
         unavailableChannels: RetrievalChannel[]
+        degradationReasons?: string[]
         pages?: Array<{ slug: string; title: string; summary: string }>
         page?: { slug: string; title: string; content: string }
       }
@@ -106,6 +107,9 @@ export function createComplexLoopToolInvoker(
         outcome: "ok" as const,
         results: result.results,
         unavailableChannels: result.unavailableChannels,
+        ...(result.degradationReasons?.length
+          ? { degradationReasons: result.degradationReasons }
+          : {}),
         ...(wiki ? { observation: `Wiki navigation (use original evidence for citations):\n${JSON.stringify(wiki).slice(0, 4000)}` } : {}),
       }
     }

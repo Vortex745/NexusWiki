@@ -783,6 +783,7 @@ export function createComplexKnowledgeMastraRunner(
       resultGroups.push(complexLoopResult.results)
       complexLoopResult.toolCalls.forEach((call) => {
         call.unavailableChannels.forEach((ch) => unavailableChannels.add(ch))
+        call.degradationReasons?.forEach((reason) => retrievalDegradedReasons.add(reason))
       })
 
       // T08: provider-failure means the searcher backend threw a non-Abort
@@ -1446,6 +1447,11 @@ export function createComplexKnowledgeMastraRunner(
           // Update shared budgets for subsequent correction rounds
           // (criterion #2). Skip when the loop call threw (sentinel).
           // Mirrors legacy L1434-L1453.
+          correctionLoopResult.toolCalls.forEach((call) => {
+            call.degradationReasons?.forEach((reason) =>
+              retrievalDegradedReasons.add(reason)
+            )
+          })
           if (
             correctionLoopResult.iterationsExecuted > 0 ||
             correctionLoopResult.toolCallsExecuted > 0

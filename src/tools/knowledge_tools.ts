@@ -43,7 +43,12 @@ async function runKnowledgeSearch(
   tool: "semantic_lexical_hybrid" | "graph_navigation" | "pageindex_hierarchy",
   args: { query: string; seeds?: string[] },
   env: ToolEnvironment
-): Promise<{ results: RetrievalResult[]; unavailableChannels: string[]; resultCount: number }> {
+): Promise<{
+  results: RetrievalResult[]
+  unavailableChannels: string[]
+  resultCount: number
+  degradationReasons?: string[]
+}> {
   const searcher = requireSearcher(env)
   const outcome = await searcher.search(
     { text: args.query },
@@ -71,6 +76,9 @@ async function runKnowledgeSearch(
     results: outcome.results,
     unavailableChannels: outcome.unavailableChannels,
     resultCount: outcome.results.length,
+    ...(outcome.degradationReasons?.length
+      ? { degradationReasons: outcome.degradationReasons }
+      : {}),
   }
 }
 

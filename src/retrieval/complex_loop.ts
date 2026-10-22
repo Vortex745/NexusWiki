@@ -143,6 +143,8 @@ export interface ComplexLoopToolCallTrace {
   resultCount: number
   /** Channels that were unavailable during this call. */
   unavailableChannels: RetrievalChannel[]
+  /** DR-22: non-channel failure reasons reported by the executed search. */
+  degradationReasons?: string[]
   /** Search call duration in ms (0 if duplicate). */
   durationMs: number
   /** Whether observation compression ran after this call. */
@@ -307,6 +309,8 @@ export type ToolInvoker = (
       outcome: "ok"
       results: RetrievalResult[]
       unavailableChannels: RetrievalChannel[]
+      /** DR-22: non-channel failures (e.g. `reranker_unavailable`) from the search. */
+      degradationReasons?: string[]
       observation?: string
     }
   | { outcome: "unknown_tool" | "policy_denied" | "invalid_args" | "timeout" | "failed"; error?: string }
@@ -708,6 +712,9 @@ export async function runComplexLoop(
       outcome = {
         results: invocation.results,
         unavailableChannels: invocation.unavailableChannels,
+        ...(invocation.degradationReasons?.length
+          ? { degradationReasons: invocation.degradationReasons }
+          : {}),
       }
       if (invocation.observation) toolObservations.push(invocation.observation.slice(0, 4000))
     } else {
@@ -817,6 +824,9 @@ export async function runComplexLoop(
       duplicate: false,
       resultCount: outcome.results.length,
       unavailableChannels: outcome.unavailableChannels,
+      ...(outcome.degradationReasons?.length
+        ? { degradationReasons: outcome.degradationReasons }
+        : {}),
       durationMs,
       compressionRan,
       ...(compressionInputTokens !== undefined ? { compressionInputTokens } : {}),
