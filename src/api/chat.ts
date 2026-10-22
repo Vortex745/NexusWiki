@@ -211,10 +211,18 @@ export function createChatRouter(
   })
 
   router.get("/chat/runs/:runId", (req: Request, res: Response) => {
-    const history = traceRepository.getRun(String(req.params.runId))
+    const runId = String(req.params.runId)
     const context = (res.locals.accessContext as AccessContext | undefined) ?? singleTenantAccessContext()
-    // Ownership comes from the directory, even before an assistant/KB lock exists.
-    if (!history || !conversationHistory?.ownsSession(history.sessionId, context.tenantId, context.subjectId)) {
+    // DR-18: a bound conversation exposes only its owner's run. The directory
+    // check still covers runs created before an assistant/KB lock exists.
+    const history = sessionBinder
+      ? traceRepository.getRunForOwner(runId, context.tenantId, context.subjectId)
+      : traceRepository.getRun(runId)
+    if (
+      !history ||
+      (conversationHistory &&
+        !conversationHistory.ownsSession(history.sessionId, context.tenantId, context.subjectId))
+    ) {
       res.status(404).json({ error: "Answer run not found" })
       return
     }

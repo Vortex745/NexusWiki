@@ -342,7 +342,14 @@ export function createDocumentsRouter(options: {
     const docId = String(req.params.docId)
     const chunkId = String(req.params.chunkId)
     const doc = documentRepo.get(docId)
-    if (!doc || (doc.tenantId ?? "default") !== context.tenantId) {
+    // DR-18: the citation obeys the SAME doc-level rule as the version view.
+    // A document invisible to this caller (tenant or group) is the same 404 as
+    // an unknown one — a chunk read must not become a side channel into it.
+    if (
+      !doc ||
+      (doc.tenantId ?? "default") !== context.tenantId ||
+      !groupVisible(doc.allowedGroups ?? [], context)
+    ) {
       res.status(404).json({ error: "document not found" })
       return
     }

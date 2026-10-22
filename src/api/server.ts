@@ -269,6 +269,11 @@ export function createApp(options: {
     // authenticated member (group visibility applies), admin commands
     // re-check the admin scope in-handler.
     app.use("/api/assistants", options.accessMiddleware)
+    // DR-18: the exact document/version/preview/citation reads sit under
+    // /api/documents, not the catalog's /api/knowledge-bases prefix. Without
+    // this gate an unauthenticated request would reach the handlers and fall
+    // back to the deterministic single-tenant context.
+    app.use("/api/documents", options.accessMiddleware)
   }
   app.use(
     "/api",
@@ -425,6 +430,12 @@ export function createApp(options: {
     // Log files are server-host internals: identity first, then the router's
     // own admin check. The opener never accepts a client path.
     app.use("/api/logs", options.managementAccessMiddleware)
+    // DR-18: user-owned conversation history and long-term memory must never
+    // fall back to the deterministic single-tenant identity in enforced mode —
+    // an unauthenticated caller would otherwise read the `default` tenant's
+    // data. Ownership stays per (tenant, subject) inside the stores.
+    app.use("/api/conversations", options.managementAccessMiddleware)
+    app.use("/api/memories", options.managementAccessMiddleware)
   }
   app.use("/api", createLogsRouter())
   // Ticket 01: identity session + local sign-in/registration. /api/auth/* is
