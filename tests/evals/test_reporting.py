@@ -375,5 +375,75 @@ def test_rebuild_rejects_incomplete_metric_membership(tmp_path: Path, damage: st
     assert report["gate"]["judge_passed"] is False
     assert report["cases"][0]["judge"]["score"] is None
     assert any(reason["kind"] == "metric_contract_invalid" for reason in report["gate"]["reasons"])
+    summary = read_json(outcome.run_dir / "summary.json")
+    assert summary["incomplete"] is True
+    assert summary["score"] is None
     assert read_json(outcome.run_dir / "manifest.json")["planned"][0]["expected_metrics"] == {
         "Task Resolution": "applicable", "Grounding": "not_applicable", "Response Conduct": "applicable"}
+
+
+def test_baseline_report_requires_the_frozen_metric_set() -> None:
+    case_name = "hard-06-memory-never-cited"
+    planned = [{
+        "sample_id": "000-hard-06-s0",
+        "case_id": case_name,
+        "sample_index": 0,
+        "metadata": CASES[case_name]["additional_metadata"],
+        "expected_metrics": {
+            "Task Resolution": "applicable",
+            "Grounding": "not_applicable",
+            "Response Conduct": "applicable",
+        },
+    }]
+    record = {
+        "sample_id": "000-hard-06-s0",
+        "case_id": case_name,
+        "sample_index": 0,
+        "session_id": "session",
+        "agent": {"answer": "memory answer", "references": [], "http_status": 200,
+                  "duration_ms": 1, "answer_sha256": "x"},
+        "behaviour": {"status": "passed", "passed": True, "required": True,
+                      "failures": [], "checks": {}},
+        "judge": {"status": "scored", "score": 0.9, "duration_ms": 1, "metrics": [
+            {"metric": "Task Resolution", "applicability": "applicable",
+             "score": 0.9, "error": None},
+            {"metric": "Grounding", "applicability": "not_applicable",
+             "score": None, "error": None},
+        ]},
+    }
+    scan = {
+        "planned": 1, "persisted": 1, "scored": 1, "agent_errors": 0,
+        "judge_errors": 0, "pending": 0, "missing": [], "corrupt": [],
+        "unexpected": [], "incomplete": False, "score": 0.9,
+        "samples": [{"sample_id": "000-hard-06-s0", "case_id": case_name,
+                     "status": "scored", "score": 0.9}],
+        "reasons": [],
+    }
+    rubric = {"version": RUBRIC_VERSION, "digest": "digest", "threshold": 0.5}
+    report = reporting.build_report(
+        manifest={"run": {"baseline": True, "judge": "fake"}, "dataset": {},
+                  "selection": {"cases": [case_name], "samples_per_case": 1}},
+        environment={
+            "suite_version": "test",
+            "configuration": {
+                "capabilities": {"rerank": {"status": "not_configured",
+                                            "counted_as_pass": False}},
+                "rubric": rubric,
+                "cache": {"reading": "disabled", "writing": "disabled", "enabled": False},
+                "models": {},
+            },
+        },
+        planned=planned,
+        records={"000-hard-06-s0": record},
+        scan=scan,
+        baseline=True,
+        rubric=rubric,
+    )
+    assert report["gate"]["incomplete"] is True
+    assert report["gate"]["judge_passed"] is False
+    assert report["gate"]["score"] is None
+    assert report["cases"][0]["judge"]["score"] is None
+    assert any(
+        reason["kind"] == "metric_contract_invalid"
+        for reason in report["gate"]["reasons"]
+    )

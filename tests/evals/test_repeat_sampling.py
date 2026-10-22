@@ -252,22 +252,37 @@ def test_campaign_rejects_model_endpoint_timeout_and_budget_drift_before_samplin
         with pytest.raises(ValueError, match="model configuration differs"):
             repeat_sampling.run_campaign(baseline.run_dir, tmp_path / "campaign-model",
                 judge=judge, base_url=backend.base_url, password="stub-password")
+        assert not (tmp_path / "campaign-model").exists()
         monkeypatch.setenv("OPENAI_CHAT_MODEL", "frozen-model")
 
         monkeypatch.setenv("DEEPEVAL_RETRY_MAX_ATTEMPTS", "9")
         with pytest.raises(ValueError, match="judge budget differs"):
             repeat_sampling.run_campaign(baseline.run_dir, tmp_path / "campaign-budget",
                 judge=judge, base_url=backend.base_url, password="stub-password")
+        assert not (tmp_path / "campaign-budget").exists()
         monkeypatch.delenv("DEEPEVAL_RETRY_MAX_ATTEMPTS")
+
+        baseline_status = read_json(
+            baseline.run_dir / "environment.json"
+        )["configuration"]["capabilities"]["rerank"]["status"]
+        opposite = "configured_not_exercised" if baseline_status == "not_configured" else "not_configured"
+        monkeypatch.setattr(run_suite, "capability_snapshot", lambda: {
+            "rerank": {"status": opposite, "counted_as_pass": False, "detail": "changed"}})
+        with pytest.raises(ValueError, match="capabilities differ"):
+            repeat_sampling.run_campaign(baseline.run_dir, tmp_path / "campaign-capability",
+                judge=judge, base_url=backend.base_url, password="stub-password")
+        assert not (tmp_path / "campaign-capability").exists()
 
         with pytest.raises(ValueError, match="base URL differs"):
             repeat_sampling.run_campaign(baseline.run_dir, tmp_path / "campaign-url",
                 judge=judge, base_url="http://127.0.0.1:9", password="stub-password")
+        assert not (tmp_path / "campaign-url").exists()
 
         with pytest.raises(ValueError, match="chat timeout differs"):
             repeat_sampling.run_campaign(baseline.run_dir, tmp_path / "campaign-timeout",
                 judge=judge, base_url=backend.base_url, password="stub-password",
                 chat_timeout_s=frozen_timeout + 1)
+        assert not (tmp_path / "campaign-timeout").exists()
 
         assert backend.chat_requests == calls
 

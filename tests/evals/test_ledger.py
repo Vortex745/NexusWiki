@@ -186,6 +186,14 @@ def all_run_text(run_dir: Path) -> str:
     return "\n".join(chunks)
 
 
+def test_legacy_plan_does_not_import_the_deepeval_metrics_module(monkeypatch) -> None:
+    monkeypatch.setitem(sys.modules, "metrics", None)
+    planned = run_suite.build_plan(
+        [{"name": "legacy", "input": "question-a", "scope": [], "metadata": {}}], 1
+    )
+    assert "expected_metrics" not in planned[0]
+
+
 def test_success_payload_is_scrubbed_before_persistence_and_judging(tmp_path: Path, monkeypatch) -> None:
     secret = "environment-secret-canary-9481"
     monkeypatch.setenv("DR_TEST_API_KEY", secret)
@@ -201,7 +209,10 @@ def test_success_payload_is_scrubbed_before_persistence_and_judging(tmp_path: Pa
         backend.server.extra_payload = {
             "debug": {"api_key": "nested-api-canary", "headers": {
                 "Authorization": "Bearer nested-auth-canary", "Cookie": "session=nested-cookie-canary"},
-                "trace": secret},
+                "trace": secret, "token": "nested-token-canary",
+                "private_key": "nested-private-key-canary", "jwt": "nested-jwt-canary",
+                "sessionToken": "nested-session-token-canary",
+                "idToken": "nested-id-token-canary"},
             "references": [{"id": "ref", "title": "Doc", "excerpt": "evidence",
                             "metadata": {"client_secret": "nested-secret-canary"}}],
         }
@@ -214,9 +225,14 @@ def test_success_payload_is_scrubbed_before_persistence_and_judging(tmp_path: Pa
     assert sample["agent"]["answer_sha256"] == hashlib.sha256(b"answer-a").hexdigest()
     assert sample["agent"]["raw_payload"]["debug"]["api_key"] == "[REDACTED]"
     assert sample["agent"]["references"][0]["metadata"]["client_secret"] == "[REDACTED]"
+    for key in ("token", "private_key", "jwt", "sessionToken", "idToken"):
+        assert sample["agent"]["raw_payload"]["debug"][key] == "[REDACTED]"
     artifacts = all_run_text(outcome.run_dir)
     for canary in (secret, TOKEN, "nested-api-canary", "nested-auth-canary",
-                   "nested-cookie-canary", "nested-secret-canary"):
+                   "nested-cookie-canary", "nested-secret-canary",
+                   "nested-token-canary", "nested-private-key-canary",
+                   "nested-jwt-canary", "nested-session-token-canary",
+                   "nested-id-token-canary"):
         assert canary not in artifacts
 
 

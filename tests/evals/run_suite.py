@@ -553,9 +553,13 @@ def _finish_report(outcome: RunOutcome, run_ledger: ledger.RunLedger) -> None:
         if outcome.report["gate"]["incomplete"] or outcome.report["gate"]["status"] == "failed":
             outcome.exit_code = EXIT_INCOMPLETE
         if outcome.report["gate"]["incomplete"]:
+            reasons = outcome.report["gate"].get("reasons") or []
             outcome.summary = dict(outcome.summary or {})
-            outcome.summary.update(incomplete=True, score=None)
-    except (OSError, ValueError, TypeError) as exc:
+            outcome.summary.update(incomplete=True, score=None, reasons=reasons)
+            outcome.summary = run_ledger.override_summary(
+                incomplete=True, score=None, reasons=reasons
+            )
+    except (OSError, ValueError, TypeError, ledger.SummaryError) as exc:
         outcome.exit_code = EXIT_FATAL
         outcome.error = ledger.redact_text(f"cannot write report: {exc}")
         if outcome.summary is not None:
@@ -664,8 +668,6 @@ class ChatClient:
 def build_plan(
     selected: Sequence[dict], samples_per_case: int
 ) -> list[dict]:
-    import metrics as metrics_module
-
     planned: list[dict] = []
     for ordinal, item in enumerate(selected):
         for index in range(samples_per_case):
@@ -682,8 +684,10 @@ def build_plan(
                 "expected_output": item.get("expected_output"),
             }
             # Only v2 cases have a frozen per-metric judge contract; legacy
-            # ad-hoc runs keep their previous single-score shape.
+            # ad-hoc runs keep their previous single-score shape and must not
+            # need the DeepEval-backed metrics module at all.
             if _is_v2_metadata(metadata):
+                import metrics as metrics_module
                 entry["expected_metrics"] = metrics_module.expected_metric_applicability(
                     metadata
                 )

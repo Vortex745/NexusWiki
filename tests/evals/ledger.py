@@ -52,12 +52,14 @@ SAMPLE_STATUSES = frozenset(
 JUDGE_STATUSES = frozenset({"pending", "scored", "error", "not_attempted", "skipped"})
 
 SENSITIVE_ENV_NAME = re.compile(
-    r"(API_?KEY|ACCESS_?TOKEN|AUTH_?TOKEN|SECRET|PASSWORD|CREDENTIAL|COOKIE)",
+    r"(API_?KEY|ACCESS_?TOKEN|AUTH_?TOKEN|PRIVATE_?KEY|JWT|SECRET|PASSWORD|CREDENTIAL|COOKIE)",
     re.IGNORECASE,
 )
 SENSITIVE_FIELD_NAME = re.compile(
     r"(?i)(api[_-]?key|access[_-]?token|auth[_-]?token|refresh[_-]?token|"
-    r"authorization|cookie|client[_-]?secret|secret|password|credential)"
+    r"id[_-]?token|session[_-]?token|private[_-]?key|"
+    r"authorization|cookie|client[_-]?secret|secret|password|credential|"
+    r"\bjwt\b|\bbearer\b|(^|[_-])token$)"
 )
 
 # Headers and key/value pairs that must never reach an artifact. Applied to
@@ -780,10 +782,8 @@ class RunLedger:
             "samples": report["samples"],
         }
 
-    def finalize(self) -> dict:
-        """Build and write the single-writer summary, then read it back."""
-        report = self.scan()
-        payload = self._summary_payload(report)
+    def _write_summary(self, payload: Mapping[str, Any]) -> dict:
+        """Atomically publish one summary payload under the single-writer lock."""
         lock = portalocker.Lock(
             str(self.run_dir / "summary.lock"),
             mode="a",
@@ -823,6 +823,36 @@ class RunLedger:
                 lock.release()
             except Exception:
                 pass
+
+    def finalize(self) -> dict:
+        """Build and write the single-writer summary, then read it back."""
+        report = self.scan()
+        return self._write_summary(self._summary_payload(report))
+
+    def override_summary(self, *, incomplete: bool, score, reasons=None) -> dict:
+        """Persist a report-derived completeness override for the summary.
+
+        The report validates requirements the sample scan cannot see (for
+        example exact per-case metric membership). Without this the durable
+        summary would still claim a complete run after a rebuild.
+        """
+        try:
+            payload = _read_json(self.summary_path)
+        except OSError as exc:
+            raise SummaryError(
+                f"cannot read summary for run {self.run_id!r} at "
+                f"{self.summary_path}: {type(exc).__name__}: {exc}"
+            ) from exc
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise SummaryError(
+                f"summary for run {self.run_id!r} is not valid JSON: {exc}"
+            ) from exc
+        payload["incomplete"] = bool(incomplete)
+        payload["score"] = score
+        payload["generated_at"] = utc_now()
+        if reasons is not None:
+            payload["reasons"] = list(reasons)
+        return self._write_summary(payload)
 
     def write_run_state(self, state: str, *, error: str | None = None, score=None) -> None:
         payload = {
