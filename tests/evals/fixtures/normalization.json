@@ -1,0 +1,153 @@
+{
+  "schema": "eval-normalization-examples",
+  "version": 1,
+  "description": "Shared normalization and containment examples for the v2 release contract. TypeScript (scripts/release-quality-gate.ts) and Python (tests/evals/contracts.py) both load this file and must produce the listed results. Normalization is exactly: Unicode NFKC, lowercase, collapse whitespace runs to one space (leading/trailing runs are not trimmed). Numbers, units and negation characters are preserved; fullwidth punctuation is compatibility-normalized by NFKC. Containment is substring matching over normalized text. Substring matching cannot prove general semantics: the reviewed finite prohibited assertions and the semantic judge remain responsible for contradictions not listed here.",
+  "normalize": [
+    {
+      "name": "nfkc-fullwidth-ascii",
+      "input": "ＡＢＣ１２３",
+      "expected": "abc123"
+    },
+    {
+      "name": "nfkc-ideographic-space",
+      "input": "甲　乙",
+      "expected": "甲 乙"
+    },
+    {
+      "name": "nfkc-compatibility-characters",
+      "input": "Ⅳ．①",
+      "expected": "iv.1"
+    },
+    {
+      "name": "nfkc-ligature",
+      "input": "ﬁle",
+      "expected": "file"
+    },
+    {
+      "name": "whitespace-runs-collapse",
+      "input": "  多条\t空白\n行  ",
+      "expected": " 多条 空白 行 "
+    },
+    {
+      "name": "nbsp-collapses-to-space",
+      "input": "a\u00a0\u00a0b",
+      "expected": "a b"
+    },
+    {
+      "name": "ascii-case-folds",
+      "input": "AccessContext",
+      "expected": "accesscontext"
+    },
+    {
+      "name": "fullwidth-digits-become-ascii",
+      "input": "３０ 个自然日",
+      "expected": "30 个自然日"
+    },
+    {
+      "name": "units-survive-normalization",
+      "input": "90 天；24 小时；2 天",
+      "expected": "90 天;24 小时;2 天"
+    },
+    {
+      "name": "negation-survives-normalization",
+      "input": "不影响，不会精排，未配置，不是 30 个自然日",
+      "expected": "不影响,不会精排,未配置,不是 30 个自然日"
+    },
+    {
+      "name": "digits-and-units-not-stripped",
+      "input": "10 个工作日，5000 元，24 小时",
+      "expected": "10 个工作日,5000 元,24 小时"
+    },
+    {
+      "name": "mixed-nfkc-case-whitespace",
+      "input": "  ＡccessContext\n\t不影响  ",
+      "expected": " accesscontext 不影响 "
+    }
+  ],
+  "contains": [
+    {
+      "name": "exact-number-and-unit",
+      "haystack": "标准商品自签收之日起 30 个自然日内可申请退货。",
+      "needle": "30 个自然日",
+      "expected": true
+    },
+    {
+      "name": "wrong-number",
+      "haystack": "标准商品自签收之日起 31 个自然日内可申请退货。",
+      "needle": "30 个自然日",
+      "expected": false
+    },
+    {
+      "name": "wrong-unit",
+      "haystack": "标准商品自签收之日起 30 个工作日内可申请退货。",
+      "needle": "30 个自然日",
+      "expected": false
+    },
+    {
+      "name": "hours-unit-present",
+      "haystack": "四级安全事件需要在 24 小时内上报。",
+      "needle": "24 小时",
+      "expected": true
+    },
+    {
+      "name": "minutes-unit-is-not-hours",
+      "haystack": "四级安全事件需要在 24 分钟内上报。",
+      "needle": "24 小时",
+      "expected": false
+    },
+    {
+      "name": "negated-conclusion-present",
+      "haystack": "未配置 Langfuse 不影响功能。",
+      "needle": "不影响",
+      "expected": true
+    },
+    {
+      "name": "affirmative-conclusion-does-not-match-negation",
+      "haystack": "未配置 Langfuse 会影响功能。",
+      "needle": "不影响",
+      "expected": false
+    },
+    {
+      "name": "case-folded-answer-point",
+      "haystack": "租户身份来自服务端解析的 accessContext。",
+      "needle": "AccessContext",
+      "expected": true
+    },
+    {
+      "name": "fullwidth-digits-match",
+      "haystack": "退货期为 ３０ 个自然日。",
+      "needle": "30 个自然日",
+      "expected": true
+    },
+    {
+      "name": "space-inside-a-unit-is-not-removed",
+      "haystack": "退货期为 30 个自然日。",
+      "needle": "30个自然日",
+      "expected": false
+    },
+    {
+      "name": "whitespace-collapses-across-lines",
+      "haystack": "标准答案：\n  30 个自然日",
+      "needle": "30 个自然日",
+      "expected": true
+    },
+    {
+      "name": "case10-prohibition-absent-in-correct-sample",
+      "haystack": "文档未说明未配置时的行为，故此处不作推断。",
+      "needle": "未配置重排因此不会精排",
+      "expected": false
+    },
+    {
+      "name": "case10-prohibition-present",
+      "haystack": "未配置重排因此不会精排。",
+      "needle": "未配置重排因此不会精排",
+      "expected": true
+    },
+    {
+      "name": "case10-prohibition-punctuation-variant",
+      "haystack": "没有配置重排，因此不会精排。",
+      "needle": "没有配置重排，因此不会精排",
+      "expected": true
+    }
+  ]
+}
