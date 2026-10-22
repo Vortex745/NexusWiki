@@ -14,7 +14,7 @@
 
 import assert from "node:assert/strict"
 import test from "node:test"
-import { mkdtempSync, rmSync } from "node:fs"
+import { mkdtempSync, readFileSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join, resolve } from "node:path"
 import type { AddressInfo } from "node:net"
@@ -32,7 +32,9 @@ import {
   GROUP_RULES,
   MEASURED_ROUNDS,
   MEASURED_SAMPLE_COUNT,
+  MIN_CONCURRENT3_NON_FAQ_KNOWLEDGE_SAMPLES,
   MIN_NON_FAQ_KNOWLEDGE_SAMPLES,
+  P95_TARGET_MS,
   WARMUP_ROUNDS,
   buildLatencyManifest,
   buildLatencyPlan,
@@ -40,6 +42,7 @@ import {
   classifyLatencyCase,
   loadLatencyDataset,
   nearestRankPercentile,
+  phaseMarks,
   runLatencySuite,
   type LatencySampleRecord,
   type PlannedLatencySample,
@@ -69,6 +72,14 @@ function recordFor(
     terminalStatus: "completed",
     phases: [],
     error: null,
+    evidence: {
+      retrievalObserved: true,
+      degradedReasons: [],
+      ordering: null,
+      orderingSeen: false,
+      rerankModel: null,
+      degradation: { status: "none", reason: null, unavailableChannels: [] },
+    },
     writtenAt: "2026-01-01T00:00:00.100Z",
     ...overrides,
   }
@@ -152,15 +163,33 @@ test("the fixed plan is 20 warmup, 100 measured and 20 separate concurrent-3 sam
 // report derivation, denominators and gate
 // ---------------------------------------------------------------------------
 
-function manifestFor(dataset: ReturnType<typeof loadLatencyDataset>) {
+function manifestFor(
+  dataset: ReturnType<typeof loadLatencyDataset>,
+  options: {
+    rerankConfigured?: boolean
+    rerankModel?: string | null
+    stackStart?: "cold" | "warm" | "unspecified"
+  } = {}
+) {
   return buildLatencyManifest({
     runId: "test-run",
     createdAt: "2026-01-01T00:00:00.000Z",
     dataset,
-    models: { chat: "test-chat", embedding: "test-embedding", rerank: null, decision: "chat" },
-    capabilities: { chat: "http-json", rerank: null },
+    models: {
+      chat: "test-chat",
+      embedding: "test-embedding",
+      rerank: options.rerankModel ?? null,
+      decision: "chat",
+    },
+    capabilities: {
+      chat: "http-json",
+      rerank: options.rerankConfigured
+        ? { configured: true, exercised: false, countedAsPass: false }
+        : null,
+    },
     baseUrl: "http://localhost:3000",
     timeoutMs: 30_000,
+    stackStart: options.stackStart ?? "unspecified",
   })
 }
 
@@ -430,6 +459,19 @@ test("the operator command schedules and counts every planned sample over real C
           sample.phase !== "concurrent3" || sample.concurrency === 3
       )
     )
+    // DR-24: every real HTTP sample retains its own degradation/ordering
+    // evidence and per-stage durations, so a silent degradation is checkable.
+    assert.ok(report.samples.every((sample) => sample.evidence.retrievalObserved))
+    assert.ok(
+      report.samples.every(
+        (sample) => sample.evidence.degradation?.status === "none"
+      )
+    )
+    assert.ok(
+      report.samples.every((sample) =>
+        sample.phases.every((phase) => phase.cumulativeMs >= phase.durationMs)
+      )
+    )
   } finally {
     await close()
     rmSync(runsRoot, { recursive: true, force: true })
@@ -492,6 +534,292 @@ test("a controlled timeout and provider failure fail the run while every origina
     )
   } finally {
     await close()
+    rmSync(runsRoot, { recursive: true, force: true })
+  }
+})
+
+// ---------------------------------------------------------------------------
+// DR-24: the offline acceptance scaffolding for the fixed-load latency gate
+// ---------------------------------------------------------------------------
+
+test("DR-24 AC03: four slow answers put the single-concurrency p95 over 30 s while the mean stays under it", () => {
+  const dataset = loadLatencyDataset(GOLDEN)
+  const plan = buildLatencyPlan(dataset.cases)
+  const measuredNonFaq = plan.filter(
+    (sample) => sample.phase === "measured" && sample.group === "non_faq_knowledge"
+  )
+  const slow = new Set(measuredNonFaq.slice(-4).map((sample) => sample.sampleId))
+  const records = completeRecords(plan, (sample) =>
+    slow.has(sample.sampleId) ? 40_000 : 10_000
+  )
+  const report = buildLatencyReport({
+    manifest: manifestFor(dataset),
+    planned: plan,
+    records,
+  })
+  const durations = report.groups.single.non_faq_knowledge.rawDurationsMs
+  const mean = durations.reduce((sum, value) => sum + value, 0) / durations.length
+  // The mean is comfortably under the target; only the tail decides the gate.
+  assert.ok(mean < P95_TARGET_MS)
+  assert.equal(mean, 11_714.285714285714)
+  assert.equal(report.groups.single.non_faq_knowledge.p95Ms, 40_000)
+  assert.equal(report.targets.p95.thresholdMs, 30_000)
+  assert.equal(report.targets.p95.metric, "nearest-rank p95")
+  assert.equal(report.targets.p95.measuredP95Ms, 40_000)
+  assert.equal(report.targets.p95.withinTarget, false)
+  assert.match(report.targets.p95.scope, /single-concurrency non-FAQ knowledge/i)
+  assert.equal(report.gate.passed, false)
+  assert.equal(report.gate.status, "failed")
+  assert.ok(
+    report.gate.reasons.some(
+      (reason) => reason.kind === "p95_over_target" && /40000/.test(reason.detail)
+    )
+  )
+})
+
+test("DR-24 AC03: a p95 exactly at the 30 s target passes and one millisecond more fails", () => {
+  const dataset = loadLatencyDataset(GOLDEN)
+  const plan = buildLatencyPlan(dataset.cases)
+  const durationFor = (limit: number) => (sample: PlannedLatencySample) =>
+    sample.phase === "measured" && sample.group === "non_faq_knowledge"
+      ? limit
+      : 1_000
+  const atTarget = buildLatencyReport({
+    manifest: manifestFor(dataset),
+    planned: plan,
+    records: completeRecords(plan, durationFor(P95_TARGET_MS)),
+  })
+  assert.equal(atTarget.targets.p95.measuredP95Ms, 30_000)
+  assert.equal(atTarget.targets.p95.withinTarget, true)
+  assert.equal(atTarget.gate.passed, true)
+  const overTarget = buildLatencyReport({
+    manifest: manifestFor(dataset),
+    planned: plan,
+    records: completeRecords(plan, durationFor(P95_TARGET_MS + 1)),
+  })
+  assert.equal(overTarget.targets.p95.withinTarget, false)
+  assert.equal(overTarget.gate.passed, false)
+  assert.ok(overTarget.gate.reasons.some((reason) => reason.kind === "p95_over_target"))
+})
+
+test("DR-24 AC04: a completed answer whose retrieval says reranker_unavailable is a silent degradation failure", () => {
+  const dataset = loadLatencyDataset(GOLDEN)
+  const plan = buildLatencyPlan(dataset.cases)
+  const records = completeRecords(plan, () => 100)
+  const sample = plan.find(
+    (item) => item.phase === "measured" && item.group === "non_faq_knowledge"
+  )!
+  records[sample.sampleId] = recordFor(sample, 100, {
+    terminalStatus: "completed",
+    evidence: {
+      retrievalObserved: true,
+      degradedReasons: ["reranker_unavailable"],
+      ordering: { source: "fused", reason: "unavailable" },
+      orderingSeen: true,
+      rerankModel: null,
+      degradation: { status: "none", reason: null, unavailableChannels: [] },
+    },
+  })
+  const report = buildLatencyReport({
+    manifest: manifestFor(dataset),
+    planned: plan,
+    records,
+  })
+  assert.equal(report.gate.passed, false)
+  assert.equal(report.gate.status, "failed")
+  assert.ok(
+    report.gate.reasons.some(
+      (reason) =>
+        reason.kind === "silent_degradation" && reason.sampleId === sample.sampleId
+    )
+  )
+  const stored = report.samples.find((item) => item.sampleId === sample.sampleId)!
+  assert.deepEqual(stored.evidence.degradedReasons, ["reranker_unavailable"])
+  assert.deepEqual(stored.evidence.ordering, { source: "fused", reason: "unavailable" })
+  assert.ok(report.evidence.silentDegradationSampleIds.includes(sample.sampleId))
+})
+
+test("DR-24 AC04: Rerank-on degradation fails the run while a missing capability is not a degradation", () => {
+  const dataset = loadLatencyDataset(GOLDEN)
+  const plan = buildLatencyPlan(dataset.cases)
+  const failing = plan.find(
+    (item) => item.phase === "measured" && item.group === "non_faq_knowledge"
+  )!
+  const degradedRecords = completeRecords(plan, () => 100)
+  degradedRecords[failing.sampleId] = recordFor(failing, 100, {
+    evidence: {
+      retrievalObserved: true,
+      degradedReasons: ["reranker_unavailable"],
+      ordering: { source: "fused", reason: "unavailable" },
+      orderingSeen: true,
+      rerankModel: "test-rerank",
+      degradation: { status: "partial", reason: null, unavailableChannels: [] },
+    },
+  })
+  const degraded = buildLatencyReport({
+    manifest: manifestFor(dataset, {
+      rerankConfigured: true,
+      rerankModel: "test-rerank",
+    }),
+    planned: plan,
+    records: degradedRecords,
+  })
+  assert.equal(degraded.gate.passed, false)
+  assert.ok(
+    degraded.gate.reasons.some(
+      (reason) => reason.kind === "rerank_degraded" && reason.sampleId === failing.sampleId
+    )
+  )
+  assert.equal(degraded.capabilities.rerank.status, "degraded")
+  assert.equal(degraded.capabilities.rerank.countedAsPass, false)
+
+  // The unconfigured case: an absent capability is reported, never degraded
+  // and never counted as coverage.
+  const unconfiguredRecords = completeRecords(plan, () => 100)
+  for (const sample of plan) {
+    unconfiguredRecords[sample.sampleId] = recordFor(sample, 100, {
+      evidence: {
+        retrievalObserved: true,
+        degradedReasons: ["reranker_not_configured"],
+        ordering: { source: "fused", reason: "not_configured" },
+        orderingSeen: true,
+        rerankModel: null,
+        degradation: { status: "none", reason: null, unavailableChannels: [] },
+      },
+    })
+  }
+  const unconfigured = buildLatencyReport({
+    manifest: manifestFor(dataset),
+    planned: plan,
+    records: unconfiguredRecords,
+  })
+  assert.equal(unconfigured.gate.passed, true)
+  assert.equal(unconfigured.capabilities.rerank.status, "not_configured")
+  assert.equal(unconfigured.capabilities.rerank.countedAsPass, false)
+})
+
+test("DR-24 AC06: concurrency-3 declares its own sample rule and its shortfall is never a pass", () => {
+  const dataset = loadLatencyDataset(GOLDEN)
+  const plan = buildLatencyPlan(dataset.cases)
+  const records = completeRecords(plan, () => 100)
+  const report = buildLatencyReport({
+    manifest: manifestFor(dataset),
+    planned: plan,
+    records,
+  })
+  assert.equal(report.groups.single.non_faq_knowledge.minimumN, 70)
+  assert.match(report.groups.single.non_faq_knowledge.nRule, /70/)
+  assert.equal(
+    report.groups.concurrent3.non_faq_knowledge.minimumN,
+    MIN_CONCURRENT3_NON_FAQ_KNOWLEDGE_SAMPLES
+  )
+  assert.equal(MIN_CONCURRENT3_NON_FAQ_KNOWLEDGE_SAMPLES, 14)
+  assert.match(report.groups.concurrent3.non_faq_knowledge.nRule, /independent/i)
+  assert.equal(report.denominators.single.non_faq_knowledge.minimum, 70)
+  assert.equal(report.denominators.concurrent3.non_faq_knowledge.minimum, 14)
+  assert.equal(report.denominators.concurrent3.non_faq_knowledge.mixedWithSingle, false)
+
+  const removed = plan.find(
+    (sample) => sample.phase === "concurrent3" && sample.group === "non_faq_knowledge"
+  )!
+  const short = { ...records }
+  delete short[removed.sampleId]
+  const shortReport = buildLatencyReport({
+    manifest: manifestFor(dataset),
+    planned: plan,
+    records: short,
+    missing: [removed.sampleId],
+  })
+  assert.equal(shortReport.gate.passed, false)
+  assert.ok(
+    shortReport.gate.reasons.some(
+      (reason) =>
+        reason.kind === "insufficient_n" && /concurrent-3/.test(reason.detail)
+    )
+  )
+})
+
+test("DR-24 AC07: phase marks publish per-stage durations from the run's cumulative clock", () => {
+  const marks = phaseMarks([
+    { type: "progress", stage: "route", status: "completed", durationMs: 5 },
+    { type: "progress", stage: "retrieval", status: "completed", durationMs: 100 },
+    { type: "progress", stage: "validation", status: "completed", durationMs: 260 },
+    { type: "done", stage: "done", status: "completed", durationMs: 300 },
+  ])
+  assert.deepEqual(marks, [
+    { stage: "route", status: "completed", cumulativeMs: 5, durationMs: 5 },
+    { stage: "retrieval", status: "completed", cumulativeMs: 100, durationMs: 95 },
+    { stage: "validation", status: "completed", cumulativeMs: 260, durationMs: 160 },
+    { stage: "done", status: "completed", cumulativeMs: 300, durationMs: 40 },
+  ])
+  // A correction round re-emits an earlier stage later; the last mark wins and
+  // the delta still covers the whole stage rather than a single attempt.
+  const replay = phaseMarks([
+    { type: "progress", stage: "retrieval", status: "completed", durationMs: 10 },
+    { type: "progress", stage: "retrieval", status: "completed", durationMs: 120 },
+    { type: "done", stage: "done", status: "completed", durationMs: 200 },
+  ])
+  assert.deepEqual(replay, [
+    { stage: "retrieval", status: "completed", cumulativeMs: 120, durationMs: 120 },
+    { stage: "done", status: "completed", cumulativeMs: 200, durationMs: 80 },
+  ])
+})
+
+test("DR-24 AC07: the manifest publishes corpus, models, capability, concurrency and warm/cold", () => {
+  const dataset = loadLatencyDataset(GOLDEN)
+  const manifest = manifestFor(dataset, { stackStart: "cold" })
+  assert.equal(manifest.corpus.sha256, dataset.sha256)
+  assert.deepEqual(manifest.corpus.groups, {
+    faq_direct: 1,
+    non_faq_knowledge: 14,
+    other: 5,
+  })
+  assert.equal(manifest.corpus.frozen, true)
+  assert.equal(manifest.stack.startState, "cold")
+  assert.equal(manifest.warmup.excluded, true)
+  assert.equal(manifest.warmup.rounds, WARMUP_ROUNDS)
+  assert.equal(manifest.warmup.samples, 20)
+  assert.equal(manifest.concurrency.concurrent3Rounds, 1)
+  assert.equal(manifest.concurrency.concurrent3SamplesPerRound, CASES_PER_ROUND)
+  assert.equal(manifest.concurrency.statisticsSeparate, true)
+  assert.equal(manifest.models.chat, "test-chat")
+  assert.equal(manifest.configuration.p95TargetMs, P95_TARGET_MS)
+  assert.match(manifest.phaseTiming.definition, /delta/i)
+  assert.equal(manifest.phaseTiming.durationSemantics, "per-stage delta of the run's cumulative clock")
+})
+
+test("DR-24 AC05: an unavailable stack produces a fail-closed report and never a pass", async () => {
+  const runsRoot = tempRoot()
+  try {
+    const outcome = await runLatencySuite({
+      baseUrl: "http://127.0.0.1:9",
+      runsRoot,
+      password: "unused-local-password",
+      env: {},
+      fetchImpl: (async () => {
+        throw new Error("connect ECONNREFUSED 127.0.0.1:9")
+      }) as unknown as typeof fetch,
+    })
+    assert.equal(outcome.exitCode, 1)
+    const report = outcome.report
+    assert.ok(report)
+    assert.equal(report.gate.passed, false)
+    assert.equal(report.gate.status, "incomplete")
+    assert.ok(
+      report.gate.reasons.some(
+        (reason) =>
+          reason.kind === "stack_unavailable" && /ECONNREFUSED/.test(reason.detail)
+      )
+    )
+    assert.equal(report.counts.planned, 140)
+    assert.equal(report.counts.recorded, 0)
+    assert.equal(report.acceptance.online.p95, "pending")
+    assert.ok(outcome.runDir)
+    const written = JSON.parse(
+      readFileSync(join(outcome.runDir, "report.json"), "utf8")
+    ) as { gate: { passed: boolean } }
+    assert.equal(written.gate.passed, false)
+  } finally {
     rmSync(runsRoot, { recursive: true, force: true })
   }
 })

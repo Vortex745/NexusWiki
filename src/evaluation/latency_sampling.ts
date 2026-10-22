@@ -1,5 +1,5 @@
 /**
- * DR-23 — the operator-run latency measurement command.
+ * DR-23 / DR-24 — the operator-run latency measurement command.
  *
  * What this owns:
  *   - the fixed demo plan: one complete twenty-case warmup (explicitly
@@ -9,21 +9,26 @@
  *     atomically written record per planned sample, and a report derived only
  *     from those records;
  *   - nearest-rank p50/p95 over the raw client-side chat durations, with the
- *     grouping rule and denominator published for every group;
- *   - a fail-closed gate: any timeout/execution error or missing/not-started
- *     sample fails the performance run while its original record and real
- *     wait stay in the report;
+ *     grouping rule and denominator published for every group, and an explicit
+ *     `p95 <= 30 s` failure threshold for single-concurrency non-FAQ knowledge
+ *     answers (a mean is never a substitute);
+ *   - per-sample degradation and ordering evidence read from the retained
+ *     events, cross-checked against the DR-22 degradation matrix, so a silent
+ *     degradation fails instead of disappearing into a green run;
+ *   - a fail-closed gate: an unavailable stack, any timeout/execution error or
+ *     missing/not-started sample fails the performance run while its original
+ *     record and real wait stay in the report;
  *   - separation of FAQ/direct, non-FAQ knowledge answers and other cases,
- *     and of single concurrency vs concurrent-3.
+ *     and of single concurrency vs concurrent-3, each with its own declared
+ *     minimum sample count.
  *
  * What this deliberately does not own:
  *   - any judge call. Latency is the wall time from sending POST /api/chat to
  *     receiving the JSON body carrying the terminal done event; judge time
  *     can never enter it because no judge runs here.
- *   - the real-provider 30 s p95 target. That needs the online stack and is
- *     evaluated by DR-24; this command only proves scheduling, counting,
- *     persistence, recomputation and the failure contract over a controlled
- *     local HTTP service.
+ *   - online acceptance. The report always marks the real-provider p95,
+ *     degradation and Rerank-on evidence as pending; G-P0 and G-RERANK-LIVE
+ *     are decided by the online run, never by this command's local scaffold.
  */
 
 import { createHash, randomUUID } from "node:crypto"
@@ -43,6 +48,8 @@ export const CONCURRENT3_ROUNDS = 1
 export const CONCURRENT3_SESSIONS = 3
 export const CONCURRENT3_SAMPLES = CONCURRENT3_ROUNDS * CASES_PER_ROUND
 export const MIN_NON_FAQ_KNOWLEDGE_SAMPLES = 70
+export const MIN_CONCURRENT3_NON_FAQ_KNOWLEDGE_SAMPLES = 14
+export const P95_TARGET_MS = 30_000
 export const DEFAULT_TIMEOUT_MS = 120_000
 
 export const GROUP_RULES: Record<LatencyGroup, string> = {
@@ -54,11 +61,73 @@ export const GROUP_RULES: Record<LatencyGroup, string> = {
     "refusal, empty-scope and memory-only cases; recorded and reported but not used as knowledge-answer latency",
 }
 
+interface LatencySampleRule {
+  minimumN: number | null
+  nRule: string
+}
+
+const SINGLE_SAMPLE_RULES: Record<LatencyGroup, LatencySampleRule> = {
+  faq_direct: {
+    minimumN: 1,
+    nRule: "one FAQ exact-answer case per measured round; five rounds give five samples, reported alone",
+  },
+  non_faq_knowledge: {
+    minimumN: MIN_NON_FAQ_KNOWLEDGE_SAMPLES,
+    nRule:
+      "five measured rounds x fourteen non-FAQ knowledge cases = the fixed denominator 70; " +
+      "fewer recorded or usable samples is never a pass",
+  },
+  other: {
+    minimumN: null,
+    nRule:
+      "refusal, empty-scope and memory-only cases; recorded but never part of the knowledge-answer denominator",
+  },
+}
+
+const CONCURRENT3_SAMPLE_RULES: Record<LatencyGroup, LatencySampleRule> = {
+  faq_direct: {
+    minimumN: 1,
+    nRule: "one FAQ exact-answer case in the single independent concurrent-3 round",
+  },
+  non_faq_knowledge: {
+    minimumN: MIN_CONCURRENT3_NON_FAQ_KNOWLEDGE_SAMPLES,
+    nRule:
+      "one independent concurrent-3 round x fourteen non-FAQ knowledge cases = 14; " +
+      "this separate n is the declared minimum and is never mixed into the single-concurrency denominator",
+  },
+  other: {
+    minimumN: null,
+    nRule:
+      "refusal, empty-scope and memory-only cases; recorded separately and never used as knowledge-answer latency",
+  },
+}
+
+/**
+ * DR-22 semantics: these retrieval reasons mean the answer was produced from a
+ * degraded read. A missing capability (`reranker_not_configured`,
+ * `web_unconfigured`) or an empty scope (`no_knowledge_scope`) is a
+ * configuration/scope fact, not an answer degradation.
+ */
+const DEGRADATION_FAILURE_REASONS = [
+  "parent_expansion_unavailable",
+  "reranker_unavailable",
+] as const
+
+const RERANK_FUSED_REASONS = [
+  "not_configured",
+  "below_threshold",
+  "unavailable",
+  "multi_query_aggregation",
+] as const
+
 export const PHASE_TIMING_DEFINITION =
   "Chat latency is the monotonic wall time from sending POST /api/chat (stream=false) " +
   "to receiving and parsing the JSON body that carries the terminal done event. " +
   "Phase marks are the run's own event stages (route, retrieval, context, answer, " +
-  "validation, done) taken from event.durationMs; they are diagnostic and never " +
+  "validation, done) taken from event.durationMs, which is the run clock accumulated " +
+  "since the run started. The report publishes each stage as a delta from the previous " +
+  "recorded stage and keeps the raw cumulative mark beside it; a stage with no mark of " +
+  "its own is included in the next recorded delta. Phase marks are diagnostic and never " +
   "replace the end-to-end duration. No judge runs in this command, so judge time " +
   "cannot enter any latency statistic."
 
@@ -280,6 +349,26 @@ export interface LatencyManifest {
       knowledgeBaseIds: string[] | null
     }>
   }
+  corpus: {
+    source: string
+    path: string
+    sha256: string
+    caseCount: number
+    groups: Record<LatencyGroup, number>
+    frozen: true
+    rule: string
+  }
+  stack: {
+    startState: "cold" | "warm" | "unspecified"
+    declaredBy: "operator"
+    warmupExcludesColdStart: true
+  }
+  warmup: {
+    rounds: number
+    samples: number
+    excluded: true
+    rule: string
+  }
   models: {
     chat: string | null
     embedding: string | null
@@ -298,11 +387,16 @@ export interface LatencyManifest {
     single: 1
     concurrent3: 3
     concurrent3SessionsInFlight: 3
+    concurrent3Rounds: number
+    concurrent3SamplesPerRound: number
+    statisticsSeparate: true
     mixing: "never"
   }
   phaseTiming: {
     definition: string
     stages: string[]
+    durationSemantics: "per-stage delta of the run's cumulative clock"
+    cumulativeRetained: true
     judgeExcluded: true
   }
   configuration: {
@@ -313,6 +407,8 @@ export interface LatencyManifest {
     measuredRounds: number
     casesPerRound: number
     minNonFaqKnowledgeSamples: number
+    minConcurrent3NonFaqKnowledgeSamples: number
+    p95TargetMs: number
   }
   plan: {
     warmupSamples: number
@@ -326,6 +422,36 @@ export interface LatencyManifest {
     invoked: false
     excludedFromLatency: true
   }
+}
+
+export interface LatencyOrderingEvidence {
+  source: string
+  reason?: string
+}
+
+export interface LatencyDegradationEvidence {
+  status: string | null
+  reason: string | null
+  unavailableChannels: string[]
+}
+
+/** Per-sample DR-22 evidence read from the retained Chat events. */
+export interface LatencySampleEvidence {
+  retrievalObserved: boolean
+  degradedReasons: string[]
+  ordering: LatencyOrderingEvidence | null
+  orderingSeen: boolean
+  rerankModel: string | null
+  degradation: LatencyDegradationEvidence | null
+}
+
+export interface LatencyPhaseMark {
+  stage: string
+  status: string | null
+  /** Raw event.durationMs: the run clock accumulated at this mark. */
+  cumulativeMs: number
+  /** Delta from the previous recorded stage mark. */
+  durationMs: number
 }
 
 export interface LatencySampleRecord {
@@ -344,7 +470,8 @@ export interface LatencySampleRecord {
   durationMs: number
   httpStatus: number | null
   terminalStatus: string | null
-  phases: Array<{ stage: string; status: string | null; durationMs: number }>
+  phases: LatencyPhaseMark[]
+  evidence: LatencySampleEvidence
   error: string | null
   writtenAt: string
 }
@@ -381,7 +508,10 @@ export function buildLatencyManifest(input: {
   capabilities: LatencyManifest["capabilities"]
   baseUrl: string
   timeoutMs: number
+  stackStart?: "cold" | "warm" | "unspecified"
 }): LatencyManifest {
+  const groups: Record<LatencyGroup, number> = { faq_direct: 0, non_faq_knowledge: 0, other: 0 }
+  for (const item of input.dataset.cases) groups[item.group] += 1
   return {
     schema: MANIFEST_SCHEMA,
     ticket: "DR-23",
@@ -401,6 +531,30 @@ export function buildLatencyManifest(input: {
           item.knowledgeBaseIds !== undefined ? [...item.knowledgeBaseIds] : null,
       })),
     },
+    corpus: {
+      source: "fixed demo dataset",
+      path: input.dataset.path,
+      sha256: input.dataset.sha256,
+      caseCount: input.dataset.cases.length,
+      groups,
+      frozen: true,
+      rule:
+        "the same twenty cases run in every round; slow cases are never removed and " +
+        "the denominator never changes after the manifest is frozen",
+    },
+    stack: {
+      startState: input.stackStart ?? "unspecified",
+      declaredBy: "operator",
+      warmupExcludesColdStart: true,
+    },
+    warmup: {
+      rounds: WARMUP_ROUNDS,
+      samples: WARMUP_SAMPLES,
+      excluded: true,
+      rule:
+        "one complete twenty-case warmup round is executed and recorded but excluded " +
+        "from every latency statistic",
+    },
     models: { ...input.models },
     capabilities: {
       chat: input.capabilities.chat,
@@ -410,11 +564,16 @@ export function buildLatencyManifest(input: {
       single: 1,
       concurrent3: CONCURRENT3_SESSIONS,
       concurrent3SessionsInFlight: CONCURRENT3_SESSIONS,
+      concurrent3Rounds: CONCURRENT3_ROUNDS,
+      concurrent3SamplesPerRound: CASES_PER_ROUND,
+      statisticsSeparate: true,
       mixing: "never",
     },
     phaseTiming: {
       definition: PHASE_TIMING_DEFINITION,
       stages: [...PHASE_STAGES],
+      durationSemantics: "per-stage delta of the run's cumulative clock",
+      cumulativeRetained: true,
       judgeExcluded: true,
     },
     configuration: {
@@ -425,6 +584,8 @@ export function buildLatencyManifest(input: {
       measuredRounds: MEASURED_ROUNDS,
       casesPerRound: CASES_PER_ROUND,
       minNonFaqKnowledgeSamples: MIN_NON_FAQ_KNOWLEDGE_SAMPLES,
+      minConcurrent3NonFaqKnowledgeSamples: MIN_CONCURRENT3_NON_FAQ_KNOWLEDGE_SAMPLES,
+      p95TargetMs: P95_TARGET_MS,
     },
     plan: {
       warmupSamples: WARMUP_SAMPLES,
@@ -452,6 +613,9 @@ export interface LatencyGroupStats {
   notStarted: number
   n: number
   errors: number
+  minimumN: number | null
+  nRule: string
+  nSufficient: boolean
   p50Ms: number | null
   p95Ms: number | null
   rawDurationsMs: number[]
@@ -459,7 +623,18 @@ export interface LatencyGroupStats {
 }
 
 export interface LatencyGateReason {
-  kind: "not_started" | "corrupt" | "execution_error" | "insufficient_n" | "incomplete_phase"
+  kind:
+    | "not_started"
+    | "corrupt"
+    | "execution_error"
+    | "insufficient_n"
+    | "incomplete_phase"
+    | "stack_unavailable"
+    | "p95_over_target"
+    | "silent_degradation"
+    | "rerank_degraded"
+    | "ordering_malformed"
+    | "provider_failure_mislabelled"
   sampleId?: string
   detail: string
 }
@@ -473,6 +648,38 @@ export interface LatencyPhaseCounts {
   excluded?: true
 }
 
+export interface LatencyDenominator {
+  planned: number
+  minimum: number | null
+  rule: string
+  mixedWithSingle: false
+}
+
+export interface LatencyRerankCapability {
+  status: "not_configured" | "not_exercised" | "exercised" | "degraded" | "invalid"
+  configured: boolean
+  countedAsPass: false
+  dedicatedSamples: number
+  degradedSamples: number
+  model: {
+    configured: string | null
+    observed: string[]
+    matches: boolean
+  }
+  detail: string
+}
+
+export interface LatencyEvidenceSummary {
+  measuredSamples: number
+  measuredSamplesWithRetrieval: number
+  orderingSeen: number
+  degradedReasons: string[]
+  degradedSampleIds: string[]
+  silentDegradationSampleIds: string[]
+  malformedOrderingSampleIds: string[]
+  mislabelledProviderFailureSampleIds: string[]
+}
+
 export interface LatencyReport {
   schema: typeof REPORT_SCHEMA
   ticket: "DR-23"
@@ -481,6 +688,12 @@ export interface LatencyReport {
   judge: LatencyManifest["judge"]
   phaseTiming: LatencyManifest["phaseTiming"]
   plan: LatencyManifest["plan"]
+  corpus: LatencyManifest["corpus"]
+  stack: LatencyManifest["stack"]
+  warmup: LatencyManifest["warmup"]
+  models: LatencyManifest["models"]
+  concurrency: LatencyManifest["concurrency"]
+  configuration: LatencyManifest["configuration"]
   counts: {
     planned: number
     recorded: number
@@ -495,6 +708,38 @@ export interface LatencyReport {
     single: Record<LatencyGroup, LatencyGroupStats>
     concurrent3: Record<LatencyGroup, LatencyGroupStats>
   }
+  denominators: {
+    single: Record<LatencyGroup, LatencyDenominator>
+    concurrent3: Record<LatencyGroup, LatencyDenominator>
+  }
+  targets: {
+    p95: {
+      ticket: "DR-24-AC03"
+      metric: "nearest-rank p95"
+      thresholdMs: number
+      scope: string
+      meanIsNotASubstitute: true
+      measuredP95Ms: number | null
+      withinTarget: boolean | null
+    }
+    degradation: {
+      ticket: "DR-24-AC04"
+      failureReasons: string[]
+      silentDegradationFails: true
+    }
+  }
+  evidence: LatencyEvidenceSummary
+  capabilities: { rerank: LatencyRerankCapability }
+  acceptance: {
+    localGate: "passed" | "failed" | "incomplete"
+    online: {
+      status: "pending"
+      p95: "pending"
+      degradation: "pending"
+      rerank: "pending"
+      reason: string
+    }
+  }
   samples: LatencySampleRecord[]
   missing: string[]
   corrupt: string[]
@@ -506,7 +751,11 @@ export interface LatencyReport {
   limits: {
     scope: string
     productionSlo: false
+    p95TargetMs: number
+    p95TargetScope: string
     p95TargetEvaluatedBy: "DR-24 online"
+    pendingOnline: string[]
+    failClosed: string[]
   }
 }
 
@@ -543,6 +792,7 @@ function statsFor(
   const durations = observed
     .map((record) => record.durationMs)
     .filter((value) => Number.isFinite(value))
+  const rule = (phase === "measured" ? SINGLE_SAMPLE_RULES : CONCURRENT3_SAMPLE_RULES)[group]
   return {
     group,
     rule: GROUP_RULES[group],
@@ -553,10 +803,31 @@ function statsFor(
     notStarted: denominator.length - observed.length,
     n: durations.length,
     errors: observed.filter((record) => record.error !== null).length,
+    minimumN: rule.minimumN,
+    nRule: rule.nRule,
+    nSufficient: rule.minimumN === null || durations.length >= rule.minimumN,
     p50Ms: nearestRankPercentile(durations, 50),
     p95Ms: nearestRankPercentile(durations, 95),
     rawDurationsMs: durations,
     sampleIds: observed.map((record) => record.sampleId),
+  }
+}
+
+function denominatorsFor(
+  groups: Record<LatencyGroup, LatencyGroupStats>,
+  phase: "measured" | "concurrent3"
+): Record<LatencyGroup, LatencyDenominator> {
+  const rules = phase === "measured" ? SINGLE_SAMPLE_RULES : CONCURRENT3_SAMPLE_RULES
+  const value = <G extends LatencyGroup>(group: G): LatencyDenominator => ({
+    planned: groups[group].denominator,
+    minimum: rules[group].minimumN,
+    rule: rules[group].nRule,
+    mixedWithSingle: false,
+  })
+  return {
+    faq_direct: value("faq_direct"),
+    non_faq_knowledge: value("non_faq_knowledge"),
+    other: value("other"),
   }
 }
 
@@ -580,6 +851,162 @@ function phaseCounts(
   }
 }
 
+function isDegradationFailure(reason: string): boolean {
+  return (
+    (DEGRADATION_FAILURE_REASONS as readonly string[]).includes(reason) ||
+    reason.endsWith(" unavailable")
+  )
+}
+
+function retrievalDegraded(evidence: LatencySampleEvidence): boolean {
+  return (
+    evidence.degradedReasons.some(isDegradationFailure) ||
+    evidence.ordering?.reason === "unavailable"
+  )
+}
+
+/** Mirrors the DR-22 matrix: only these source/reason pairs are recognized. */
+function orderingMalformed(evidence: LatencySampleEvidence): boolean {
+  if (!evidence.orderingSeen) return false
+  const ordering = evidence.ordering
+  if (!ordering) return true
+  if (ordering.source === "dedicated_rerank" && ordering.reason === undefined) return false
+  return (
+    ordering.source === "fused" &&
+    (RERANK_FUSED_REASONS as readonly string[]).includes(ordering.reason ?? "")
+  )
+    ? false
+    : true
+}
+
+interface DegradationCrossCheck {
+  evidence: LatencyEvidenceSummary
+  silentSampleIds: string[]
+  malformedSampleIds: string[]
+  mislabelledSampleIds: string[]
+  degradedSampleIds: string[]
+}
+
+function crossCheckDegradation(
+  planned: readonly PlannedLatencySample[],
+  records: Record<string, LatencySampleRecord>
+): DegradationCrossCheck {
+  const silent: string[] = []
+  const malformed: string[] = []
+  const mislabelled: string[] = []
+  const degraded: string[] = []
+  const failedReasons = new Set<string>()
+  const measured = planned.filter((sample) => sample.phase === "measured")
+  let measuredWithRetrieval = 0
+  let orderingSeen = 0
+  for (const sample of planned) {
+    const record = records[sample.sampleId]
+    if (!record) continue
+    const evidence = record.evidence
+    for (const reason of evidence.degradedReasons) failedReasons.add(reason)
+    if (orderingMalformed(evidence)) malformed.push(record.sampleId)
+    if (evidence.degradedReasons.some(isDegradationFailure) || evidence.ordering?.reason === "unavailable") {
+      degraded.push(record.sampleId)
+    }
+    if (record.terminalStatus === "completed") {
+      if (
+        retrievalDegraded(evidence) &&
+        evidence.degradation?.status !== "partial"
+      ) {
+        silent.push(record.sampleId)
+      } else if (
+        evidence.ordering?.source === "dedicated_rerank" &&
+        evidence.degradedReasons.some(isDegradationFailure)
+      ) {
+        silent.push(record.sampleId)
+      }
+    }
+    if (record.terminalStatus === "provider_error" && evidence.degradation?.reason === "no_cited_claims") {
+      mislabelled.push(record.sampleId)
+    }
+  }
+  const measuredRecords = measured
+    .map((sample) => records[sample.sampleId])
+    .filter((record): record is LatencySampleRecord => record !== undefined)
+  for (const record of measuredRecords) {
+    if (record.evidence.retrievalObserved) measuredWithRetrieval += 1
+    if (record.evidence.orderingSeen) orderingSeen += 1
+  }
+  return {
+    evidence: {
+      measuredSamples: measuredRecords.length,
+      measuredSamplesWithRetrieval: measuredWithRetrieval,
+      orderingSeen,
+      degradedReasons: [...failedReasons].sort(),
+      degradedSampleIds: [...new Set(degraded)].sort(),
+      silentDegradationSampleIds: [...new Set(silent)].sort(),
+      malformedOrderingSampleIds: [...new Set(malformed)].sort(),
+      mislabelledProviderFailureSampleIds: [...new Set(mislabelled)].sort(),
+    },
+    silentSampleIds: [...new Set(silent)].sort(),
+    malformedSampleIds: [...new Set(malformed)].sort(),
+    mislabelledSampleIds: [...new Set(mislabelled)].sort(),
+    degradedSampleIds: [...new Set(degraded)].sort(),
+  }
+}
+
+function rerankCapability(
+  manifest: LatencyManifest,
+  planned: readonly PlannedLatencySample[],
+  records: Record<string, LatencySampleRecord>
+): LatencyRerankCapability {
+  const measured = planned
+    .filter((sample) => sample.phase === "measured")
+    .map((sample) => records[sample.sampleId])
+    .filter((record): record is LatencySampleRecord => record !== undefined)
+  const configuredModel = manifest.models.rerank
+  const configured =
+    manifest.capabilities.rerank?.configured === true || Boolean(configuredModel)
+  const dedicated = measured.filter(
+    (record) => record.evidence.ordering?.source === "dedicated_rerank"
+  )
+  const degraded = measured.filter((record) => retrievalDegraded(record.evidence))
+  const malformed = measured.filter((record) => orderingMalformed(record.evidence))
+  const observedModels = [
+    ...new Set(
+      measured
+        .map((record) => record.evidence.rerankModel)
+        .filter((model): model is string => typeof model === "string" && model.length > 0)
+    ),
+  ].sort()
+  const matches =
+    observedModels.length > 0 &&
+    (configuredModel === null ||
+      (observedModels.length === 1 && observedModels[0] === configuredModel))
+  let status: LatencyRerankCapability["status"]
+  if (malformed.length > 0) status = "invalid"
+  else if (degraded.length > 0) status = "degraded"
+  else if (dedicated.length > 0) status = "exercised"
+  else if (configured) status = "not_exercised"
+  else status = "not_configured"
+  const detail: Record<LatencyRerankCapability["status"], string> = {
+    not_configured:
+      "no rerank provider is configured; the capability is reported as absent and is not counted as coverage",
+    not_exercised:
+      "a rerank provider is configured but no measured sample proves a dedicated rerank call; configured presence is not coverage",
+    exercised:
+      "measured samples published dedicated_rerank ordering; online Rerank-on acceptance still belongs to the online run",
+    degraded:
+      "a measured sample published a fused/unavailable ranking or reranker_unavailable; Rerank-on evidence is not clean",
+    invalid:
+      "a measured sample carried malformed final-ordering evidence; no rerank claim is made",
+  }
+  return {
+    status,
+    configured,
+    countedAsPass: false,
+    dedicatedSamples: dedicated.length,
+    degradedSamples: degraded.length,
+    model: { configured: configuredModel, observed: observedModels, matches },
+    detail: detail[status],
+  }
+}
+
 export function buildLatencyReport(input: {
   manifest: LatencyManifest
   planned: readonly PlannedLatencySample[]
@@ -587,6 +1014,7 @@ export function buildLatencyReport(input: {
   missing?: readonly string[]
   corrupt?: readonly string[]
   generatedAt?: string
+  runError?: string
 }): LatencyReport {
   const planned = [...input.planned].sort(compareSamples)
   const records: Record<string, LatencySampleRecord> = {}
@@ -625,6 +1053,9 @@ export function buildLatencyReport(input: {
   }
 
   const reasons: LatencyGateReason[] = []
+  if (input.runError !== undefined) {
+    reasons.push({ kind: "stack_unavailable", detail: input.runError })
+  }
   for (const sample of planned) {
     if (missing.includes(sample.sampleId) || records[sample.sampleId] === undefined) {
       if (!missing.includes(sample.sampleId) && corrupt.includes(sample.sampleId)) continue
@@ -675,6 +1106,18 @@ export function buildLatencyReport(input: {
       detail: `non-FAQ knowledge samples ${nonFaq.n}/${MIN_NON_FAQ_KNOWLEDGE_SAMPLES} have a usable duration`,
     })
   }
+  const c3NonFaq = groups.concurrent3.non_faq_knowledge
+  if (
+    c3NonFaq.denominator < MIN_CONCURRENT3_NON_FAQ_KNOWLEDGE_SAMPLES ||
+    c3NonFaq.n < MIN_CONCURRENT3_NON_FAQ_KNOWLEDGE_SAMPLES
+  ) {
+    reasons.push({
+      kind: "insufficient_n",
+      detail:
+        `concurrent-3 non-FAQ knowledge samples ${c3NonFaq.n}/${MIN_CONCURRENT3_NON_FAQ_KNOWLEDGE_SAMPLES} ` +
+        "(the separate concurrent-3 denominator is declared and is never a pass when short)",
+    })
+  }
   if (groups.single.faq_direct.recorded === 0) {
     reasons.push({
       kind: "insufficient_n",
@@ -682,10 +1125,60 @@ export function buildLatencyReport(input: {
     })
   }
 
+  const p95 = nonFaq.p95Ms
+  const withinTarget = p95 === null ? null : p95 <= P95_TARGET_MS
+  if (withinTarget === false) {
+    reasons.push({
+      kind: "p95_over_target",
+      detail:
+        `single-concurrency non-FAQ knowledge p95 ${p95} ms > ${P95_TARGET_MS} ms ` +
+        "(nearest-rank p95 over the raw durations; the mean is not a substitute)",
+    })
+  }
+
+  const crossCheck = crossCheckDegradation(planned, records)
+  for (const sampleId of crossCheck.silentSampleIds) {
+    reasons.push({
+      kind: "silent_degradation",
+      sampleId,
+      detail:
+        "a completed answer reported none/partial-inconsistent degradation while its " +
+        "retrieval evidence recorded a failure reason",
+    })
+  }
+  for (const sampleId of crossCheck.mislabelledSampleIds) {
+    reasons.push({
+      kind: "provider_failure_mislabelled",
+      sampleId,
+      detail: "a failure terminal is labelled no_cited_claims",
+    })
+  }
+  for (const sampleId of crossCheck.malformedSampleIds) {
+    reasons.push({
+      kind: "ordering_malformed",
+      sampleId,
+      detail: "final ordering evidence is not a recognized source/reason pair",
+    })
+  }
+  for (const sampleId of crossCheck.degradedSampleIds) {
+    reasons.push({
+      kind: "rerank_degraded",
+      sampleId,
+      detail:
+        "the retrieval evidence reports reranker_unavailable or a fused/unavailable " +
+        "ranking; a clean Rerank-on run never contains it",
+    })
+  }
+
   const incomplete = reasons.some(
-    (reason) => reason.kind === "not_started" || reason.kind === "corrupt"
+    (reason) =>
+      reason.kind === "not_started" ||
+      reason.kind === "corrupt" ||
+      reason.kind === "stack_unavailable"
   )
   const passed = reasons.length === 0
+  const status = passed ? "passed" : incomplete ? "incomplete" : "failed"
+  const p95Scope = "single-concurrency non-FAQ knowledge answers only"
   return {
     schema: REPORT_SCHEMA,
     ticket: "DR-23",
@@ -694,6 +1187,12 @@ export function buildLatencyReport(input: {
     judge: { ...input.manifest.judge },
     phaseTiming: { ...input.manifest.phaseTiming },
     plan: { ...input.manifest.plan },
+    corpus: { ...input.manifest.corpus, groups: { ...input.manifest.corpus.groups } },
+    stack: { ...input.manifest.stack },
+    warmup: { ...input.manifest.warmup },
+    models: { ...input.manifest.models },
+    concurrency: { ...input.manifest.concurrency },
+    configuration: { ...input.manifest.configuration },
     counts: {
       planned: planned.length,
       recorded: Object.keys(records).length,
@@ -705,23 +1204,67 @@ export function buildLatencyReport(input: {
       concurrent3,
     },
     groups,
+    denominators: {
+      single: denominatorsFor(groups.single, "measured"),
+      concurrent3: denominatorsFor(groups.concurrent3, "concurrent3"),
+    },
+    targets: {
+      p95: {
+        ticket: "DR-24-AC03",
+        metric: "nearest-rank p95",
+        thresholdMs: P95_TARGET_MS,
+        scope: p95Scope,
+        meanIsNotASubstitute: true,
+        measuredP95Ms: p95,
+        withinTarget,
+      },
+      degradation: {
+        ticket: "DR-24-AC04",
+        failureReasons: [...DEGRADATION_FAILURE_REASONS],
+        silentDegradationFails: true,
+      },
+    },
+    evidence: crossCheck.evidence,
+    capabilities: { rerank: rerankCapability(input.manifest, planned, records) },
+    acceptance: {
+      localGate: status,
+      online: {
+        status: "pending",
+        p95: "pending",
+        degradation: "pending",
+        rerank: "pending",
+        reason:
+          "the real provider/model/rerank stack evidence is decided by the online run " +
+          "(G-P0, G-RERANK-LIVE); this command's local gate never substitutes for it",
+      },
+    },
     samples: planned
       .map((sample) => records[sample.sampleId])
       .filter((record): record is LatencySampleRecord => record !== undefined),
     missing,
     corrupt,
-    gate: {
-      passed,
-      status: passed ? "passed" : incomplete ? "incomplete" : "failed",
-      reasons,
-    },
+    gate: { passed, status, reasons },
     limits: {
       scope:
         "Fixed demo dataset and configuration at the recorded concurrency only; " +
         "single-concurrency and concurrent-3 are reported separately and never " +
         "mixed. This is not a production SLO.",
       productionSlo: false,
+      p95TargetMs: P95_TARGET_MS,
+      p95TargetScope: p95Scope,
       p95TargetEvaluatedBy: "DR-24 online",
+      pendingOnline: [
+        "real provider p95 measured under the frozen online configuration",
+        "real Rerank-on provider call, dedicated ordering and model snapshot",
+        "real degradation matrix cross-check of the online run",
+      ],
+      failClosed: [
+        "an unavailable stack writes a failed report instead of a bare error",
+        "any timeout or execution error fails the run and keeps its real wait",
+        "any missing or corrupt planned sample is incomplete, never a pass",
+        "a p95 over 30 s for single-concurrency non-FAQ knowledge fails explicitly",
+        "a silent degradation or a fused/unavailable ranking fails the run",
+      ],
     },
   }
 }
@@ -740,6 +1283,8 @@ export interface LatencyRunOptions {
   fetchImpl?: typeof fetch
   now?: () => number
   env?: NodeJS.ProcessEnv
+  /** Operator's declaration of whether the stack was already serving. */
+  stackStart?: "cold" | "warm" | "unspecified"
 }
 
 export interface LatencyRunOutcome {
@@ -776,6 +1321,7 @@ function baseSample(
     httpStatus: number | null
     terminalStatus: string | null
     phases: LatencySampleRecord["phases"]
+    evidence: LatencySampleEvidence
     error: string | null
   }
 ): LatencySampleRecord {
@@ -795,16 +1341,23 @@ function baseSample(
     httpStatus: input.httpStatus,
     terminalStatus: input.terminalStatus,
     phases: input.phases,
+    evidence: input.evidence,
     error: input.error,
     writtenAt: new Date().toISOString(),
   }
 }
 
-function phaseMarks(events: unknown): LatencySampleRecord["phases"] {
+/**
+ * A sample's per-stage durations. `event.durationMs` is the run clock
+ * accumulated at that stage, so the report divides it into deltas here instead
+ * of presenting a cumulative value as a stage cost. The cumulative mark is
+ * kept beside each delta so the numbers stay recomputable.
+ */
+export function phaseMarks(events: unknown): LatencyPhaseMark[] {
   if (!Array.isArray(events)) return []
   const latest = new Map<
     string,
-    { stage: string; status: string | null; durationMs: number }
+    { stage: string; status: string | null; cumulativeMs: number }
   >()
   for (const candidate of events) {
     if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) continue
@@ -821,11 +1374,109 @@ function phaseMarks(events: unknown): LatencySampleRecord["phases"] {
       latest.set(event.stage, {
         stage: event.stage,
         status: typeof event.status === "string" ? event.status : null,
-        durationMs: event.durationMs,
+        cumulativeMs: event.durationMs,
       })
     }
   }
-  return [...latest.values()]
+  const marks: LatencyPhaseMark[] = []
+  let previous = 0
+  for (const stage of PHASE_STAGES) {
+    const mark = latest.get(stage)
+    if (!mark) continue
+    marks.push({
+      stage: mark.stage,
+      status: mark.status,
+      cumulativeMs: mark.cumulativeMs,
+      durationMs: Math.max(0, mark.cumulativeMs - previous),
+    })
+    previous = Math.max(previous, mark.cumulativeMs)
+  }
+  return marks
+}
+
+function orderingEvidence(value: unknown): LatencyOrderingEvidence | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null
+  const candidate = value as { source?: unknown; reason?: unknown }
+  if (typeof candidate.source !== "string") return null
+  return {
+    source: candidate.source,
+    ...(typeof candidate.reason === "string" ? { reason: candidate.reason } : {}),
+  }
+}
+
+/**
+ * Read one sample's degradation/ordering evidence from the retained Chat
+ * events — the same fields the DR-22 degradation matrix uses. Answer text is
+ * never read: a reply that mentions rerank cannot prove the provider ran.
+ */
+function sampleEvidence(events: unknown): LatencySampleEvidence {
+  const evidence: LatencySampleEvidence = {
+    retrievalObserved: false,
+    degradedReasons: [],
+    ordering: null,
+    orderingSeen: false,
+    rerankModel: null,
+    degradation: null,
+  }
+  if (!Array.isArray(events)) return evidence
+  for (const candidate of events) {
+    if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) continue
+    const event = candidate as {
+      type?: unknown
+      stage?: unknown
+      data?: unknown
+      result?: unknown
+    }
+    if (event.type === "progress" && event.stage === "retrieval") {
+      const data = event.data
+      if (!data || typeof data !== "object" || Array.isArray(data)) continue
+      const trace = data as { degradedReasons?: unknown; finalContextOrdering?: unknown }
+      if (Array.isArray(trace.degradedReasons)) {
+        for (const reason of trace.degradedReasons) {
+          if (
+            typeof reason === "string" &&
+            !evidence.degradedReasons.includes(reason)
+          ) {
+            evidence.degradedReasons.push(reason)
+          }
+        }
+      }
+      if ("finalContextOrdering" in trace) {
+        evidence.orderingSeen = true
+        evidence.ordering = orderingEvidence(trace.finalContextOrdering)
+      }
+      evidence.retrievalObserved = true
+    } else if (event.type === "done") {
+      const result = event.result
+      if (!result || typeof result !== "object" || Array.isArray(result)) continue
+      const done = result as { degradation?: unknown; modelProfile?: unknown }
+      const degradation = done.degradation
+      if (degradation && typeof degradation === "object" && !Array.isArray(degradation)) {
+        const state = degradation as {
+          status?: unknown
+          reason?: unknown
+          unavailableChannels?: unknown
+        }
+        evidence.degradation = {
+          status: typeof state.status === "string" ? state.status : null,
+          reason: typeof state.reason === "string" ? state.reason : null,
+          unavailableChannels: Array.isArray(state.unavailableChannels)
+            ? state.unavailableChannels.filter(
+                (channel): channel is string => typeof channel === "string"
+              )
+            : [],
+        }
+      }
+      const profile = done.modelProfile
+      if (profile && typeof profile === "object" && !Array.isArray(profile)) {
+        const rerank = (profile as { rerankModel?: unknown }).rerankModel
+        if (typeof rerank === "string" && rerank.trim().length > 0) {
+          evidence.rerankModel = rerank.trim()
+        }
+      }
+    }
+  }
+  return evidence
 }
 
 async function login(
@@ -869,6 +1520,7 @@ async function measureSample(input: {
   let httpStatus: number | null = null
   let terminalStatus: string | null = null
   let phases: LatencySampleRecord["phases"] = []
+  let evidence: LatencySampleEvidence = sampleEvidence(undefined)
   let error: string | null = null
   try {
     const body: Record<string, unknown> = {
@@ -909,6 +1561,7 @@ async function measureSample(input: {
           } else {
             terminalStatus = result.status
             phases = phaseMarks(result.events)
+            evidence = sampleEvidence(result.events)
             if (EXECUTION_ERROR_TERMINALS.has(result.status)) {
               error = `terminal status ${result.status}`
             }
@@ -933,6 +1586,7 @@ async function measureSample(input: {
     httpStatus,
     terminalStatus,
     phases,
+    evidence,
     error,
   })
 }
@@ -941,6 +1595,17 @@ function dedupeSample(record: LatencySampleRecord): LatencySampleRecord {
   return {
     ...record,
     phases: record.phases.map((phase) => ({ ...phase })),
+    evidence: {
+      ...record.evidence,
+      degradedReasons: [...record.evidence.degradedReasons],
+      ordering: record.evidence.ordering ? { ...record.evidence.ordering } : null,
+      degradation: record.evidence.degradation
+        ? {
+            ...record.evidence.degradation,
+            unavailableChannels: [...record.evidence.degradation.unavailableChannels],
+          }
+        : null,
+    },
   }
 }
 
@@ -953,12 +1618,8 @@ export async function runLatencySuite(
   const baseUrl = options.baseUrl.replace(/\/+$/, "")
 
   let dataset: LoadedLatencyDataset
-  let token: string
   try {
     dataset = loadLatencyDataset(options.casesPath)
-    token =
-      options.authToken ??
-      (await login(baseUrl, options.password, fetchImpl))
   } catch (error) {
     return {
       exitCode: 2,
@@ -979,6 +1640,7 @@ export async function runLatencySuite(
     capabilities: latencyCapabilitySnapshot(options.env),
     baseUrl,
     timeoutMs,
+    ...(options.stackStart ? { stackStart: options.stackStart } : {}),
   })
   let planned: PlannedLatencySample[]
   try {
@@ -993,6 +1655,31 @@ export async function runLatencySuite(
       exitCode: 2,
       error: error instanceof Error ? error.message : String(error),
     }
+  }
+
+  // DR-24 AC05: an unavailable stack still leaves a fail-closed report behind,
+  // instead of only a bare error with no measured/unmeasured accounting.
+  let token: string
+  try {
+    token =
+      options.authToken ??
+      (await login(baseUrl, options.password, fetchImpl))
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error)
+    const report = buildLatencyReport({
+      manifest,
+      planned,
+      records: {},
+      missing: planned.map((sample) => sample.sampleId),
+      runError: `stack unavailable: ${message}`,
+    })
+    try {
+      writeJsonAtomic(join(runDir, "report.json"), report)
+      writeJsonAtomic(join(runDir, "summary.json"), report)
+    } catch {
+      return { exitCode: 2, runId, runDir, error: message }
+    }
+    return { exitCode: 1, runId, runDir, report, error: message }
   }
 
   const byId = new Map(dataset.cases.map((item) => [item.id, item]))
