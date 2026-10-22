@@ -736,10 +736,16 @@ export function createMastraChatEventAdapter(
         )
       }
 
-      // Only validated tokens are publishable knowledge output. Tokens that
-      // were already streamed live are skipped — replay covers runners that
-      // ignored the onAnswerDelta hook (deltasPublished === 0).
-      for (const token of runnerOutput.tokens.slice(deltasPublished)) {
+      // Only validated tokens are publishable knowledge output. A terminal that
+      // did not approve the draft publishes none of them, even when the runner
+      // still hands back the generated text (it cannot retract it) — the done
+      // event's public terminal copy is the only text that surface carries.
+      // Tokens that were already streamed live are skipped — replay covers
+      // runners that ignored the onAnswerDelta hook (deltasPublished === 0).
+      const publishableTokens = isDraftPublishable(runnerOutput.status)
+        ? runnerOutput.tokens.slice(deltasPublished)
+        : []
+      for (const token of publishableTokens) {
         const base = makeBaseEvent({
           runId,
           sessionId,
