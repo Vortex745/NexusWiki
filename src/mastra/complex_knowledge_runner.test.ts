@@ -505,6 +505,40 @@ test("T12 #1a planner path: sub-queries with coverage criteria are decomposed an
   assert.equal(searcher.calls.length, 2, "searcher.search called per sub-query")
 })
 
+test("DR-22 review: a complex-path rerank failure is a partial answer, not none", async () => {
+  const result = makeRetrievalResult()
+  const evidence = buildEvidence([result])
+  const build = (degradationReasons: string[]) =>
+    createComplexKnowledgeMastraRunner({
+      router: makeFakeRouter("complex"),
+      createSearcher: () =>
+        makeFakeSearcher({
+          status: "degraded",
+          results: [result],
+          unavailableChannels: [],
+          degradationReasons,
+        }),
+      planner: makeFakePlanner({ queries: [{ text: "policy" }] }),
+      assembler: makeFakeAssembler(),
+      validator: makeFakeValidator({ passed: true, hallucination: false, completeness: true }),
+      replanner: makeFakeRePlanner([]),
+      streamAnswerDraft: makeScriptedDraftStream([buildCitedAnswer(evidence)]),
+    })
+
+  const failed = await build(["reranker_unavailable"])(makeRunnerInput())
+  assert.equal(failed.status, "completed")
+  assert.equal(failed.degradation.status, "partial")
+  assert.ok(
+    (failed.retrievalTrace.degradedReasons ?? []).includes("reranker_unavailable"),
+    "the trace keeps the reason that caused the degradation",
+  )
+
+  // A missing rerank capability is a configuration fact, not answer degradation.
+  const unconfigured = await build(["reranker_not_configured"])(makeRunnerInput())
+  assert.equal(unconfigured.status, "completed")
+  assert.equal(unconfigured.degradation.status, "none")
+})
+
 test("P1 regression: early complex terminal preserves prepared and planner route trace fields", async () => {
   const preparedTrace = {
     decision: "complex" as const,

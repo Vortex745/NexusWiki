@@ -129,6 +129,7 @@ import {
   type NormalizedToolCall,
 } from "../retrieval/complex_loop"
 import { createComplexLoopToolInvoker, READ_ONLY_TOOL_ALLOWLIST } from "../tools/complex_loop_adapter"
+import { degradationWasObserved } from "./answer_degradation"
 import type { Validator } from "../critic/validator/interface"
 import { bindAnswerBasis } from "./answer_basis"
 import type { RePlanner } from "../critic/replanner/interface"
@@ -658,6 +659,10 @@ export function createComplexKnowledgeMastraRunner(
           })
         : undefined
     const unavailableChannels = new Set<RetrievalResult["source"]>()
+    // DR-22: reasons reported by a real search that are not channel failures
+    // (e.g. `reranker_unavailable`). The simple route already keeps these on
+    // the trace; the complex route must classify them the same way.
+    const retrievalDegradedReasons = new Set<string>()
     let retrievalAttempted = false
     let retrievalAvailable = false
     const resultGroups: RetrievalResult[][] = []
@@ -910,6 +915,9 @@ export function createComplexKnowledgeMastraRunner(
           signal
         )
         outcome.unavailableChannels.forEach((ch) => unavailableChannels.add(ch))
+        for (const reason of outcome.degradationReasons ?? []) {
+          retrievalDegradedReasons.add(reason)
+        }
         if (outcome.status !== "insufficient") retrievalAvailable = true
         resultGroups.push(outcome.results)
         if (outcome.ordering) orderings.push(outcome.ordering)
@@ -955,8 +963,15 @@ export function createComplexKnowledgeMastraRunner(
       channelStatuses,
       resultCount: resultGroups.flat().length,
       selectedEvidenceIds: [],
-      ...(unavailableChannels.size > 0
-        ? { degradedReasons: [...unavailableChannels].map((ch) => `${ch} unavailable`) }
+      ...(unavailableChannels.size > 0 || retrievalDegradedReasons.size > 0
+        ? {
+            degradedReasons: [
+              ...new Set([
+                ...[...unavailableChannels].map((ch) => `${ch} unavailable`),
+                ...retrievalDegradedReasons,
+              ]),
+            ],
+          }
         : {}),
       ...(complexLoopResult
         ? {
@@ -1074,6 +1089,16 @@ export function createComplexKnowledgeMastraRunner(
         ...retrievalTrace,
         finalContextCandidates: toRankedCandidateObservations(candidates, citationIds),
         finalContextRound,
+        ...(unavailableChannels.size > 0 || retrievalDegradedReasons.size > 0
+          ? {
+              degradedReasons: [
+                ...new Set([
+                  ...[...unavailableChannels].map((ch) => `${ch} unavailable`),
+                  ...retrievalDegradedReasons,
+                ]),
+              ],
+            }
+          : {}),
         // PL-04 review fix — the ONE rule, byte-identical to the simple route:
         //   merged rounds report an aggregation;
         //   exactly one contributing search keeps its own label;
@@ -1249,7 +1274,7 @@ export function createComplexKnowledgeMastraRunner(
       terminalReferences = []
     }
     let terminalDegradation: AnswerDegradation = {
-      status: unavailableChannels.size > 0 ? "partial" : "none",
+      status: degradationWasObserved(unavailableChannels, [...retrievalDegradedReasons]) ? "partial" : "none",
       unavailableChannels: [...unavailableChannels],
     }
 
@@ -1329,14 +1354,14 @@ export function createComplexKnowledgeMastraRunner(
           // a refused persistence stays honest as 证据不足.
           setTerminal(handoffCase ? "handoff_required" : "insufficient_evidence")
           terminalDegradation = {
-            status: unavailableChannels.size > 0 ? "partial" : "none",
+            status: degradationWasObserved(unavailableChannels, [...retrievalDegradedReasons]) ? "partial" : "none",
             unavailableChannels: [...unavailableChannels],
             reason: "coverage_not_met",
           }
         } else {
           setTerminal("insufficient_evidence")
           terminalDegradation = {
-            status: unavailableChannels.size > 0 ? "partial" : "none",
+            status: degradationWasObserved(unavailableChannels, [...retrievalDegradedReasons]) ? "partial" : "none",
             unavailableChannels: [...unavailableChannels],
             reason: "coverage_not_met",
           }
@@ -1466,6 +1491,9 @@ export function createComplexKnowledgeMastraRunner(
             fallbackOutcome.unavailableChannels.forEach((ch) =>
               unavailableChannels.add(ch)
             )
+            for (const reason of fallbackOutcome.degradationReasons ?? []) {
+              retrievalDegradedReasons.add(reason)
+            }
             if (fallbackOutcome.status === "insufficient") {
               correctionInsufficient = true
               break
@@ -1503,6 +1531,9 @@ export function createComplexKnowledgeMastraRunner(
           correctionOutcome.unavailableChannels.forEach((ch) =>
             unavailableChannels.add(ch)
           )
+          for (const reason of correctionOutcome.degradationReasons ?? []) {
+            retrievalDegradedReasons.add(reason)
+          }
           if (correctionOutcome.status === "insufficient") {
             correctionInsufficient = true
             break
@@ -1547,14 +1578,14 @@ export function createComplexKnowledgeMastraRunner(
           // a refused persistence stays honest as 证据不足.
           setTerminal(handoffCase ? "handoff_required" : "insufficient_evidence")
           terminalDegradation = {
-            status: unavailableChannels.size > 0 ? "partial" : "none",
+            status: degradationWasObserved(unavailableChannels, [...retrievalDegradedReasons]) ? "partial" : "none",
             unavailableChannels: [...unavailableChannels],
             reason: "coverage_not_met",
           }
         } else {
           setTerminal("insufficient_evidence")
           terminalDegradation = {
-            status: unavailableChannels.size > 0 ? "partial" : "none",
+            status: degradationWasObserved(unavailableChannels, [...retrievalDegradedReasons]) ? "partial" : "none",
             unavailableChannels: [...unavailableChannels],
             reason: "coverage_not_met",
           }
@@ -1731,14 +1762,14 @@ export function createComplexKnowledgeMastraRunner(
         })
         setTerminal(handoffCase ? "handoff_required" : "insufficient_evidence")
         terminalDegradation = {
-          status: unavailableChannels.size > 0 ? "partial" : "none",
+          status: degradationWasObserved(unavailableChannels, [...retrievalDegradedReasons]) ? "partial" : "none",
           unavailableChannels: [...unavailableChannels],
           reason: "coverage_not_met",
         }
       } else {
         setTerminal("insufficient_evidence")
         terminalDegradation = {
-          status: unavailableChannels.size > 0 ? "partial" : "none",
+          status: degradationWasObserved(unavailableChannels, [...retrievalDegradedReasons]) ? "partial" : "none",
           unavailableChannels: [...unavailableChannels],
           reason: "coverage_not_met",
         }
@@ -1810,7 +1841,7 @@ export function createComplexKnowledgeMastraRunner(
       status: "completed",
       references: finalReferences,
       degradation: {
-        status: unavailableChannels.size > 0 ? "partial" : "none",
+        status: degradationWasObserved(unavailableChannels, [...retrievalDegradedReasons]) ? "partial" : "none",
         unavailableChannels: [...unavailableChannels],
       },
       tokens: draftTokens,
