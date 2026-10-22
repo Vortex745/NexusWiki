@@ -94,6 +94,48 @@ test("v1 stays on disk but is not silently consumed as the v2 standard", () => {
   assert.throws(() => loadDataset(V1_PATH), /v2 standard/)
 })
 
+test("a v2 case may carry empty optional arrays without being rejected", () => {
+  const base = {
+    schema: "demo-release-cases",
+    version: 2,
+    contract: V2.contract,
+    rules: V2.rules,
+  }
+  const dir = mkdtempSync(join(tmpdir(), "dr03-gate-valid-"))
+  try {
+    const path = join(dir, "valid.json")
+    writeFileSync(
+      path,
+      JSON.stringify(
+        {
+          ...base,
+          cases: [
+            {
+              id: "empty-optionals",
+              hard: false,
+              kind: "refuse",
+              message: "问题",
+              knowledgeBaseIds: [],
+              answerPoints: [],
+              prohibitedAssertions: [],
+            },
+          ],
+        },
+        null,
+        2
+      ),
+      "utf8"
+    )
+    const dataset = loadDataset(path)
+    assert.equal(dataset.cases.length, 1)
+    assert.deepEqual(dataset.cases[0].knowledgeBaseIds, [])
+    assert.deepEqual(dataset.cases[0].answerPoints, [])
+    assert.deepEqual(dataset.cases[0].prohibitedAssertions, [])
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
 test("the gate fails closed on an invalid v2 case before any request", () => {
   const base = {
     schema: "demo-release-cases",

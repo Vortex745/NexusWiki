@@ -489,10 +489,9 @@ function isNonEmptyString(value: unknown): value is string {
   return typeof value === "string" && value.trim().length > 0
 }
 
-function isNonEmptyStringArray(value: unknown): value is string[] {
+function isStringArray(value: unknown): value is string[] {
   return (
     Array.isArray(value) &&
-    value.length > 0 &&
     value.every((entry) => isNonEmptyString(entry))
   )
 }
@@ -534,13 +533,13 @@ function validateCases(cases: unknown): asserts cases is GateCase[] {
     }
     if (
       cs.answerPoints !== undefined &&
-      !isNonEmptyStringArray(cs.answerPoints)
+      !isStringArray(cs.answerPoints)
     ) {
       throw new Error(`${cs.id}: answerPoints must be an array of non-empty strings`)
     }
     if (
       cs.prohibitedAssertions !== undefined &&
-      !isNonEmptyStringArray(cs.prohibitedAssertions)
+      !isStringArray(cs.prohibitedAssertions)
     ) {
       throw new Error(
         `${cs.id}: prohibitedAssertions must be an array of non-empty strings`
@@ -554,7 +553,10 @@ function validateCases(cases: unknown): asserts cases is GateCase[] {
         `${cs.id}: forbiddenReferenceContent must be a non-empty string`
       )
     }
-    if (cs.kind === "answer" && !isNonEmptyStringArray(cs.answerPoints)) {
+    if (
+      cs.kind === "answer" &&
+      (!isStringArray(cs.answerPoints) || cs.answerPoints.length === 0)
+    ) {
       throw new Error(`${cs.id}: answer case requires non-empty answerPoints`)
     }
     if (cs.kind === "memory-not-cited" && !isNonEmptyString(cs.forbiddenReferenceContent)) {
