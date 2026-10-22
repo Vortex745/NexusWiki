@@ -1,0 +1,17 @@
+# Isolated eval runtime (Python 3.12) — direct requirements.
+# Maintained by hand; tests/evals/requirements.txt is the fully resolved lock.
+#
+# DeepEval judges (JevEval) and the TypeSafe SDK are the two externally fixed
+# versions for the DeepEval repair programme (plans/019-deepeval-agent-repairs).
+deepeval==4.2.8
+typesafe-sdk==0.7.4
+
+# The eval harness is executed by pytest; the app bridge uses requests.
+pytest
+requests
+
+# Real platform file locking. DeepEval depends on portalocker; the preflight
+# imports it directly to prove a real Windows lock (no shim). pywin32 makes
+# portalocker select its Win32Locker instead of the msvcrt fallback.
+pywin32; sys_platform == "win32"
+portalocker

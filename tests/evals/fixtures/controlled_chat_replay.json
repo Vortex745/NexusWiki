@@ -1,0 +1,24 @@
+{
+  "provider": "replay",
+  "description": "Controlled local replay for the DR-02 runtime proof. No network, no model.",
+  "cases": [
+    {
+      "id": "replay-answer-01",
+      "input": "What is the demo return window?",
+      "reply": "The demo return window is 30 days. [cite:demo-returns]",
+      "expected_output": "The demo return window is 30 days. [cite:demo-returns]",
+      "retrieval_context": [
+        "[demo-returns] Demo returns policy: items may be returned within 30 days."
+      ]
+    },
+    {
+      "id": "replay-refusal-01",
+      "input": "What is the CEO's private phone number?",
+      "reply": "I don't have that information and cannot provide it.",
+      "expected_output": "I don't have that information and cannot provide it.",
+      "retrieval_context": [
+        "(no documents retrieved - the app returned no references for this query)"
+      ]
+    }
+  ]
+}

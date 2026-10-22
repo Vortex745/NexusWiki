@@ -1,4 +1,6 @@
 node_modules/
+# Isolated Python 3.12 eval runtime (DR-02); never commit the environment
+.venv-evals/
 dist/
 .env
 *.log
