@@ -12,6 +12,11 @@
  * SERVER enforces its declared JSON schema (MCP protocol behavior). When a
  * third-party MCP server needs stricter client-side validation, translate
  * its inputSchema into zod at registration.
+ *
+ * DR-20 (T1-AC07): authority is NOT a tool parameter. A run's tenant,
+ * subject, groups and scope live in the tool environment; an argument that
+ * names any of them is refused here, before the call leaves this process,
+ * whichever server declared the tool.
  */
 
 import path from "node:path"
@@ -32,6 +37,42 @@ export interface McpToolBridge {
   }
   close(): Promise<void>
 }
+
+const ACCESS_CONTEXT_ARGUMENT_KEYS = [
+  "accessContext",
+  "retrievalScope",
+  "tenant",
+  "tenantId",
+  "subject",
+  "subjectId",
+  "scope",
+  "scopes",
+  "groups",
+] as const
+
+const AUTHORITY_ARGUMENT_ERROR =
+  "MCP tool arguments cannot carry tenant, subject or scope; authority comes from the run environment"
+
+/**
+ * The invocation boundary parses every MCP call with this schema. The plain
+ * record keeps the server's own JSON-schema enforcement authoritative for
+ * tool-specific parameters; the refinement refuses injected AUTHORITY fields
+ * so no server — local or third-party — ever receives them.
+ */
+const mcpToolArguments = z
+  .record(z.string(), z.unknown())
+  .superRefine((args, context) => {
+    const injected = Object.keys(args).find((key) =>
+      (ACCESS_CONTEXT_ARGUMENT_KEYS as readonly string[]).includes(key)
+    )
+    if (injected) {
+      context.addIssue({
+        code: "custom",
+        path: [injected],
+        message: AUTHORITY_ARGUMENT_ERROR,
+      })
+    }
+  })
 
 export interface McpToolBridgeOptions {
   registry: ToolRegistry
@@ -77,6 +118,14 @@ export async function createMcpToolBridge(
    */
   const unwrapMcpResult = (raw: unknown): unknown => {
     if (!raw || typeof raw !== "object" || Array.isArray(raw)) return raw
+    // @mastra/mcp reports a rejected call (e.g. the server's input-schema
+    // validation) as `{ error: true, message }` instead of throwing. That is a
+    // refusal, never data: surfacing it as an `ok` result would hide both the
+    // refusal and its bounded terminal from the caller.
+    const refusal = raw as { error?: unknown; message?: unknown }
+    if (refusal.error === true && typeof refusal.message === "string") {
+      throw new Error(refusal.message.slice(0, 200))
+    }
     const envelope = raw as { isError?: boolean; content?: Array<{ type?: string; text?: string }> }
     if (!Array.isArray(envelope.content)) return raw
     if (envelope.isError) {
@@ -110,9 +159,9 @@ export async function createMcpToolBridge(
         registry.register({
           name: registeredName,
           description: (tool.description ?? "MCP capability status tool").slice(0, 300),
-          // Server-side JSON-schema enforcement is the MCP contract; the
-          // boundary still bounds the args shape to a plain object.
-          schema: z.record(z.string(), z.unknown()),
+          // DR-20: the server's declared JSON schema still governs its own
+          // parameters, but authority keys are refused at THIS boundary.
+          schema: mcpToolArguments,
           summarize: (args) => JSON.stringify(args ?? {}).slice(0, 160),
           execute: async (args) => unwrapMcpResult(await executable(args)),
         })

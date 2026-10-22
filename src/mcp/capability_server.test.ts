@@ -16,6 +16,7 @@ import assert from "node:assert/strict"
 import test from "node:test"
 
 import { loadConfig } from "../config"
+import type { AccessContext } from "../access/context"
 import { ToolRegistry, ToolInvocationService } from "../tools/invocation"
 import { registerBuiltinTools } from "../tools/knowledge_tools"
 import { createMcpToolBridge } from "./tool_bridge"
@@ -56,6 +57,75 @@ test("Ticket 35: the compatible MCP client discovers and calls the local capabil
     assert.equal(typeof result.configured, "boolean")
     assert.ok(invocation.trace.argsSummary !== undefined)
     assert.ok(invocation.trace.durationMs >= 0)
+  } finally {
+    await bridge!.close()
+  }
+})
+
+test("DR-20 AC01: MCP tool args cannot carry tenant, subject or scope", { timeout: 60_000 }, async () => {
+  const registry = new ToolRegistry()
+  const bridge = await createMcpToolBridge({ registry, config })
+  assert.ok(bridge)
+  try {
+    const service = new ToolInvocationService({
+      registry,
+      allowedTools: [...bridge!.toolNames()],
+      timeoutMs: 15_000,
+    })
+    const accessContext: AccessContext = { tenantId: "tenant-a", subjectId: "alice", groups: [], scopes: ["chat"] }
+    const forged = [
+      { tenantId: "tenant-b" },
+      { tenant: "tenant-b" },
+      { subjectId: "mallory" },
+      { subject: "mallory" },
+      { scopes: ["admin"] },
+      { scope: "admin" },
+      { groups: ["ops"] },
+      { accessContext: { tenantId: "tenant-b" } },
+      { retrievalScope: { knowledgeBaseIds: ["kb-x"] } },
+    ]
+    for (const args of forged) {
+      const invocation = await service.invoke(
+        "mcp_capabilities_model_status",
+        args,
+        { accessContext }
+      )
+      assert.equal(invocation.outcome, "invalid_args", JSON.stringify(args))
+      assert.equal(invocation.result, undefined, "a refused call cannot execute")
+      assert.equal(invocation.trace.argsSummary, "", "the forged values never reach the trace")
+      assert.match(
+        invocation.trace.error ?? "",
+        /cannot carry tenant, subject or scope/
+      )
+      assert.equal(
+        JSON.stringify(invocation).includes("mallory"),
+        false,
+        "the forged subject is not echoed back"
+      )
+    }
+
+    // Authorized, argument-free calls still execute through the same boundary.
+    const allowed = await service.invoke(
+      "mcp_capabilities_model_status",
+      {},
+      { accessContext }
+    )
+    assert.equal(allowed.outcome, "ok")
+
+    // A run whose allowlist omits the DISCOVERED name never reaches the tool.
+    const narrowed = new ToolInvocationService({
+      registry,
+      allowedTools: [],
+      timeoutMs: 15_000,
+    })
+    const denied = await narrowed.invoke(
+      "mcp_capabilities_model_status",
+      {},
+      { accessContext }
+    )
+    assert.equal(denied.outcome, "policy_denied")
+    assert.equal(denied.result, undefined)
+    assert.ok(denied.trace.error)
   } finally {
     await bridge!.close()
   }
