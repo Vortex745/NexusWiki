@@ -1,0 +1,89 @@
+node_modules/
+dist/
+.env
+*.log
+*.err
+.DS_Store
+# Added by code-review-graph
+.code-review-graph/
+# Ticket 04: release-time evidence artifacts — must not dirty the trusted worktree
+.release-artifacts/
+
+# Agent task state and scratch work
+.omx/
+.scratch/
+
+# Non-runtime documentation and development-tool instructions
+*.md
+# Locally-retained planning/reference docs (kept on disk, not tracked)
+LANGFUSE-V4-MIGRATION.md
+MEMORY.md
+.cursorrules
+.windsurfrules
+.mcp.json
+opencode.jsonc
+
+# Test sources, end-to-end scenarios, and captured test output
+**/*.test.*
+**/*.spec.*
+src/evaluation/test-fixtures/
+e2e/
+test*.txt
+full_test*.txt
+release-verification-*.json
+console.log('observability
+
+# Design artifacts outside the runtime surface
+*.drawio
+*.drawio.png
+/rag-*.png
+*.url
+agentic-rag-runtime-architecture.*
+*.visual-check.*
+
+# Agent session protocol files (kept on disk, untracked)
+AGENTS.md
+HINTS.md
+verify.json
+
+# Runtime data (sqlite db, ragas eval history)
+data/
+
+# Tool state directories and temp artifacts
+.codegraph/
+.omc/
+.tmp/
+__pycache__/
+
+# README.md is NOT ignored — recreating it will be tracked normally
+!README.md
+
+# ===== ↑ 以上同步自 .gitignore（「从 .gitignore 同步」只重写以上部分）=====
+.git/
+.hg/
+.svn/
+bower_components/
+jspm_packages/
+site-packages/
+venv/
+coverage/
+htmlcov/
+lcov-report/
+cmakefiles/
+cmake-build-*/
+bazel-*/
+pods/
+deriveddata/
+storybook-static/
+playwright-report/
+test-results/
+allure-results/
+allure-report/
+cdk.out/
+*.egg-info/
+*.dist-info/
+eggs/
+pip-wheel-metadata/
+wheels/
+# ----- ↑ 以上为 ZCode 默认排除规则（自定义规则请写在本行下方，不会被同步/恢复改动）-----
+# 自定义规则写在下方（本行提示可删除）

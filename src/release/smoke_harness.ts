@@ -49,6 +49,7 @@ export type ProbeName =
   | "markitdown"
   | "marker"
   | "mineru"
+  | "ocr-api"
   | "cancellation"
   | "graceful_shutdown"
   | "citation_integrity"
@@ -177,7 +178,7 @@ export interface WriteEvidenceOptions {
 }
 
 // ---------------------------------------------------------------------------
-// PROBE_REGISTRY — 14 declarations covering all spec-listed capabilities
+// PROBE_REGISTRY — current capabilities, with one OCR provider
 // ---------------------------------------------------------------------------
 
 export const PROBE_REGISTRY: readonly ProbeDeclaration[] = [
@@ -321,37 +322,20 @@ export const PROBE_REGISTRY: readonly ProbeDeclaration[] = [
     ],
   },
   {
-    name: "marker",
-    description: "Marker parser — bounded PDF + structured output",
+    name: "ocr-api",
+    description: "Volcengine OCRPdf — bounded PDF/image recognition and page evidence",
     requiredPerProfile: { local: "optional", production: "required" },
     timeoutMs: 60_000,
-    prerequisites: ["MARKER_COMMAND"],
+    prerequisites: ["VOLC_ACCESSKEY", "VOLC_SECRETKEY"],
     redaction: {
       stripFields: ["content", "raw_content", "document_text"],
       redactPatterns: [],
       maxOutputLength: 1000,
     },
-    fixtureIdentity: "smoke/marker-fixed-doc.pdf",
+    fixtureIdentity: "smoke/ocr-api-fixed-doc.pdf",
     resultSchema: [
       { name: "ok", type: "boolean", required: true },
       { name: "pages", type: "number", required: true },
-    ],
-  },
-  {
-    name: "mineru",
-    description: "MinerU OCR parser — bounded image + Chinese text extraction",
-    requiredPerProfile: { local: "optional", production: "required" },
-    timeoutMs: 60_000,
-    prerequisites: ["MINERU_COMMAND"],
-    redaction: {
-      stripFields: ["content", "raw_content", "image_data"],
-      redactPatterns: [],
-      maxOutputLength: 1000,
-    },
-    fixtureIdentity: "smoke/mineru-fixed-image.png",
-    resultSchema: [
-      { name: "ok", type: "boolean", required: true },
-      { name: "characters", type: "number", required: true },
     ],
   },
   {

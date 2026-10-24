@@ -1,9 +1,18 @@
 import { useCallback, useEffect, useMemo, useState } from "react"
 
 import { AppShell } from "./components/AppShell"
+import {
+  Alert,
+  AlertTitle,
+  AlertDescription,
+} from "./components/primitives/alert"
+import { Skeleton } from "./components/arc/skeleton/skeleton"
 import { LoginScreen } from "./components/LoginScreen"
 import { AssistantsDialog } from "./components/panels/AssistantsDialog"
-import { DocumentViewerDialog, type DocumentViewTarget } from "./components/panels/DocumentViewerDialog"
+import {
+  DocumentViewerDialog,
+  type DocumentViewTarget,
+} from "./components/panels/DocumentViewerDialog"
 import { EvaluationDialog } from "./components/panels/EvaluationDialog"
 import { FaqDialog } from "./components/panels/FaqDialog"
 import { FeedbackDialog } from "./components/panels/FeedbackDialog"
@@ -13,7 +22,10 @@ import { MemoryDialog } from "./components/panels/MemoryDialog"
 import { SettingsDialog } from "./components/panels/SettingsDialog"
 import type { Attachment } from "./components/thread/Thread"
 import { Toast, type ToastMessage } from "./components/Toast"
-import { conversationStore, useConversation } from "./conversation/useConversation"
+import {
+  conversationStore,
+  useConversation,
+} from "./conversation/useConversation"
 import {
   listSessionAttachments,
   promoteSessionAttachment,
@@ -22,13 +34,32 @@ import {
 } from "./lib/api"
 import { knowledgeStore } from "./runtime/knowledgeStore"
 import { useTheme } from "./lib/theme"
-import { AppShellProvider, type AppShellActions, type AppShellState } from "./runtime/AppShellContext"
+import {
+  AppShellProvider,
+  type AppShellActions,
+  type AppShellState,
+} from "./runtime/AppShellContext"
 import { MemoryProvider } from "./runtime/MemoryContext"
 import { PromptComposerProvider } from "./runtime/PromptComposerContext"
 import { ConversationRuntimeProvider } from "./runtime/ConversationRuntimeProvider"
 import { SessionProvider, useSession } from "./runtime/SessionContext"
 
 export function App() {
+  useEffect(() => {
+    const root = document.documentElement
+    const previous = root.getAttribute("data-motion-input")
+    const pointer = () => root.setAttribute("data-motion-input", "pointer")
+    const keyboard = () => root.setAttribute("data-motion-input", "keyboard")
+    keyboard()
+    document.addEventListener("pointerdown", pointer, true)
+    document.addEventListener("keydown", keyboard, true)
+    return () => {
+      document.removeEventListener("pointerdown", pointer, true)
+      document.removeEventListener("keydown", keyboard, true)
+      if (previous === null) root.removeAttribute("data-motion-input")
+      else root.setAttribute("data-motion-input", previous)
+    }
+  }, [])
   return (
     <SessionProvider>
       <SessionGate />
@@ -46,8 +77,11 @@ function SessionGate() {
 
   if (state.status === "loading") {
     return (
-      <div className="grid min-h-dvh place-items-center bg-canvas">
-        <p className="text-xs text-muted">正在确认身份…</p>
+      <div className="grid min-h-dvh place-items-center bg-background">
+        <div role="status" className="flex w-64 flex-col gap-3">
+          <Skeleton lines={2} label="正在确认身份" />
+          <p className="text-sm text-muted-foreground">正在确认身份…</p>
+        </div>
       </div>
     )
   }
@@ -59,13 +93,10 @@ function SessionGate() {
   if (state.status === "error") {
     return (
       <div className="grid min-h-dvh place-items-center bg-canvas px-4">
-        <div
-          role="alert"
-          className="w-full max-w-sm rounded-xl border border-line bg-surface p-6 "
-        >
-          <p className="text-sm font-medium text-ink">无法进入应用</p>
-          <p className="mt-2 text-xs leading-relaxed text-muted">{state.message}</p>
-        </div>
+        <Alert variant="destructive" className="max-w-sm">
+          <AlertTitle>无法进入应用</AlertTitle>
+          <AlertDescription>{state.message}</AlertDescription>
+        </Alert>
       </div>
     )
   }
@@ -104,16 +135,25 @@ function AppRoot() {
   const [assistantsOpen, setAssistantsOpen] = useState(false)
   const [feedbackOpen, setFeedbackOpen] = useState(false)
   const [faqsOpen, setFaqsOpen] = useState(false)
-  const [documentView, setDocumentView] = useState<{ open: boolean; target: DocumentViewTarget | null }>({
+  const [documentView, setDocumentView] = useState<{
+    open: boolean
+    target: DocumentViewTarget | null
+  }>({
     open: false,
     target: null,
   })
-  const [trace, setTrace] = useState<{ open: boolean; messageId: string | null }>({
+  const [trace, setTrace] = useState<{
+    open: boolean
+    messageId: string | null
+  }>({
     open: false,
     messageId: null,
   })
 
-  const showToast = useCallback((text: string) => setToast({ text, key: Date.now() }), [])
+  const showToast = useCallback(
+    (text: string) => setToast({ text, key: Date.now() }),
+    [],
+  )
   const openTrace = useCallback((messageId: string) => {
     setTrace((previous) =>
       previous.open && previous.messageId === messageId
@@ -121,7 +161,10 @@ function AppRoot() {
         : { open: true, messageId },
     )
   }, [])
-  const closeTrace = useCallback(() => setTrace({ open: false, messageId: null }), [])
+  const closeTrace = useCallback(
+    () => setTrace({ open: false, messageId: null }),
+    [],
+  )
   const openMemory = useCallback(() => setMemoryOpen(true), [])
   const openImport = useCallback(() => setImportOpen(true), [])
   const openEvaluation = useCallback(() => setEvaluationOpen(true), [])
@@ -136,8 +179,34 @@ function AppRoot() {
   )
 
   const shellActions = useMemo<AppShellActions & AppShellState>(
-    () => ({ activeImportCount, openTrace, openMemory, openImport, openEvaluation, openKnowledge, openSettings, openAssistants, openFeedback, openFaqs, openDocument, showToast }),
-    [activeImportCount, openTrace, openMemory, openImport, openEvaluation, openKnowledge, openSettings, openAssistants, openFeedback, openFaqs, openDocument, showToast],
+    () => ({
+      activeImportCount,
+      openTrace,
+      openMemory,
+      openImport,
+      openEvaluation,
+      openKnowledge,
+      openSettings,
+      openAssistants,
+      openFeedback,
+      openFaqs,
+      openDocument,
+      showToast,
+    }),
+    [
+      activeImportCount,
+      openTrace,
+      openMemory,
+      openImport,
+      openEvaluation,
+      openKnowledge,
+      openSettings,
+      openAssistants,
+      openFeedback,
+      openFaqs,
+      openDocument,
+      showToast,
+    ],
   )
 
   // Replay server-side trace history for runs persisted before this page load.
@@ -151,9 +220,12 @@ function AppRoot() {
   // currently streaming: whenever the newest assistant message changes (a new run
   // opens, or the thread switches) the panel drops back to the live chain.
   const latestAssistantId =
-    [...messages].reverse().find((message) => message.role === "assistant")?.id ?? null
+    [...messages].reverse().find((message) => message.role === "assistant")
+      ?.id ?? null
   useEffect(() => {
-    setTrace((previous) => (previous.messageId ? { ...previous, messageId: null } : previous))
+    setTrace((previous) =>
+      previous.messageId ? { ...previous, messageId: null } : previous,
+    )
   }, [latestAssistantId])
 
   // Ticket 22 (ATT-01): attachments are SERVER-owned rows of the current
@@ -167,7 +239,8 @@ function AppRoot() {
     let cancelled = false
     void listSessionAttachments(activeThreadId)
       .then((payload) => {
-        if (!cancelled) setAttachments(payload.attachments.map(toChipAttachment))
+        if (!cancelled)
+          setAttachments(payload.attachments.map(toChipAttachment))
       })
       .catch(() => {
         if (!cancelled) setAttachments([])
@@ -190,10 +263,7 @@ function AppRoot() {
   // Ticket 33 (MEM-01B): the prompt carries ONLY what the user typed —
   // long-term memories are recalled SERVER-side now (owner-scoped, traceable,
   // disableable per run), so the client no longer pastes them into the message.
-  const composePrompt = useCallback(
-    (displayText: string) => displayText,
-    [],
-  )
+  const composePrompt = useCallback((displayText: string) => displayText, [])
 
   const handleRemoveAttachment = useCallback(
     async (id: string) => {
@@ -249,22 +319,42 @@ function AppRoot() {
               onPromote: handlePromoteAttachment,
             }}
           />
-          <MemoryDialog open={memoryOpen} onClose={() => setMemoryOpen(false)} />
+          <MemoryDialog
+            open={memoryOpen}
+            onClose={() => setMemoryOpen(false)}
+          />
           <ImportDialog
             open={importOpen}
             onClose={() => setImportOpen(false)}
             onActiveCountChange={setActiveImportCount}
           />
-          <EvaluationDialog open={evaluationOpen} onClose={() => setEvaluationOpen(false)} />
-          <KnowledgeDialog open={knowledgeOpen} onClose={() => setKnowledgeOpen(false)} />
-          <SettingsDialog open={settingsOpen} onClose={() => setSettingsOpen(false)} />
-          <AssistantsDialog open={assistantsOpen} onClose={() => setAssistantsOpen(false)} />
-          <FeedbackDialog open={feedbackOpen} onClose={() => setFeedbackOpen(false)} />
+          <EvaluationDialog
+            open={evaluationOpen}
+            onClose={() => setEvaluationOpen(false)}
+          />
+          <KnowledgeDialog
+            open={knowledgeOpen}
+            onClose={() => setKnowledgeOpen(false)}
+          />
+          <SettingsDialog
+            open={settingsOpen}
+            onClose={() => setSettingsOpen(false)}
+          />
+          <AssistantsDialog
+            open={assistantsOpen}
+            onClose={() => setAssistantsOpen(false)}
+          />
+          <FeedbackDialog
+            open={feedbackOpen}
+            onClose={() => setFeedbackOpen(false)}
+          />
           <FaqDialog open={faqsOpen} onClose={() => setFaqsOpen(false)} />
           <DocumentViewerDialog
             open={documentView.open}
             target={documentView.target}
-            onClose={() => setDocumentView((previous) => ({ ...previous, open: false }))}
+            onClose={() =>
+              setDocumentView((previous) => ({ ...previous, open: false }))
+            }
           />
           <Toast toast={toast} />
         </ConversationRuntimeProvider>

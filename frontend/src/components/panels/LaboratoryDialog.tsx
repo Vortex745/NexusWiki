@@ -1,14 +1,22 @@
-import { FlaskConical, X } from "lucide"
-import { useEffect, useRef, useState } from "react"
+import { Alert, AlertDescription } from "@/components/primitives/alert"
+import { FlaskConical } from "../ui/icons"
+import { useState } from "react"
 
-import { Icon } from "../ui/Icon"
+import type { LabCandidatePayload, LabRunPayload } from "../../lib/api"
 import {
   DocumentOperationError,
   LabTimeoutError,
   runRetrievalDebug,
-  type LabCandidatePayload,
-  type LabRunPayload,
 } from "../../lib/api"
+import { Icon } from "../ui/Icon"
+import { Dialog } from "../ui/Dialog"
+import {
+  Button,
+  Checkbox,
+  EmptyState,
+  StatusBadge,
+  TextInput,
+} from "../ui/Controls"
 
 /**
  * Ticket 15 (RET-02): the retrieval laboratory — one experiment at a time,
@@ -53,46 +61,57 @@ function CandidateList({
       {candidates.map((candidate) => (
         <li
           key={`${candidate.chunkId}-${candidate.rank}`}
-          className="rounded-md border border-line bg-surface px-2 py-1.5 text-[11px] text-muted"
+          className="rounded-[10px] border border-line bg-surface px-2.5 py-1.5 text-[11px] text-muted-foreground"
         >
-          <span className="mr-1.5 font-mono text-[10px] text-brand">#{candidate.rank}</span>
-          <span className="font-medium text-ink">{candidate.title || "未命名"}</span>
+          {/* The rank used to carry `text-brand`, spending the accent on a
+              counter; brand is reserved for links, focus and selection. */}
+          <span className="mr-1.5 font-mono text-[10px] text-faint">
+            #{candidate.rank}
+          </span>
+          <span className="font-medium text-ink">
+            {candidate.title || "未命名"}
+          </span>
           {candidate.score !== null ? (
             <span className="ml-1.5 font-mono text-[10px]" title={scoreNote}>
               {scoreNote} {candidate.score.toFixed(4)}
             </span>
           ) : null}
-          <p className="mt-0.5 line-clamp-2 overflow-hidden">{candidate.excerpt}</p>
+          <p className="mt-0.5 line-clamp-2 overflow-hidden">
+            {candidate.excerpt}
+          </p>
         </li>
       ))}
     </ol>
   )
 }
 
-const STAGE_CARD_CLASS = "rounded-lg border border-line p-3"
-const STAGE_TITLE_CLASS = "text-[10px] font-medium uppercase tracking-wider text-muted/70"
+const STAGE_CARD_CLASS = "rounded-[14px] border border-line p-3"
+const STAGE_TITLE_CLASS = "text-[10px] font-medium text-muted-foreground"
+const STAGE_TIME_CLASS = "font-mono text-[10px] text-faint"
 
-export function LaboratoryDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
-  const dialogRef = useRef<HTMLDialogElement>(null)
+export function LaboratoryDialog({
+  open,
+  onClose,
+}: {
+  open: boolean
+  onClose: () => void
+}) {
   const [query, setQuery] = useState("")
-  const [selected, setSelected] = useState<string[]>(["vector", "bm25", "graph", "pageIndex"])
+  const [selected, setSelected] = useState<string[]>([
+    "vector",
+    "bm25",
+    "graph",
+    "pageIndex",
+  ])
   const [running, setRunning] = useState(false)
   const [run, setRun] = useState<LabRunPayload | null>(null)
   const [error, setError] = useState<string | null>(null)
 
-  useEffect(() => {
-    const dialog = dialogRef.current
-    if (!dialog) return
-    if (open && !dialog.open) {
-      dialog.showModal()
-    } else if (!open && dialog.open) {
-      dialog.close()
-    }
-  }, [open])
-
   const toggleChannel = (id: string) =>
     setSelected((previous) =>
-      previous.includes(id) ? previous.filter((entry) => entry !== id) : [...previous, id],
+      previous.includes(id)
+        ? previous.filter((entry) => entry !== id)
+        : [...previous, id],
     )
 
   const execute = () => {
@@ -115,193 +134,229 @@ export function LaboratoryDialog({ open, onClose }: { open: boolean; onClose: ()
   const ordering = run?.ordering ?? null
 
   return (
-    <dialog
-      ref={dialogRef}
+    <Dialog
+      open={open}
       onClose={onClose}
-      onClick={(event) => {
-        if (event.target === event.currentTarget) onClose()
-      }}
-      aria-labelledby="laboratory-title"
-      className="m-auto h-[min(680px,calc(100dvh-48px))] w-[min(760px,calc(100vw-32px))] grid-rows-[auto_minmax(0,1fr)] overflow-hidden rounded-xl border border-line bg-surface text-ink shadow-dialog backdrop:bg-black/20 open:grid max-md:m-0 max-md:h-dvh max-md:w-screen max-md:rounded-none max-md:border-0"
-    >
-      <div className="flex h-13 flex-none items-center justify-between border-b border-line px-5 max-md:px-4">
-        <div className="flex min-w-0 items-center gap-2">
-          <Icon icon={FlaskConical} className="size-4 flex-none text-muted" />
-          <h2 id="laboratory-title" className="truncate text-sm font-semibold text-ink">
-            检索实验室
-          </h2>
-        </div>
-        <button
-          type="button"
-          onClick={onClose}
-          aria-label="关闭检索实验室"
-          title="关闭"
-          className="grid size-7 flex-none cursor-pointer place-items-center rounded-md text-muted/70 transition-colors hover:bg-surface-subtle hover:text-ink"
+      title="检索实验室"
+      titleId="laboratory-title"
+      icon={FlaskConical}
+      tier="work"
+      toolbar={
+        <form
+          className="flex flex-col gap-2"
+          onSubmit={(event) => {
+            event.preventDefault()
+            execute()
+          }}
         >
-          <Icon icon={X} className="size-4" />
-        </button>
-      </div>
-
-      <form
-        className="flex min-h-0 flex-col overflow-y-auto px-5 py-4 max-md:px-4"
-        onSubmit={(event) => {
-          event.preventDefault()
-          execute()
-        }}
-      >
-        {/* Query + channel selection */}
-        <div className="flex flex-none flex-wrap items-center gap-2">
-          <input
-            autoFocus
-            value={query}
-            onChange={(event) => setQuery(event.target.value)}
-            placeholder="输入实验查询…（回车运行）"
-            maxLength={2000}
-            aria-label="实验查询"
-            className="h-9 min-w-0 flex-1 rounded-md border border-line bg-surface px-2.5 text-xs text-ink outline-none focus:border-brand"
-          />
-          <button
-            type="submit"
-            disabled={running || !query.trim() || selected.length === 0}
-            title={selected.length === 0 ? "至少选择一个通道" : "运行实验"}
-            className="inline-flex h-9 flex-none cursor-pointer items-center gap-1.5 rounded-lg bg-brand px-3 text-xs font-medium text-white transition-[color,background-color,border-color,transform,translate,scale] duration-150 ease-out hover:bg-brand-hover active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-50"
+          <div className="flex items-center gap-2">
+            <TextInput
+              autoFocus
+              value={query}
+              onChange={(event) => setQuery(event.target.value)}
+              placeholder="输入实验查询…（回车运行）"
+              maxLength={2000}
+              aria-label="实验查询"
+            />
+            <Button
+              type="submit"
+              tone="primary"
+              disabled={running || !query.trim() || selected.length === 0}
+              title={selected.length === 0 ? "至少选择一个通道" : "运行实验"}
+            >
+              {running ? "运行中…" : "运行"}
+            </Button>
+          </div>
+          <div
+            className="flex flex-wrap items-center gap-3"
+            role="group"
+            aria-label="通道选择"
           >
-            {running ? "运行中…" : "运行"}
-          </button>
-        </div>
-        <div className="mt-2 flex flex-none flex-wrap items-center gap-3" role="group" aria-label="通道选择">
-          {ALL_CHANNELS.map(({ id, label }) => (
-            <label key={id} className="flex cursor-pointer items-center gap-1.5 text-xs text-muted">
-              <input
-                type="checkbox"
+            {ALL_CHANNELS.map(({ id, label }) => (
+              <Checkbox
+                key={id}
                 checked={selected.includes(id)}
                 onChange={() => toggleChannel(id)}
-                className="accent-[var(--color-brand,theme(colors.brand))]"
+                label={label}
               />
-              {label}
-            </label>
-          ))}
-          <span className="text-[10px] text-muted/60">
-            知识范围与对话一致（侧栏选择）
-          </span>
-        </div>
-
-        {/* States: error / timeout / empty / result — each distinct */}
-        {error ? (
-          <p role="alert" className="mt-4 rounded-lg border border-red-200 bg-red-50 p-3 text-xs text-red-700 dark:border-red-900 dark:bg-red-950/40 dark:text-red-300">
-            {error}
-          </p>
-        ) : null}
-
-        {run ? (
-          <div className="mt-4 flex min-h-0 flex-col gap-3">
-            {/* Overall status + ordering source */}
-            <div className="flex flex-wrap items-center gap-1.5">
-              <span className="rounded-full border border-line bg-surface-subtle px-2 py-0.5 font-mono text-[10px] text-muted">
-                {run.status === "ok" ? "正常" : run.status === "degraded" ? "降级" : "无结果"}
-              </span>
-              <span className="rounded-full border border-line bg-surface-subtle px-2 py-0.5 font-mono text-[10px] text-muted">
-                总耗时 {Math.round(run.debug?.totalMs ?? 0)} ms
-              </span>
-              {ordering ? (
-                ordering.source === "dedicated_rerank" ? (
-                  <span className="rounded-full border border-brand-line bg-brand-subtle px-2 py-0.5 font-mono text-[10px] text-brand">
-                    专用重排
-                  </span>
-                ) : (
-                  /* Criterion 3: a fallback ordering is labeled as one. */
-                  <span
-                    title="融合排序是回退结果，不是成功的重排"
-                    className="rounded-full border border-amber-300 bg-amber-50 px-2 py-0.5 font-mono text-[10px] text-amber-700 dark:border-amber-700 dark:bg-amber-950/40 dark:text-amber-300"
-                  >
-                    回退排序：融合结果（未成功重排{ordering.reason ? ` — ${RERANK_REASON_LABELS[ordering.reason] ?? ordering.reason}` : ""}）
-                  </span>
-                )
-              ) : null}
-            </div>
-
-            {/* Disabled channels (not a failure) */}
-            {(run.unselectedChannels?.length ?? 0) > 0 ? (
-              <p className="rounded-lg border border-line bg-surface-subtle/40 p-3 text-xs text-muted">
-                本次未启用通道：{run.unselectedChannels?.map((c) => CHANNEL_LABELS[c] ?? c).join("、")}（未启用 ≠ 故障）
-              </p>
-            ) : null}
-
-            {/* Empty hits vs total channel failure — distinct states */}
-            {run.unavailableChannels.length > 0 ? (
-              <p role="alert" className="rounded-lg border border-red-200 bg-red-50 p-3 text-xs text-red-700 dark:border-red-900 dark:bg-red-950/40 dark:text-red-300">
-                通道不可用：{run.unavailableChannels.map((c) => CHANNEL_LABELS[c] ?? c).join("、")} — 该通道执行失败，其余通道正常参与。
-              </p>
-            ) : run.status === "insufficient" || (run.debug?.fused.distinctCount ?? 0) === 0 ? (
-              <p className="rounded-lg border border-line bg-surface-subtle/40 p-3 text-xs text-muted">
-                无命中：本次实验未检索到候选（空命中是正常结果，不是故障）。
-              </p>
-            ) : null}
-
-            {/* Stage 1: raw channel ranks — per-channel scores, explicitly NOT comparable */}
-            {run.debug?.channels.map((stage) => (
-              <div key={stage.channel} className={STAGE_CARD_CLASS}>
-                <div className="flex items-center justify-between gap-2">
-                  <p className={STAGE_TITLE_CLASS}>
-                    通道 · {CHANNEL_LABELS[stage.channel] ?? stage.channel}
-                    {!stage.ok ? " · 失败" : ""}
-                  </p>
-                  <span className="font-mono text-[10px] text-muted/70">{Math.round(stage.elapsedMs)} ms</span>
-                </div>
-                {stage.error ? (
-                  <p role="alert" className="mt-1 text-[11px] text-red-700 dark:text-red-300">{stage.error}</p>
-                ) : stage.candidates.length === 0 ? (
-                  <p className="mt-1 text-[11px] text-muted/70">该通道没有返回候选。</p>
-                ) : (
-                  <CandidateList
-                    candidates={stage.candidates}
-                    scoreNote="通道原始分（不可跨通道比较）"
-                  />
-                )}
-              </div>
             ))}
+            <span className="ml-auto text-[10px] text-faint">
+              知识范围与对话一致（侧栏选择）
+            </span>
+          </div>
+        </form>
+      }
+    >
+      {/* States: error / timeout / empty / result — each distinct */}
+      {error ? (
+        <Alert variant="destructive" role="alert" className="border p-3">
+          <AlertDescription>{error}</AlertDescription>
+        </Alert>
+      ) : null}
 
-            {/* Stage 2: fusion = dedup + rank-based ordering (no scores shown) */}
-            {run.debug ? (
-              <div className={STAGE_CARD_CLASS}>
-                <div className="flex items-center justify-between gap-2">
-                  <p className={STAGE_TITLE_CLASS}>融合（RRF · 去重）</p>
-                  <span className="font-mono text-[10px] text-muted/70">{Math.round(run.debug.fused.elapsedMs)} ms</span>
-                </div>
-                <p className="mt-1 text-[11px] text-muted">
-                  原始候选 {run.debug.fused.rawCandidateCount} 条 → 去重后 {run.debug.fused.distinctCount} 条（按排名融合，无统一分数）
-                </p>
-                {run.debug.fused.candidates.length > 0 ? (
-                  <CandidateList candidates={run.debug.fused.candidates} scoreNote="" />
-                ) : null}
-              </div>
-            ) : null}
+      {!run && !error && !running ? (
+        <EmptyState
+          icon={FlaskConical}
+          message="运行一次查询，这里会按通道、融合、重排三段展开各自的候选。"
+        />
+      ) : null}
 
-            {/* Stage 3: rerank — success and failure are visibly different */}
-            {rerank ? (
-              <div className={STAGE_CARD_CLASS}>
-                <div className="flex items-center justify-between gap-2">
-                  <p className={STAGE_TITLE_CLASS}>
-                    重排
-                    {rerank.applied ? " · 已应用" : " · 未应用（回退）"}
-                  </p>
-                  <span className="font-mono text-[10px] text-muted/70">{Math.round(rerank.elapsedMs)} ms</span>
-                </div>
-                {!rerank.applied ? (
-                  <p role="alert" className="mt-1 text-[11px] text-amber-700 dark:text-amber-300">
-                    重排失败或未执行（{RERANK_REASON_LABELS[rerank.reason ?? ""] ?? rerank.reason ?? "未知原因"}）——
-                    展示的是融合回退排序，不是重排结果。
-                  </p>
-                ) : rerank.candidates && rerank.candidates.length > 0 ? (
-                  <CandidateList candidates={rerank.candidates} scoreNote="重排分" />
-                ) : (
-                  <p className="mt-1 text-[11px] text-muted/70">没有候选。</p>
-                )}
-              </div>
+      {run ? (
+        <div className="flex min-h-0 flex-col gap-3">
+          {/* Overall status + ordering source */}
+          <div className="flex flex-wrap items-center gap-1.5">
+            <StatusBadge
+              tone={
+                run.status === "ok"
+                  ? "success"
+                  : run.status === "degraded"
+                    ? "warning"
+                    : "neutral"
+              }
+            >
+              {run.status === "ok"
+                ? "正常"
+                : run.status === "degraded"
+                  ? "降级"
+                  : "无结果"}
+            </StatusBadge>
+            <StatusBadge>
+              总耗时 {Math.round(run.debug?.totalMs ?? 0)} ms
+            </StatusBadge>
+            {ordering ? (
+              ordering.source === "dedicated_rerank" ? (
+                <StatusBadge tone="success">专用重排</StatusBadge>
+              ) : (
+                /* Criterion 3: a fallback ordering is labeled as one. */
+                <StatusBadge
+                  tone="warning"
+                  title="融合排序是回退结果，不是成功的重排"
+                >
+                  回退排序：融合结果（未成功重排
+                  {ordering.reason
+                    ? ` — ${RERANK_REASON_LABELS[ordering.reason] ?? ordering.reason}`
+                    : ""}
+                  ）
+                </StatusBadge>
+              )
             ) : null}
           </div>
-        ) : null}
-      </form>
-    </dialog>
+
+          {/* Disabled channels (not a failure) */}
+          {(run.unselectedChannels?.length ?? 0) > 0 ? (
+            <p className="rounded-[14px] border border-line bg-surface-subtle p-3 text-xs text-muted-foreground">
+              本次未启用通道：
+              {run.unselectedChannels
+                ?.map((c) => CHANNEL_LABELS[c] ?? c)
+                .join("、")}
+              （未启用 ≠ 故障）
+            </p>
+          ) : null}
+
+          {/* Empty hits vs total channel failure — distinct states */}
+          {run.unavailableChannels.length > 0 ? (
+            <Alert variant="destructive" role="alert" className="border p-3">
+              <AlertDescription>
+                通道不可用：
+                {run.unavailableChannels
+                  .map((c) => CHANNEL_LABELS[c] ?? c)
+                  .join("、")}{" "}
+                — 该通道执行失败，其余通道正常参与。
+              </AlertDescription>
+            </Alert>
+          ) : run.status === "insufficient" ||
+            (run.debug?.fused.distinctCount ?? 0) === 0 ? (
+            <p className="rounded-[14px] border border-line bg-surface-subtle p-3 text-xs text-muted-foreground">
+              无命中：本次实验未检索到候选（空命中是正常结果，不是故障）。
+            </p>
+          ) : null}
+
+          {/* Stage 1: raw channel ranks — per-channel scores, explicitly NOT comparable */}
+          {run.debug?.channels.map((stage) => (
+            <div key={stage.channel} className={STAGE_CARD_CLASS}>
+              <div className="flex items-center justify-between gap-2">
+                <p className={STAGE_TITLE_CLASS}>
+                  通道 · {CHANNEL_LABELS[stage.channel] ?? stage.channel}
+                  {!stage.ok ? " · 失败" : ""}
+                </p>
+                <span className={STAGE_TIME_CLASS}>
+                  {Math.round(stage.elapsedMs)} ms
+                </span>
+              </div>
+              {stage.error ? (
+                <Alert variant="destructive" role="alert" className="mt-1">
+                  <AlertDescription>{stage.error}</AlertDescription>
+                </Alert>
+              ) : stage.candidates.length === 0 ? (
+                <p className="mt-1 text-[11px] text-muted-foreground">
+                  该通道没有返回候选。
+                </p>
+              ) : (
+                <CandidateList
+                  candidates={stage.candidates}
+                  scoreNote="通道原始分（不可跨通道比较）"
+                />
+              )}
+            </div>
+          ))}
+
+          {/* Stage 2: fusion = dedup + rank-based ordering (no scores shown) */}
+          {run.debug ? (
+            <div className={STAGE_CARD_CLASS}>
+              <div className="flex items-center justify-between gap-2">
+                <p className={STAGE_TITLE_CLASS}>融合（RRF · 去重）</p>
+                <span className={STAGE_TIME_CLASS}>
+                  {Math.round(run.debug.fused.elapsedMs)} ms
+                </span>
+              </div>
+              <p className="mt-1 text-[11px] text-muted-foreground">
+                原始候选 {run.debug.fused.rawCandidateCount} 条 → 去重后{" "}
+                {run.debug.fused.distinctCount} 条（按排名融合，无统一分数）
+              </p>
+              {run.debug.fused.candidates.length > 0 ? (
+                <CandidateList
+                  candidates={run.debug.fused.candidates}
+                  scoreNote=""
+                />
+              ) : null}
+            </div>
+          ) : null}
+
+          {/* Stage 3: rerank — success and failure are visibly different */}
+          {rerank ? (
+            <div className={STAGE_CARD_CLASS}>
+              <div className="flex items-center justify-between gap-2">
+                <p className={STAGE_TITLE_CLASS}>
+                  重排{rerank.applied ? " · 已应用" : " · 未应用（回退）"}
+                </p>
+                <span className={STAGE_TIME_CLASS}>
+                  {Math.round(rerank.elapsedMs)} ms
+                </span>
+              </div>
+              {!rerank.applied ? (
+                <Alert variant="destructive" role="alert" className="mt-1">
+                  <AlertDescription>
+                    重排失败或未执行（
+                    {RERANK_REASON_LABELS[rerank.reason ?? ""] ??
+                      rerank.reason ??
+                      "未知原因"}
+                    ）—— 展示的是融合回退排序，不是重排结果。
+                  </AlertDescription>
+                </Alert>
+              ) : rerank.candidates && rerank.candidates.length > 0 ? (
+                <CandidateList
+                  candidates={rerank.candidates}
+                  scoreNote="重排分"
+                />
+              ) : (
+                <p className="mt-1 text-[11px] text-muted-foreground">
+                  没有候选。
+                </p>
+              )}
+            </div>
+          ) : null}
+        </div>
+      ) : null}
+    </Dialog>
   )
 }

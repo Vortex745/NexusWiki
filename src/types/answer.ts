@@ -1,5 +1,5 @@
 import type { RetrievalResult } from "./retrieval"
-import type { TokenUsage } from "./agent"
+import type { AnswerBasis, TokenUsage } from "./agent"
 
 /**
  * Ticket 07 (spec §12): read-only retrieval tool names exposed to the LLM
@@ -9,6 +9,8 @@ import type { TokenUsage } from "./agent"
  * structurally identical — a value of one is assignable to the other.
  */
 export type RetrievalToolName =
+  | "wiki_search"
+  | "wiki_read_page"
   | "semantic_lexical_hybrid"
   | "graph_navigation"
   | "pageindex_hierarchy"
@@ -237,7 +239,10 @@ export type ComplexLoopStopReason =
   | "deterministic-fallback"
 
 export interface RouteTraceData {
+  routingModel?: import("./agent").RoutingModelDetails
   decision?: "direct" | "simple" | "ambiguous" | "complex"
+  /** Deterministic bypass for explicit saved-memory inspection queries. */
+  memoryIntent?: boolean
   queryCount?: number
   subQueries?: RouteSubQuery[]
   modelCalls?: number
@@ -455,9 +460,147 @@ export interface RankedCandidateObservation {
   evidenceId?: string
 }
 
+/**
+ * PL-05 / PT-08 — `generation-context-v1`.
+ *
+ * What the generator ACTUALLY received on one generation round, as distinct
+ * from the candidate ranking (`finalContextCandidates`) and from the citations
+ * the final reply chose. It records identity, output position, count and
+ * omissions — never the full body, so an ordinary trace does not widen content
+ * exposure. Presence of a source here does not claim the model used it, nor
+ * that a summary preserved every fact.
+ */
+export const GENERATION_CONTEXT_SNAPSHOT_VERSION = "generation-context-v1"
+
+export type GenerationContextRepresentation =
+  | "deterministic_full"
+  | "deterministic_partial"
+  | "compressed"
+
+/** Reasons a run has no actual-context snapshot to report. */
+export type GenerationContextUnavailableReason =
+  | "no_generation_call"
+  | "legacy_event"
+
+export interface GenerationContextEntry {
+  evidenceId: string
+  documentId: string
+  chunkId: string
+  /** 1-based position in the context string that was sent to the generator. */
+  outputOrder: number
+  representation: GenerationContextRepresentation
+  /** Deterministic entries: where the authorized material actually sits. */
+  span?: { start: number; end: number; coverage: "full" | "partial" }
+  /** Compressed entries: the non-empty output block the source was folded into. */
+  compressedBlockIndex?: number
+  tokens: number
+}
+
+export interface GenerationContextOmission {
+  evidenceId: string
+  documentId: string
+  chunkId: string
+  reason: "budget_exhausted" | "does_not_fit" | "dropped_by_compression"
+}
+
+export interface GenerationContextSnapshot {
+  version: typeof GENERATION_CONTEXT_SNAPSHOT_VERSION
+  /** The real generation round this context produced (1 = initial draft). */
+  generationRound: number
+  representation: GenerationContextRepresentation
+  /** Token count of the exact context string handed to the generator. */
+  tokenCount: number
+  contextLength: number
+  entries: GenerationContextEntry[]
+  omissions: GenerationContextOmission[]
+  /** Deterministic digest of the context, for captured-prompt cross-checks. */
+  digest?: string
+}
+
+/**
+ * PT-04 / PT-05: one selected gap fact that did not reach the actual
+ * generation context. The identity fields are the same pair the runners
+ * deduplicate and cite on, so an observer can join an omission with the
+ * round's `finalContextCandidates` and with its references.
+ */
+export interface GapFactOmissionTrace {
+  documentId: string
+  chunkId: string
+  /** Stable Evidence id of the omitted chunk, when the round built one. */
+  evidenceId?: string
+  /**
+   * `context_budget` — the bounded assembler could not fit it even though it
+   * was selected first. `compression` — an LLM-compressed context dropped it.
+   */
+  reason: "context_budget" | "compression"
+}
+
+/**
+ * PT-06 / PT-07:AC03 — the honest compression decision for one context assembly.
+ *
+ * `overBudget` is decided from the assembler's candidate material against the
+ * SAME budget the deterministic output was fitted to — never from the sum of
+ * 600-character display previews. `outcome` names what happened next: no model
+ * call when the material already fits, an attempt that was adopted, or the
+ * explicit reason an attempt was refused (each refusal falls back to the
+ * in-budget deterministic context with its source records switched over).
+ */
+export interface ContextCompressionDecision {
+  /**
+   * COUNT 1 — the complete authorized parent blocks. Absent when the wired
+   * assembler is a legacy string-only implementation that cannot report them.
+   */
+  rawTokens?: number
+  /**
+   * COUNT 2 — the per-parent candidate windows (what compression must fit).
+   * Absent for a legacy string-only assembler.
+   */
+  candidateTokens?: number
+  /** COUNT 3 — the exact deterministic context. */
+  finalTokens: number
+  /** The configured budget the decision was made against (default 6000). */
+  maxContextTokens: number
+  /**
+   * Absent when the real material is unknown (legacy assembler): an unknown
+   * budget decision is never reported as "fits".
+   */
+  overBudget?: boolean
+  /** PT-06:AC08 — how many authorized pieces of material the budget left out. */
+  omittedCount?: number
+  outcome:
+    | "compressed"
+    | "within_budget"
+    | "all_groups_failed"
+    | "still_over_budget"
+    | "unknown_citation"
+    | "provider_error"
+    | "rejected_for_gap_loss"
+    | "not_configured"
+    /** PT-06:AC07 — the compressor refused without naming a reason. */
+    | "refused"
+    /** PT-06:AC09 — a legacy string-only assembler: no material counts exist. */
+    | "preview_only"
+  /** True when this decision actually paid for at least one compression call. */
+  modelCallMade: boolean
+}
+
 export interface ContextTraceData {
+  phase?: "assembly" | "draft"
   evidenceCount?: number
   contextLength?: number
+  /**
+   * PT-06:AC02/AC03 — the REAL material counts this context was decided on and
+   * what the run did about them. `candidateTokens` is the text left after the
+   * per-parent window, `finalTokens` the exact formatted context, `rawTokens`
+   * the complete authorized parent blocks. The 600-character display preview is
+   * none of these and must never be used as the trigger again (that conflation
+   * was finding F4). Absent when the wired assembler is a legacy string-only
+   * implementation that cannot report material — then `compressionDecision`
+   * says so instead of implying the preview sum was the material.
+   */
+  contextTokenCount?: number
+  /** PT-06:AC03 — why compression ran, or why it did not. */
+  compressionDecision?: ContextCompressionDecision
   /**
    * Ticket 61 / 04 (spec §2 L1748): whether semantic Evidence-Context
    * compression ran for this context assembly step. `false` (or omitted)
@@ -502,13 +645,39 @@ export interface ContextTraceData {
    * text token counts, not LLM API usage.
    */
   compressionUsage?: TokenUsage
+  /**
+   * PT-04 / PT-05: the current correction round's gap facts that were
+   * SELECTED but did not reach the context this round actually generated
+   * from. Non-empty means the 补检 did not land: the trajectory must not
+   * present the gap as covered. It records only — the existing Citation and
+   * Critic rules still decide the terminal. Absent when every selected new
+   * fact reached the context, and on rounds without correction retrieval.
+   */
+  gapFactOmissions?: GapFactOmissionTrace[]
+  /**
+   * PT-04 / PT-05 (AC07): true when an LLM-compressed context was rejected
+   * because it had lost a selected gap fact, so the deterministic assembled
+   * context — which still carries the fact — is what the round generated
+   * from (`compressionRan` stays `false`, its documented meaning: the
+   * deterministic output was used).
+   */
+  compressionRejectedForGapLoss?: boolean
+  /**
+   * PL-05 (PT-08): the actual context that was handed to the generator for
+   * THIS generation round, as opposed to the candidate list. Absent on events
+   * produced before this version and on runs that never called a generator —
+   * it is never reconstructed from candidates or final references.
+   */
+  generationContext?: GenerationContextSnapshot
+  /** Why no snapshot exists for a run that is otherwise observable. */
+  generationContextUnavailable?: GenerationContextUnavailableReason
 }
 
 export interface ValidationTraceData {
   round?: number
   passed?: boolean
+  answerBasis?: AnswerBasis
 }
-
 export type AnswerRunEventPayload =
   | { type: "progress"; stage: "route"; message: string; data: RouteTraceData }
   | { type: "progress"; stage: "retrieval"; message: string; data: RetrievalTraceData }

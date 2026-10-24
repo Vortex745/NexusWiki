@@ -1,0 +1,12 @@
+{
+  "requestedModel": "jev-latest",
+  "endpoint": "https://api.typesafe.ai/v1/systemone",
+  "httpStatus": 200,
+  "elapsedMs": 520,
+  "receivedAt": "2026-10-10T02:16:18.683317+00:00",
+  "success": true,
+  "responseValidationErrors": [],
+  "requestSha256": "e15e9d86b3a26dbfbec6dbe5e0d40fbae089073efac3632c56088cb8d407ea9a",
+  "evidenceBasis": "Recorded prior checks; no tests rerun",
+  "modelJudgmentReturned": true
+}

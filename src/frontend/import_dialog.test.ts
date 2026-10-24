@@ -1,5 +1,6 @@
 import assert from "node:assert/strict"
 import { readFileSync } from "node:fs"
+import { createRequire } from "node:module"
 import { join } from "node:path"
 import test from "node:test"
 import { runInNewContext } from "node:vm"
@@ -29,15 +30,19 @@ type IngestStatus = {
 }
 
 function loadFrontendModule(path: string): any {
-  const source = readFileSync(join(__dirname, "../..", path), "utf8")
+  const modulePath = join(__dirname, "../..", path)
+  const source = readFileSync(modulePath, "utf8")
   const compiled = ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.CommonJS } }).outputText
   const exports = {}
-  runInNewContext(compiled, { exports })
+  runInNewContext(compiled, { exports, require: createRequire(modulePath) })
   return exports
 }
 
 const { deriveIngestProgress, initialImportProgress, buildImportSteps, estimateUploadRemainingMs, estimateImportRemainingMs, describeActivationReasons, describeAllowedOperations } = loadFrontendModule("frontend/src/lib/ingestProgress.ts")
 const constants = loadFrontendModule("frontend/src/lib/constants.ts")
+// Ticket 27: the failure-copy decision layer is production logic too — same
+// reason as importBatch below, hand-mocking it drifted once already.
+const qualityReasons = loadFrontendModule("frontend/src/lib/qualityReasons.ts")
 
 /** The REAL decision-layer module — hand-mocking it drifted (a missing export
  * silently broke the settled check), so the harness loads it with a require
@@ -372,6 +377,10 @@ function dialogHarness() {
       clearInterval(id: number) { timers.delete(id) },
     },
       require(name: string) {
+      // UI primitives are inert host nodes; the real dialog's business hooks and transport stay under test.
+      if (name.includes("/primitives/")) return { Button:"button", Input:"input", Textarea:"textarea", DialogTitle:"h2", RadioGroup:"radiogroup", RadioGroupItem:"radio", ToggleGroup:"group", ToggleGroupItem:"button", Alert:"alert", AlertDescription:"description", FieldSet:"fieldset", FieldLegend:"legend" }
+      if (name.endsWith("/Controls")) return {Button:"button",Select:"select",TextInput:"input",TextArea:"textarea",Field:"field",Checkbox:"checkbox",EmptyState:"empty",StatusBadge:"badge"}
+      if (name.endsWith("/Dialog")) return {Dialog:"dialog",PanelDialog:"dialog"}
       if (name === "react") return react
       if (name === "react/jsx-runtime") return { jsx: (type: unknown, props: unknown) => ({ type, props }), jsxs: (type: unknown, props: unknown) => ({ type, props }) }
       if (name.endsWith("/api")) return {
@@ -468,6 +477,7 @@ function dialogHarness() {
       if (name.endsWith("/constants")) return constants
       if (name.endsWith("/cn")) return { cn: (...parts: unknown[]) => parts.filter(Boolean).join(" ") }
       if (name.endsWith("/ingestProgress")) return { deriveIngestProgress, initialImportProgress, describeActivationReasons, describeAllowedOperations }
+      if (name.endsWith("/qualityReasons")) return qualityReasons
       if (name.endsWith("/AppShellContext")) return { useAppShell: () => ({ showToast: (message: string) => toasts.push(message) }) }
       if (name.endsWith("/icons")) return { Database: {}, X: {} }
       if (name.endsWith("/Icon")) return { Icon: "icon" }

@@ -13,6 +13,7 @@ import { z } from "zod"
 import {
   ToolRegistry,
   ToolInvocationService,
+  boundedQuery,
   type ToolDefinition,
   type ToolEnvironment,
 } from "./invocation"
@@ -171,4 +172,58 @@ test("Ticket 34: a tool failure is a bounded outcome, not a crash", async () => 
   assert.ok(outcome.trace.error)
   // The trace is bounded — a provider error message cannot leak unbounded text.
   assert.ok(outcome.trace.error!.length <= 200)
+})
+
+// ---------------------------------------------------------------------------
+// PT-02 / PT-03 — the environment is the ONLY carrier of the run's session and
+// web intent, so a tool reads exactly what its run is bound to.
+// ---------------------------------------------------------------------------
+
+test("PT-02 AC02 / PT-03 AC04: the tool environment carries the bound session and web intent, never the args", async () => {
+  const probe: ToolDefinition<
+    { query: string },
+    { attachments?: { sessionId: string }; webRequested?: boolean }
+  > = {
+    name: "probe",
+    description: "reports the run environment it was invoked with",
+    schema: z.strictObject({ query: boundedQuery(100) }),
+    summarize: (args) => `query=${args.query}`,
+    execute: async (_args, toolEnv) => ({
+      ...(toolEnv.attachments ? { attachments: toolEnv.attachments } : {}),
+      ...(toolEnv.webRequested !== undefined ? { webRequested: toolEnv.webRequested } : {}),
+    }),
+  }
+  const tool = service(["probe"], { registry: new ToolRegistry().register(probe) })
+
+  const bound = await tool.invoke(
+    "probe",
+    { query: "附件退款规则" },
+    {
+      accessContext: context,
+      attachments: { sessionId: "sess-bound" },
+      webRequested: true,
+    }
+  )
+  assert.equal(bound.outcome, "ok")
+  assert.deepEqual(bound.result, { attachments: { sessionId: "sess-bound" }, webRequested: true })
+
+  // A bare environment opens neither channel.
+  const bare = await tool.invoke("probe", { query: "普通问题" }, env)
+  assert.equal(bare.outcome, "ok")
+  assert.deepEqual(bare.result, {})
+
+  // The model's args can name neither a session nor a web opt-in.
+  for (const rawArgs of [
+    { query: "x", sessionId: "sess-victim" },
+    { query: "x", attachments: { sessionId: "sess-victim" } },
+    { query: "x", webRequested: true },
+  ]) {
+    const smuggled = await tool.invoke(
+      "probe",
+      rawArgs,
+      { accessContext: context, attachments: { sessionId: "sess-bound" } }
+    )
+    assert.equal(smuggled.outcome, "invalid_args", JSON.stringify(rawArgs))
+    assert.equal(smuggled.result, undefined)
+  }
 })

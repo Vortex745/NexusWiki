@@ -4,6 +4,7 @@ import type { Client } from "@elastic/elasticsearch"
 import type { Driver } from "neo4j-driver"
 import type OpenAI from "openai"
 import type { AppConfig } from "../config"
+import { resolveChunkIndexName } from "../config"
 
 /**
  * Ticket 44 (DEMO-01C): the capability status surface.
@@ -53,11 +54,9 @@ interface StatusResponse {
 }
 
 // 知识库 chunk 索引名 — 与 ingestion/storage/store.ts、retrieval/search/searcher.ts 保持一致
-const KB_INDEX_NAME = "kefu-rag-chunks"
-
-async function probeKnowledgeBaseContent(client: Client): Promise<boolean> {
+async function probeKnowledgeBaseContent(client: Client, index: string): Promise<boolean> {
   try {
-    const result = await client.count({ index: KB_INDEX_NAME })
+    const result = await client.count({ index })
     return (result.count ?? 0) > 0
   } catch {
     // 索引不存在、ES 不可达、权限不足等都视为"无内容"
@@ -233,13 +232,14 @@ export function createStatusRouter(deps: StatusRouterDeps): Router {
           deps.config.markitdownCommand,
           deps.config.markerCommand,
           deps.config.mineruCommand,
+          deps.config.pythonCommand,
         ].filter((command): command is string => typeof command === "string" && command.length > 0)
       ),
     ])
 
     // 仅当 ES 可达时探测 chunk 数量；ES 不可达时直接视为无内容
     const hasContent = es.status === "connected"
-      ? await probeKnowledgeBaseContent(deps.elasticsearch)
+      ? await probeKnowledgeBaseContent(deps.elasticsearch, resolveChunkIndexName(undefined, deps.config))
       : false
 
     // 可选能力：未配置就是 unconfigured（不是失败，也不是成功）；已配置但

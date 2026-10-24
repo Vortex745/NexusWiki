@@ -1,0 +1,541 @@
+{
+  "schemaVersion": "pdf-quality-coverage-v1",
+  "ticket": "pdf-quality-02",
+  "requiredCategories": [
+    "pure-text",
+    "scanned",
+    "mixed",
+    "blank-page",
+    "image-cover",
+    "garbled",
+    "table",
+    "multi-column",
+    "encrypted",
+    "damaged",
+    "unopenable"
+  ],
+  "requiredAcceptanceScenarioIds": [
+    "pure-text-all-pages-pass",
+    "textless-scan-needs-ocr",
+    "mixed-document-partial-failure",
+    "blank-page-still-evidenced",
+    "image-cover-text-only-as-pixels",
+    "garbled-text-layer-vs-clean-image",
+    "table-structure-must-be-proven",
+    "multi-column-reading-order-must-be-proven",
+    "footnote-retention-must-be-proven",
+    "formula-fidelity-must-be-proven",
+    "visible-content-missing-from-text-layer",
+    "encrypted-input-failure",
+    "damaged-input-failure",
+    "unopenable-input-failure",
+    "ocr-candidate-passes-second-audit",
+    "ocr-candidate-rejected-second-audit",
+    "ocr-fabricated-candidate-rejected",
+    "uncertain-page-blocks-pass",
+    "malformed-clef-response-fails-closed",
+    "invalid-clef-answer-rejected",
+    "clef-timeout-bounded-retry",
+    "clef-service-exhausted",
+    "clef-cancellation-persisted-not-quality-fail",
+    "clef-recovery-reuses-durable-evidence",
+    "ocr-timeout-and-recovery",
+    "ocr-service-exhausted",
+    "oversized-input-splitting-below-image-limit",
+    "metadata-only-evidence-cannot-pass",
+    "multi-script-and-number-fidelity"
+  ],
+  "scenarios": [
+    {
+      "scenarioId": "pure-text-all-pages-pass",
+      "description": "纯文本样本每页都应判 pass：门禁不得把好文件判坏。",
+      "categories": [
+        "pure-text"
+      ],
+      "fixtureIds": [
+        "pure-text",
+        "text-long-6p"
+      ],
+      "replayScenarioIds": [
+        "clef-local-audit--pass--pure-text",
+        "clef-local-audit--pass--text-long-6p-batch-1",
+        "clef-local-audit--pass--text-long-6p-batch-2"
+      ],
+      "replayFree": false,
+      "replayFreeReason": null
+    },
+    {
+      "scenarioId": "textless-scan-needs-ocr",
+      "description": "整篇无文本层的扫描件必须走到 OCR 而不是在提取器空文本处失败。",
+      "categories": [
+        "scanned"
+      ],
+      "fixtureIds": [
+        "scanned-textless"
+      ],
+      "replayScenarioIds": [
+        "clef-local-audit--fail--scanned-textless",
+        "ocr--faithful-candidate--scanned-textless",
+        "clef-second-audit--pass--scanned-textless"
+      ],
+      "replayFree": false,
+      "replayFreeReason": null
+    },
+    {
+      "scenarioId": "mixed-document-partial-failure",
+      "description": "文本页与图像页混排：审计结论必须是页级的，不能是整篇的。",
+      "categories": [
+        "mixed"
+      ],
+      "fixtureIds": [
+        "mixed-text-scan",
+        "partially-rasterized"
+      ],
+      "replayScenarioIds": [
+        "clef-local-audit--fail--mixed-text-scan",
+        "clef-second-audit--fail--mixed-text-scan"
+      ],
+      "replayFree": false,
+      "replayFreeReason": null
+    },
+    {
+      "scenarioId": "blank-page-still-evidenced",
+      "description": "设计上的空页判 pass，但仍必须产出该页的证据。",
+      "categories": [
+        "blank-page"
+      ],
+      "fixtureIds": [
+        "blank-page"
+      ],
+      "replayScenarioIds": [
+        "clef-local-audit--pass--blank-page"
+      ],
+      "replayFree": false,
+      "replayFreeReason": null
+    },
+    {
+      "scenarioId": "image-cover-text-only-as-pixels",
+      "description": "整页图像封面上的文字只存在于像素里。",
+      "categories": [
+        "image-cover"
+      ],
+      "fixtureIds": [
+        "image-cover"
+      ],
+      "replayScenarioIds": [
+        "clef-local-audit--fail--image-cover",
+        "ocr--faithful-candidate--image-cover",
+        "clef-second-audit--pass--image-cover"
+      ],
+      "replayFree": false,
+      "replayFreeReason": null
+    },
+    {
+      "scenarioId": "garbled-text-layer-vs-clean-image",
+      "description": "页面视觉干净但文本层是乱码：图像与文本必须判不一致。",
+      "categories": [
+        "garbled"
+      ],
+      "fixtureIds": [
+        "garbled"
+      ],
+      "replayScenarioIds": [
+        "clef-local-audit--fail--garbled-text",
+        "ocr--faithful-candidate--garbled",
+        "clef-second-audit--pass--garbled"
+      ],
+      "replayFree": false,
+      "replayFreeReason": null
+    },
+    {
+      "scenarioId": "table-structure-must-be-proven",
+      "description": "表格页：单元格齐全不等于对齐与表头-值关系保真。",
+      "categories": [
+        "table"
+      ],
+      "fixtureIds": [
+        "table-grid"
+      ],
+      "replayScenarioIds": [
+        "clef-local-audit--uncertain--table-grid",
+        "clef-local-audit--fail-structure-flattened--table-grid",
+        "clef-second-audit--uncertain--table-grid"
+      ],
+      "replayFree": false,
+      "replayFreeReason": null
+    },
+    {
+      "scenarioId": "multi-column-reading-order-must-be-proven",
+      "description": "多栏页：顺序必须是左栏→右栏，否则 readingOrder 失败。",
+      "categories": [
+        "multi-column"
+      ],
+      "fixtureIds": [
+        "two-column",
+        "footnote"
+      ],
+      "replayScenarioIds": [
+        "clef-local-audit--uncertain--two-column",
+        "clef-second-audit--fail-reading-order--two-column"
+      ],
+      "replayFree": false,
+      "replayFreeReason": null
+    },
+    {
+      "scenarioId": "footnote-retention-must-be-proven",
+      "description": "页底小字脚注必须留在同页正文里。",
+      "categories": [
+        "footnote"
+      ],
+      "fixtureIds": [
+        "footnote"
+      ],
+      "replayScenarioIds": [
+        "clef-local-audit--uncertain--footnote"
+      ],
+      "replayFree": false,
+      "replayFreeReason": null
+    },
+    {
+      "scenarioId": "formula-fidelity-must-be-proven",
+      "description": "公式作为文本必须逐字符保真（a^2 不能变成 a2）。",
+      "categories": [
+        "formula"
+      ],
+      "fixtureIds": [
+        "formula-inline"
+      ],
+      "replayScenarioIds": [
+        "clef-local-audit--uncertain--formula-inline"
+      ],
+      "replayFree": false,
+      "replayFreeReason": null
+    },
+    {
+      "scenarioId": "visible-content-missing-from-text-layer",
+      "description": "可见内容有一部分只在图像里：本地候选必须 content-missing。",
+      "categories": [
+        "partial-rasterization",
+        "mixed"
+      ],
+      "fixtureIds": [
+        "partially-rasterized"
+      ],
+      "replayScenarioIds": [
+        "clef-local-audit--fail--partially-rasterized"
+      ],
+      "replayFree": false,
+      "replayFreeReason": null
+    },
+    {
+      "scenarioId": "encrypted-input-failure",
+      "description": "加密 PDF 在任何 Clef/OCR 调用之前就是终态输入失败。",
+      "categories": [
+        "encrypted"
+      ],
+      "fixtureIds": [
+        "encrypted-aes256"
+      ],
+      "replayScenarioIds": [],
+      "replayFree": true,
+      "replayFreeReason": "票 17 的契约要求加密文件在任何 Clef/OCR 调用发生之前终止，所以这条路径上没有服务应答可以脚本化；语料提供真实 AES-256 字节，由票 17 断言调用计数为零。"
+    },
+    {
+      "scenarioId": "damaged-input-failure",
+      "description": "损坏 PDF（截断/交叉引用清零）必须是输入失败而不是质量失败。",
+      "categories": [
+        "damaged"
+      ],
+      "fixtureIds": [
+        "damaged-truncated",
+        "damaged-corrupt-object-headers"
+      ],
+      "replayScenarioIds": [],
+      "replayFree": true,
+      "replayFreeReason": "损坏文件读不出页，也就没有页级应答可回放；票 17 用真实字节断言输入失败与零服务调用。"
+    },
+    {
+      "scenarioId": "unopenable-input-failure",
+      "description": "根本不是 PDF 的输入（PNG 字节、只有 %PDF 头）必须显式失败。",
+      "categories": [
+        "unopenable"
+      ],
+      "fixtureIds": [
+        "unopenable-not-a-pdf",
+        "unopenable-stub-header"
+      ],
+      "replayScenarioIds": [],
+      "replayFree": true,
+      "replayFreeReason": "这类输入没有页结构可言，因此不声明页数，也不需要 Clef/OCR 应答脚本。"
+    },
+    {
+      "scenarioId": "ocr-candidate-passes-second-audit",
+      "description": "OCR 候选通过第二次逐页审计才允许继续导入。",
+      "categories": [],
+      "fixtureIds": [
+        "scanned-textless",
+        "image-cover"
+      ],
+      "replayScenarioIds": [
+        "ocr--faithful-candidate--scanned-textless",
+        "clef-second-audit--pass--scanned-textless",
+        "clef-second-audit--pass--image-cover"
+      ],
+      "replayFree": false,
+      "replayFreeReason": null
+    },
+    {
+      "scenarioId": "ocr-candidate-rejected-second-audit",
+      "description": "OCR 候选在第二次审计里失败：导入必须终止。",
+      "categories": [],
+      "fixtureIds": [
+        "mixed-text-scan",
+        "scanned-textless"
+      ],
+      "replayScenarioIds": [
+        "ocr--incomplete-candidate--mixed-text-scan",
+        "clef-second-audit--fail--mixed-text-scan"
+      ],
+      "replayFree": false,
+      "replayFreeReason": null
+    },
+    {
+      "scenarioId": "ocr-fabricated-candidate-rejected",
+      "description": "OCR 凭空产出的内容要判 content-fabricated。",
+      "categories": [],
+      "fixtureIds": [
+        "scanned-textless"
+      ],
+      "replayScenarioIds": [
+        "ocr--fabricated-candidate--scanned-textless",
+        "clef-second-audit--fail-fabricated--scanned-textless"
+      ],
+      "replayFree": false,
+      "replayFreeReason": null
+    },
+    {
+      "scenarioId": "uncertain-page-blocks-pass",
+      "description": "任一页 uncertain 都不能让整篇 pass（含审计覆盖不完整）。",
+      "categories": [],
+      "fixtureIds": [
+        "two-column",
+        "table-grid",
+        "footnote",
+        "formula-inline",
+        "mixed-text-scan"
+      ],
+      "replayScenarioIds": [
+        "clef-local-audit--uncertain--two-column",
+        "clef-local-audit--uncertain--table-grid",
+        "clef-local-audit--uncertain--footnote",
+        "clef-local-audit--uncertain--formula-inline",
+        "clef-second-audit--uncertain-audit-incomplete--mixed-text-scan",
+        "clef-local-audit--uncertain-page-image-unavailable--pure-text",
+        "ocr--blank-page-empty-candidate--blank-page"
+      ],
+      "replayFree": false,
+      "replayFreeReason": null
+    },
+    {
+      "scenarioId": "malformed-clef-response-fails-closed",
+      "description": "语法就无效的 Clef 响应必须 fail-closed，与质量失败分开分类。",
+      "categories": [],
+      "fixtureIds": [
+        "pure-text",
+        "scanned-textless"
+      ],
+      "replayScenarioIds": [
+        "clef-local-audit--malformed--pure-text",
+        "clef-second-audit--malformed--scanned-textless",
+        "ocr--malformed-response--scanned-textless"
+      ],
+      "replayFree": false,
+      "replayFreeReason": null
+    },
+    {
+      "scenarioId": "invalid-clef-answer-rejected",
+      "description": "缺页、重复页、未知裁决、未知标签、页号越界都要被拒绝。",
+      "categories": [],
+      "fixtureIds": [
+        "pure-text"
+      ],
+      "replayScenarioIds": [
+        "clef-local-audit--invalid-missing-page--pure-text",
+        "clef-local-audit--invalid-duplicate-page--pure-text",
+        "clef-local-audit--invalid-unknown-verdict--pure-text",
+        "clef-local-audit--invalid-unknown-issue-label--pure-text",
+        "clef-local-audit--invalid-page-out-of-range--pure-text"
+      ],
+      "replayFree": false,
+      "replayFreeReason": null
+    },
+    {
+      "scenarioId": "clef-timeout-bounded-retry",
+      "description": "Clef 超时走有界重试，重试成功后仍能完成审计。",
+      "categories": [],
+      "fixtureIds": [
+        "pure-text"
+      ],
+      "replayScenarioIds": [
+        "clef-local-audit--timeout-then-pass--pure-text",
+        "clef-second-audit--timeout-then-pass--scanned-textless"
+      ],
+      "replayFree": false,
+      "replayFreeReason": null
+    },
+    {
+      "scenarioId": "clef-service-exhausted",
+      "description": "重试耗尽得到服务不可用终态，绝不能变成质量 pass。",
+      "categories": [],
+      "fixtureIds": [
+        "pure-text"
+      ],
+      "replayScenarioIds": [
+        "clef-local-audit--unavailable-exhausted--pure-text"
+      ],
+      "replayFree": false,
+      "replayFreeReason": null
+    },
+    {
+      "scenarioId": "clef-cancellation-persisted-not-quality-fail",
+      "description": "取消要作为取消落盘，而不是被判成质量失败。",
+      "categories": [],
+      "fixtureIds": [
+        "pure-text",
+        "scanned-textless"
+      ],
+      "replayScenarioIds": [
+        "clef-local-audit--cancelled--pure-text",
+        "clef-second-audit--cancelled--scanned-textless",
+        "ocr--cancelled--scanned-textless"
+      ],
+      "replayFree": false,
+      "replayFreeReason": null
+    },
+    {
+      "scenarioId": "clef-recovery-reuses-durable-evidence",
+      "description": "恢复时复用已持久化的审计证据，服务调用次数为 0。",
+      "categories": [],
+      "fixtureIds": [
+        "pure-text",
+        "scanned-textless"
+      ],
+      "replayScenarioIds": [
+        "clef-local-audit--recovery-reuse--pure-text",
+        "clef-second-audit--recovery-reuse--scanned-textless"
+      ],
+      "replayFree": false,
+      "replayFreeReason": null
+    },
+    {
+      "scenarioId": "ocr-timeout-and-recovery",
+      "description": "OCR 超时后的有界重试与恢复复用。",
+      "categories": [],
+      "fixtureIds": [
+        "scanned-textless"
+      ],
+      "replayScenarioIds": [
+        "ocr--timeout-then-faithful--scanned-textless",
+        "ocr--recovery-reuse--scanned-textless"
+      ],
+      "replayFree": false,
+      "replayFreeReason": null
+    },
+    {
+      "scenarioId": "ocr-service-exhausted",
+      "description": "OCR 重试耗尽得到服务不可用终态。",
+      "categories": [],
+      "fixtureIds": [
+        "scanned-textless"
+      ],
+      "replayScenarioIds": [
+        "ocr--unavailable-exhausted--scanned-textless"
+      ],
+      "replayFree": false,
+      "replayFreeReason": null
+    },
+    {
+      "scenarioId": "oversized-input-splitting-below-image-limit",
+      "description": "超过每次 4 张图的上限必须切分，且不静默截断。",
+      "categories": [],
+      "fixtureIds": [
+        "text-long-6p"
+      ],
+      "replayScenarioIds": [
+        "clef-local-audit--pass--text-long-6p",
+        "clef-local-audit--pass--text-long-6p-batch-1",
+        "clef-local-audit--pass--text-long-6p-batch-2"
+      ],
+      "replayFree": false,
+      "replayFreeReason": null
+    },
+    {
+      "scenarioId": "metadata-only-evidence-cannot-pass",
+      "description": "只给元数据不给页面图像的请求必须被记为契约违规。",
+      "categories": [],
+      "fixtureIds": [
+        "pure-text",
+        "scanned-textless"
+      ],
+      "replayScenarioIds": [
+        "clef-local-audit--pass--pure-text",
+        "clef-local-audit--uncertain-page-image-unavailable--pure-text"
+      ],
+      "replayFree": false,
+      "replayFreeReason": null
+    },
+    {
+      "scenarioId": "multi-script-and-number-fidelity",
+      "description": "中英混排、数值与否定词的文本准确性。",
+      "categories": [],
+      "fixtureIds": [
+        "pure-text",
+        "two-column",
+        "table-grid"
+      ],
+      "replayScenarioIds": [
+        "clef-local-audit--pass--pure-text",
+        "clef-local-audit--uncertain--two-column"
+      ],
+      "replayFree": false,
+      "replayFreeReason": null
+    }
+  ],
+  "unrepresented": [
+    {
+      "case": "scanner-photocopy-artifacts",
+      "reason": "本机没有 scanner/相机，无法产出真实复印件的倾斜、摩尔纹、低光照与透印退化；这类图像对 OCR 与审计的额外压力不在本票可诚实复现的范围内。",
+      "approximatedBy": "scanned-textless / image-cover 用 150dpi 数字渲染 raster 近似「无文本层的印刷页」，只保留载体事实。"
+    },
+    {
+      "case": "handwritten-text",
+      "reason": "手写内容需要真实笔迹样本，合成字形无法诚实代表手写识别难度，也不应用打印字体冒充。",
+      "approximatedBy": null
+    },
+    {
+      "case": "production-mojibake-pdfs",
+      "reason": "真实生产环境里 ToUnicode 损坏的 PDF 需要外部来源；本票不引入无法解释来源的二进制样本。",
+      "approximatedBy": "garbled 用 raster 干净视觉 + render mode 3 不可见乱码文本层合成同一形状，构造方式写在清单里。"
+    },
+    {
+      "case": "live-clef-or-ocr-responses",
+      "reason": "本票只提供确定性回放脚本；真实 Clef/OCR 响应属于票 29 的在线质量评估，不能在这里边写边调外部服务，否则真值会被实现产物污染。",
+      "approximatedBy": "replay/*.json 覆盖 pass/fail/uncertain/malformed/timeout/cancellation/recovery。"
+    },
+    {
+      "case": "signature-form-and-annotation-layers",
+      "reason": "数字签名、AcroForm 字段与批注层不是本次质量门的判定对象，没有诚实的页级真值可登记。",
+      "approximatedBy": null
+    },
+    {
+      "case": "encrypted-with-owner-password-only",
+      "reason": "只设 owner 口令（内容仍可无口令读取）的文件在质量门语义上不是「打不开」，放进语料会与 document-unreadable 的定义冲突，故显式不表示。",
+      "approximatedBy": null
+    },
+    {
+      "case": "zero-byte-upload",
+      "reason": "0 字节文件不是 PDF 语料样本，属于上传准入层（票 21/26）的输入校验。",
+      "approximatedBy": "unopenable-stub-header 提供「有 %PDF 头但没有任何对象」的更近形状。"
+    }
+  ]
+}

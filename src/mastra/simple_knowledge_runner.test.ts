@@ -33,8 +33,8 @@ import {
   createSimpleKnowledgeMastraRunner,
   RouteNotSimpleError,
 } from "./simple_knowledge_runner"
-import { buildEvidence } from "../answer/evidence"
-import type { MastraRunnerInput } from "./chat_event_adapter"
+import { buildEvidence, citationIdsByChunk } from "../answer/evidence"
+import type { MastraRunnerInput, MastraRunnerOutput, ProgressStage, StageProgressDetails } from "./chat_event_adapter"
 import type { Router } from "../retrieval/router/interface"
 import type {
   Searcher,
@@ -42,6 +42,14 @@ import type {
   SearchOutcome,
 } from "../retrieval/search/interface"
 import type { ContextAssembler } from "../retrieval/context/interface"
+import {
+  ContextAssemblerImpl,
+  modelTokenCount,
+} from "../retrieval/context/assembler"
+import type {
+  ContextCompressor,
+  ContextCompressionResult,
+} from "../answer/context_compressor"
 import type { Validator } from "../critic/validator/interface"
 import type { RePlanner } from "../critic/replanner/interface"
 import type {
@@ -52,6 +60,7 @@ import type {
 import type { HandoffStore } from "../answer/handoff_store"
 import type { AccessContext } from "../access/context"
 import type {
+  Evidence,
   Query,
   RetrievalResult,
   RouterDecision,
@@ -247,8 +256,10 @@ function makeFakeHandoffStore(): HandoffStore & {
   const createdCases: Array<any> = []
   return {
     createdCases,
-    create(args: any): void {
+    create(args: any): unknown {
       createdCases.push(args)
+      // PL-01 AC04: a successful persistence returns the established case.
+      return { caseId: `case-${createdCases.length}` }
     },
   } as unknown as HandoffStore & { createdCases: Array<any> }
 }
@@ -282,6 +293,66 @@ function buildCitedAnswer(evidence: ReturnType<typeof buildEvidence>): string {
   const firstId = evidence[0].id
   return `According to the document [cite:${firstId}], the return policy is 30 days.`
 }
+
+test("AP-02: simple runner reports actual retrieval, assembly, draft and validation boundaries", async () => {
+  const result = makeRetrievalResult()
+  const evidence = buildEvidence([result])
+  const progress: Array<{ stage: ProgressStage; details?: StageProgressDetails<ProgressStage> }> = []
+  const runner = createSimpleKnowledgeMastraRunner({
+    router: makeFakeRouter("simple"),
+    createSearcher: () => makeFakeSearcher({ status: "ok", results: [result], unavailableChannels: [] }),
+    assembler: { async assemble() {
+      assert.deepEqual(progress.at(-1), { stage: "context", details: { round: 1, data: { phase: "assembly", evidenceCount: 1 } } })
+      return "actual evidence context"
+    } },
+    streamAnswerDraft: async function* () {
+      assert.equal(progress.at(-1)?.stage, "context")
+      assert.equal((progress.at(-1)?.details?.data as { phase?: string }).phase, "draft")
+      yield buildCitedAnswer(evidence)
+    },
+    validator: { async validate() {
+      assert.deepEqual(progress.at(-1), { stage: "validation", details: { round: 1, data: { round: 1 } } })
+      return { passed: true, hallucination: false, completeness: true, answerBasis: { text: "  依据已核对的退货资料。  ", referenceIds: [evidence[0].id, evidence[0].id] } }
+    } },
+    replanner: makeFakeRePlanner([]),
+  })
+  const output = await runner(makeRunnerInput({ onStageProgress: (stage, details) => progress.push({ stage, details }) }))
+  assert.equal(output.status, "completed")
+  assert.ok(progress.some(({ stage, details }) => stage === "retrieval" && details?.status === "completed" && (details.data as { resultCount?: number }).resultCount === 1))
+  assert.equal(output.contextTrace.phase, "draft")
+  assert.deepEqual(output.validationTrace.answerBasis, { text: "依据已核对的退货资料。", referenceIds: [evidence[0].id] })
+  assert.ok(progress.every(({ details }) => !details?.data || !("answerBasis" in details.data)))
+})
+
+test("AP-02: simple correction shows round two and publishes only its passed basis", async () => {
+  const oldResult = makeRetrievalResult()
+  const gapResult = makeRetrievalResult({ chunk: { id: "gap", documentId: "gap-doc", content: "New evidence", childrenIds: [], metadata: {} } })
+  const oldEvidence = buildEvidence([oldResult])
+  const gapEvidence = buildEvidence([gapResult])
+  const progress: Array<{ stage: ProgressStage; details?: StageProgressDetails<ProgressStage> }> = []
+  const searcher = makeFakeSearcher([
+    { status: "ok", results: [oldResult], unavailableChannels: [] },
+    { status: "ok", results: [gapResult], unavailableChannels: [] },
+  ])
+  const validator = makeFakeValidator([
+    { passed: false, hallucination: false, completeness: false, answerBasis: { text: "第一轮不能公开", referenceIds: [oldEvidence[0].id] } },
+    { passed: true, hallucination: false, completeness: true, answerBasis: { text: "第二轮依据新增资料。", referenceIds: [gapEvidence[0].id] } },
+  ])
+  const runner = createSimpleKnowledgeMastraRunner({
+    router: makeFakeRouter("simple"), createSearcher: () => searcher,
+    assembler: makeFakeAssembler(), validator, replanner: makeFakeRePlanner([{ text: "missing detail" }]),
+    streamAnswerDraft: makeScriptedDraftStream([[buildCitedAnswer(oldEvidence)], [buildCitedAnswer(gapEvidence)]]),
+  })
+  const output = await runner(makeRunnerInput({ onStageProgress: (stage, details) => progress.push({ stage, details }) }))
+  assert.equal(output.status, "completed")
+  assert.deepEqual(output.validationTrace.answerBasis, { text: "第二轮依据新增资料。", referenceIds: [gapEvidence[0].id] })
+  assert.equal(validator.calls, 2)
+  assert.equal(searcher.calls.length, 2)
+  const roundTwo = progress.filter(({ details }) => details?.round === 2)
+  assert.deepEqual(roundTwo.map(({ stage }) => stage), ["retrieval", "retrieval", "context", "context", "context", "context", "validation", "validation"])
+  assert.equal((roundTwo[1].details?.data as { resultCount?: number }).resultCount, 1)
+  assert.ok(progress.every(({ details }) => !details?.data || !("answerBasis" in details.data)))
+})
 
 // ---------------------------------------------------------------------------
 // T11 #1 — Mastra delegates retrieval to existing Access Context-aware service
@@ -687,7 +758,10 @@ test("T11 #4 unknown citation in initial draft → invalid_citation", async () =
   })
   const output = await runner(makeRunnerInput())
   assert.equal(output.status, "invalid_citation", "unknown citation → invalid_citation (T11 #4)")
-  assert.equal(output.reply, "", "invalid_citation reply must be empty (draft rejected)")
+  // PL-01 AC04: 引用无效 publishes its own safe terminal text — the draft that
+  // failed the citation check is never published, not even as an empty body.
+  assert.equal(output.reply, "回答引用无法验证，请重试。")
+  assert.ok(!output.reply.includes("[cite:"), "no citation marker may survive")
   assert.deepEqual(output.tokens, [], "invalid-citation Draft tokens must be withheld")
 })
 
@@ -839,7 +913,7 @@ test("T11 #5 insufficient retrieval (all channels unavailable) → insufficient_
   })
   const output = await runner(makeRunnerInput())
   assert.equal(output.status, "insufficient_retrieval", "all channels unavailable → insufficient_retrieval (T11 #5)")
-  assert.ok(output.reply.includes("检索服务暂时不可用"), "reply must contain insufficient retrieval message")
+  assert.ok(output.reply.includes("未检索到足够的可用资料"), "reply must contain insufficient retrieval message")
 })
 
 test("T11 #5 abort before route → AbortError", async () => {
@@ -1204,9 +1278,17 @@ test("Ticket 01 #4: correction round accepted → finalContextCandidates reflect
   assert.ok(candidates)
   assert.deepEqual(
     candidates!.map((c) => `${c.rank}:${c.documentId}/${c.chunkId}`),
-    ["1:d1/c1", "2:d2/c2"],
-    "correction round candidates must be ordered merged context, not the reply reference list"
+    ["1:d2/c2", "2:d1/c1"],
+    "correction round candidates must be the gap-first merged context (PT-04: this round's 补检 hit leads, the older result fills the rest), not the reply reference list"
   )
+  // PT-04 AC09: the merged list is a runner-side selection across two
+  // retrievals, so it is reported as an aggregation — never as a
+  // dedicated-rerank success (see the dedicated PT-04:AC09 regression below,
+  // which wires a `dedicated_rerank` correction outcome to prove the point).
+  assert.deepEqual(output.retrievalTrace.finalContextOrdering, {
+    source: "fused",
+    reason: "multi_query_aggregation",
+  })
 })
 
 test("Ticket 01 #4: correction regen citation fails → observation stays on the published (initial) round", async () => {
@@ -1240,9 +1322,12 @@ test("Ticket 01 #4: correction regen citation fails → observation stays on the
     ]),
   })
   const output = await runner(makeRunnerInput())
-  // Degraded terminal publishing the initial draft.
+  // PL-01: an invalid-citation terminal publishes neither the rejected regen
+  // draft nor the previously cited initial draft — no facts, no citations.
   assert.equal(output.status, "invalid_citation")
-  assert.ok(output.reply.includes("[cite:"), "published reply is the initial (valid) draft")
+  assert.equal(output.reply, "回答引用无法验证，请重试。")
+  assert.ok(!output.reply.includes("[cite:"), "published reply must carry no draft citations")
+  assert.deepEqual(output.references, [], "no references may survive a rejected draft")
   // The published reply came from the INITIAL context — the observation must
   // stay on round 1's candidates and must NOT point at the correction round
   // context whose draft was rejected.
@@ -1254,4 +1339,541 @@ test("Ticket 01 #4: correction regen citation fails → observation stays on the
     ["1:d1/c1"],
     "observation must reflect the published round, not the rejected correction context"
   )
+})
+
+// ---------------------------------------------------------------------------
+// PT-04 — the correction (补检) gap-first evidence selection on the simple route
+//
+// Shared fixture, converted from the audited reproduction
+// `F3_correction_new_evidence_starved` in
+// `.scratch/pipeline-structure-audit-2026-10-08/reproduce.cjs`. That script
+// asserted the defect (the fresh fact absent from EVERY generation prompt while
+// still present in `finalContextCandidates`); these tests assert the opposite,
+// with the REAL default `ContextAssemblerImpl` (6,000 / 4,500) and the REAL
+// tokenizer, because the fake assembler cannot show what actually reached the
+// model. Before PT-04 the gap results were appended to the TAIL of the
+// accumulated array, the assembler walked its groups in insertion order with a
+// shrinking budget, and the old top-10 parent chunks ate all 6,000 tokens.
+// ---------------------------------------------------------------------------
+
+const FRESH_GAP_FACT = "新增关键例外：特定商品不可退款。"
+const OLD_SNIPPET = "旧规则：标准商品七日退款。"
+
+function makeGapChild(id: string, content: string): RetrievalResult {
+  return {
+    chunk: {
+      id,
+      documentId: `doc-${id}`,
+      content,
+      childrenIds: [],
+      metadata: { kind: "child", source: `source-${id}`, title: id },
+    },
+    source: "vector",
+    score: 0.9,
+    wikilinks: [],
+  }
+}
+
+/** One old top-10 member: a small child inside a parent far larger than the budget. */
+function makeOldParentResult(id: string, filler: string): RetrievalResult {
+  const result = makeGapChild(id, "旧资料".repeat(40))
+  result.parentChunk = {
+    ...result.chunk,
+    id: `parent-${id}`,
+    content: `${result.chunk.content}${filler.repeat(5_000)}`,
+    metadata: { kind: "parent", source: `old-parent-${id}` },
+  }
+  return result
+}
+
+function makeOldTop10(): RetrievalResult[] {
+  return [
+    makeOldParentResult("old", "甲"),
+    ...Array.from({ length: 9 }, (_, index) =>
+      makeOldParentResult(`old-${index}`, "乙")
+    ),
+  ]
+}
+
+/**
+ * The scripted searcher reports what a real dedicated reranker reports, so
+ * AC09 can check the runner never launders that label through a gap-first merge.
+ */
+function makeRerankedOutcome(results: RetrievalResult[]): SearchOutcome {
+  return {
+    status: "ok",
+    results,
+    unavailableChannels: [],
+    ordering: { source: "dedicated_rerank" },
+  }
+}
+
+/** Captures the actual `streamAnswerDraft(messages)` payload of every round. */
+function makePromptCapturingDraft(replies: string[]) {
+  const prompts: string[] = []
+  let callIndex = 0
+  const stream = async function* capturingDraft(
+    messages: AgentMessage[]
+  ): AsyncGenerator<string> {
+    const index = callIndex
+    callIndex += 1
+    prompts.push(messages[messages.length - 1].content)
+    yield replies[Math.min(index, replies.length - 1)]
+  }
+  return { stream, prompts, get calls(): number { return callIndex } }
+}
+
+/** The context portion of a generation prompt (the `用户问题` tail is not context). */
+function contextOf(prompt: string): string {
+  const at = prompt.lastIndexOf("\n\n用户问题：")
+  return at < 0 ? prompt : prompt.slice(0, at)
+}
+
+function makeFakeCompressor(
+  build: (evidence: Evidence[]) => ContextCompressionResult | null
+): ContextCompressor & { calls: number } {
+  let callsCount = 0
+  const compressor = {
+    get calls(): number {
+      return callsCount
+    },
+    async compress(
+      evidence: Evidence[],
+      _query: string,
+      _budget: { maxContextTokens: number }
+    ): Promise<ContextCompressionResult | null> {
+      callsCount += 1
+      return build(evidence)
+    },
+  }
+  return compressor as unknown as ContextCompressor & { calls: number }
+}
+
+function compressedBlock(evidenceIds: string[], body: string): ContextCompressionResult {
+  const context = ["以下是从知识库中找到的相关文档片段：", ...evidenceIds.map((id) => `[cite:${id}] [来源: compressed.md]`), body].join("\n")
+  return {
+    context,
+    tokenCount: context.length,
+    retainedEvidenceIds: evidenceIds,
+    droppedEvidenceIds: [],
+    inputTokens: 9_000,
+    outputTokens: 400,
+  }
+}
+
+interface GapFixture {
+  searcher: ReturnType<typeof makeFakeSearcher>
+  draft: ReturnType<typeof makePromptCapturingDraft>
+  oldId: string
+  freshId: string
+  output: Promise<MastraRunnerOutput>
+}
+
+function runGapStarvationFixture(options: {
+  gapOutcomes?: SearchOutcome[]
+  oldResults?: RetrievalResult[]
+  replies?: string[]
+  compressor?: ContextCompressor
+  verdicts?: CriticVerdict[]
+  gapQueries?: Query[][]
+} = {}): GapFixture {
+  const oldResults = options.oldResults ?? makeOldTop10()
+  const fresh = makeGapChild("new", FRESH_GAP_FACT)
+  const gapOutcomes = options.gapOutcomes ?? [makeRerankedOutcome([fresh])]
+  const searcher = makeFakeSearcher([
+    makeRerankedOutcome(oldResults),
+    ...gapOutcomes,
+  ])
+  const oldId = buildEvidence([oldResults[0]])[0].id
+  const freshId = buildEvidence([fresh])[0].id
+  const draft = makePromptCapturingDraft(
+    options.replies ?? [
+      `旧资料 [cite:${oldId}]`,
+      `新增例外 [cite:${freshId}]，旧资料 [cite:${oldId}]`,
+    ]
+  )
+  const runner = createSimpleKnowledgeMastraRunner({
+    router: makeFakeRouter("simple"),
+    createSearcher: () => searcher,
+    // REAL default assembler + REAL tokenizer: the point of the ticket is what
+    // the generated prompt contains, not what a stub returns.
+    assembler: new ContextAssemblerImpl(),
+    validator: makeFakeValidator(
+      options.verdicts ?? [
+        { passed: false, hallucination: false, completeness: false, missingGap: "查询关键例外" },
+        { passed: true, hallucination: false, completeness: true },
+      ]
+    ),
+    replanner: makeFakeRePlanner(
+      options.gapQueries ?? [[{ text: "特定商品 不可退款 例外" }]]
+    ),
+    streamAnswerDraft: draft.stream,
+    ...(options.compressor ? { compressor: options.compressor } : {}),
+  })
+  return {
+    searcher,
+    draft,
+    oldId,
+    freshId,
+    output: runner(makeRunnerInput({ message: "比较资料中的退款规则与例外" })),
+  }
+}
+
+test("PT-04 fixture guard: the audited tail-append order really does starve the new fact", async () => {
+  // Why this regression had to change the ORDER and not the budget: with the
+  // pre-PT-04 candidate order (old top-10 first, gap hit appended at the tail)
+  // the unchanged 6,000-token budget leaves the fresh fact nothing at all, even
+  // though a real reranker scored the gap search. Proves the positive tests
+  // below are not vacuous.
+  const oldResults = makeOldTop10()
+  const fresh = makeGapChild("new", FRESH_GAP_FACT)
+  const tailAppended = [...oldResults, fresh]
+  const starved = await new ContextAssemblerImpl().assemble(
+    tailAppended,
+    citationIdsByChunk(buildEvidence(tailAppended))
+  )
+  assert.equal(starved.includes(FRESH_GAP_FACT), false, "old order must starve the gap fact")
+  assert.ok(modelTokenCount(starved) <= 6_000, "the budget itself was never the problem")
+
+  const gapFirst = [fresh, ...oldResults]
+  const selected = await new ContextAssemblerImpl().assemble(
+    gapFirst,
+    citationIdsByChunk(buildEvidence(gapFirst))
+  )
+  assert.ok(selected.includes(FRESH_GAP_FACT), "gap-first selection admits the new fact")
+  assert.ok(modelTokenCount(selected) <= 6_000, "without raising any budget")
+})
+
+test("PT-04 AC01/AC02: the 补检 exception reaches the second generation prompt", async () => {
+  const fixture = runGapStarvationFixture()
+  const output = await fixture.output
+
+  assert.equal(output.status, "completed")
+  assert.equal(fixture.searcher.calls.length, 2, "one initial search + one gap search: no extra correction round")
+  assert.equal(fixture.draft.calls, 2, "no extra generation call and no model rerank step")
+  assert.equal(fixture.draft.prompts.length, 2)
+  assert.equal(
+    fixture.draft.prompts[0].includes(FRESH_GAP_FACT),
+    false,
+    "the gap was real: round 1 could not already contain the exception"
+  )
+  // The behaviour, observed where it matters: the actual generation input.
+  assert.ok(
+    fixture.draft.prompts[1].includes(FRESH_GAP_FACT),
+    "PT-04: the fresh fact must be in the second prompt, not only in finalContextCandidates"
+  )
+  assert.ok(
+    fixture.draft.prompts[1].includes(`[cite:${fixture.freshId}]`),
+    "the fresh fact arrives with its stable citation identity"
+  )
+  assert.ok(
+    fixture.draft.prompts[1].includes("旧资料"),
+    "the remaining budget still fills with the older material"
+  )
+  // AC01's other half: the candidates still report it, now at the front.
+  const candidates = output.retrievalTrace.finalContextCandidates!
+  assert.equal(candidates[0].chunkId, "new")
+  assert.equal(candidates[0].evidenceId, fixture.freshId)
+  assert.equal(output.retrievalTrace.finalContextRound, 2)
+})
+
+test("PT-04 AC03: the correction prompt stays inside the unchanged budget, headers and citations counted", async () => {
+  const fixture = runGapStarvationFixture()
+  const output = await fixture.output
+  assert.equal(output.status, "completed")
+
+  for (const [index, prompt] of fixture.draft.prompts.entries()) {
+    const context = contextOf(prompt)
+    assert.ok(
+      modelTokenCount(context) <= 6_000,
+      `generation round ${index + 1} must not exceed the configured 6,000-token total`
+    )
+    // Headers, citations and the fixed framing text are inside the counted
+    // context, and the per-parent cap is what makes them fit.
+    assert.ok(context.startsWith("以下是从知识库中找到的相关文档片段"), "fixed intro counted")
+    assert.ok(context.includes("请基于以上文档片段回答用户的问题"), "fixed suffix counted")
+    assert.ok(context.includes("[来源:"), "per-group headers counted")
+    assert.ok(context.includes("[cite:"), "citation markers counted")
+  }
+})
+
+test("PT-04 AC04: a gap snippet sharing a parent keeps the new window and the parent is framed once", async () => {
+  // The gap hit and an older hit share ONE parent chunk. The shared group must
+  // carry the new snippet (the gap match is seen first) and must not be framed
+  // — or paid for — twice.
+  const sharedParentContent = `${"甲".repeat(3_000)}${OLD_SNIPPET}${"乙".repeat(3_000)}${FRESH_GAP_FACT}`
+  const oldShared = makeGapChild("old-shared", OLD_SNIPPET)
+  oldShared.chunk.documentId = "doc-shared"
+  oldShared.parentChunk = {
+    id: "parent-shared",
+    documentId: "doc-shared",
+    content: sharedParentContent,
+    childrenIds: [],
+    metadata: { kind: "parent", source: "shared-parent" },
+  }
+  const gapShared = makeGapChild("new-shared", FRESH_GAP_FACT)
+  gapShared.chunk.documentId = "doc-shared"
+  gapShared.parentChunk = oldShared.parentChunk
+
+  const oldResults = [oldShared, ...makeOldTop10()]
+  const freshEvidenceId = buildEvidence([gapShared])[0].id
+  const oldId = buildEvidence([oldResults[1]])[0].id
+  const fixture = runGapStarvationFixture({
+    oldResults,
+    gapOutcomes: [makeRerankedOutcome([gapShared])],
+    replies: [`旧资料 [cite:${oldId}]`, `新增例外 [cite:${freshEvidenceId}]`],
+  })
+  const output = await fixture.output
+
+  assert.equal(output.status, "completed")
+  const secondPrompt = fixture.draft.prompts[1]
+  assert.ok(secondPrompt.includes(FRESH_GAP_FACT), "the new gap snippet survives in the shared parent window")
+  assert.ok(secondPrompt.includes(`[cite:${freshEvidenceId}]`), "the shared group cites the new snippet")
+  assert.equal(
+    secondPrompt.match(/来源: shared-parent/g)?.length,
+    1,
+    "one shared parent is framed once: a repeated identity never consumes budget twice"
+  )
+})
+
+test("PT-04 AC05: repeated identities are chosen once, citations stay stable, multi-gap order replays", async () => {
+  const oldResults = makeOldTop10()
+  const freshA = makeGapChild("new-a", FRESH_GAP_FACT)
+  const freshB = makeGapChild("new-b", "新增时效例外：定制商品退款需人工审核。")
+  // The second gap query re-hits an OLD chunk: same identity, different channel.
+  const duplicateOld = { ...oldResults[3], channels: ["bm25"] as RetrievalResult["source"][] }
+  const freshAId = buildEvidence([freshA])[0].id
+  const freshBId = buildEvidence([freshB])[0].id
+  const oldId = buildEvidence([oldResults[0]])[0].id
+  const fixture = runGapStarvationFixture({
+    gapOutcomes: [makeRerankedOutcome([freshA]), makeRerankedOutcome([freshB, duplicateOld])],
+    gapQueries: [[{ text: "特定商品 不可退款 例外" }, { text: "定制 商品 人工审核" }]],
+    replies: [
+      `旧资料 [cite:${oldId}]`,
+      `新增例外 [cite:${freshAId}] 与 [cite:${freshBId}]`,
+    ],
+  })
+  const output = await fixture.output
+  assert.equal(output.status, "completed")
+
+  const candidates = output.retrievalTrace.finalContextCandidates!
+  const identities = candidates.map((c) => `${c.documentId}\0${c.chunkId}`)
+  assert.equal(new Set(identities).size, identities.length, "no identity is offered to the assembler twice")
+  assert.equal(identities.length, 12, "10 older chunks + 2 new facts + the re-hit that collapses onto an existing identity")
+  assert.deepEqual(
+    candidates.slice(0, 2).map((c) => c.chunkId),
+    ["new-a", "new-b"],
+    "both gap facts lead, in gap-query order"
+  )
+  assert.equal(output.contextTrace.evidenceCount, 12, "Evidence dedups the same identity without double-counting it")
+  // Stable identity → stable citation across rounds.
+  const freshCandidate = candidates.find((c) => c.chunkId === "new-a")!
+  assert.equal(freshCandidate.evidenceId, freshAId)
+  assert.ok(
+    output.references.some((reference) => reference.id === freshCandidate.evidenceId),
+    "the published reference reuses the same evidence identity the round-1 candidates carry"
+  )
+
+  // Deterministic and replayable: the same inputs produce the same prompt.
+  const replay = runGapStarvationFixture({
+    gapOutcomes: [makeRerankedOutcome([freshA]), makeRerankedOutcome([freshB, duplicateOld])],
+    gapQueries: [[{ text: "特定商品 不可退款 例外" }, { text: "定制 商品 人工审核" }]],
+    replies: [
+      `旧资料 [cite:${oldId}]`,
+      `新增例外 [cite:${freshAId}] 与 [cite:${freshBId}]`,
+    ],
+  })
+  await replay.output
+  assert.deepEqual(replay.draft.prompts, fixture.draft.prompts, "the selection replays byte-for-byte")
+})
+
+test("PT-04 AC06: a gap fact too long for the budget is recorded as an omission and never claims coverage", async () => {
+  const monster = makeGapChild("monster", "缺".repeat(8_000))
+  const fresh = makeGapChild("new", FRESH_GAP_FACT)
+  const oldId = buildEvidence([makeOldTop10()[0]])[0].id
+  const fixture = runGapStarvationFixture({
+    gapOutcomes: [makeRerankedOutcome([monster, fresh])],
+    replies: [`旧资料 [cite:${oldId}]`, `旧资料 [cite:${oldId}]`],
+    // The Critic still rejects the regenerated draft: the run degrades by the
+    // EXISTING rules, the omission record does not gate it.
+    verdicts: [
+      { passed: false, hallucination: false, completeness: false, missingGap: "查询关键例外" },
+      { passed: false, hallucination: false, completeness: false, missingGap: "查询关键例外" },
+    ],
+    gapQueries: [[{ text: "特定商品 不可退款 例外" }], []],
+  })
+  const output = await fixture.output
+
+  assert.equal(output.status, "insufficient_evidence", "the existing validation rules still decide the terminal")
+  assert.equal(output.validationTrace.passed, false)
+  assert.deepEqual(output.references, [], "no coverage claim survives")
+  const omissions = output.contextTrace.gapFactOmissions
+  assert.ok(omissions && omissions.length === 1, "the un-fittable gap fact is recorded explicitly")
+  assert.equal(omissions![0].chunkId, "monster")
+  assert.equal(omissions![0].reason, "context_budget")
+  assert.equal(
+    omissions![0].evidenceId,
+    buildEvidence([monster])[0].id,
+    "the omission names the same stable identity a citation would"
+  )
+  assert.ok(
+    fixture.draft.prompts[1].includes(FRESH_GAP_FACT),
+    "an oversized gap hit does not displace the other new facts it shares the round with"
+  )
+})
+
+test("PT-04 AC07: compression keeps the selected new fact; a compressed context that lost it does not close the round", async () => {
+  const oldResults = makeOldTop10()
+  const fresh = makeGapChild("new", FRESH_GAP_FACT)
+  const freshId = buildEvidence([fresh])[0].id
+  const oldId = buildEvidence([oldResults[0]])[0].id
+
+  // (a) the compression carried the selected fact's own wording → adopted with
+  // nothing to report.
+  const retained = runGapStarvationFixture({
+    compressor: makeFakeCompressor((evidence) =>
+      compressedBlock(
+        evidence.map(({ id }) => id),
+        `压缩摘要：七日退款规则如下。${FRESH_GAP_FACT}`
+      )
+    ),
+  })
+  const retainedOutput = await retained.output
+  assert.equal(retainedOutput.status, "completed")
+  assert.equal(retainedOutput.contextTrace.compressionRan, true)
+  assert.equal(retainedOutput.contextTrace.compressionRejectedForGapLoss, undefined)
+  assert.equal(retainedOutput.contextTrace.gapFactOmissions, undefined)
+  assert.ok(
+    retained.draft.prompts[1].includes(`[cite:${freshId}]`),
+    "the compressed context carries the selected new fact's identity into the prompt"
+  )
+  assert.ok(retained.draft.prompts[1].includes("压缩摘要"), "compressed output is what generated")
+
+  // (a2) an adopted compression that keeps only the citation identity is
+  // lineage, not proof of wording. The adoption rule cannot tell the two apart,
+  // so the record must say the selected fact is not literally present rather
+  // than let anyone read the correction as closed.
+  const reworded = runGapStarvationFixture({
+    compressor: makeFakeCompressor((evidence) =>
+      compressedBlock(evidence.map(({ id }) => id), "压缩摘要：七日退款与例外。")
+    ),
+  })
+  const rewordedOutput = await reworded.output
+  assert.equal(rewordedOutput.contextTrace.compressionRan, true)
+  const compressionOmissions = rewordedOutput.contextTrace.gapFactOmissions ?? []
+  assert.ok(
+    compressionOmissions.some(
+      (omission) =>
+        omission.reason === "compression" &&
+        (omission as { evidenceId?: string }).evidenceId === freshId
+    ),
+    `lineage-only adoption must be recorded as unverified coverage, got ${JSON.stringify(compressionOmissions)}`
+  )
+  assert.ok(
+    reworded.draft.prompts[1].includes(`[cite:${freshId}]`),
+    "and the run still generated from the adopted compressed context"
+  )
+
+  // (b) compression dropped the fact → the round generates from the
+  // deterministic context instead, and the loss is recorded.
+  const dropper = runGapStarvationFixture({
+    compressor: makeFakeCompressor(() =>
+      compressedBlock([oldId], "压缩摘要：只有旧规则。")
+    ),
+  })
+  const droppedOutput = await dropper.output
+  assert.equal(droppedOutput.contextTrace.compressionRan, false, "a lossy compression is not a closed correction round")
+  assert.equal(droppedOutput.contextTrace.compressionRejectedForGapLoss, true)
+  assert.ok(
+    dropper.draft.prompts[1].includes(FRESH_GAP_FACT),
+    "the selected new fact still reaches the prompt through the deterministic context"
+  )
+  assert.equal(dropper.draft.prompts[1].includes("只有旧规则"), false, "the lossy compressed output is not used")
+
+  // (c) compression failure fallback keeps the fact too.
+  const throwing = runGapStarvationFixture({
+    compressor: {
+      async compress(): Promise<ContextCompressionResult | null> {
+        throw new Error("provider blew up")
+      },
+    },
+  })
+  const fallbackOutput = await throwing.output
+  assert.equal(fallbackOutput.contextTrace.compressionRan, false)
+  assert.ok(
+    throwing.draft.prompts[1].includes(FRESH_GAP_FACT),
+    "the compression-failure fallback retains the selected new facts"
+  )
+})
+
+test("PT-04 AC08: no new evidence, provider failure and scope stay bounded; nothing claims a correction", async () => {
+  // (a) the gap search found nothing new.
+  const empty = runGapStarvationFixture({ gapOutcomes: [makeRerankedOutcome([])] })
+  const emptyOutput = await empty.output
+  assert.equal(emptyOutput.status, "insufficient_evidence")
+  assert.equal(empty.searcher.calls.length, 2, "no further correction searches after the empty gap")
+  assert.equal(empty.draft.calls, 1, "no regeneration was claimed for a correction that produced nothing")
+  assert.equal(emptyOutput.contextTrace.gapFactOmissions, undefined, "an empty 补检 may not report gap coverage")
+  assert.equal(emptyOutput.retrievalTrace.finalContextRound, 1)
+  assert.deepEqual(emptyOutput.references, [])
+
+  // (b) the gap search itself failed: still bounded, and the locked scope of
+  // the run is what the 补检 reads — a retry never widens it.
+  const retrievalScope = { knowledgeBaseIds: ["kb-policies"] }
+  const calls: Array<{ query: Query; options?: SearchOptions }> = []
+  const failingSearcher: Searcher & { calls: typeof calls } = {
+    calls,
+    async search(query: Query, options?: SearchOptions): Promise<SearchOutcome> {
+      calls.push({ query, options })
+      if (calls.length > 1) throw new Error("provider unavailable")
+      return makeRerankedOutcome(makeOldTop10())
+    },
+  }
+  const oldId = buildEvidence([makeOldTop10()[0]])[0].id
+  const draft = makePromptCapturingDraft([`旧资料 [cite:${oldId}]`])
+  const runner = createSimpleKnowledgeMastraRunner({
+    router: makeFakeRouter("simple"),
+    createSearcher: () => failingSearcher,
+    assembler: new ContextAssemblerImpl(),
+    validator: makeFakeValidator({ passed: false, hallucination: false, completeness: false, missingGap: "查询关键例外" }),
+    replanner: makeFakeRePlanner([[{ text: "特定商品 不可退款 例外" }]]),
+    streamAnswerDraft: draft.stream,
+  })
+  await assert.rejects(
+    () => runner(makeRunnerInput({ message: "比较资料中的退款规则与例外", retrievalScope })),
+    /provider unavailable/
+  )
+  assert.equal(failingSearcher.calls.length, 2, "one initial search + one gap search, then the run stops")
+  assert.equal(draft.calls, 1, "a failed 补检 never regenerates")
+  for (const call of failingSearcher.calls) {
+    assert.equal(call.options?.retrievalScope, retrievalScope, "the gap-first retry never widens the read")
+  }
+})
+
+test("PT-04 AC09: gap-first selection is labelled as an aggregation, a lone search keeps its own honest label", async () => {
+  const merged = runGapStarvationFixture()
+  const mergedOutput = await merged.output
+  assert.equal(mergedOutput.status, "completed")
+  // Both contributing searches reported `dedicated_rerank`, but the published
+  // order is the runner's gap-first merge — so it must not be labelled one.
+  assert.notEqual(mergedOutput.retrievalTrace.finalContextOrdering?.source, "dedicated_rerank")
+  assert.deepEqual(mergedOutput.retrievalTrace.finalContextOrdering, {
+    source: "fused",
+    reason: "multi_query_aggregation",
+  })
+
+  // The untouched case: a single accepted search keeps its own label.
+  const oldResults = makeOldTop10()
+  const oldId = buildEvidence([oldResults[0]])[0].id
+  const passthrough = runGapStarvationFixture({
+    gapOutcomes: [makeRerankedOutcome([])],
+    replies: [`旧资料 [cite:${oldId}]`],
+    verdicts: [{ passed: true, hallucination: false, completeness: true }],
+    gapQueries: [[]],
+  })
+  const passthroughOutput = await passthrough.output
+  assert.equal(passthroughOutput.status, "completed")
+  assert.deepEqual(passthroughOutput.retrievalTrace.finalContextOrdering, {
+    source: "dedicated_rerank",
+  })
 })

@@ -49,7 +49,6 @@ const convertMessage = (message: import("@core/conversation").Message): ThreadMe
         traceStatus: message.traceStatus ?? null,
         runId: message.runId ?? null,
         faq: message.faq ?? null,
-        memoryUsed: message.memoryUsed ?? null,
       },
     },
   }

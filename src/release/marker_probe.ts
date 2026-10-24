@@ -276,7 +276,7 @@ export const markerProbe: ProbeImplementation = async (
 
   try {
     // --- Phase 1: Happy path — production parser routing + parse ---
-    // Exercise real selectParser to route the document to marker.
+    // Historical offline CLI fixture: default PDF routing is now builtin-pdf.
     const parserDecision = selectParser({
       fileName: fixture.document.fileName,
       mimeType: fixture.document.mimeType,

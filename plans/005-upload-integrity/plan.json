@@ -1,0 +1,509 @@
+{
+  "schemaVersion": 1,
+  "updated": "2026-10-03",
+  "tracker": "local",
+  "label": "reference-only",
+  "status": "superseded_for_execution",
+  "implementationStatus": "not_started",
+  "currentTurnScope": "specification_decomposition_only",
+  "parentPlan": "../005-upload-integrity-and-recovery.md",
+  "specification": "spec.md",
+  "executionIndex": "../../.scratch/upload-integrity-tickets/README.md",
+  "firstImplementationTicket": null,
+  "testingBoundary": {
+    "primary": [
+      "existing_file_upload_http",
+      "existing_task_status_http",
+      "existing_task_resume_http",
+      "ingestion_lifecycle"
+    ],
+    "supplemental": [
+      "independent_parser_and_artifact_truth",
+      "frontend_component_and_browser_in_batch_two"
+    ],
+    "source": "derived_from_confirmed_acceptance_requirements_and_existing_tests"
+  },
+  "readyLabelMeaning": "Specification is triaged. Start eligibility also requires completed dependencies, an accepted batch gate, and an implementation instruction.",
+  "gates": [
+    {
+      "id": "B1",
+      "title": "核心验收",
+      "requiredTickets": [
+        "UP-01",
+        "UP-02",
+        "UP-03",
+        "UP-04",
+        "UP-05",
+        "UP-06",
+        "UP-07",
+        "UP-08",
+        "UP-09",
+        "UP-10",
+        "UP-11"
+      ],
+      "status": "not_started"
+    },
+    {
+      "id": "B2",
+      "title": "前端验收",
+      "dependsOnGates": [
+        "B1"
+      ],
+      "requiredTickets": [
+        "UP-12",
+        "UP-13",
+        "UP-14",
+        "UP-15",
+        "UP-16"
+      ],
+      "status": "not_started"
+    }
+  ],
+  "tasks": [
+    {
+      "id": "UP-01",
+      "title": "独立真值样本与修复前基线",
+      "batch": "core",
+      "spec": "issues/01-truth-and-baseline.md",
+      "label": "ready-for-agent",
+      "status": "not_started",
+      "dependsOn": [],
+      "requiredGates": [],
+      "decisions": [
+        "Q4",
+        "Q7",
+        "Q8",
+        "Q9"
+      ]
+    },
+    {
+      "id": "UP-02",
+      "title": "文件准入与类型兼容解析",
+      "batch": "core",
+      "spec": "issues/02-admission-and-routing.md",
+      "label": "ready-for-agent",
+      "status": "not_started",
+      "dependsOn": [
+        "UP-01"
+      ],
+      "requiredGates": [],
+      "decisions": [
+        "Q6",
+        "Q12"
+      ]
+    },
+    {
+      "id": "UP-03",
+      "title": "能力与错误分类、有限重试",
+      "batch": "core",
+      "spec": "issues/03-capability-and-retry.md",
+      "label": "ready-for-agent",
+      "status": "not_started",
+      "dependsOn": [
+        "UP-02"
+      ],
+      "requiredGates": [],
+      "decisions": [
+        "Q6"
+      ]
+    },
+    {
+      "id": "UP-04",
+      "title": "提取与来源证据持久化",
+      "batch": "core",
+      "spec": "issues/04-durable-extraction-evidence.md",
+      "label": "ready-for-agent",
+      "status": "not_started",
+      "dependsOn": [
+        "UP-02"
+      ],
+      "requiredGates": [],
+      "decisions": [
+        "Q1",
+        "Q5"
+      ]
+    },
+    {
+      "id": "UP-05",
+      "title": "保真 TXT 与冷启动优化",
+      "batch": "core",
+      "spec": "issues/05-faithful-txt.md",
+      "label": "ready-for-agent",
+      "status": "not_started",
+      "dependsOn": [
+        "UP-03",
+        "UP-04"
+      ],
+      "requiredGates": [],
+      "decisions": [
+        "Q1",
+        "Q2",
+        "Q5"
+      ]
+    },
+    {
+      "id": "UP-06",
+      "title": "保守 PDF 归一化",
+      "batch": "core",
+      "spec": "issues/06-conservative-pdf.md",
+      "label": "ready-for-agent",
+      "status": "not_started",
+      "dependsOn": [
+        "UP-03",
+        "UP-04"
+      ],
+      "requiredGates": [],
+      "decisions": [
+        "Q1",
+        "Q2",
+        "Q5",
+        "Q10"
+      ]
+    },
+    {
+      "id": "UP-07",
+      "title": "来源跨度与切块覆盖",
+      "batch": "core",
+      "spec": "issues/07-chunk-coverage.md",
+      "label": "ready-for-agent",
+      "status": "not_started",
+      "dependsOn": [
+        "UP-05",
+        "UP-06"
+      ],
+      "requiredGates": [],
+      "decisions": [
+        "Q1",
+        "Q5"
+      ]
+    },
+    {
+      "id": "UP-08",
+      "title": "完整性门槛与旧版本保护",
+      "batch": "core",
+      "spec": "issues/08-integrity-lifecycle-gate.md",
+      "label": "ready-for-agent",
+      "status": "not_started",
+      "dependsOn": [
+        "UP-04",
+        "UP-07"
+      ],
+      "requiredGates": [],
+      "decisions": [
+        "Q1",
+        "Q2",
+        "Q3",
+        "Q10"
+      ]
+    },
+    {
+      "id": "UP-09",
+      "title": "索引与检索核验",
+      "batch": "core",
+      "spec": "issues/09-index-and-search-verification.md",
+      "label": "ready-for-agent",
+      "status": "not_started",
+      "dependsOn": [
+        "UP-08"
+      ],
+      "requiredGates": [],
+      "decisions": [
+        "Q1",
+        "Q3"
+      ]
+    },
+    {
+      "id": "UP-10",
+      "title": "同文档任务恢复",
+      "batch": "core",
+      "spec": "issues/10-same-document-recovery.md",
+      "label": "ready-for-agent",
+      "status": "not_started",
+      "dependsOn": [
+        "UP-03",
+        "UP-08",
+        "UP-09"
+      ],
+      "requiredGates": [],
+      "decisions": [
+        "Q3",
+        "Q6",
+        "Q11"
+      ]
+    },
+    {
+      "id": "UP-11",
+      "title": "核心验收与同样本性能比较",
+      "batch": "core",
+      "spec": "issues/11-core-acceptance.md",
+      "label": "ready-for-agent",
+      "status": "not_started",
+      "dependsOn": [
+        "UP-10"
+      ],
+      "requiredGates": [],
+      "decisions": [
+        "Q1",
+        "Q2",
+        "Q4",
+        "Q7",
+        "Q8",
+        "Q9",
+        "Q10",
+        "Q13"
+      ]
+    },
+    {
+      "id": "UP-12",
+      "title": "预检查与有界队列",
+      "batch": "frontend",
+      "spec": "issues/12-preflight-and-queue.md",
+      "label": "ready-for-agent",
+      "status": "not_started",
+      "dependsOn": [
+        "UP-02"
+      ],
+      "requiredGates": [
+        "B1"
+      ],
+      "decisions": [
+        "Q12"
+      ]
+    },
+    {
+      "id": "UP-13",
+      "title": "恢复与待校验状态接入",
+      "batch": "frontend",
+      "spec": "issues/13-resume-and-review-ui.md",
+      "label": "ready-for-agent",
+      "status": "not_started",
+      "dependsOn": [
+        "UP-08",
+        "UP-10"
+      ],
+      "requiredGates": [
+        "B1"
+      ],
+      "decisions": [
+        "Q3",
+        "Q11"
+      ]
+    },
+    {
+      "id": "UP-14",
+      "title": "取消与迟到响应收敛",
+      "batch": "frontend",
+      "spec": "issues/14-cancellation-convergence.md",
+      "label": "ready-for-agent",
+      "status": "not_started",
+      "dependsOn": [
+        "UP-10",
+        "UP-12",
+        "UP-13"
+      ],
+      "requiredGates": [
+        "B1"
+      ],
+      "decisions": [
+        "Q11"
+      ]
+    },
+    {
+      "id": "UP-15",
+      "title": "稳定时间起点与阶段进度",
+      "batch": "frontend",
+      "spec": "issues/15-timing-and-progress.md",
+      "label": "ready-for-agent",
+      "status": "not_started",
+      "dependsOn": [
+        "UP-11",
+        "UP-12",
+        "UP-13"
+      ],
+      "requiredGates": [
+        "B1"
+      ],
+      "decisions": [
+        "Q4"
+      ]
+    },
+    {
+      "id": "UP-16",
+      "title": "整体浏览器验收",
+      "batch": "frontend",
+      "spec": "issues/16-browser-acceptance.md",
+      "label": "ready-for-agent",
+      "status": "not_started",
+      "dependsOn": [
+        "UP-12",
+        "UP-13",
+        "UP-14",
+        "UP-15"
+      ],
+      "requiredGates": [
+        "B1"
+      ],
+      "decisions": [
+        "Q12",
+        "Q13"
+      ]
+    }
+  ],
+  "decisions": [
+    {
+      "id": "Q1",
+      "description": "全部有效信息可检索、可追溯并保留原件",
+      "status": "confirmed_by_user",
+      "tasks": [
+        "UP-04",
+        "UP-05",
+        "UP-06",
+        "UP-07",
+        "UP-08",
+        "UP-09",
+        "UP-11"
+      ]
+    },
+    {
+      "id": "Q2",
+      "description": "先 TXT 与文本 PDF，再独立验证 OCR",
+      "status": "confirmed_by_user",
+      "tasks": [
+        "UP-05",
+        "UP-06",
+        "UP-08",
+        "UP-11"
+      ]
+    },
+    {
+      "id": "Q3",
+      "description": "未知完整性待校验且旧正常版本可用",
+      "status": "confirmed_by_user",
+      "tasks": [
+        "UP-08",
+        "UP-09",
+        "UP-10",
+        "UP-13"
+      ]
+    },
+    {
+      "id": "Q4",
+      "description": "完整可检索的端到端耗时为主要速度指标",
+      "status": "confirmed_by_user",
+      "tasks": [
+        "UP-01",
+        "UP-11",
+        "UP-15"
+      ]
+    },
+    {
+      "id": "Q5",
+      "description": "可追溯、保守过滤",
+      "status": "confirmed_by_user",
+      "tasks": [
+        "UP-04",
+        "UP-05",
+        "UP-06",
+        "UP-07"
+      ]
+    },
+    {
+      "id": "Q6",
+      "description": "自动匹配能力，有限恢复与完整性校验",
+      "status": "confirmed_by_user",
+      "tasks": [
+        "UP-02",
+        "UP-03",
+        "UP-10"
+      ]
+    },
+    {
+      "id": "Q7",
+      "description": "合成独立真值，再本地代表性样本",
+      "status": "confirmed_by_user",
+      "tasks": [
+        "UP-01",
+        "UP-11"
+      ]
+    },
+    {
+      "id": "Q8",
+      "description": "先基线，再定改善目标",
+      "status": "confirmed_by_user",
+      "tasks": [
+        "UP-01",
+        "UP-11"
+      ]
+    },
+    {
+      "id": "Q9",
+      "description": "先按现有样本测工作量",
+      "status": "confirmed_by_user",
+      "tasks": [
+        "UP-01",
+        "UP-11"
+      ]
+    },
+    {
+      "id": "Q10",
+      "description": "已验证路径先交付，复杂文件待校验",
+      "status": "confirmed_by_user",
+      "tasks": [
+        "UP-06",
+        "UP-08",
+        "UP-11"
+      ]
+    },
+    {
+      "id": "Q11",
+      "description": "恢复同文档与任务，避免重复传输和版本",
+      "status": "confirmed_by_user",
+      "tasks": [
+        "UP-10",
+        "UP-13",
+        "UP-14"
+      ]
+    },
+    {
+      "id": "Q12",
+      "description": "保留已有格式，重点验证 PDF/TXT",
+      "status": "confirmed_by_user",
+      "tasks": [
+        "UP-02",
+        "UP-12",
+        "UP-16"
+      ]
+    },
+    {
+      "id": "Q13",
+      "description": "核心先修，前端第二批",
+      "status": "confirmed_by_user",
+      "tasks": [
+        "UP-11",
+        "UP-16"
+      ]
+    }
+  ],
+  "jev": {
+    "request": "jev-request.json",
+    "evidence": "jev-evidence.json",
+    "actualModel": "jev-1.13.0",
+    "appliedChoices": [
+      "sixteen_behavior_tickets",
+      "separate_shared_guard",
+      "before_behavior_changes"
+    ],
+    "interpretation": "Option distributions are not measured upload success rates or engineering feasibility."
+  },
+  "executionFrontier": [
+    "UT-01",
+    "UT-02"
+  ],
+  "supersededBy": "../../.scratch/upload-integrity-tickets/final-ticket-plan.json",
+  "historicalExecution": {
+    "executionIndex": "README.md",
+    "firstImplementationTicket": "UP-01",
+    "status": "specified",
+    "note": "Original 16 specifications and dependencies are retained as requirements references; use the published 32-ticket plan for execution."
+  }
+}

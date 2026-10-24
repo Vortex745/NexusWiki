@@ -29,6 +29,42 @@ export interface KnowledgeBase {
    * full re-ingestion.
    */
   embeddingProfile: string
+  /**
+   * The knowledge-base folder this base is grouped under, or null when it is
+   * ungrouped. A presentation aid only: it is NOT an ownership boundary, it is
+   * never part of a retrieval scope, and a folder row that disappears leaves
+   * its members active and ungrouped.
+   */
+  folderId: string | null
+  createdAt: string
+  updatedAt: string
+}
+
+/**
+ * A tenant-shared folder that groups knowledge bases one level deep. Folders do
+ * not nest and a knowledge base belongs to at most one of them, so this is a
+ * flat (id, name) taxonomy plus the `folderId` back-reference on each base.
+ */
+export interface KnowledgeBaseFolder {
+  id: string
+  tenantId: string
+  name: string
+  createdAt: string
+  updatedAt: string
+}
+
+/**
+ * A document folder: one directory inside ONE knowledge base. Membership is not
+ * stored here — a document carries the folder's `name` in its own
+ * `documents.metadata.folder`, which is what the catalog filters and facets
+ * already read. This row is what lets an empty directory exist and gives
+ * rename/delete something to address.
+ */
+export interface DocumentFolder {
+  id: string
+  tenantId: string
+  knowledgeBaseId: string
+  name: string
   createdAt: string
   updatedAt: string
 }

@@ -1,0 +1,15 @@
+{
+  "phase": "verified",
+  "source": "kefu-rag-chunks",
+  "target": "kefu-rag-chunks-v2-20261010",
+  "sourceCount": 122,
+  "embeddingDimensions": 1024,
+  "sourceBytes": 2404456,
+  "originalWriteBlock": false,
+  "sourceLocked": true,
+  "targetLocked": true,
+  "targetCount": 122,
+  "fractionalValues": 461,
+  "manifestSha256": "4c8868e286a44a8d44bf3384676e990266ef8f32733da9dcd8c9f855494579b7",
+  "timestamp": "2026-10-09T19:58:50.388Z"
+}

@@ -7,6 +7,9 @@ import { singleTenantAccessContext } from "../access/context"
 import { openDb, type DB } from "../ingestion/tracking/db"
 import { SqliteKnowledgeBaseRepo } from "../knowledge/knowledge_base_repo"
 import { KnowledgeBaseServiceImpl } from "../knowledge/knowledge_base_service"
+import { RetirementServiceImpl } from "../knowledge/retirement"
+import { SqliteSourceLifecycleStore } from "../knowledge/source_lifecycle_store"
+import { TaskRepo } from "../ingestion/tracking/task_repo"
 import type { KnowledgeBase } from "../types/knowledge_base"
 import { defaultKnowledgeBaseId } from "../types/knowledge_base"
 import { createKnowledgeBaseRouter } from "./knowledge_bases"
@@ -32,11 +35,21 @@ function contextFor(tenantId: string, scopes: AccessContext["scopes"] = ["chat"]
 function buildApp(options: {
   tenantId?: string
   scopes?: AccessContext["scopes"]
-} = {}): { app: express.Express; db: DB; service: KnowledgeBaseServiceImpl } {
+} = {}): {
+  app: express.Express
+  db: DB
+  service: KnowledgeBaseServiceImpl
+  retirement: RetirementServiceImpl
+} {
   const db = openDb(":memory:")
   const service = new KnowledgeBaseServiceImpl(
     new SqliteKnowledgeBaseRepo(db),
     EMBEDDING_PROFILE
+  )
+  const retirement = new RetirementServiceImpl(
+    db,
+    new SqliteSourceLifecycleStore(db),
+    new TaskRepo(db)
   )
   const app = express()
   app.use(express.json())
@@ -44,8 +57,8 @@ function buildApp(options: {
     res.locals.accessContext = contextFor(options.tenantId ?? "demo", options.scopes)
     next()
   })
-  app.use("/api", createKnowledgeBaseRouter({ service }))
-  return { app, db, service }
+  app.use("/api", createKnowledgeBaseRouter({ service, retirement }))
+  return { app, db, service, retirement }
 }
 
 async function listen(app: express.Express) {
@@ -231,6 +244,160 @@ test("Ticket 08: archiving the default knowledge base fails with 400", async () 
     } finally {
       server.close()
     }
+  } finally {
+    db.close()
+  }
+})
+
+// ---------------------------------------------------------------------------
+// POST /knowledge-bases/:id/retire-contents — the knowledge-base-wide wipe.
+// ---------------------------------------------------------------------------
+
+/** Seed one source (with its documents) into an existing knowledge base. */
+function seedSource(db: DB, args: {
+  sourceId: string
+  knowledgeBaseId: string
+  tenantId: string
+  docIds: string[]
+}): void {
+  const at = "2026-09-27T00:00:00.000Z"
+  db.prepare(
+    `INSERT INTO sources (source_id, source_key, source_kind, source_uri, namespace,
+       created_at, updated_at, tenant_id, lifecycle_state, knowledge_base_id)
+     VALUES (?, ?, 'file', ?, 'local', ?, ?, ?, 'active', ?)`
+  ).run(
+    args.sourceId, `key-${args.sourceId}`, `file:///tmp/${args.sourceId}.txt`,
+    at, at, args.tenantId, args.knowledgeBaseId
+  )
+  args.docIds.forEach((docId, index) => {
+    db.prepare(
+      `INSERT INTO documents (doc_id, source_id, content_hash, version, activation_order,
+         title, source, content, status, created_at, updated_at, tenant_id, knowledge_base_id)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'completed', ?, ?, ?, ?)`
+    ).run(
+      docId, args.sourceId, `hash-${docId}`, index + 1, index + 1, `Doc ${docId}`,
+      `file:///tmp/${args.sourceId}.txt`, `content-${docId}`, at, at, args.tenantId,
+      args.knowledgeBaseId
+    )
+  })
+}
+
+/** Read a source's lifecycle state straight from SQLite. */
+function lifecycleState(db: DB, sourceId: string): string | undefined {
+  return (
+    db.prepare(`SELECT lifecycle_state FROM sources WHERE source_id = ?`).get(sourceId) as
+      | { lifecycle_state: string }
+      | undefined
+  )?.lifecycle_state
+}
+
+test("a content wipe is admin-only, reason-mandatory and 404s on an unknown base", async () => {
+  const { app, db, service } = buildApp({ scopes: ["chat"] })
+  try {
+    const base = service.create("demo", "Policies")
+    seedSource(db, { sourceId: "src-1", knowledgeBaseId: base.id, tenantId: "demo", docIds: ["doc-1"] })
+
+    const { server, port } = await listen(app)
+    try {
+      assert.equal((await request(port, "POST", `/knowledge-bases/${base.id}/retire-contents`, { reason: "x" })).status, 403)
+      assert.equal(lifecycleState(db, "src-1"), "active", "a rejected call has no side effect")
+    } finally {
+      server.close()
+    }
+
+    const admin = buildApp({ scopes: ["chat", "admin"] })
+    try {
+      const adminBase = admin.service.create("demo", "Policies")
+      seedSource(admin.db, { sourceId: "src-1", knowledgeBaseId: adminBase.id, tenantId: "demo", docIds: ["doc-1"] })
+      const { server, port } = await listen(admin.app)
+      try {
+        assert.equal((await request(port, "POST", `/knowledge-bases/${adminBase.id}/retire-contents`, {})).status, 400)
+        assert.equal((await request(port, "POST", `/knowledge-bases/${adminBase.id}/retire-contents`, { reason: "" })).status, 400)
+        assert.equal((await request(port, "POST", "/knowledge-bases/kb-missing/retire-contents", { reason: "清理" })).status, 404)
+        assert.equal(lifecycleState(admin.db, "src-1"), "active",
+          "a rejected payload wiped nothing")
+      } finally {
+        server.close()
+      }
+    } finally {
+      admin.db.close()
+    }
+  } finally {
+    db.close()
+  }
+})
+
+test("an admin wipes every source of a base, and the wipe is idempotent", async () => {
+  const { app, db, service } = buildApp({ scopes: ["chat", "admin"] })
+  try {
+    const base = service.create("demo", "Policies")
+    seedSource(db, { sourceId: "src-1", knowledgeBaseId: base.id, tenantId: "demo", docIds: ["doc-1a", "doc-1b"] })
+    seedSource(db, { sourceId: "src-2", knowledgeBaseId: base.id, tenantId: "demo", docIds: ["doc-2a"] })
+    // A second base that must survive the wipe untouched.
+    const other = service.create("demo", "Keep me")
+    seedSource(db, { sourceId: "src-3", knowledgeBaseId: other.id, tenantId: "demo", docIds: ["doc-3a"] })
+
+    const { server, port } = await listen(app)
+    try {
+      const first = await request(port, "POST", `/knowledge-bases/${base.id}/retire-contents`, {
+        reason: "重新导入前的清空",
+      })
+      assert.equal(first.status, 200)
+      assert.deepEqual(first.json, {
+        knowledgeBaseId: base.id,
+        sources: 2,
+        retired: 2,
+        alreadyRetired: 0,
+        // 3 documents x the 4 cleanup ops.
+        cleanupTasksQueued: 12,
+      })
+
+      const second = await request(port, "POST", `/knowledge-bases/${base.id}/retire-contents`, {
+        reason: "再点一次",
+      })
+      assert.equal(second.json?.retired, 0)
+      assert.equal(second.json?.alreadyRetired, 2)
+      assert.equal(second.json?.cleanupTasksQueued, 0, "a re-wipe queues nothing a second time")
+    } finally {
+      server.close()
+    }
+
+    const states = new Map(
+      (db.prepare(
+        `SELECT source_id, lifecycle_state FROM sources WHERE tenant_id = 'demo'`
+      ).all() as Array<{ source_id: string; lifecycle_state: string }>).map(
+        (row) => [row.source_id, row.lifecycle_state]
+      )
+    )
+    assert.equal(states.get("src-1"), "retired")
+    assert.equal(states.get("src-2"), "retired")
+    assert.equal(states.get("src-3"), "active", "the other knowledge base is untouched")
+    // Both bases still exist: a content wipe never removes a knowledge base.
+    assert.equal(service.getById(base.id, "demo")?.status, "active")
+    assert.equal(service.getById(other.id, "demo")?.status, "active")
+  } finally {
+    db.close()
+  }
+})
+
+test("the default knowledge base can be emptied (it is only un-archivable)", async () => {
+  const { app, db, service } = buildApp({ scopes: ["chat", "admin"] })
+  try {
+    const fallback = service.ensureDefault("demo")
+    seedSource(db, { sourceId: "src-d", knowledgeBaseId: fallback.id, tenantId: "demo", docIds: ["doc-d"] })
+
+    const { server, port } = await listen(app)
+    try {
+      const res = await request(port, "POST", `/knowledge-bases/${fallback.id}/retire-contents`, {
+        reason: "清掉演示语料",
+      })
+      assert.equal(res.status, 200)
+      assert.equal(res.json?.retired, 1)
+    } finally {
+      server.close()
+    }
+    assert.equal(service.getById(fallback.id, "demo")?.status, "active",
+      "emptying the default base does not archive it")
   } finally {
     db.close()
   }

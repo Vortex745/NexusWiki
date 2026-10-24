@@ -58,6 +58,7 @@ function activatingStageRunner(db: DB, inner: IngestionStageRunner): IngestionSt
       let completedStages = 0
       const tracked: StageExecution = {
         signal: execution.signal,
+        executionId: execution.executionId,
         runStage: async (name, input, operation, summarize) => {
           const result = await execution.runStage(name, input, operation, summarize)
           completedStages += 1

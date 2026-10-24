@@ -1,7 +1,13 @@
-import { RefreshCw, X } from "lucide"
-import { useCallback, useEffect, useRef, useState } from "react"
+import { Button as UiButton } from "@/components/primitives/button"
+import { Alert, AlertDescription } from "@/components/primitives/alert"
+import { Input } from "@/components/primitives/input"
+import { PanelDialog } from "../ui/Dialog"
+import { DialogTitle } from "../primitives/dialog"
+import { RefreshCw, X } from "../ui/icons"
+import { useCallback, useEffect, useState } from "react"
 
 import { Icon } from "../ui/Icon"
+import { Select } from "../ui/Controls"
 import {
   createSyncSource,
   deleteSyncSource,
@@ -36,7 +42,6 @@ export function SyncDialog({
   knowledgeBase: { id: string; name: string } | null
   onClose: () => void
 }) {
-  const dialogRef = useRef<HTMLDialogElement>(null)
   const kbId = knowledgeBase?.id ?? null
   const [sources, setSources] = useState<SyncDataSourcePayload[]>([])
   const [kind, setKind] = useState<"url" | "sitemap">("url")
@@ -44,24 +49,16 @@ export function SyncDialog({
   const [interval, setInterval] = useState<string>("manual")
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [lastReport, setLastReport] = useState<SyncRunReportPayload | null>(null)
-
-  useEffect(() => {
-    const dialog = dialogRef.current
-    if (!dialog) return
-    if (open && !dialog.open) {
-      dialog.showModal()
-    } else if (!open && dialog.open) {
-      dialog.close()
-    }
-  }, [open])
+  const [lastReport, setLastReport] = useState<SyncRunReportPayload | null>(
+    null,
+  )
 
   const refresh = useCallback(() => {
     if (!kbId) return
     fetchSyncSources(kbId)
       .then(setSources)
       .catch((err: unknown) =>
-        setError(err instanceof Error ? err.message : "同步源读取失败")
+        setError(err instanceof Error ? err.message : "同步源读取失败"),
       )
   }, [kbId])
 
@@ -88,7 +85,7 @@ export function SyncDialog({
         refresh()
       })
       .catch((err: unknown) =>
-        setError(err instanceof Error ? err.message : "同步源创建失败")
+        setError(err instanceof Error ? err.message : "同步源创建失败"),
       )
       .finally(() => setBusy(false))
   }
@@ -103,7 +100,7 @@ export function SyncDialog({
         refresh()
       })
       .catch((err: unknown) =>
-        setError(err instanceof Error ? err.message : "同步执行失败")
+        setError(err instanceof Error ? err.message : "同步执行失败"),
       )
       .finally(() => setBusy(false))
   }
@@ -111,10 +108,12 @@ export function SyncDialog({
   const toggleState = (source: SyncDataSourcePayload) => {
     if (busy) return
     setBusy(true)
-    updateSyncSource(source.id, { state: source.state === "active" ? "paused" : "active" })
+    updateSyncSource(source.id, {
+      state: source.state === "active" ? "paused" : "active",
+    })
       .then(refresh)
       .catch((err: unknown) =>
-        setError(err instanceof Error ? err.message : "同步源更新失败")
+        setError(err instanceof Error ? err.message : "同步源更新失败"),
       )
       .finally(() => setBusy(false))
   }
@@ -125,98 +124,105 @@ export function SyncDialog({
     deleteSyncSource(id)
       .then(refresh)
       .catch((err: unknown) =>
-        setError(err instanceof Error ? err.message : "同步源删除失败")
+        setError(err instanceof Error ? err.message : "同步源删除失败"),
       )
       .finally(() => setBusy(false))
   }
 
   return (
-    <dialog
-      ref={dialogRef}
+    <PanelDialog
+      open={open}
       onClose={onClose}
-      onClick={(event) => {
-        if (event.target === event.currentTarget) onClose()
-      }}
-      aria-labelledby="sync-title"
-      className="m-auto h-[min(680px,calc(100dvh-48px))] w-[min(720px,calc(100vw-32px))] grid-rows-[auto_minmax(0,1fr)] overflow-hidden rounded-xl border border-line bg-surface text-ink shadow-dialog backdrop:bg-black/20 open:grid max-md:m-0 max-md:h-dvh max-md:w-screen max-md:rounded-none max-md:border-0"
+      titleId="sync-title"
+      className="grid grid-rows-[auto_auto_minmax(0,1fr)] sm:max-w-3xl"
     >
       <div className="flex h-13 flex-none items-center justify-between border-b border-line px-5 max-md:px-4">
         <div className="flex min-w-0 items-center gap-2">
-          <Icon icon={RefreshCw} className="size-4 flex-none text-muted" />
-          <h2 id="sync-title" className="truncate text-sm font-semibold text-ink">
+          <Icon
+            icon={RefreshCw}
+            className="size-4 flex-none text-muted-foreground"
+          />
+          <DialogTitle id="sync-title" className="truncate">
             同步数据源{knowledgeBase ? ` · ${knowledgeBase.name}` : ""}
-          </h2>
+          </DialogTitle>
         </div>
-        <button
+        <UiButton
+          variant="ghost"
+          size="icon-sm"
           type="button"
           onClick={onClose}
           aria-label="关闭同步数据源"
           title="关闭"
-          className="grid size-7 flex-none cursor-pointer place-items-center rounded-md text-muted/70 transition-colors hover:bg-surface-subtle hover:text-ink"
+          className="grid size-7 flex-none place-items-center"
         >
-          <Icon icon={X} className="size-4" />
-        </button>
+          <Icon data-icon="inline-start" icon={X} />
+        </UiButton>
       </div>
 
       <div className="flex min-h-0 flex-col gap-4 overflow-y-auto px-5 py-4 max-md:px-4">
         {error ? (
-          <p role="alert" className="rounded-lg border border-red-200 bg-red-50 p-3 text-xs text-red-700 dark:border-red-900 dark:bg-red-950/40 dark:text-red-300">
-            {error}
-          </p>
+          <Alert variant="destructive" role="alert" className="border p-3">
+            <AlertDescription>{error}</AlertDescription>
+          </Alert>
         ) : null}
 
-        <section className="rounded-lg border border-line p-3">
-          <p className="text-[10px] font-medium uppercase tracking-wider text-muted/70">
+        <section className="rounded-[14px] border border-line p-3">
+          <p className="text-[10px] font-medium text-muted-foreground">
             新建数据源（URL 或 sitemap，绑定本知识库）
           </p>
           <div className="mt-2 flex flex-wrap items-center gap-2">
-            <select
+            <Select
               value={kind}
-              onChange={(event) => setKind(event.target.value as "url" | "sitemap")}
+              onChange={(event) =>
+                setKind(event.target.value as "url" | "sitemap")
+              }
               aria-label="资源类型"
-              className="h-9 flex-none rounded-md border border-line bg-surface px-2 text-xs text-ink outline-none focus:border-brand"
+              wrapperClassName="flex-none w-32"
             >
               <option value="url">URL</option>
               <option value="sitemap">Sitemap</option>
-            </select>
-            <input
+            </Select>
+            <Input
               value={uri}
               onChange={(event) => setUri(event.target.value)}
               placeholder="https://example.com/policy 或 https://example.com/sitemap.xml"
               maxLength={2000}
               aria-label="资源地址"
-              className="h-9 min-w-0 flex-1 rounded-md border border-line bg-surface px-2.5 text-xs text-ink outline-none focus:border-brand"
+              className="h-9 min-w-0 flex-1 border px-2.5"
             />
-            <select
+            <Select
               value={interval}
               onChange={(event) => setInterval(event.target.value)}
               aria-label="同步间隔"
-              className="h-9 flex-none rounded-md border border-line bg-surface px-2 text-xs text-ink outline-none focus:border-brand"
+              wrapperClassName="flex-none w-36"
             >
               {INTERVALS.map(({ id, label }) => (
                 <option key={id} value={id}>
                   {label}
                 </option>
               ))}
-            </select>
-            <button
+            </Select>
+            <UiButton
+              variant="default"
+              size="sm"
               type="button"
               onClick={create}
               disabled={busy || !uri.trim()}
               title="创建数据源"
-              className="inline-flex h-9 flex-none cursor-pointer items-center rounded-lg bg-brand px-3 text-xs font-medium text-white transition-[color,background-color,border-color,transform,translate,scale] duration-150 ease-out hover:bg-brand-hover active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-50"
+              className="inline-flex h-9 flex-none items-center px-3 active:scale-[0.98] disabled:opacity-50"
             >
               创建
-            </button>
+            </UiButton>
           </div>
-          <p className="mt-1.5 text-[10px] text-muted/60">
-            同步复用与导入一致的安全抓取（内网拒绝 / 重定向校验 / 大小上限），内容经正常摄取流程入库；内容未变化时不会产生新版本。
+          <p className="mt-1.5 text-[10px] text-muted-foreground/60">
+            同步复用与导入一致的安全抓取（内网拒绝 / 重定向校验 /
+            大小上限），内容经正常摄取流程入库；内容未变化时不会产生新版本。
           </p>
         </section>
 
         {lastReport ? (
-          <section className="rounded-lg border border-line p-3">
-            <p className="text-[10px] font-medium uppercase tracking-wider text-muted/70">
+          <section className="rounded-[14px] border border-line p-3">
+            <p className="text-[10px] font-medium text-muted-foreground">
               最近一次同步报告
             </p>
             <ul className="mt-1.5 flex flex-col gap-0.5">
@@ -225,85 +231,107 @@ export function SyncDialog({
                   <span
                     className={
                       page.status === "failed"
-                        ? "font-mono text-[10px] text-red-600 dark:text-red-400"
+                        ? "font-mono text-[10px] text-danger"
                         : page.status === "unchanged"
-                          ? "font-mono text-[10px] text-muted/70"
+                          ? "font-mono text-[10px] text-muted-foreground/70"
                           : "font-mono text-[10px] text-brand"
                     }
                   >
                     {page.status}
                   </span>{" "}
                   <span className="truncate">{page.uri}</span>
-                  {page.detail ? <span className="text-[10px] text-muted/60"> — {page.detail}</span> : null}
+                  {page.detail ? (
+                    <span className="text-[10px] text-muted-foreground/60">
+                      {" "}
+                      — {page.detail}
+                    </span>
+                  ) : null}
                 </li>
               ))}
             </ul>
             {lastReport.truncated ? (
-              <p className="mt-1 text-[10px] text-amber-700 dark:text-amber-300">
+              <p className="mt-1 text-[10px] text-warning">
                 本次同步窗口已截断（页面数超过单次上限），其余页面将在后续同步处理。
               </p>
             ) : null}
           </section>
         ) : null}
 
-        <section className="rounded-lg border border-line p-3">
-          <p className="text-[10px] font-medium uppercase tracking-wider text-muted/70">数据源列表</p>
+        <section className="rounded-[14px] border border-line p-3">
+          <p className="text-[10px] font-medium text-muted-foreground">
+            数据源列表
+          </p>
           {sources.length === 0 ? (
-            <p className="mt-2 text-xs text-muted/70">还没有同步数据源。</p>
+            <p className="mt-2 text-xs text-muted-foreground/70">
+              还没有同步数据源。
+            </p>
           ) : (
             <ul className="mt-2 flex flex-col gap-2">
               {sources.map((source) => (
-                <li key={source.id} className="rounded-md border border-line bg-surface px-2.5 py-2 text-xs">
+                <li
+                  key={source.id}
+                  className="rounded-md border border-line bg-surface px-2.5 py-2 text-xs"
+                >
                   <div className="flex flex-wrap items-center gap-1.5">
                     <span
                       className={
                         source.state === "active"
                           ? "rounded bg-brand-subtle px-1 text-[10px] text-brand"
-                          : "rounded bg-surface-subtle px-1 text-[10px] text-muted/70"
+                          : "rounded bg-surface-subtle px-1 text-[10px] text-muted-foreground/70"
                       }
                     >
                       {source.state === "active" ? "启用" : "已暂停"}
                     </span>
-                    <span className="rounded bg-surface-subtle px-1 text-[10px] text-muted">
+                    <span className="rounded bg-surface-subtle px-1 text-[10px] text-muted-foreground">
                       {source.kind === "url" ? "URL" : "Sitemap"}
                     </span>
-                    <span className="truncate font-medium text-ink" title={source.uri}>
+                    <span
+                      className="truncate font-medium text-ink"
+                      title={source.uri}
+                    >
                       {source.uri}
                     </span>
-                    <span className="font-mono text-[10px] text-muted/60">
-                      {INTERVALS.find((entry) => entry.id === source.interval)?.label ?? source.interval}
+                    <span className="font-mono text-[10px] text-muted-foreground/60">
+                      {INTERVALS.find((entry) => entry.id === source.interval)
+                        ?.label ?? source.interval}
                     </span>
                   </div>
-                  <p className="mt-0.5 text-[10px] text-muted/60">
+                  <p className="mt-0.5 text-[10px] text-muted-foreground/60">
                     {source.lastSyncStatus
                       ? `上次同步：${source.lastSyncAt ?? "—"} · ${source.lastSyncStatus}`
                       : "尚未同步过。"}
                   </p>
                   <div className="mt-1 flex flex-wrap gap-1.5">
-                    <button
+                    <UiButton
+                      variant="default"
+                      size="sm"
                       type="button"
                       onClick={() => runOnce(source.id)}
                       disabled={busy || source.state !== "active"}
-                      className="cursor-pointer rounded bg-brand-subtle px-1.5 py-0.5 text-[10px] text-brand transition-colors hover:bg-brand-hover hover:text-white disabled:cursor-not-allowed disabled:opacity-50"
+                      className="px-1.5 py-0.5 disabled:opacity-50"
                     >
                       立即同步
-                    </button>
-                    <button
+                    </UiButton>
+                    <UiButton
+                      variant="ghost"
+                      size="sm"
                       type="button"
                       onClick={() => toggleState(source)}
                       disabled={busy}
-                      className="cursor-pointer rounded bg-surface-subtle px-1.5 py-0.5 text-[10px] text-muted transition-colors hover:text-ink disabled:opacity-50"
+                      className="px-1.5 py-0.5 disabled:opacity-50"
                     >
                       {source.state === "active" ? "暂停" : "启用"}
-                    </button>
-                    <button
+                    </UiButton>
+                    <UiButton
+                      variant="destructive"
+                      size="sm"
                       type="button"
                       onClick={() => remove(source.id)}
                       disabled={busy}
-                      className="cursor-pointer rounded px-1.5 py-0.5 text-[10px] text-red-600 transition-colors hover:bg-red-50 disabled:opacity-50 dark:hover:bg-red-950/40"
+                      className="px-1.5 py-0.5 disabled:opacity-50"
                     >
                       删除
-                    </button>
+                    </UiButton>
                   </div>
                 </li>
               ))}
@@ -311,6 +339,6 @@ export function SyncDialog({
           )}
         </section>
       </div>
-    </dialog>
+    </PanelDialog>
   )
 }

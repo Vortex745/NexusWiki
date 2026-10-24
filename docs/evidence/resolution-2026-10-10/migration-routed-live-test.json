@@ -1,0 +1,24 @@
+{
+  "phase": "verified",
+  "source": "resolution-migration-test-source-20261010",
+  "target": "resolution-migration-test-target-20261010",
+  "sourceCount": 2,
+  "embeddingDimensions": 2,
+  "sourceBytes": 18527,
+  "originalWriteBlock": false,
+  "sourceLocked": true,
+  "targetLocked": true,
+  "targetCount": 2,
+  "fractionalValues": 14,
+  "manifestSha256": "eb8fd36d59e29f9a471fa5e76b3cc3e2a2f100c13f60be8429a864b839a53b8d",
+  "routing": [
+    {
+      "id": "child",
+      "routing": "test-tenant-route"
+    },
+    {
+      "id": "parent",
+      "routing": "test-tenant-route"
+    }
+  ]
+}

@@ -1,0 +1,74 @@
+{
+  "model": "jev-latest",
+  "state": {
+    "task": "Decompose five proven RAG pipeline structural defects into local ready-for-agent repair specifications, without implementing business code. User confirmed test seams: existing shared Answer entry, actual Chat HTTP SSE/JSON transports, frontend public response behavior, captured generation prompts, with real in-memory SQLite/Searcher boundary for PageIndex and controlled external model/services.",
+    "constraints": [
+      "Retain architecture and existing permissions/active-version gates.",
+      "Every task independently shippable with complete behavior and tests.",
+      "Do not split backend fix and frontend status display of rejected drafts into separately shippable halves.",
+      "Use only genuine technical dependencies; priority order is separate.",
+      "No production corpus, key values or user docs supplied.",
+      "Current task specifies repairs only; live quality benchmark, graph capability buildout and Router redesign remain deferred."
+    ],
+    "provenDefects": [
+      {
+        "id": "F5",
+        "behavior": "Critic rejects hallucinated refund draft; runner tokens=[] but done.reply contains it. JSON returns terminal reply and frontend HTTP-ok displays complete. Shared entry, runners, HTTP and frontend all must honor terminal/public text contract."
+      },
+      {
+        "id": "F2",
+        "behavior": "Production complex tool-loop environment drops bound attachment session and web opt-in. Simple gets evidence and completes; complex does zero source calls and insufficient_retrieval for same scope/input."
+      },
+      {
+        "id": "F3",
+        "behavior": "New gap result appended after initial top-10 parent groups. Real default 6000-token assembler omits new fact in both prompts. Candidate trace includes new id. Selecting new gap candidates first is a deterministic standalone repair."
+      },
+      {
+        "id": "F4",
+        "behavior": "Evidence 600-char preview substitutes for complete content in compression and budget, while assembler uses parent windows. Raw parent material=30000 tokens; preview budget=3854; compression skipped; tail facts absent from its input. Common authorized fragment plan and measured actual output can be provided by repaired existing assembler/compressor."
+      },
+      {
+        "id": "F1",
+        "behavior": "PageIndex whole-table LIMIT 5 precedes KB/ACL filters. Adding 5 other-KB nodes makes target hits 1->0 with target stored. Eligibility must precede LIMIT; keep ES hydration rechecks."
+      }
+    ],
+    "metricContext": "Current six retrieval metrics intentionally score final-round ordered pre-assembler candidates, preserving first passage rank, keeping unmappable candidates nonrelevant, GT misses=0, empty GT=null, honest rerank source. These metrics are valid as candidate-retrieval measures, but finalContext naming cannot prove content seen by generation. We need actual post-window/post-compression consumed ids/spans, and separate generator-context recall with explicit stage/version. Candidate recall and generated answer citations are neither substitute for consumed context. An id-only retained list cannot prove every claim survived semantic compression.",
+    "alternatives": {
+      "five_per_defect": "Five vertical fixes, combining deterministic correction selection and actual-context/evaluation trace under F3; F4 repairs common content representation. F3 becomes a larger runner+assembler+metric+transport integration change.",
+      "six_behavior_seams": "Six vertical specs: publish boundary; complex source propagation; correction selection under current assembler budget; complete authorized context/budget/compression representation including actual-output selection result; consumed-context trace and separate context recall while preserving candidate metrics; scoped PageIndex eligibility. Trace task has a genuine prerequisite on repaired actual-output result, correction selection can independently ship earlier. No standalone research/test tickets.",
+      "seven_layer_tickets": "Split publication backend and frontend; separate schema groundwork from consumers; seven or more tickets whose partial delivery may not protect the behavior."
+    }
+  },
+  "questions": {
+    "granularity": {
+      "type": "choice",
+      "instructions": "Which decomposition best provides concrete independently accepted repair outcomes with minimal coordination for this existing codebase? Consider the actual contracts and alternatives in state, not an arbitrary target count.",
+      "criteria": {
+        "five_per_defect": "Five fixes; accept the wider F3 task to minimize spec count.",
+        "six_behavior_seams": "Six fixes; separate selection effectiveness from honest observed consumption because their behavior, evidence and downstream metric consumers are independently testable.",
+        "seven_layer_tickets": "Prefer seven or more layer-specific tickets even if they require all layers to fix one outcome.",
+        "insufficient_evidence": "The alternatives cannot be evaluated from the available evidence."
+      }
+    },
+    "metric_policy": {
+      "type": "choice",
+      "instructions": "Which metric policy best repairs the candidate-versus-consumed-context mismatch while preserving meaningful existing metrics?",
+      "criteria": {
+        "preserve_candidate_add_consumed": "Preserve six existing candidate ranking metrics with explicit stage labeling; add a separate actual generation-context recall/consumption trace and version/availability. Do not infer content truth from citation ids.",
+        "replace_candidate_with_consumed": "Replace existing six metrics' input with post-budget consumed context and mark new version; drop the old candidate ranking metric meaning.",
+        "labels_only": "Keep candidate metrics and change names only, without adding any actual consumption observation.",
+        "insufficient_evidence": "No metric semantics can be settled."
+      }
+    },
+    "correction_strategy": {
+      "type": "choice",
+      "instructions": "Which minimal first correction-selection repair is warranted for proven budget starvation while respecting current budgets?",
+      "criteria": {
+        "deterministic_gap_first": "For correction rounds, prioritize newly retrieved gap evidence deterministically before old context, deduplicate by stable document/chunk, reuse current parent grouping/budgets, record omitted evidence. No new model/rerank service.",
+        "global_llm_rerank": "Add a new mandatory LLM global rerank for accumulated correction results.",
+        "raise_budget": "Increase default context budget instead of changing ordering.",
+        "insufficient_evidence": "No selection repair is supported."
+      }
+    }
+  }
+}

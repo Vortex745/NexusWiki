@@ -1,0 +1,580 @@
+{
+  "schemaVersion": "pdf-quality-replay-v1",
+  "scenarios": [
+    {
+      "schemaVersion": "pdf-quality-replay-v1",
+      "scenarioId": "clef-second-audit--pass--scanned-textless",
+      "service": "clef",
+      "stage": "ocr-audit",
+      "fixture": "scanned-textless",
+      "caseKinds": [
+        "pass"
+      ],
+      "coversPages": [
+        1,
+        2
+      ],
+      "maxImagesPerRequest": 4,
+      "timeoutMs": 10000,
+      "externalServiceDependency": "none",
+      "authoredFrom": "脚本答案逐页取自 corpus-manifest.json 的 expected 记录；这些期望由 generate.py 的 DESIGN 常量按 closedSetRule 推导，早于任何提取器/Clef/OCR 调用，因此回放绑定的是独立标注的页面真值。",
+      "answersSource": {
+        "kind": "corpus-expectations",
+        "fixture": "scanned-textless",
+        "stage": "ocr-candidate"
+      },
+      "attempts": [
+        {
+          "attempt": 1,
+          "outcome": "answered",
+          "latencyMs": 140,
+          "pages": [
+            {
+              "page": 1,
+              "verdict": "pass",
+              "issueLabels": [
+                "none"
+              ],
+              "probability": 0.92,
+              "confidence": 0.85
+            },
+            {
+              "page": 2,
+              "verdict": "pass",
+              "issueLabels": [
+                "none"
+              ],
+              "probability": 0.91,
+              "confidence": 0.84
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "schemaVersion": "pdf-quality-replay-v1",
+      "scenarioId": "clef-second-audit--pass--image-cover",
+      "service": "clef",
+      "stage": "ocr-audit",
+      "fixture": "image-cover",
+      "caseKinds": [
+        "pass"
+      ],
+      "coversPages": [
+        1,
+        2
+      ],
+      "maxImagesPerRequest": 4,
+      "timeoutMs": 10000,
+      "externalServiceDependency": "none",
+      "authoredFrom": "脚本答案逐页取自 corpus-manifest.json 的 expected 记录；这些期望由 generate.py 的 DESIGN 常量按 closedSetRule 推导，早于任何提取器/Clef/OCR 调用，因此回放绑定的是独立标注的页面真值。",
+      "answersSource": {
+        "kind": "corpus-expectations",
+        "fixture": "image-cover",
+        "stage": "ocr-candidate"
+      },
+      "attempts": [
+        {
+          "attempt": 1,
+          "outcome": "answered",
+          "latencyMs": 140,
+          "pages": [
+            {
+              "page": 1,
+              "verdict": "pass",
+              "issueLabels": [
+                "none"
+              ],
+              "probability": 0.92,
+              "confidence": 0.85
+            },
+            {
+              "page": 2,
+              "verdict": "pass",
+              "issueLabels": [
+                "none"
+              ],
+              "probability": 0.91,
+              "confidence": 0.84
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "schemaVersion": "pdf-quality-replay-v1",
+      "scenarioId": "clef-second-audit--pass--garbled",
+      "service": "clef",
+      "stage": "ocr-audit",
+      "fixture": "garbled",
+      "caseKinds": [
+        "pass"
+      ],
+      "coversPages": [
+        1,
+        2
+      ],
+      "maxImagesPerRequest": 4,
+      "timeoutMs": 10000,
+      "externalServiceDependency": "none",
+      "authoredFrom": "脚本答案逐页取自 corpus-manifest.json 的 expected 记录；这些期望由 generate.py 的 DESIGN 常量按 closedSetRule 推导，早于任何提取器/Clef/OCR 调用，因此回放绑定的是独立标注的页面真值。",
+      "answersSource": {
+        "kind": "corpus-expectations",
+        "fixture": "garbled",
+        "stage": "ocr-candidate"
+      },
+      "attempts": [
+        {
+          "attempt": 1,
+          "outcome": "answered",
+          "latencyMs": 140,
+          "pages": [
+            {
+              "page": 1,
+              "verdict": "pass",
+              "issueLabels": [
+                "none"
+              ],
+              "probability": 0.92,
+              "confidence": 0.85
+            },
+            {
+              "page": 2,
+              "verdict": "pass",
+              "issueLabels": [
+                "none"
+              ],
+              "probability": 0.91,
+              "confidence": 0.84
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "schemaVersion": "pdf-quality-replay-v1",
+      "scenarioId": "clef-second-audit--uncertain--table-grid",
+      "service": "clef",
+      "stage": "ocr-audit",
+      "fixture": "table-grid",
+      "caseKinds": [
+        "uncertain"
+      ],
+      "coversPages": [
+        1
+      ],
+      "maxImagesPerRequest": 4,
+      "timeoutMs": 10000,
+      "externalServiceDependency": "none",
+      "authoredFrom": "脚本答案逐页取自 corpus-manifest.json 的 expected 记录；这些期望由 generate.py 的 DESIGN 常量按 closedSetRule 推导，早于任何提取器/Clef/OCR 调用，因此回放绑定的是独立标注的页面真值。",
+      "answersSource": {
+        "kind": "corpus-expectations",
+        "fixture": "table-grid",
+        "stage": "ocr-candidate"
+      },
+      "attempts": [
+        {
+          "attempt": 1,
+          "outcome": "answered",
+          "latencyMs": 140,
+          "pages": [
+            {
+              "page": 1,
+              "verdict": "uncertain",
+              "issueLabels": [
+                "structure-unverified"
+              ],
+              "probability": 0.92,
+              "confidence": 0.85
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "schemaVersion": "pdf-quality-replay-v1",
+      "scenarioId": "clef-second-audit--fail--mixed-text-scan",
+      "service": "clef",
+      "stage": "ocr-audit",
+      "fixture": "mixed-text-scan",
+      "caseKinds": [
+        "fail"
+      ],
+      "coversPages": [
+        1,
+        2,
+        3
+      ],
+      "maxImagesPerRequest": 4,
+      "timeoutMs": 10000,
+      "externalServiceDependency": "none",
+      "authoredFrom": "脚本答案是人为构造的 defective candidate：用来证明评估器会给出指定闭集标签与页号，它不对应任何真实模型输出，也不参与页面真值的制定。 OCR 候选没读回第 2 页可见内容。",
+      "answersSource": {
+        "kind": "authored-defect",
+        "fixture": "mixed-text-scan",
+        "stage": "ocr-candidate",
+        "defect": "content-missing"
+      },
+      "attempts": [
+        {
+          "attempt": 1,
+          "outcome": "answered",
+          "latencyMs": 140,
+          "pages": [
+            {
+              "page": 1,
+              "verdict": "pass",
+              "issueLabels": [
+                "none"
+              ],
+              "probability": 0.92,
+              "confidence": 0.85
+            },
+            {
+              "page": 2,
+              "verdict": "fail",
+              "issueLabels": [
+                "content-missing"
+              ],
+              "probability": 0.2,
+              "confidence": 0.2
+            },
+            {
+              "page": 3,
+              "verdict": "pass",
+              "issueLabels": [
+                "none"
+              ],
+              "probability": 0.9,
+              "confidence": 0.84
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "schemaVersion": "pdf-quality-replay-v1",
+      "scenarioId": "clef-second-audit--uncertain-audit-incomplete--mixed-text-scan",
+      "service": "clef",
+      "stage": "ocr-audit",
+      "fixture": "mixed-text-scan",
+      "caseKinds": [
+        "uncertain"
+      ],
+      "coversPages": [
+        1,
+        2,
+        3
+      ],
+      "maxImagesPerRequest": 4,
+      "timeoutMs": 10000,
+      "externalServiceDependency": "none",
+      "authoredFrom": "脚本答案是人为构造的 defective candidate：用来证明评估器会给出指定闭集标签与页号，它不对应任何真实模型输出，也不参与页面真值的制定。 第 2 页的审计覆盖不完整，必须停在 uncertain 而不是被折成 pass。",
+      "answersSource": {
+        "kind": "authored-defect",
+        "fixture": "mixed-text-scan",
+        "stage": "ocr-candidate",
+        "defect": "audit-incomplete"
+      },
+      "attempts": [
+        {
+          "attempt": 1,
+          "outcome": "answered",
+          "latencyMs": 140,
+          "pages": [
+            {
+              "page": 1,
+              "verdict": "pass",
+              "issueLabels": [
+                "none"
+              ],
+              "probability": 0.91,
+              "confidence": 0.84
+            },
+            {
+              "page": 2,
+              "verdict": "uncertain",
+              "issueLabels": [
+                "audit-incomplete"
+              ],
+              "probability": 0.45,
+              "confidence": 0.4
+            },
+            {
+              "page": 3,
+              "verdict": "pass",
+              "issueLabels": [
+                "none"
+              ],
+              "probability": 0.9,
+              "confidence": 0.83
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "schemaVersion": "pdf-quality-replay-v1",
+      "scenarioId": "clef-second-audit--fail-reading-order--two-column",
+      "service": "clef",
+      "stage": "ocr-audit",
+      "fixture": "two-column",
+      "caseKinds": [
+        "fail"
+      ],
+      "coversPages": [
+        1
+      ],
+      "maxImagesPerRequest": 4,
+      "timeoutMs": 10000,
+      "externalServiceDependency": "none",
+      "authoredFrom": "脚本答案是人为构造的 defective candidate：用来证明评估器会给出指定闭集标签与页号，它不对应任何真实模型输出，也不参与页面真值的制定。 左右栏被逐行交错读出。",
+      "answersSource": {
+        "kind": "authored-defect",
+        "fixture": "two-column",
+        "stage": "ocr-candidate",
+        "defect": "reading-order-broken"
+      },
+      "attempts": [
+        {
+          "attempt": 1,
+          "outcome": "answered",
+          "latencyMs": 140,
+          "pages": [
+            {
+              "page": 1,
+              "verdict": "fail",
+              "issueLabels": [
+                "reading-order-broken"
+              ],
+              "probability": 0.3,
+              "confidence": 0.3
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "schemaVersion": "pdf-quality-replay-v1",
+      "scenarioId": "clef-second-audit--fail-fabricated--scanned-textless",
+      "service": "clef",
+      "stage": "ocr-audit",
+      "fixture": "scanned-textless",
+      "caseKinds": [
+        "fail"
+      ],
+      "coversPages": [
+        1,
+        2
+      ],
+      "maxImagesPerRequest": 4,
+      "timeoutMs": 10000,
+      "externalServiceDependency": "none",
+      "authoredFrom": "脚本答案是人为构造的 defective candidate：用来证明评估器会给出指定闭集标签与页号，它不对应任何真实模型输出，也不参与页面真值的制定。 OCR 在第 2 页产出了页面上不存在的句子。",
+      "answersSource": {
+        "kind": "authored-defect",
+        "fixture": "scanned-textless",
+        "stage": "ocr-candidate",
+        "defect": "content-fabricated"
+      },
+      "attempts": [
+        {
+          "attempt": 1,
+          "outcome": "answered",
+          "latencyMs": 140,
+          "pages": [
+            {
+              "page": 1,
+              "verdict": "pass",
+              "issueLabels": [
+                "none"
+              ],
+              "probability": 0.9,
+              "confidence": 0.85
+            },
+            {
+              "page": 2,
+              "verdict": "fail",
+              "issueLabels": [
+                "content-fabricated"
+              ],
+              "probability": 0.25,
+              "confidence": 0.3
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "schemaVersion": "pdf-quality-replay-v1",
+      "scenarioId": "clef-second-audit--malformed--scanned-textless",
+      "service": "clef",
+      "stage": "ocr-audit",
+      "fixture": "scanned-textless",
+      "caseKinds": [
+        "malformed"
+      ],
+      "coversPages": [
+        1,
+        2
+      ],
+      "maxImagesPerRequest": 4,
+      "timeoutMs": 10000,
+      "externalServiceDependency": "none",
+      "authoredFrom": "第二次审计返回的不是有效 JSON：必须按协议无效处理，且不得触发质量重试。",
+      "answersSource": {
+        "kind": "none",
+        "fixture": "scanned-textless",
+        "stage": "ocr-candidate"
+      },
+      "attempts": [
+        {
+          "attempt": 1,
+          "outcome": "malformed",
+          "latencyMs": 80,
+          "httpStatus": 200,
+          "bodyRaw": "{\"pages\":[]"
+        }
+      ]
+    },
+    {
+      "schemaVersion": "pdf-quality-replay-v1",
+      "scenarioId": "clef-second-audit--timeout-then-pass--scanned-textless",
+      "service": "clef",
+      "stage": "ocr-audit",
+      "fixture": "scanned-textless",
+      "caseKinds": [
+        "timeout",
+        "recovery",
+        "pass"
+      ],
+      "coversPages": [
+        1,
+        2
+      ],
+      "maxImagesPerRequest": 4,
+      "timeoutMs": 10000,
+      "externalServiceDependency": "none",
+      "authoredFrom": "第二次审计超时后一次有界重试成功，逐页答案与语料 ocr-candidate 期望一致。",
+      "answersSource": {
+        "kind": "corpus-expectations",
+        "fixture": "scanned-textless",
+        "stage": "ocr-candidate"
+      },
+      "attempts": [
+        {
+          "attempt": 1,
+          "outcome": "timeout",
+          "latencyMs": 10000
+        },
+        {
+          "attempt": 2,
+          "outcome": "answered",
+          "latencyMs": 150,
+          "pages": [
+            {
+              "page": 1,
+              "verdict": "pass",
+              "issueLabels": [
+                "none"
+              ],
+              "probability": 0.92,
+              "confidence": 0.85
+            },
+            {
+              "page": 2,
+              "verdict": "pass",
+              "issueLabels": [
+                "none"
+              ],
+              "probability": 0.91,
+              "confidence": 0.84
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "schemaVersion": "pdf-quality-replay-v1",
+      "scenarioId": "clef-second-audit--cancelled--scanned-textless",
+      "service": "clef",
+      "stage": "ocr-audit",
+      "fixture": "scanned-textless",
+      "caseKinds": [
+        "cancellation"
+      ],
+      "coversPages": [
+        1,
+        2
+      ],
+      "maxImagesPerRequest": 4,
+      "timeoutMs": 10000,
+      "externalServiceDependency": "none",
+      "authoredFrom": "第二次审计在飞行中被取消：AbortError，而不是质量失败。",
+      "answersSource": {
+        "kind": "none",
+        "fixture": "scanned-textless",
+        "stage": "ocr-candidate"
+      },
+      "attempts": [
+        {
+          "attempt": 1,
+          "outcome": "cancelled",
+          "latencyMs": 40
+        }
+      ]
+    },
+    {
+      "schemaVersion": "pdf-quality-replay-v1",
+      "scenarioId": "clef-second-audit--recovery-reuse--scanned-textless",
+      "service": "clef",
+      "stage": "ocr-audit",
+      "fixture": "scanned-textless",
+      "caseKinds": [
+        "recovery",
+        "pass"
+      ],
+      "coversPages": [
+        1,
+        2
+      ],
+      "maxImagesPerRequest": 4,
+      "timeoutMs": 10000,
+      "externalServiceDependency": "none",
+      "authoredFrom": "恢复路径复用已持久化的第二次审计证据，不重新调用 Clef。",
+      "answersSource": {
+        "kind": "corpus-expectations",
+        "fixture": "scanned-textless",
+        "stage": "ocr-candidate"
+      },
+      "attempts": [
+        {
+          "attempt": 1,
+          "outcome": "answered-from-durable-evidence",
+          "reusedFromAttempt": 1,
+          "latencyMs": 5,
+          "pages": [
+            {
+              "page": 1,
+              "verdict": "pass",
+              "issueLabels": [
+                "none"
+              ],
+              "probability": 0.92,
+              "confidence": 0.85
+            },
+            {
+              "page": 2,
+              "verdict": "pass",
+              "issueLabels": [
+                "none"
+              ],
+              "probability": 0.91,
+              "confidence": 0.84
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

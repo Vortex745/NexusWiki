@@ -107,6 +107,7 @@ function parserStatus(config: AppConfig) {
     markitdown: commandOnPath(config.markitdownCommand ?? "markitdown"),
     marker: config.markerCommand ? commandOnPath(config.markerCommand) : false,
     mineru: config.mineruCommand ? commandOnPath(config.mineruCommand) : false,
+    builtin_pdf: commandOnPath(config.pythonCommand ?? "python"),
   }
   return {
     capability: "parser",
@@ -150,7 +151,7 @@ export function createCapabilityServer(config: AppConfig = loadConfig()): MCPSer
       }),
       parser_status: createTool({
         id: "parser_status",
-        description: "Read-only document parser availability (markitdown/marker/mineru on PATH).",
+        description: "Read-only document parser availability (markitdown/marker/mineru/builtin-pdf runtime on PATH).",
         inputSchema: z.strictObject({}),
         execute: async () => parserStatus(config),
       }),

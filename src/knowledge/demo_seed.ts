@@ -435,6 +435,7 @@ export async function seedDemoNamespace(options: DemoSeedOptions): Promise<DemoS
         description: base.description,
         status: "active",
         embeddingProfile,
+        folderId: null,
         createdAt: timestamp,
         updatedAt: timestamp,
       })

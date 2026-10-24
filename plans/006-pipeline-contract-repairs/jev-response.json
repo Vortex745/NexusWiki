@@ -1,0 +1,47 @@
+{
+  "timestamp": "2026-10-07T18:00:30.787Z",
+  "elapsedMs": 890,
+  "httpStatus": 200,
+  "response": {
+    "model": "jev-1.13.0",
+    "answers": {
+      "granularity": {
+        "type": "choice",
+        "choice": "six_behavior_seams",
+        "confidence": 0.67,
+        "probabilities": {
+          "seven_layer_tickets": 0,
+          "five_per_defect": 0.25,
+          "insufficient_evidence": 0,
+          "six_behavior_seams": 0.75
+        }
+      },
+      "metric_policy": {
+        "type": "choice",
+        "choice": "preserve_candidate_add_consumed",
+        "confidence": 1,
+        "probabilities": {
+          "labels_only": 0,
+          "replace_candidate_with_consumed": 0,
+          "insufficient_evidence": 0,
+          "preserve_candidate_add_consumed": 1
+        }
+      },
+      "correction_strategy": {
+        "type": "choice",
+        "choice": "deterministic_gap_first",
+        "confidence": 1,
+        "probabilities": {
+          "raise_budget": 0,
+          "global_llm_rerank": 0,
+          "insufficient_evidence": 0,
+          "deterministic_gap_first": 1
+        }
+      }
+    },
+    "usage": {
+      "input_tokens": 1642,
+      "output_tokens": 199
+    }
+  }
+}

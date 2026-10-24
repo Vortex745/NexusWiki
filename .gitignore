@@ -63,3 +63,12 @@ __pycache__/
 
 # Ticket 46: generated quality-gate results (copied to .scratch/ticket46-evidence/) 
 release-quality-results.json
+
+# Session probe outputs and one-off captures (regenerable, never tracked)
+/chunks_dump.json
+/scroll1.json
+/rd_probe.json
+/status_full.json
+/crocodile-e-bike.html
+.tmp-dev/
+.tmp-evidence/

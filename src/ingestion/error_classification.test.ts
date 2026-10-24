@@ -22,7 +22,9 @@ import {
   INGESTION_FAILURE_REASON_CODES,
   allowedOperationsFor,
   redactedFailureMessage,
+  RETRY_DELAYS_MS,
 } from "./error_classification"
+import { PdfQualityRejectionError } from "./quality/pdf_ocr_fallback_flag"
 
 // loadConfig() 是进程级 memoize：本文件任何 openDb 前必须就绪。
 process.env.OPENAI_API_KEY = process.env.OPENAI_API_KEY || "test-key"
@@ -85,6 +87,63 @@ test("UT-07 分类：能力缺失/永久输入/暂时/取消各归其类，未�
     redactedFailureMessage(new Error("fetch failed for https://user:secret@host.example/x")),
     "fetch failed for ***@***"
   )
+})
+
+test("Ticket 18 分类：质量拒绝按类型归为终态，理由码措辞不构成再次重试的依据", () => {
+  // 票 18：gate 的拒绝理由码会带分类词（如 service_failure:timeout:1）。
+  // 按类型而不是按消息分类，拒绝才不会重新进入 transient 类并触发任务级
+  // 第二轮整档重试（gate 内的预算已经花完）。
+  const rejection = new PdfQualityRejectionError(["service_failure:timeout:1", "missing_content:2"])
+  assert.ok(rejection.message.includes("timeout"), "前置：消息里确实出现了 timeout 词形")
+  const classification = classifyIngestionError(rejection)
+  assert.equal(classification.category, "permanent_input")
+  assert.equal(classification.reasonCode, INGESTION_FAILURE_REASON_CODES.pdfQualityGateRejected)
+  assert.equal(classification.retryable, false, "gate 已花掉自己的有界预算；第二轮重试是双重花费")
+
+  assert.deepEqual([...RETRY_DELAYS_MS], [2_000, 4_000, 8_000], "有界预算是唯一共享表")
+})
+
+test("Ticket 26 落账：质量拒绝的审计明细码进入 failure 记录，其他失败不带该字段", async () => {
+  const db = openDb(":memory:")
+  try {
+    // 质量拒绝：明细码（含页码）必须原样进入持久化 failure 记录——前端
+    // 凭它区分真质量拒绝与审计服务故障（粗分类同为 permanent_input）。
+    const rejectionRunner: IngestionStageRunner = {
+      close: async () => {},
+      async run(_document, execution: StageExecution): Promise<void> {
+        await execution.runStage("chunk", {}, async () => {
+          throw new PdfQualityRejectionError(["quality_failed:3", "service_failure:timeout:5"])
+        }, () => ({}))
+      },
+    }
+    const rejectionLifecycle = new IngestionLifecycle(db, rejectionRunner)
+    const rejected = rejectionLifecycle.submit({ title: "拒绝样本", content: "c", source: "rejection-test" })
+    assert.equal((await rejectionLifecycle.runNext())?.success, false)
+    const failure = rejectionLifecycle.getStatus(rejected.docId)?.failure
+    assert.equal(failure?.reasonCode, INGESTION_FAILURE_REASON_CODES.pdfQualityGateRejected)
+    assert.deepEqual(
+      failure?.reasonCodes,
+      ["quality_failed:3", "service_failure:timeout:5"],
+      "审计明细码原样持久化（数字不被 messageSafeCode 改写）",
+    )
+
+    // 非质量失败：不携带 reasonCodes 字段（ absence 本身是前端判断依据）。
+    const plainLifecycle = new IngestionLifecycle(db, {
+      close: async () => {},
+      async run(_document, execution: StageExecution): Promise<void> {
+        await execution.runStage("chunk", {}, async () => {
+          throw new Error("MarkItDown executable is unavailable. Parser executable is unavailable: markitdown")
+        }, () => ({}))
+      },
+    })
+    const plain = plainLifecycle.submit({ title: "普通失败样本", content: "c", source: "plain-test" })
+    assert.equal((await plainLifecycle.runNext())?.success, false)
+    const plainFailure = plainLifecycle.getStatus(plain.docId)?.failure
+    assert.equal(plainFailure?.reasonCode, INGESTION_FAILURE_REASON_CODES.parserCapabilityMissing)
+    assert.equal(plainFailure?.reasonCodes, undefined, "非质量失败没有审计明细码")
+  } finally {
+    db.close()
+  }
 })
 
 test("UT-07 注入缺命令：解析只被调用一次即终止，原因与允许操作可读", async () => {

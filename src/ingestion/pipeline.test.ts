@@ -11,6 +11,36 @@ import { DocumentRepo } from "./tracking/doc_repo"
 
 class StopAfterChunk extends Error {}
 
+test("ordinary import completes without the legacy graph model", async () => {
+  const db = openDb(":memory:")
+  let persisted = false
+  const store = {
+    async storeChunks() { persisted = true },
+    async storeEntities() { throw new Error("legacy graph must be skipped") },
+    async storeWikilinks() { throw new Error("legacy graph must be skipped") },
+    async close() {},
+    get chunkIndexName() { return "test-chunks" },
+  } as unknown as IngestionStoreImpl
+  const runner = new PipelineStageRunner(db, undefined, store)
+  const document: Document = { id: "doc-plain", sourceId: "source-plain",
+    contentHash: "hash", version: 1, title: "Plain text", source: "plain.txt",
+    content: "This content should be searchable even if no graph model is available.",
+    metadata: {}, createdAt: new Date(0), tenantId: "tenant-a",
+    allowedGroups: [], knowledgeBaseId: "kb-a" }
+  try {
+    const summary = await runner.run(document, {
+      signal: new AbortController().signal,
+      executionId: "test-execution",
+      async runStage(_name, _input, operation) { return operation() },
+    })
+    assert.equal(persisted, true)
+    assert.equal(summary.entityCount, 0)
+    assert.equal(summary.wikilinkCount, 0)
+  } finally {
+    db.close()
+  }
+})
+
 test("the chunk stage records and persists the MarkItDown decision and normalized blocks", async () => {
   const db = openDb(":memory:")
   const documents = new DocumentRepo(db)
@@ -45,6 +75,7 @@ test("the chunk stage records and persists the MarkItDown decision and normalize
   let chunkOutput: Record<string, unknown> | undefined
   const execution: StageExecution = {
     signal: new AbortController().signal,
+    executionId: "test-execution",
     async runStage(name, input, operation, summarize) {
       const result = await operation()
       if (name === "chunk") {
@@ -64,6 +95,9 @@ test("the chunk stage records and persists the MarkItDown decision and normalize
       mimeType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
       parser: "markitdown",
       parserReason: "extension .docx is supported by MarkItDown",
+      // Ticket 04: the effective PDF switch state is reported per stage. The
+      // document is not a PDF and the switch is unset, so it reads off.
+      pdfOcrFallbackEnabled: false,
     })
     assert.equal(chunkOutput?.parser, "markitdown")
     assert.equal(chunkOutput?.parserReason, "extension .docx is supported by MarkItDown")
@@ -109,6 +143,7 @@ test("a parser failure still leaves its selection and reason in document metadat
   const runner = new PipelineStageRunner(db, () => parser)
   const execution: StageExecution = {
     signal: new AbortController().signal,
+    executionId: "test-execution",
     async runStage(_name, _input, operation) {
       return operation()
     },
@@ -177,6 +212,7 @@ test("the persistence stages inherit access metadata and reject missing metadata
   const runner = new PipelineStageRunner(db, () => parser, store)
   const execution: StageExecution = {
     signal: new AbortController().signal,
+    executionId: "test-execution",
     async runStage<T>(
       _name: IngestionStageName,
       _input: Record<string, unknown>,

@@ -243,3 +243,17 @@ test("ticket 44: probe errors are bounded AND redacted before leaving the server
   assert.match(channels.chat.error ?? "", /\*\*\*/, "the secret is redacted in place")
   assert.ok((channels.chat.error ?? "").length <= 200, "the error is bounded")
 })
+
+test("status counts only the selected physical index", async () => {
+  const indices: string[] = []
+  const body = await callStatus({
+    config: mockConfig({ esChunkIndexName: "selected-v2" }),
+    es: { ping: async () => true, count: async ({index}: {index: string}) => {
+      indices.push(index)
+      return {count: index === "selected-v2" ? 0 : 42}
+    }} as unknown as Client,
+    neo4j: mockNeo4jDriver(true), openai: mockOpenAI(true),
+  })
+  assert.equal(body.hasKnowledgeBaseContent, false)
+  assert.deepEqual(indices, ["selected-v2"])
+})

@@ -1,5 +1,5 @@
-import type { Query, RouterDecision } from "../../types"
+import type { Query, RouterCallOptions, RouterDecision } from "../../types"
 
 export interface Router {
-  decide(query: Query): Promise<RouterDecision>
+  decide(query: Query, options?: RouterCallOptions): Promise<RouterDecision>
 }

@@ -117,7 +117,14 @@ async function main(): Promise<number> {
   )
   const clients: DemoNamespaceClients = {
     db,
-    es,
+    indexName: config.esChunkIndexName,
+    // The real client's top-level `exists` is the DOCUMENT exists API — the
+    // namespace reset needs the INDEX exists (`indices.exists`).
+    es: {
+      exists: (request, meta) => es.indices.exists(request, meta),
+      count: (request, meta) => es.count(request, meta),
+      deleteByQuery: (request, meta) => es.deleteByQuery(request, meta),
+    },
     // The SAME graph adapter the one-time rebuild uses — one strip rule
     // implementation, no drift.
     graph: createNeo4jDemoRebuildGraph(graphDriver),

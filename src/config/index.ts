@@ -1,9 +1,18 @@
 export interface AppConfig {
   esNode: string
   esApiKey: string
+  /** Physical chunk index; explicit isolated scope targets take precedence. */
+  esChunkIndexName?: string
   openaiApiKey: string
   openaiBaseUrl: string
   openaiChatModel: string
+  /** Optional question-routing provider; omitted configurations use Chat. */
+  decisionProvider?: "chat" | "clef"
+  /** Server-side credentials for the Cloudflare Clef decision provider. */
+  cloudflareAccountId?: string
+  cloudflareApiToken?: string
+  /** Per-decision request timeout in milliseconds; defaults to 10_000. */
+  decisionRequestTimeoutMs?: number
   embeddingApiKey: string
   embeddingBaseUrl: string
   embeddingModel: string
@@ -30,11 +39,45 @@ export interface AppConfig {
   pollIntervalMs: number
   claimedTimeoutMs: number
   markitdownCommand?: string
+  /** Deprecated: only historical offline parser fixtures consume these. */
   markerCommand?: string
   mineruCommand?: string
+  /** OCR credentials are server-only and independent from the Chat API key. */
+  ocrAccessKeyId?: string
+  ocrSecretAccessKey?: string
+  ocrSessionToken?: string
+  /** Python interpreter backing the repo-shipped builtin-pdf parser. */
+  pythonCommand?: string
   parserTimeoutMs?: number
   parserInputLimitBytes?: number
   parserOutputLimitBytes?: number
+  /**
+   * Ingestion speed: passages per embedding request (count bound) and per
+   * request byte budget (UTF-8 bound). The byte cap is the safety net when a
+   * provider rejects large batches — lower it instead of shipping a revert.
+   */
+  embeddingBatchMaxChunks?: number
+  embeddingBatchMaxBytes?: number
+  /** Ingestion speed: concurrent ingestion tasks the worker may run. */
+  ingestionConcurrency?: number
+  /**
+   * PDF quality queue Ticket 04: the independent switch for the PDF
+   * OCR-fallback + page-quality-gate ingestion workflow. Default OFF — unset,
+   * blank or `0` keeps every PDF import on the existing
+   * extraction → chunk → vectorize → index path.
+   *
+   * Optional in the type the way the other ingestion/decision settings are:
+   * `loadConfig()` always populates it after validating
+   * `PDF_OCR_FALLBACK_ENABLED`, and a config object that never went through
+   * `loadConfig()` (isolated scopes, legacy stubs) reads as OFF — the
+   * fail-safe direction, never an accidental gate.
+   *
+   * It is an INGESTION switch only. Question-answering Clef routing
+   * (`decisionProvider` and its credentials/timeout), run budgets,
+   * cancellation, prompts and classification never consult it, and the value is
+   * never exported to the frontend or written into user content.
+   */
+  pdfOcrFallbackEnabled?: boolean
   imageAssetPath?: string
   accessMode: "single_tenant" | "enforced"
   /**
@@ -49,8 +92,8 @@ export interface AppConfig {
   demoOidcAudience: string
   /**
    * Ticket 01: the password every demo account signs in with. Verified
-   * server-side only — it never reaches the browser. Required whenever
-   * `demoOidc` is on; there is deliberately no built-in default credential.
+   * server-side only — it never reaches the browser. Defaults to a fixed
+   * demo credential; `DEMO_OIDC_PASSWORD` overrides it.
    */
   demoOidcPassword: string
   /**
@@ -148,6 +191,18 @@ function required(key: string): string {
 
 let _config: AppConfig | null = null
 
+export const DEFAULT_ES_CHUNK_INDEX = "kefu-rag-chunks"
+
+/** Validate a single physical index, never a wildcard or multi-index target. */
+export function resolveChunkIndexName(indexName?: string, config?: Pick<AppConfig, "esChunkIndexName">): string {
+  const name = indexName?.trim() || config?.esChunkIndexName?.trim() || DEFAULT_ES_CHUNK_INDEX
+  if (name !== name.toLowerCase() || name === "." || name === ".." ||
+    /^[\-+_]/.test(name) || /[\\/*?"<>|\s,#:]/.test(name) || Buffer.byteLength(name, "utf8") > 255) {
+    throw new Error("ES_CHUNK_INDEX must be a valid single lowercase physical index name")
+  }
+  return name
+}
+
 /**
  * Shared integer env parser. Replaces the three former near-identical
  * validators (positiveInteger / nonNegativeInteger /
@@ -176,6 +231,25 @@ function integerEnv(
     throw new Error(`${key} must be a ${kind} integer`)
   }
   return value
+}
+
+/**
+ * Shared boolean env parser for opt-in switches, the same shape as integerEnv:
+ *   - unset / blank      → the documented default (off for PDF_OCR_FALLBACK_ENABLED)
+ *   - 1 / true           → true (case-insensitive, trimmed)
+ *   - 0 / false          → false
+ *   - anything else      → fails at startup. A safety switch that an operator
+ *     meant to turn on must never be silently read as "off" — the same
+ *     fail-loudly rule DECISION_PROVIDER applies to an unknown provider.
+ */
+function booleanEnv(key: string, fallback: boolean): boolean {
+  const raw = process.env[key]?.trim()
+  if (!raw) return fallback
+  const value = raw.toLowerCase()
+  if (value === "1" || value === "true") return true
+  if (value === "0" || value === "false") return false
+  // The setting is named in the message; the operator's value is not echoed.
+  throw new Error(`${key} must be 1, 0, true or false`)
 }
 
 function optionalPricingTable(): AppConfig["answerRunModelPricing"] {
@@ -232,19 +306,40 @@ export function loadConfig(): AppConfig {
   if (!Number.isInteger(embeddingDimensions) || embeddingDimensions <= 0) {
     throw new Error("EMBEDDING_DIMENSIONS must be a positive integer")
   }
-  // Ticket 01: the demo identity flow fails closed at startup rather than
-  // falling back to a shipped default credential or to single-tenant access.
+  // The demo gate is nominal: a fixed default keeps a fresh clone sign-in-able
+  // without any .env setup; DEMO_OIDC_PASSWORD still overrides it.
   const demoOidc = process.env.DEMO_OIDC === "1"
-  const demoOidcPassword = process.env.DEMO_OIDC_PASSWORD || ""
-  if (demoOidc && demoOidcPassword.length === 0) {
-    throw new Error("DEMO_OIDC_PASSWORD is required when DEMO_OIDC=1")
+  const demoOidcPassword = process.env.DEMO_OIDC_PASSWORD || "123456"
+  const decisionProvider = process.env.DECISION_PROVIDER?.trim() || "chat"
+  if (decisionProvider !== "chat" && decisionProvider !== "clef") {
+    throw new Error("DECISION_PROVIDER must be chat or clef")
+  }
+  const cloudflareAccountId = process.env.CLOUDFLARE_ACCOUNT_ID?.trim() || ""
+  const cloudflareApiToken = process.env.CLOUDFLARE_API_TOKEN?.trim() || ""
+  if (decisionProvider === "clef" && (!cloudflareAccountId || !cloudflareApiToken)) {
+    const missing = [
+      !cloudflareAccountId && "CLOUDFLARE_ACCOUNT_ID",
+      !cloudflareApiToken && "CLOUDFLARE_API_TOKEN",
+    ].filter(Boolean).join(" and ")
+    throw new Error(`${missing} required when DECISION_PROVIDER=clef; set them in .env`)
+  }
+  const rawDecisionTimeout = process.env.DECISION_REQUEST_TIMEOUT_MS?.trim()
+  const decisionRequestTimeoutMs = rawDecisionTimeout ? Number(rawDecisionTimeout) : 10_000
+  if (!Number.isSafeInteger(decisionRequestTimeoutMs) || decisionRequestTimeoutMs <= 0 ||
+    decisionRequestTimeoutMs > 2_147_483_647) {
+    throw new Error("DECISION_REQUEST_TIMEOUT_MS must be a positive integer no greater than 2147483647")
   }
   _config = {
     esNode: process.env.ES_NODE || "http://localhost:9200",
     esApiKey: process.env.ES_API_KEY || "",
+    esChunkIndexName: resolveChunkIndexName(process.env.ES_CHUNK_INDEX),
     openaiApiKey,
     openaiBaseUrl,
     openaiChatModel: process.env.OPENAI_CHAT_MODEL || "gpt-4o-mini",
+    decisionProvider,
+    cloudflareAccountId,
+    cloudflareApiToken,
+    decisionRequestTimeoutMs,
     embeddingApiKey: process.env.EMBEDDING_API_KEY || openaiApiKey,
     embeddingBaseUrl: process.env.EMBEDDING_BASE_URL || openaiBaseUrl,
     embeddingModel: process.env.EMBEDDING_MODEL || "text-embedding-3-small",
@@ -258,11 +353,20 @@ export function loadConfig(): AppConfig {
     pollIntervalMs: Number(process.env.POLL_INTERVAL_MS) || 2000,
     claimedTimeoutMs: Number(process.env.CLAIMED_TIMEOUT_MS) || 600000,
     markitdownCommand: process.env.MARKITDOWN_COMMAND || "markitdown",
-    markerCommand: process.env.MARKER_COMMAND || "marker_single",
-    mineruCommand: process.env.MINERU_COMMAND || "mineru",
+    ocrAccessKeyId: process.env.VOLC_ACCESSKEY?.trim() || "",
+    ocrSecretAccessKey: process.env.VOLC_SECRETKEY?.trim() || "",
+    ocrSessionToken: process.env.VOLC_SESSION_TOKEN?.trim() || "",
+    pythonCommand: process.env.PYTHON_COMMAND || "python",
     parserTimeoutMs: integerEnv("PARSER_TIMEOUT_MS", "positive", 120_000),
     parserInputLimitBytes: integerEnv("PARSER_INPUT_LIMIT_BYTES", "positive", 20 * 1024 * 1024),
     parserOutputLimitBytes: integerEnv("PARSER_OUTPUT_LIMIT_BYTES", "positive", 20 * 1024 * 1024),
+    embeddingBatchMaxChunks: integerEnv("EMBEDDING_BATCH_MAX_CHUNKS", "positive", 64),
+    embeddingBatchMaxBytes: integerEnv("EMBEDDING_BATCH_MAX_BYTES", "positive", 150 * 1024),
+    ingestionConcurrency: integerEnv("INGESTION_CONCURRENCY", "positive", 2),
+    // Ticket 04 (PDF quality): opt-in ingestion switch, off unless the
+    // operator asks for it. Read only by the ingestion pipeline's PDF quality
+    // gate; never part of a frontend settings payload or a log line.
+    pdfOcrFallbackEnabled: booleanEnv("PDF_OCR_FALLBACK_ENABLED", false),
     imageAssetPath: process.env.IMAGE_ASSET_PATH || "./data/image-assets",
     // Ticket 01: DEMO_OIDC=1 forces the enforced identity path. The demo
     // issuer is then the only identity source, so falling back to the

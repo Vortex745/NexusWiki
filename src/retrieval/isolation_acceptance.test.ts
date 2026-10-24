@@ -45,9 +45,13 @@ import {
   KnowledgeBaseNotFoundError,
   KnowledgeBaseServiceImpl,
 } from "../knowledge/knowledge_base_service"
-import { PageIndexRepository } from "../ingestion/tracking/page_index_repo"
+import { ActiveVersionRepository } from "../ingestion/tracking/active_version_repo"
+import {
+  PageIndexRepository,
+  type PageIndexNodeEligibility,
+} from "../ingestion/tracking/page_index_repo"
 import type { AccessContext } from "../access/context"
-import type { Chunk, Query } from "../types"
+import type { Chunk, Query, RetrievalResult } from "../types"
 import type { RetrievalScope } from "../types/retrieval_scope"
 import { RuntimeSearchOperations, SearcherImpl } from "./search/searcher"
 import type {
@@ -63,6 +67,8 @@ import type {
   ComplexLoopDecision,
 } from "./complex_loop"
 import { buildEvidence, referencesForReply } from "../answer/evidence"
+import { ToolInvocationService, ToolRegistry } from "../tools/invocation"
+import { registerBuiltinTools } from "../tools/knowledge_tools"
 
 // ---------------------------------------------------------------------------
 // In-memory Elasticsearch substitute: seeded documents + a clause evaluator
@@ -819,6 +825,634 @@ test("archived, unknown and unauthorized knowledge bases never join new retrieva
     // KB-B's same-name document through any of this.
     const scoped = await search(stack, "退货政策", [stack.kbA.id])
     assert.ok(!documentIds(scoped).includes(DOC_B))
+  } finally {
+    stack.db.close()
+  }
+})
+
+// ---------------------------------------------------------------------------
+// Ticket PT-10 (audit finding F1) — the PageIndex node quota is spent on
+// ELIGIBLE nodes only.
+//
+// `.scratch/pipeline-structure-audit-2026-10-08/reproduce.cjs` case
+// `F1_pageindex_scope_after_limit` used the defect as its own evidence: one
+// stored target hit, then five higher-sorted foreign nodes, then zero hits for
+// the run. These tests reuse that fixture shape — real SQLite, real
+// PageIndexRepository, real RuntimeSearchOperations, and the in-memory
+// Elasticsearch substitute that evaluates every emitted clause — and invert the
+// assertion: the target keeps its hit, the ceiling stays five, and a passage is
+// still only ever Evidence after hydration re-authorizes it.
+// ---------------------------------------------------------------------------
+
+const PT10_TENANT = "pt10-tenant"
+const PT10_OTHER_TENANT = "pt10-other-tenant"
+const PT10_QUERY = "退款规则"
+const PT10_TARGET_DOC = "z-target-refund"
+const PT10_TARGET_CHUNK = `chunk-${PT10_TARGET_DOC}`
+
+interface Pt10NodeSpec {
+  documentId: string
+  knowledgeBaseId: string
+  tenantId?: string
+  allowedGroups?: string[]
+  /** Stamp a source whose active pointer is this document. */
+  active?: boolean
+  /** Write the row with no knowledge-base tag at all (the pre-KB-02A shape). */
+  untagged?: boolean
+  /** Index the linked chunk in Elasticsearch too (default: yes). */
+  indexed?: boolean
+}
+
+interface Pt10Stack {
+  db: DB
+  targetKb: { id: string }
+  foreignKb: { id: string }
+  /** The chunk index the hydration re-check reads. */
+  es: InMemoryEs
+  pageIndex: PageIndexRepository
+  operations: RuntimeSearchOperations
+  searcher: SearcherImpl
+  /** Every bounded node read, with the eligibility the channel asked for. */
+  nodeCalls: Array<{ query: string; limit: number; eligibility?: PageIndexNodeEligibility }>
+  /** Every Elasticsearch request the channel issued. */
+  esRequests: Array<Record<string, unknown>>
+}
+
+function pt10Stack(
+  options: {
+    activeVersionRepository?: boolean
+    /**
+     * PT-10 AC06: retire every active version at the moment the hydration
+     * filter reads the active set — i.e. AFTER the bounded node selection has
+     * already run. That is the race the hydration re-check exists to close.
+     */
+    retireActiveVersionsOnHydrationRead?: boolean
+  } = {}
+): Pt10Stack {
+  const db = openDb(":memory:")
+  const kbService = new KnowledgeBaseServiceImpl(
+    new SqliteKnowledgeBaseRepo(db),
+    EMBEDDING_PROFILE
+  )
+  kbService.ensureDefault(PT10_TENANT)
+  const targetKb = kbService.create(PT10_TENANT, "目标库")
+  const foreignKb = kbService.create(PT10_TENANT, "他库")
+
+  const es = new InMemoryEs()
+  const esClient = es.client()
+  const esRequests: Array<Record<string, unknown>> = []
+  const countedEs = {
+    async search(request: Record<string, unknown>) {
+      esRequests.push(request)
+      return esClient.search(request as never)
+    },
+  } as unknown as Client
+
+  const pageIndex = new PageIndexRepository(db)
+  const nodeCalls: Pt10Stack["nodeCalls"] = []
+  const recordedPageIndex = {
+    searchNodes: (query: string, limit: number, eligibility?: PageIndexNodeEligibility) => {
+      nodeCalls.push({ query, limit, eligibility })
+      return pageIndex.searchNodes(query, limit, eligibility)
+    },
+  } as unknown as PageIndexRepository
+
+  let activeVersionRepo: ActiveVersionRepository | undefined
+  if (options.activeVersionRepository) {
+    const real = new ActiveVersionRepository(db)
+    activeVersionRepo = options.retireActiveVersionsOnHydrationRead
+      ? ({
+          getActiveDocIds: () => {
+            // A concurrent retirement landing between selection and hydration.
+            db.prepare("UPDATE sources SET active_doc_id = NULL").run()
+            return real.getActiveDocIds()
+          },
+        } as unknown as ActiveVersionRepository)
+      : real
+  }
+
+  const operations = new RuntimeSearchOperations({
+    es: countedEs,
+    embeddingClient: fakeEmbeddingClient(),
+    embeddingModel: "embedding-test",
+    pageIndexRepo: recordedPageIndex,
+    ...(activeVersionRepo ? { activeVersionRepo } : {}),
+  })
+  return {
+    db,
+    targetKb,
+    foreignKb,
+    es,
+    pageIndex,
+    operations,
+    searcher: new SearcherImpl(operations),
+    nodeCalls,
+    esRequests,
+  }
+}
+
+/** Seed one document's PageIndex node, its indexed chunk, and — when asked —
+ *  the source row that makes it the active version. */
+function pt10Seed(stack: Pt10Stack, spec: Pt10NodeSpec): void {
+  const chunkId = `chunk-${spec.documentId}`
+  const tenantId = spec.tenantId ?? PT10_TENANT
+  stack.pageIndex.replaceNodes(
+    spec.documentId,
+    [
+      {
+        documentId: spec.documentId,
+        nodeId: "node-1",
+        title: `${PT10_QUERY}（${spec.documentId}）`,
+        sectionPath: [PT10_QUERY],
+        pageStart: 1,
+        pageEnd: 1,
+        summary: "退款条件与例外",
+        parentId: null,
+        childIds: [],
+        linkedChunkIds: [chunkId],
+      },
+    ],
+    {
+      tenantId,
+      allowedGroups: spec.allowedGroups ?? [],
+      knowledgeBaseId: spec.knowledgeBaseId,
+    }
+  )
+  if (spec.untagged) {
+    // replaceNodes never writes an empty owner, so the legacy untagged row is
+    // stamped the way a pre-KB-02A database holds it.
+    stack.db
+      .prepare("UPDATE page_index_nodes SET knowledge_base_id = '' WHERE document_id = ?")
+      .run(spec.documentId)
+  }
+  if (spec.active) {
+    const now = new Date().toISOString()
+    stack.db
+      .prepare(
+        `INSERT INTO sources (
+           source_id, source_key, source_kind, source_uri, namespace,
+           active_doc_id, created_at, updated_at, tenant_id, knowledge_base_id
+         ) VALUES (?, ?, 'file', ?, 'pt10', ?, ?, ?, ?, ?)`
+      )
+      .run(
+        `src-${spec.documentId}`,
+        `key-${spec.documentId}`,
+        `file://${spec.documentId}`,
+        spec.documentId,
+        now,
+        now,
+        tenantId,
+        spec.knowledgeBaseId
+      )
+  }
+  if (spec.indexed === false) return
+  stack.es.seed({
+    id: chunkId,
+    documentId: spec.documentId,
+    kind: "child",
+    content: `${PT10_QUERY}：${spec.documentId} 允许退款`,
+    ...(spec.untagged ? {} : { knowledgeBaseId: spec.knowledgeBaseId }),
+    tenantId,
+    childrenIds: [],
+    metadata: { title: PT10_QUERY, source: "pt10", kind: "child" },
+    embedding: embedText(spec.documentId),
+  })
+}
+
+/** The audit fixture's five documents — every one sorts ahead of the target. */
+function pt10ForeignSpecs(
+  stack: Pt10Stack,
+  overrides: Partial<Pt10NodeSpec> = {}
+): Pt10NodeSpec[] {
+  return [0, 1, 2, 3, 4].map((index) => ({
+    documentId: `a-foreign-${index}`,
+    knowledgeBaseId: stack.foreignKb.id,
+    ...overrides,
+  }))
+}
+
+function pt10Context(
+  groups: string[] = [],
+  scopes: AccessContext["scopes"] = ["chat"]
+): AccessContext {
+  return {
+    tenantId: PT10_TENANT,
+    subjectId: groups.length > 0 ? `pt10-user-${groups[0]}` : "pt10-user",
+    groups,
+    scopes,
+  }
+}
+
+function pt10TargetScope(stack: Pt10Stack): RetrievalScope {
+  return { knowledgeBaseIds: [stack.targetKb.id] }
+}
+
+function pt10Ids(results: RetrievalResult[]): string[] {
+  return results.map(({ chunk }) => chunk.id).sort()
+}
+
+function pt10ForeignChunkIds(): string[] {
+  return [0, 1, 2, 3, 4].map((index) => `chunk-a-foreign-${index}`).sort()
+}
+
+test("PT-10 AC01: the audit F1 fixture inverted — five foreign-KB nodes leave the target's one valid hit intact", async () => {
+  const stack = pt10Stack()
+  try {
+    pt10Seed(stack, { documentId: PT10_TARGET_DOC, knowledgeBaseId: stack.targetKb.id })
+
+    const baseline = await stack.operations.pageIndexSearch(
+      { text: PT10_QUERY },
+      5,
+      pt10Context(),
+      pt10TargetScope(stack)
+    )
+    assert.deepEqual(baseline.map(({ chunk }) => chunk.id), [PT10_TARGET_CHUNK])
+
+    for (const spec of pt10ForeignSpecs(stack)) pt10Seed(stack, spec)
+
+    const after = await stack.operations.pageIndexSearch(
+      { text: PT10_QUERY },
+      5,
+      pt10Context(),
+      pt10TargetScope(stack)
+    )
+    assert.equal(
+      after.length,
+      1,
+      "reproduce.cjs F1 asserted 0 here; the eligible target must keep its hit"
+    )
+    assert.equal(after[0].chunk.id, PT10_TARGET_CHUNK)
+    assert.equal(after[0].source, "pageIndex")
+    assert.equal(stack.nodeCalls.at(-1)!.limit, 5, "the ceiling stays five nodes")
+    assert.deepEqual(stack.nodeCalls.at(-1)!.eligibility?.knowledgeBaseIds, [stack.targetKb.id])
+    assert.deepEqual(stack.nodeCalls.at(-1)!.eligibility?.tenantId, PT10_TENANT)
+
+    // Proof that the fixture really starves an unscoped quota: five eligible
+    // rows ahead of the target fill all five slots (the legacy caller contract,
+    // untouched by PT-10).
+    const unscoped = await stack.operations.pageIndexSearch({ text: PT10_QUERY }, 5)
+    assert.deepEqual(pt10Ids(unscoped), pt10ForeignChunkIds())
+    assert.ok(!pt10Ids(unscoped).includes(PT10_TARGET_CHUNK))
+  } finally {
+    stack.db.close()
+  }
+})
+
+test("PT-10 AC02: cross-tenant matches sorting ahead of the target never consume its slot", async () => {
+  const stack = pt10Stack()
+  try {
+    pt10Seed(stack, { documentId: PT10_TARGET_DOC, knowledgeBaseId: stack.targetKb.id })
+    for (const spec of pt10ForeignSpecs(stack, {
+      knowledgeBaseId: stack.targetKb.id,
+      tenantId: PT10_OTHER_TENANT,
+    })) {
+      pt10Seed(stack, spec)
+    }
+
+    const results = await stack.operations.pageIndexSearch(
+      { text: PT10_QUERY },
+      5,
+      pt10Context(),
+      pt10TargetScope(stack)
+    )
+    assert.deepEqual(results.map(({ chunk }) => chunk.id), [PT10_TARGET_CHUNK])
+    const hydration = JSON.stringify(stack.esRequests.at(-1))
+    assert.ok(!hydration.includes("a-foreign-"), `foreign tenant leaked: ${hydration}`)
+    assert.ok(hydration.includes(`"tenantId":"${PT10_TENANT}"`))
+  } finally {
+    stack.db.close()
+  }
+})
+
+test("PT-10 AC02: an invisible group's nodes never consume a group-restricted caller's slot", async () => {
+  const stack = pt10Stack()
+  try {
+    pt10Seed(stack, { documentId: PT10_TARGET_DOC, knowledgeBaseId: stack.targetKb.id })
+    for (const spec of pt10ForeignSpecs(stack, {
+      knowledgeBaseId: stack.targetKb.id,
+      allowedGroups: ["secret-team"],
+    })) {
+      pt10Seed(stack, spec)
+    }
+
+    const restricted = await stack.operations.pageIndexSearch(
+      { text: PT10_QUERY },
+      5,
+      pt10Context(["ops"]),
+      pt10TargetScope(stack)
+    )
+    assert.deepEqual(restricted.map(({ chunk }) => chunk.id), [PT10_TARGET_CHUNK])
+    assert.deepEqual(stack.nodeCalls.at(-1)!.eligibility?.callerGroups, ["ops"])
+
+    // The same five rows ARE eligible for a tenant-wide reader, so the axis is
+    // caller-derived and the five-slot ceiling is unchanged (not raised).
+    const tenantWide = await stack.operations.pageIndexSearch(
+      { text: PT10_QUERY },
+      5,
+      pt10Context(),
+      pt10TargetScope(stack)
+    )
+    assert.deepEqual(tenantWide.map(({ chunk }) => chunk.id).sort(), pt10ForeignChunkIds())
+  } finally {
+    stack.db.close()
+  }
+})
+
+test("PT-10 AC02: a non-active document version never consumes the active caller's slot", async () => {
+  const stack = pt10Stack({ activeVersionRepository: true })
+  try {
+    pt10Seed(stack, {
+      documentId: PT10_TARGET_DOC,
+      knowledgeBaseId: stack.targetKb.id,
+      active: true,
+    })
+    for (const spec of pt10ForeignSpecs(stack, { knowledgeBaseId: stack.targetKb.id })) {
+      // Indexed and tenant-visible, but its source has no active pointer: the
+      // node is a non-active version.
+      pt10Seed(stack, spec)
+    }
+
+    const results = await stack.operations.pageIndexSearch(
+      { text: PT10_QUERY },
+      5,
+      pt10Context(),
+      pt10TargetScope(stack)
+    )
+    assert.deepEqual(
+      results.map(({ chunk }) => chunk.id),
+      [PT10_TARGET_CHUNK],
+      "only the active version may occupy a PageIndex slot"
+    )
+    assert.equal(stack.nodeCalls.at(-1)!.eligibility?.restrictToActiveDocumentVersions, true)
+    const hydration = JSON.stringify(stack.esRequests.at(-1))
+    assert.ok(hydration.includes(`"documentId":["${PT10_TARGET_DOC}"]`), hydration)
+    assert.ok(!hydration.includes("a-foreign-"), hydration)
+  } finally {
+    stack.db.close()
+  }
+})
+
+test("PT-10 AC03: a configured-empty active set yields no eligible node, an unconfigured repository keeps the default read", async () => {
+  const dataSeed = (stack: Pt10Stack) => {
+    pt10Seed(stack, { documentId: PT10_TARGET_DOC, knowledgeBaseId: stack.targetKb.id })
+    for (const spec of pt10ForeignSpecs(stack, { knowledgeBaseId: stack.foreignKb.id })) {
+      pt10Seed(stack, spec)
+    }
+  }
+
+  // Configured, and its active set is EMPTY (no source row carries a pointer).
+  const gated = pt10Stack({ activeVersionRepository: true })
+  try {
+    dataSeed(gated)
+    const results = await gated.operations.pageIndexSearch({ text: PT10_QUERY }, 5)
+    assert.deepEqual(results, [], "a configured-empty active set hides everything")
+    assert.equal(gated.nodeCalls.at(-1)!.eligibility?.restrictToActiveDocumentVersions, true)
+    assert.equal(gated.esRequests.length, 0, "no eligible node must not reach hydration")
+  } finally {
+    gated.db.close()
+  }
+
+  // NOT configured — the pre-existing default read over the same data.
+  const unconfigured = pt10Stack()
+  try {
+    dataSeed(unconfigured)
+    const results = await unconfigured.operations.pageIndexSearch({ text: PT10_QUERY }, 5)
+    assert.deepEqual(
+      pt10Ids(results),
+      pt10ForeignChunkIds(),
+      "an unconfigured active-version repository must keep reading its corpus"
+    )
+    assert.equal(unconfigured.nodeCalls.at(-1)!.eligibility?.restrictToActiveDocumentVersions, undefined)
+    assert.notDeepEqual(
+      unconfigured.nodeCalls.at(-1)!.eligibility,
+      gated.nodeCalls.at(-1)!.eligibility,
+      "the two states are distinguishable at the query seam"
+    )
+  } finally {
+    unconfigured.db.close()
+  }
+})
+
+test("PT-10 AC04: an explicit empty knowledge scope queries neither PageIndex nor Elasticsearch", async () => {
+  const stack = pt10Stack({ activeVersionRepository: true })
+  try {
+    pt10Seed(stack, { documentId: PT10_TARGET_DOC, knowledgeBaseId: stack.targetKb.id, active: true })
+
+    const results = await stack.operations.pageIndexSearch(
+      { text: PT10_QUERY },
+      5,
+      pt10Context(),
+      { knowledgeBaseIds: [] }
+    )
+    assert.deepEqual(results, [])
+    assert.equal(stack.nodeCalls.length, 0, "an empty scope must not read the node table")
+    assert.equal(stack.esRequests.length, 0, "an empty scope must not reach Elasticsearch")
+
+    // The refusal holds at the full-channel entry too.
+    const outcome = await stack.searcher.search({ text: PT10_QUERY }, {
+      accessContext: pt10Context(),
+      retrievalScope: { knowledgeBaseIds: [] },
+      channels: ["pageIndex"],
+    })
+    assert.deepEqual(outcome.results, [])
+    assert.equal(stack.nodeCalls.length, 0)
+  } finally {
+    stack.db.close()
+  }
+})
+
+test("PT-10 AC04: an untagged legacy row is refused under an explicit scope and stays readable without one", async () => {
+  const stack = pt10Stack()
+  try {
+    pt10Seed(stack, { documentId: PT10_TARGET_DOC, knowledgeBaseId: stack.targetKb.id })
+    pt10Seed(stack, {
+      documentId: "a-untagged",
+      knowledgeBaseId: stack.targetKb.id,
+      untagged: true,
+    })
+
+    const scoped = await stack.operations.pageIndexSearch(
+      { text: PT10_QUERY },
+      5,
+      pt10Context(),
+      pt10TargetScope(stack)
+    )
+    assert.deepEqual(scoped.map(({ chunk }) => chunk.id), [PT10_TARGET_CHUNK])
+    const scopedHydration = JSON.stringify(stack.esRequests.at(-1))
+    assert.ok(!scopedHydration.includes("a-untagged"), "an untagged row cannot be authorized")
+
+    const legacy = await stack.operations.pageIndexSearch({ text: PT10_QUERY }, 5, pt10Context())
+    assert.deepEqual(pt10Ids(legacy), ["chunk-a-untagged", PT10_TARGET_CHUNK])
+  } finally {
+    stack.db.close()
+  }
+})
+
+test("PT-10 AC04: an admin caller gains no cross-tenant or cross-knowledge-base reach from the node quota", async () => {
+  const stack = pt10Stack()
+  try {
+    pt10Seed(stack, { documentId: PT10_TARGET_DOC, knowledgeBaseId: stack.targetKb.id })
+    for (const spec of pt10ForeignSpecs(stack)) pt10Seed(stack, spec)
+    for (const spec of pt10ForeignSpecs(stack, { tenantId: PT10_OTHER_TENANT }).map((foreign) => ({
+      ...foreign,
+      documentId: `b-other-tenant-${foreign.documentId}`,
+    }))) {
+      pt10Seed(stack, spec)
+    }
+
+    const admin = await stack.operations.pageIndexSearch(
+      { text: PT10_QUERY },
+      5,
+      pt10Context([], ["chat", "admin"]),
+      pt10TargetScope(stack)
+    )
+    assert.deepEqual(admin.map(({ chunk }) => chunk.id), [PT10_TARGET_CHUNK])
+    const adminEligibility = stack.nodeCalls.at(-1)!.eligibility
+
+    const reader = await stack.operations.pageIndexSearch(
+      { text: PT10_QUERY },
+      5,
+      pt10Context(),
+      pt10TargetScope(stack)
+    )
+    assert.deepEqual(
+      stack.nodeCalls.at(-1)!.eligibility,
+      adminEligibility,
+      "the node axes come from the caller's tenant and scope — never from an admin scope"
+    )
+    assert.deepEqual(reader.map(({ chunk }) => chunk.id), [PT10_TARGET_CHUNK])
+    const hydration = JSON.stringify(stack.esRequests.at(-1))
+    assert.ok(!hydration.includes("a-foreign-"), hydration)
+    assert.ok(!hydration.includes("b-other-tenant"), hydration)
+  } finally {
+    stack.db.close()
+  }
+})
+
+test("PT-10 AC05: eight eligible nodes still return the first five, deduped by linked chunk and cut to topK", async () => {
+  const stack = pt10Stack()
+  try {
+    for (const documentId of ["e0", "e1", "e2", "e3", "e4", "e5"]) {
+      pt10Seed(stack, { documentId, knowledgeBaseId: stack.targetKb.id })
+    }
+    // A second node in e2 links the SAME chunk: the documentId+chunkId dedup must
+    // collapse it inside the five selected nodes.
+    stack.db
+      .prepare(
+        `INSERT INTO page_index_nodes (
+           document_id, node_id, title, section_path, page_start, page_end, summary,
+           parent_id, child_ids, linked_chunk_ids, tenant_id, allowed_groups, knowledge_base_id
+         ) VALUES ('e2', 'node-2', ?, '[]', 1, 1, ?, NULL, '[]', '["chunk-e2"]', ?, '[]', ?)`
+      )
+      .run(`${PT10_QUERY}（e2/node-2）`, "退款条件与例外", PT10_TENANT, stack.targetKb.id)
+
+    const results = await stack.operations.pageIndexSearch(
+      { text: PT10_QUERY },
+      2,
+      pt10Context(),
+      pt10TargetScope(stack)
+    )
+    assert.equal(stack.nodeCalls.at(-1)!.limit, 5, "the node ceiling is unchanged by topK")
+    assert.deepEqual(
+      results.map(({ chunk }) => chunk.id).sort(),
+      ["chunk-e0", "chunk-e1"],
+      "the five eligible nodes are read in (document_id, node_id) order, deduped, then cut to topK"
+    )
+    const hydration = stack.esRequests.at(-1)!.query as {
+      bool: { should: Array<Record<string, unknown>> }
+    }
+    assert.equal(hydration.bool.should.length, 2, "duplicate linked chunks collapse to one identity")
+    assert.ok(!JSON.stringify(hydration).includes("chunk-e2"))
+
+    const wider = await stack.operations.pageIndexSearch(
+      { text: PT10_QUERY },
+      4,
+      pt10Context(),
+      pt10TargetScope(stack)
+    )
+    assert.deepEqual(
+      wider.map(({ chunk }) => chunk.id).sort(),
+      ["chunk-e0", "chunk-e1", "chunk-e2", "chunk-e3"]
+    )
+    assert.equal(stack.nodeCalls.at(-1)!.limit, 5)
+  } finally {
+    stack.db.close()
+  }
+})
+
+test("PT-10 AC06: material that lost active eligibility between selection and hydration is refused", async () => {
+  const stack = pt10Stack({
+    activeVersionRepository: true,
+    retireActiveVersionsOnHydrationRead: true,
+  })
+  try {
+    pt10Seed(stack, {
+      documentId: PT10_TARGET_DOC,
+      knowledgeBaseId: stack.targetKb.id,
+      active: true,
+    })
+
+    const results = await stack.operations.pageIndexSearch(
+      { text: PT10_QUERY },
+      5,
+      pt10Context(),
+      pt10TargetScope(stack)
+    )
+    // The node WAS selected (it was active when the bounded read ran)…
+    assert.equal(stack.nodeCalls.length, 1)
+    assert.deepEqual(stack.nodeCalls[0].eligibility?.knowledgeBaseIds, [stack.targetKb.id])
+    // …and hydration re-checked, found the version retired, and refused it.
+    assert.deepEqual(results, [], "a retired version must never become Evidence")
+    assert.equal(stack.esRequests.length, 1)
+    const hydration = JSON.stringify(stack.esRequests[0])
+    assert.ok(
+      hydration.includes("__no_active_document__"),
+      `the fail-closed active filter must be emitted: ${hydration}`
+    )
+    assert.ok(!hydration.includes("允许退款"), "no content leaked past the re-check")
+  } finally {
+    stack.db.close()
+  }
+})
+
+test("PT-10 AC09: the shared-entry PageIndex tool reaches the target evidence with foreign nodes present", async () => {
+  const stack = pt10Stack()
+  try {
+    pt10Seed(stack, { documentId: PT10_TARGET_DOC, knowledgeBaseId: stack.targetKb.id })
+    for (const spec of pt10ForeignSpecs(stack)) pt10Seed(stack, spec)
+
+    const service = new ToolInvocationService({
+      registry: registerBuiltinTools(new ToolRegistry()),
+      allowedTools: ["knowledge_search"],
+    })
+    const invocation = await service.invoke(
+      "knowledge_search",
+      { query: PT10_QUERY, mode: "pageindex_hierarchy" },
+      {
+        searcher: stack.searcher,
+        accessContext: pt10Context(),
+        retrievalScope: pt10TargetScope(stack),
+      }
+    )
+    assert.equal(invocation.trace.outcome, "ok", invocation.trace.error ?? "")
+    const result = invocation.result as {
+      results: RetrievalResult[]
+      resultCount: number
+      unavailableChannels: string[]
+    }
+    assert.deepEqual(result.unavailableChannels, [])
+    assert.equal(
+      result.resultCount,
+      1,
+      "the tool's PageIndex lookup still reaches the target after five foreign nodes arrive"
+    )
+    assert.deepEqual(result.results.map(({ chunk }) => chunk.id), [PT10_TARGET_CHUNK])
+
+    const evidence = buildEvidence(result.results)
+    assert.equal(evidence[0].documentId, PT10_TARGET_DOC)
+    const references = referencesForReply(`退款规则 [cite:${evidence[0].id}]`, evidence)
+    assert.equal(references[0].documentId, PT10_TARGET_DOC)
+    assert.equal(stack.nodeCalls.at(-1)!.limit, 5)
   } finally {
     stack.db.close()
   }

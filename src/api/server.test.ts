@@ -176,3 +176,32 @@ test("management routes authenticate before handlers and retain handler scope ch
     db.close()
   }
 })
+
+test("business chunk citation routes use configured physical index for exact and sibling reads", async () => {
+  const db = openDb(":memory:")
+  const {DocumentRepo} = await import("../ingestion/tracking/doc_repo")
+  const {singleTenantAccessContext} = await import("../access/context")
+  const repo = new DocumentRepo(db)
+  const ctx = singleTenantAccessContext()
+  const source = repo.createSource({sourceId: "source-selected", sourceKey: "key-selected", kind: "submission", uri: "selected", namespace: "test", tenantId: ctx.tenantId, allowedGroups: [], knowledgeBaseId: "kb-selected"})
+  repo.insert({docId: "doc-selected", sourceId: source.sourceId, contentHash: "hash", version: 1, title: "selected", source: "api", content: "body", tenantId: ctx.tenantId, allowedGroups: [], knowledgeBaseId: "kb-selected"})
+  repo.updateStatus("doc-selected", "completed")
+  repo.activate("doc-selected")
+  const indices: string[] = []
+  const chunk = (index: string) => ({id: "chunk-selected", documentId: "doc-selected", kind: "child", content: index === "selected-v2" ? "new content" : "old content", allowedGroups: [], metadata: {index: 0}})
+  const app = createApp({db, eventsSource: stubEventsSource(),
+    config: {esChunkIndexName: "selected-v2", openaiChatModel: "test", embeddingModel: "test", embeddingDimensions: 2} as never,
+    processRuntime: {elasticsearch: {
+      get: async ({index}: {index: string}) => {indices.push(index); return {_source: chunk(index)}},
+      search: async ({index}: {index: string}) => {indices.push(index); return {hits: {hits: [{_source: chunk(index)}]}}},
+    }, chatClient: {}, neo4jDriver: {}} as never,
+  })
+  const {server, port} = await listen(app)
+  try {
+    const response = await fetch(`http://127.0.0.1:${port}/api/documents/doc-selected/chunks/chunk-selected`)
+    assert.equal(response.status, 200)
+    const body = await response.json() as {chunk: {content: string}}
+    assert.equal(body.chunk.content, "new content")
+    assert.deepEqual(indices, ["selected-v2", "selected-v2"])
+  } finally {server.close(); db.close()}
+})

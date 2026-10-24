@@ -1,38 +1,9 @@
-<!-- code-review-graph MCP tools -->
-## MCP Tools: code-review-graph
+# Session Navigation
 
-**IMPORTANT: This project has a knowledge graph. ALWAYS use the
-code-review-graph MCP tools BEFORE using Grep/Glob/Read to explore
-the codebase.** The graph is faster, cheaper (fewer tokens), and gives
-you structural context (callers, dependents, test coverage) that file
-scanning cannot.
-
-### When to use graph tools FIRST
-
-- **Exploring code**: `semantic_search_nodes_tool` or `query_graph_tool` instead of Grep
-- **Understanding impact**: `get_impact_radius_tool` instead of manually tracing imports
-- **Code review**: `detect_changes_tool` + `get_review_context_tool` instead of reading entire files
-- **Finding relationships**: `query_graph_tool` with callers_of/callees_of/imports_of/tests_for
-- **Architecture questions**: `get_architecture_overview_tool` + `list_communities_tool`
-
-Fall back to Grep/Glob/Read **only** when the graph doesn't cover what you need.
-
-### Key Tools
-
-| Tool | Use when |
-| ------ | ---------- |
-| `detect_changes_tool` | Reviewing code changes — gives risk-scored analysis |
-| `get_review_context_tool` | Need source snippets for review — token-efficient |
-| `get_impact_radius_tool` | Understanding blast radius of a change |
-| `get_affected_flows_tool` | Finding which execution paths are impacted |
-| `query_graph_tool` | Tracing callers, callees, imports, tests, dependencies |
-| `semantic_search_nodes_tool` | Finding functions/classes by name or keyword |
-| `get_architecture_overview_tool` | Understanding high-level codebase structure |
-| `refactor_tool` | Planning renames, finding dead code |
-
-### Workflow
-
-1. The graph auto-updates on file changes (via hooks).
-2. Use `detect_changes_tool` for code review.
-3. Use `get_affected_flows_tool` to understand impact.
-4. Use `query_graph_tool` pattern="tests_for" to check coverage.
+- **Start here**: `HINTS.md` — environment variables, common commands, runtime conventions, repository navigation.
+- **Current ticket state**: `.scratch/upload-integrity-tickets/README.md` (untracked scratch; UT-series work). Retro guardrail tickets: `.scratch/retro-guardrails/README.md`.
+- **Pipeline repair tickets**: `.scratch/pipeline-contract-repair-tickets/README.md` (PT-01–10; ready-for-agent / not_started). `plans/006-pipeline-contract-repairs/` is the source specification, not a second execution queue.
+- **Logging / OTel execution tickets**: `.scratch/logging-observability-tickets/README.md` (LO-01–20; ready-for-agent / not_started). Dependencies, coverage and G-COMPAT live in `final-ticket-plan.json`; initial frontier is LO-01/02/03. `plans/018-logging-observability/` retains the LG-01–09 parent specifications, not a second execution queue. Ticket publication does not start implementation.
+- **DeepEval / Agent repair tickets**: `.scratch/deepeval-agent-repair-tickets/README.md` (DR-01–24; ready-for-agent / not_started). `final-ticket-plan.json` owns execution dependencies, coverage and G-P0 / G-RERANK-LIVE; initial frontier DR-01/02. `plans/019-deepeval-agent-repairs/` and the approved draft remain source references, not a second execution queue. Publication does not start implementation or online evaluation.
+- **Contract assertions live in tests**: dependency contracts in `src/frontend/app.contract.test.ts`; dormant-surface policy (deliberately unwired modules) in `src/release/dormant_surface_audit.test.ts`. Check both before deleting anything.
+- The old knowledge-graph MCP tooling was decommissioned (server config removed); explore with Grep/Glob/Read or `npm run check:dead`.

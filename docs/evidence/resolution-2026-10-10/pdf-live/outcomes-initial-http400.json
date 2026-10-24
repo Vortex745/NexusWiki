@@ -1,0 +1,920 @@
+{
+  "observedAt": "2026-10-09T19:54:36.402Z",
+  "rounds": 3,
+  "outcomes": [
+    {
+      "fixture": "pure-text",
+      "round": 1,
+      "documentStatus": "failed",
+      "failureReasonCode": "pdf_quality_gate_rejected",
+      "failureMessage": "pdf_quality_gate_rejected: the PDF page-quality audit did not pass (reason codes: service_failure:provider_failure:n1;missing_evidence:n2;missing_evidence:n3); the audit stopped on a provider fault after at most n1 attempt(s) on a page",
+      "stages": [],
+      "downstream": {
+        "chunks": 0,
+        "entities": 0,
+        "wikilinks": 0
+      },
+      "durationMs": 801
+    },
+    {
+      "fixture": "text-long-6p",
+      "round": 1,
+      "documentStatus": "failed",
+      "failureReasonCode": "pdf_quality_gate_rejected",
+      "failureMessage": "pdf_quality_gate_rejected: the PDF page-quality audit did not pass (reason codes: service_failure:provider_failure:n1;missing_evidence:n2;missing_evidence:n3;missing_evidence:n4;missing_evidence:n5;missing_evidence:n6); the audit stopped on a provider fault after at most n1 attempt(s) on a page",
+      "stages": [],
+      "downstream": {
+        "chunks": 0,
+        "entities": 0,
+        "wikilinks": 0
+      },
+      "durationMs": 1794
+    },
+    {
+      "fixture": "table-grid",
+      "round": 1,
+      "documentStatus": "failed",
+      "failureReasonCode": "pdf_quality_gate_rejected",
+      "failureMessage": "pdf_quality_gate_rejected: the PDF page-quality audit did not pass (reason codes: service_failure:provider_failure:n1); the audit stopped on a provider fault after at most n1 attempt(s) on a page",
+      "stages": [],
+      "downstream": {
+        "chunks": 0,
+        "entities": 0,
+        "wikilinks": 0
+      },
+      "durationMs": 945
+    },
+    {
+      "fixture": "garbled",
+      "round": 1,
+      "documentStatus": "failed",
+      "failureReasonCode": "pdf_quality_gate_rejected",
+      "failureMessage": "pdf_quality_gate_rejected: the PDF page-quality audit did not pass (reason codes: service_failure:provider_failure:n1;missing_evidence:n2); the audit stopped on a provider fault after at most n1 attempt(s) on a page",
+      "stages": [],
+      "downstream": {
+        "chunks": 0,
+        "entities": 0,
+        "wikilinks": 0
+      },
+      "durationMs": 1552
+    },
+    {
+      "fixture": "footnote",
+      "round": 1,
+      "documentStatus": "failed",
+      "failureReasonCode": "pdf_quality_gate_rejected",
+      "failureMessage": "pdf_quality_gate_rejected: the PDF page-quality audit did not pass (reason codes: service_failure:provider_failure:n1); the audit stopped on a provider fault after at most n1 attempt(s) on a page",
+      "stages": [],
+      "downstream": {
+        "chunks": 0,
+        "entities": 0,
+        "wikilinks": 0
+      },
+      "durationMs": 763
+    },
+    {
+      "fixture": "two-column",
+      "round": 1,
+      "documentStatus": "failed",
+      "failureReasonCode": "pdf_quality_gate_rejected",
+      "failureMessage": "pdf_quality_gate_rejected: the PDF page-quality audit did not pass (reason codes: service_failure:provider_failure:n1); the audit stopped on a provider fault after at most n1 attempt(s) on a page",
+      "stages": [],
+      "downstream": {
+        "chunks": 0,
+        "entities": 0,
+        "wikilinks": 0
+      },
+      "durationMs": 789
+    },
+    {
+      "fixture": "formula-inline",
+      "round": 1,
+      "documentStatus": "failed",
+      "failureReasonCode": "pdf_quality_gate_rejected",
+      "failureMessage": "pdf_quality_gate_rejected: the PDF page-quality audit did not pass (reason codes: service_failure:provider_failure:n1); the audit stopped on a provider fault after at most n1 attempt(s) on a page",
+      "stages": [],
+      "downstream": {
+        "chunks": 0,
+        "entities": 0,
+        "wikilinks": 0
+      },
+      "durationMs": 742
+    },
+    {
+      "fixture": "image-cover",
+      "round": 1,
+      "documentStatus": "failed",
+      "failureReasonCode": "pdf_quality_gate_rejected",
+      "failureMessage": "pdf_quality_gate_rejected: the PDF page-quality audit did not pass (reason codes: service_failure:provider_failure:n1;missing_evidence:n2); the audit stopped on a provider fault after at most n1 attempt(s) on a page",
+      "stages": [],
+      "downstream": {
+        "chunks": 0,
+        "entities": 0,
+        "wikilinks": 0
+      },
+      "durationMs": 892
+    },
+    {
+      "fixture": "partially-rasterized",
+      "round": 1,
+      "documentStatus": "failed",
+      "failureReasonCode": "pdf_quality_gate_rejected",
+      "failureMessage": "pdf_quality_gate_rejected: the PDF page-quality audit did not pass (reason codes: service_failure:provider_failure:n1); the audit stopped on a provider fault after at most n1 attempt(s) on a page",
+      "stages": [],
+      "downstream": {
+        "chunks": 0,
+        "entities": 0,
+        "wikilinks": 0
+      },
+      "durationMs": 891
+    },
+    {
+      "fixture": "mixed-text-scan",
+      "round": 1,
+      "documentStatus": "failed",
+      "failureReasonCode": "pdf_quality_gate_rejected",
+      "failureMessage": "pdf_quality_gate_rejected: the PDF page-quality audit did not pass (reason codes: service_failure:provider_failure:n1;missing_evidence:n2;missing_evidence:n3); the audit stopped on a provider fault after at most n1 attempt(s) on a page",
+      "stages": [],
+      "downstream": {
+        "chunks": 0,
+        "entities": 0,
+        "wikilinks": 0
+      },
+      "durationMs": 929
+    },
+    {
+      "fixture": "blank-page",
+      "round": 1,
+      "documentStatus": "failed",
+      "failureReasonCode": "pdf_quality_gate_rejected",
+      "failureMessage": "pdf_quality_gate_rejected: the PDF page-quality audit did not pass (reason codes: service_failure:provider_failure:n1;missing_evidence:n2;missing_evidence:n3); the audit stopped on a provider fault after at most n1 attempt(s) on a page",
+      "stages": [],
+      "downstream": {
+        "chunks": 0,
+        "entities": 0,
+        "wikilinks": 0
+      },
+      "durationMs": 829
+    },
+    {
+      "fixture": "scanned-textless",
+      "round": 1,
+      "documentStatus": "failed",
+      "failureReasonCode": "pdf_quality_gate_rejected",
+      "failureMessage": "pdf_quality_gate_rejected: the PDF page-quality audit did not pass (reason codes: service_failure:provider_failure:n1;missing_evidence:n2); the audit stopped on a provider fault after at most n1 attempt(s) on a page",
+      "stages": [],
+      "downstream": {
+        "chunks": 0,
+        "entities": 0,
+        "wikilinks": 0
+      },
+      "durationMs": 1001
+    },
+    {
+      "fixture": "holdout-image-digits",
+      "round": 1,
+      "documentStatus": "failed",
+      "failureReasonCode": "pdf_quality_gate_rejected",
+      "failureMessage": "pdf_quality_gate_rejected: the PDF page-quality audit did not pass (reason codes: service_failure:provider_failure:n1); the audit stopped on a provider fault after at most n1 attempt(s) on a page",
+      "stages": [],
+      "downstream": {
+        "chunks": 0,
+        "entities": 0,
+        "wikilinks": 0
+      },
+      "durationMs": 864
+    },
+    {
+      "fixture": "holdout-small-raster",
+      "round": 1,
+      "documentStatus": "failed",
+      "failureReasonCode": "pdf_quality_gate_rejected",
+      "failureMessage": "pdf_quality_gate_rejected: the PDF page-quality audit did not pass (reason codes: service_failure:provider_failure:n1); the audit stopped on a provider fault after at most n1 attempt(s) on a page",
+      "stages": [],
+      "downstream": {
+        "chunks": 0,
+        "entities": 0,
+        "wikilinks": 0
+      },
+      "durationMs": 888
+    },
+    {
+      "fixture": "holdout-complete-mixed",
+      "round": 1,
+      "documentStatus": "failed",
+      "failureReasonCode": "pdf_quality_gate_rejected",
+      "failureMessage": "pdf_quality_gate_rejected: the PDF page-quality audit did not pass (reason codes: service_failure:provider_failure:n1); the audit stopped on a provider fault after at most n1 attempt(s) on a page",
+      "stages": [],
+      "downstream": {
+        "chunks": 0,
+        "entities": 0,
+        "wikilinks": 0
+      },
+      "durationMs": 840
+    },
+    {
+      "fixture": "holdout-decoration",
+      "round": 1,
+      "documentStatus": "failed",
+      "failureReasonCode": "pdf_quality_gate_rejected",
+      "failureMessage": "pdf_quality_gate_rejected: the PDF page-quality audit did not pass (reason codes: service_failure:provider_failure:n1); the audit stopped on a provider fault after at most n1 attempt(s) on a page",
+      "stages": [],
+      "downstream": {
+        "chunks": 0,
+        "entities": 0,
+        "wikilinks": 0
+      },
+      "durationMs": 852
+    },
+    {
+      "fixture": "pure-text",
+      "round": 2,
+      "documentStatus": "failed",
+      "failureReasonCode": "pdf_quality_gate_rejected",
+      "failureMessage": "pdf_quality_gate_rejected: the PDF page-quality audit did not pass (reason codes: service_failure:provider_failure:n1;missing_evidence:n2;missing_evidence:n3); the audit stopped on a provider fault after at most n1 attempt(s) on a page",
+      "stages": [],
+      "downstream": {
+        "chunks": 0,
+        "entities": 0,
+        "wikilinks": 0
+      },
+      "durationMs": 926
+    },
+    {
+      "fixture": "text-long-6p",
+      "round": 2,
+      "documentStatus": "failed",
+      "failureReasonCode": "pdf_quality_gate_rejected",
+      "failureMessage": "pdf_quality_gate_rejected: the PDF page-quality audit did not pass (reason codes: service_failure:provider_failure:n1;missing_evidence:n2;missing_evidence:n3;missing_evidence:n4;missing_evidence:n5;missing_evidence:n6); the audit stopped on a provider fault after at most n1 attempt(s) on a page",
+      "stages": [],
+      "downstream": {
+        "chunks": 0,
+        "entities": 0,
+        "wikilinks": 0
+      },
+      "durationMs": 1608
+    },
+    {
+      "fixture": "table-grid",
+      "round": 2,
+      "documentStatus": "failed",
+      "failureReasonCode": "pdf_quality_gate_rejected",
+      "failureMessage": "pdf_quality_gate_rejected: the PDF page-quality audit did not pass (reason codes: service_failure:provider_failure:n1); the audit stopped on a provider fault after at most n1 attempt(s) on a page",
+      "stages": [],
+      "downstream": {
+        "chunks": 0,
+        "entities": 0,
+        "wikilinks": 0
+      },
+      "durationMs": 886
+    },
+    {
+      "fixture": "garbled",
+      "round": 2,
+      "documentStatus": "failed",
+      "failureReasonCode": "pdf_quality_gate_rejected",
+      "failureMessage": "pdf_quality_gate_rejected: the PDF page-quality audit did not pass (reason codes: service_failure:provider_failure:n1;missing_evidence:n2); the audit stopped on a provider fault after at most n1 attempt(s) on a page",
+      "stages": [],
+      "downstream": {
+        "chunks": 0,
+        "entities": 0,
+        "wikilinks": 0
+      },
+      "durationMs": 1058
+    },
+    {
+      "fixture": "footnote",
+      "round": 2,
+      "documentStatus": "failed",
+      "failureReasonCode": "pdf_quality_gate_rejected",
+      "failureMessage": "pdf_quality_gate_rejected: the PDF page-quality audit did not pass (reason codes: service_failure:provider_failure:n1); the audit stopped on a provider fault after at most n1 attempt(s) on a page",
+      "stages": [],
+      "downstream": {
+        "chunks": 0,
+        "entities": 0,
+        "wikilinks": 0
+      },
+      "durationMs": 868
+    },
+    {
+      "fixture": "two-column",
+      "round": 2,
+      "documentStatus": "failed",
+      "failureReasonCode": "pdf_quality_gate_rejected",
+      "failureMessage": "pdf_quality_gate_rejected: the PDF page-quality audit did not pass (reason codes: service_failure:provider_failure:n1); the audit stopped on a provider fault after at most n1 attempt(s) on a page",
+      "stages": [],
+      "downstream": {
+        "chunks": 0,
+        "entities": 0,
+        "wikilinks": 0
+      },
+      "durationMs": 901
+    },
+    {
+      "fixture": "formula-inline",
+      "round": 2,
+      "documentStatus": "failed",
+      "failureReasonCode": "pdf_quality_gate_rejected",
+      "failureMessage": "pdf_quality_gate_rejected: the PDF page-quality audit did not pass (reason codes: service_failure:provider_failure:n1); the audit stopped on a provider fault after at most n1 attempt(s) on a page",
+      "stages": [],
+      "downstream": {
+        "chunks": 0,
+        "entities": 0,
+        "wikilinks": 0
+      },
+      "durationMs": 831
+    },
+    {
+      "fixture": "image-cover",
+      "round": 2,
+      "documentStatus": "failed",
+      "failureReasonCode": "pdf_quality_gate_rejected",
+      "failureMessage": "pdf_quality_gate_rejected: the PDF page-quality audit did not pass (reason codes: service_failure:provider_failure:n1;missing_evidence:n2); the audit stopped on a provider fault after at most n1 attempt(s) on a page",
+      "stages": [],
+      "downstream": {
+        "chunks": 0,
+        "entities": 0,
+        "wikilinks": 0
+      },
+      "durationMs": 1012
+    },
+    {
+      "fixture": "partially-rasterized",
+      "round": 2,
+      "documentStatus": "failed",
+      "failureReasonCode": "pdf_quality_gate_rejected",
+      "failureMessage": "pdf_quality_gate_rejected: the PDF page-quality audit did not pass (reason codes: service_failure:provider_failure:n1); the audit stopped on a provider fault after at most n1 attempt(s) on a page",
+      "stages": [],
+      "downstream": {
+        "chunks": 0,
+        "entities": 0,
+        "wikilinks": 0
+      },
+      "durationMs": 1064
+    },
+    {
+      "fixture": "mixed-text-scan",
+      "round": 2,
+      "documentStatus": "failed",
+      "failureReasonCode": "pdf_quality_gate_rejected",
+      "failureMessage": "pdf_quality_gate_rejected: the PDF page-quality audit did not pass (reason codes: service_failure:provider_failure:n1;missing_evidence:n2;missing_evidence:n3); the audit stopped on a provider fault after at most n1 attempt(s) on a page",
+      "stages": [],
+      "downstream": {
+        "chunks": 0,
+        "entities": 0,
+        "wikilinks": 0
+      },
+      "durationMs": 1073
+    },
+    {
+      "fixture": "blank-page",
+      "round": 2,
+      "documentStatus": "failed",
+      "failureReasonCode": "pdf_quality_gate_rejected",
+      "failureMessage": "pdf_quality_gate_rejected: the PDF page-quality audit did not pass (reason codes: service_failure:provider_failure:n1;missing_evidence:n2;missing_evidence:n3); the audit stopped on a provider fault after at most n1 attempt(s) on a page",
+      "stages": [],
+      "downstream": {
+        "chunks": 0,
+        "entities": 0,
+        "wikilinks": 0
+      },
+      "durationMs": 973
+    },
+    {
+      "fixture": "scanned-textless",
+      "round": 2,
+      "documentStatus": "failed",
+      "failureReasonCode": "pdf_quality_gate_rejected",
+      "failureMessage": "pdf_quality_gate_rejected: the PDF page-quality audit did not pass (reason codes: service_failure:provider_failure:n1;missing_evidence:n2); the audit stopped on a provider fault after at most n1 attempt(s) on a page",
+      "stages": [],
+      "downstream": {
+        "chunks": 0,
+        "entities": 0,
+        "wikilinks": 0
+      },
+      "durationMs": 1155
+    },
+    {
+      "fixture": "holdout-image-digits",
+      "round": 2,
+      "documentStatus": "failed",
+      "failureReasonCode": "pdf_quality_gate_rejected",
+      "failureMessage": "pdf_quality_gate_rejected: the PDF page-quality audit did not pass (reason codes: service_failure:provider_failure:n1); the audit stopped on a provider fault after at most n1 attempt(s) on a page",
+      "stages": [],
+      "downstream": {
+        "chunks": 0,
+        "entities": 0,
+        "wikilinks": 0
+      },
+      "durationMs": 844
+    },
+    {
+      "fixture": "holdout-small-raster",
+      "round": 2,
+      "documentStatus": "failed",
+      "failureReasonCode": "pdf_quality_gate_rejected",
+      "failureMessage": "pdf_quality_gate_rejected: the PDF page-quality audit did not pass (reason codes: service_failure:provider_failure:n1); the audit stopped on a provider fault after at most n1 attempt(s) on a page",
+      "stages": [],
+      "downstream": {
+        "chunks": 0,
+        "entities": 0,
+        "wikilinks": 0
+      },
+      "durationMs": 846
+    },
+    {
+      "fixture": "holdout-decoration",
+      "round": 2,
+      "documentStatus": "failed",
+      "failureReasonCode": "pdf_quality_gate_rejected",
+      "failureMessage": "pdf_quality_gate_rejected: the PDF page-quality audit did not pass (reason codes: service_failure:provider_failure:n1); the audit stopped on a provider fault after at most n1 attempt(s) on a page",
+      "stages": [],
+      "downstream": {
+        "chunks": 0,
+        "entities": 0,
+        "wikilinks": 0
+      },
+      "durationMs": 821
+    },
+    {
+      "fixture": "holdout-complete-mixed",
+      "round": 2,
+      "documentStatus": "failed",
+      "failureReasonCode": "pdf_quality_gate_rejected",
+      "failureMessage": "pdf_quality_gate_rejected: the PDF page-quality audit did not pass (reason codes: service_failure:provider_failure:n1); the audit stopped on a provider fault after at most n1 attempt(s) on a page",
+      "stages": [],
+      "downstream": {
+        "chunks": 0,
+        "entities": 0,
+        "wikilinks": 0
+      },
+      "durationMs": 939
+    },
+    {
+      "fixture": "pure-text",
+      "round": 3,
+      "documentStatus": "failed",
+      "failureReasonCode": "pdf_quality_gate_rejected",
+      "failureMessage": "pdf_quality_gate_rejected: the PDF page-quality audit did not pass (reason codes: service_failure:provider_failure:n1;missing_evidence:n2;missing_evidence:n3); the audit stopped on a provider fault after at most n1 attempt(s) on a page",
+      "stages": [],
+      "downstream": {
+        "chunks": 0,
+        "entities": 0,
+        "wikilinks": 0
+      },
+      "durationMs": 1318
+    },
+    {
+      "fixture": "text-long-6p",
+      "round": 3,
+      "documentStatus": "failed",
+      "failureReasonCode": "pdf_quality_gate_rejected",
+      "failureMessage": "pdf_quality_gate_rejected: the PDF page-quality audit did not pass (reason codes: service_failure:provider_failure:n1;missing_evidence:n2;missing_evidence:n3;missing_evidence:n4;missing_evidence:n5;missing_evidence:n6); the audit stopped on a provider fault after at most n1 attempt(s) on a page",
+      "stages": [],
+      "downstream": {
+        "chunks": 0,
+        "entities": 0,
+        "wikilinks": 0
+      },
+      "durationMs": 1403
+    },
+    {
+      "fixture": "table-grid",
+      "round": 3,
+      "documentStatus": "failed",
+      "failureReasonCode": "pdf_quality_gate_rejected",
+      "failureMessage": "pdf_quality_gate_rejected: the PDF page-quality audit did not pass (reason codes: service_failure:provider_failure:n1); the audit stopped on a provider fault after at most n1 attempt(s) on a page",
+      "stages": [],
+      "downstream": {
+        "chunks": 0,
+        "entities": 0,
+        "wikilinks": 0
+      },
+      "durationMs": 898
+    },
+    {
+      "fixture": "garbled",
+      "round": 3,
+      "documentStatus": "failed",
+      "failureReasonCode": "pdf_quality_gate_rejected",
+      "failureMessage": "pdf_quality_gate_rejected: the PDF page-quality audit did not pass (reason codes: service_failure:provider_failure:n1;missing_evidence:n2); the audit stopped on a provider fault after at most n1 attempt(s) on a page",
+      "stages": [],
+      "downstream": {
+        "chunks": 0,
+        "entities": 0,
+        "wikilinks": 0
+      },
+      "durationMs": 1033
+    },
+    {
+      "fixture": "footnote",
+      "round": 3,
+      "documentStatus": "failed",
+      "failureReasonCode": "pdf_quality_gate_rejected",
+      "failureMessage": "pdf_quality_gate_rejected: the PDF page-quality audit did not pass (reason codes: service_failure:provider_failure:n1); the audit stopped on a provider fault after at most n1 attempt(s) on a page",
+      "stages": [],
+      "downstream": {
+        "chunks": 0,
+        "entities": 0,
+        "wikilinks": 0
+      },
+      "durationMs": 850
+    },
+    {
+      "fixture": "two-column",
+      "round": 3,
+      "documentStatus": "failed",
+      "failureReasonCode": "pdf_quality_gate_rejected",
+      "failureMessage": "pdf_quality_gate_rejected: the PDF page-quality audit did not pass (reason codes: service_failure:provider_failure:n1); the audit stopped on a provider fault after at most n1 attempt(s) on a page",
+      "stages": [],
+      "downstream": {
+        "chunks": 0,
+        "entities": 0,
+        "wikilinks": 0
+      },
+      "durationMs": 866
+    },
+    {
+      "fixture": "formula-inline",
+      "round": 3,
+      "documentStatus": "failed",
+      "failureReasonCode": "pdf_quality_gate_rejected",
+      "failureMessage": "pdf_quality_gate_rejected: the PDF page-quality audit did not pass (reason codes: service_failure:provider_failure:n1); the audit stopped on a provider fault after at most n1 attempt(s) on a page",
+      "stages": [],
+      "downstream": {
+        "chunks": 0,
+        "entities": 0,
+        "wikilinks": 0
+      },
+      "durationMs": 874
+    },
+    {
+      "fixture": "image-cover",
+      "round": 3,
+      "documentStatus": "failed",
+      "failureReasonCode": "pdf_quality_gate_rejected",
+      "failureMessage": "pdf_quality_gate_rejected: the PDF page-quality audit did not pass (reason codes: service_failure:provider_failure:n1;missing_evidence:n2); the audit stopped on a provider fault after at most n1 attempt(s) on a page",
+      "stages": [],
+      "downstream": {
+        "chunks": 0,
+        "entities": 0,
+        "wikilinks": 0
+      },
+      "durationMs": 1007
+    },
+    {
+      "fixture": "partially-rasterized",
+      "round": 3,
+      "documentStatus": "failed",
+      "failureReasonCode": "pdf_quality_gate_rejected",
+      "failureMessage": "pdf_quality_gate_rejected: the PDF page-quality audit did not pass (reason codes: service_failure:provider_failure:n1); the audit stopped on a provider fault after at most n1 attempt(s) on a page",
+      "stages": [],
+      "downstream": {
+        "chunks": 0,
+        "entities": 0,
+        "wikilinks": 0
+      },
+      "durationMs": 995
+    },
+    {
+      "fixture": "mixed-text-scan",
+      "round": 3,
+      "documentStatus": "failed",
+      "failureReasonCode": "pdf_quality_gate_rejected",
+      "failureMessage": "pdf_quality_gate_rejected: the PDF page-quality audit did not pass (reason codes: service_failure:provider_failure:n1;missing_evidence:n2;missing_evidence:n3); the audit stopped on a provider fault after at most n1 attempt(s) on a page",
+      "stages": [],
+      "downstream": {
+        "chunks": 0,
+        "entities": 0,
+        "wikilinks": 0
+      },
+      "durationMs": 1060
+    },
+    {
+      "fixture": "blank-page",
+      "round": 3,
+      "documentStatus": "failed",
+      "failureReasonCode": "pdf_quality_gate_rejected",
+      "failureMessage": "pdf_quality_gate_rejected: the PDF page-quality audit did not pass (reason codes: service_failure:provider_failure:n1;missing_evidence:n2;missing_evidence:n3); the audit stopped on a provider fault after at most n1 attempt(s) on a page",
+      "stages": [],
+      "downstream": {
+        "chunks": 0,
+        "entities": 0,
+        "wikilinks": 0
+      },
+      "durationMs": 897
+    },
+    {
+      "fixture": "scanned-textless",
+      "round": 3,
+      "documentStatus": "failed",
+      "failureReasonCode": "pdf_quality_gate_rejected",
+      "failureMessage": "pdf_quality_gate_rejected: the PDF page-quality audit did not pass (reason codes: service_failure:provider_failure:n1;missing_evidence:n2); the audit stopped on a provider fault after at most n1 attempt(s) on a page",
+      "stages": [],
+      "downstream": {
+        "chunks": 0,
+        "entities": 0,
+        "wikilinks": 0
+      },
+      "durationMs": 1043
+    },
+    {
+      "fixture": "holdout-image-digits",
+      "round": 3,
+      "documentStatus": "failed",
+      "failureReasonCode": "pdf_quality_gate_rejected",
+      "failureMessage": "pdf_quality_gate_rejected: the PDF page-quality audit did not pass (reason codes: service_failure:provider_failure:n1); the audit stopped on a provider fault after at most n1 attempt(s) on a page",
+      "stages": [],
+      "downstream": {
+        "chunks": 0,
+        "entities": 0,
+        "wikilinks": 0
+      },
+      "durationMs": 773
+    },
+    {
+      "fixture": "holdout-small-raster",
+      "round": 3,
+      "documentStatus": "failed",
+      "failureReasonCode": "pdf_quality_gate_rejected",
+      "failureMessage": "pdf_quality_gate_rejected: the PDF page-quality audit did not pass (reason codes: service_failure:provider_failure:n1); the audit stopped on a provider fault after at most n1 attempt(s) on a page",
+      "stages": [],
+      "downstream": {
+        "chunks": 0,
+        "entities": 0,
+        "wikilinks": 0
+      },
+      "durationMs": 788
+    },
+    {
+      "fixture": "holdout-complete-mixed",
+      "round": 3,
+      "documentStatus": "failed",
+      "failureReasonCode": "pdf_quality_gate_rejected",
+      "failureMessage": "pdf_quality_gate_rejected: the PDF page-quality audit did not pass (reason codes: service_failure:provider_failure:n1); the audit stopped on a provider fault after at most n1 attempt(s) on a page",
+      "stages": [],
+      "downstream": {
+        "chunks": 0,
+        "entities": 0,
+        "wikilinks": 0
+      },
+      "durationMs": 778
+    },
+    {
+      "fixture": "holdout-decoration",
+      "round": 3,
+      "documentStatus": "failed",
+      "failureReasonCode": "pdf_quality_gate_rejected",
+      "failureMessage": "pdf_quality_gate_rejected: the PDF page-quality audit did not pass (reason codes: service_failure:provider_failure:n1); the audit stopped on a provider fault after at most n1 attempt(s) on a page",
+      "stages": [],
+      "downstream": {
+        "chunks": 0,
+        "entities": 0,
+        "wikilinks": 0
+      },
+      "durationMs": 808
+    }
+  ],
+  "calls": [
+    {
+      "provider": "clef",
+      "durationMs": 34
+    },
+    {
+      "provider": "clef",
+      "status": 400,
+      "durationMs": 961
+    },
+    {
+      "provider": "clef",
+      "status": 400,
+      "durationMs": 403
+    },
+    {
+      "provider": "clef",
+      "status": 400,
+      "durationMs": 861
+    },
+    {
+      "provider": "clef",
+      "status": 400,
+      "durationMs": 226
+    },
+    {
+      "provider": "clef",
+      "status": 400,
+      "durationMs": 248
+    },
+    {
+      "provider": "clef",
+      "status": 400,
+      "durationMs": 221
+    },
+    {
+      "provider": "clef",
+      "status": 400,
+      "durationMs": 228
+    },
+    {
+      "provider": "clef",
+      "status": 400,
+      "durationMs": 264
+    },
+    {
+      "provider": "clef",
+      "status": 400,
+      "durationMs": 237
+    },
+    {
+      "provider": "clef",
+      "status": 400,
+      "durationMs": 246
+    },
+    {
+      "provider": "clef",
+      "status": 400,
+      "durationMs": 233
+    },
+    {
+      "provider": "clef",
+      "status": 400,
+      "durationMs": 216
+    },
+    {
+      "provider": "clef",
+      "status": 400,
+      "durationMs": 236
+    },
+    {
+      "provider": "clef",
+      "status": 400,
+      "durationMs": 227
+    },
+    {
+      "provider": "clef",
+      "status": 400,
+      "durationMs": 228
+    },
+    {
+      "provider": "clef",
+      "status": 400,
+      "durationMs": 236
+    },
+    {
+      "provider": "clef",
+      "status": 400,
+      "durationMs": 839
+    },
+    {
+      "provider": "clef",
+      "status": 400,
+      "durationMs": 239
+    },
+    {
+      "provider": "clef",
+      "status": 400,
+      "durationMs": 231
+    },
+    {
+      "provider": "clef",
+      "status": 400,
+      "durationMs": 232
+    },
+    {
+      "provider": "clef",
+      "status": 400,
+      "durationMs": 242
+    },
+    {
+      "provider": "clef",
+      "status": 400,
+      "durationMs": 225
+    },
+    {
+      "provider": "clef",
+      "status": 400,
+      "durationMs": 242
+    },
+    {
+      "provider": "clef",
+      "status": 400,
+      "durationMs": 317
+    },
+    {
+      "provider": "clef",
+      "status": 400,
+      "durationMs": 231
+    },
+    {
+      "provider": "clef",
+      "status": 400,
+      "durationMs": 228
+    },
+    {
+      "provider": "clef",
+      "status": 400,
+      "durationMs": 226
+    },
+    {
+      "provider": "clef",
+      "status": 400,
+      "durationMs": 228
+    },
+    {
+      "provider": "clef",
+      "status": 400,
+      "durationMs": 222
+    },
+    {
+      "provider": "clef",
+      "status": 400,
+      "durationMs": 230
+    },
+    {
+      "provider": "clef",
+      "status": 400,
+      "durationMs": 312
+    },
+    {
+      "provider": "clef",
+      "status": 400,
+      "durationMs": 233
+    },
+    {
+      "provider": "clef",
+      "status": 400,
+      "durationMs": 229
+    },
+    {
+      "provider": "clef",
+      "status": 400,
+      "durationMs": 225
+    },
+    {
+      "provider": "clef",
+      "status": 400,
+      "durationMs": 229
+    },
+    {
+      "provider": "clef",
+      "status": 400,
+      "durationMs": 241
+    },
+    {
+      "provider": "clef",
+      "status": 400,
+      "durationMs": 246
+    },
+    {
+      "provider": "clef",
+      "status": 400,
+      "durationMs": 231
+    },
+    {
+      "provider": "clef",
+      "status": 400,
+      "durationMs": 219
+    },
+    {
+      "provider": "clef",
+      "status": 400,
+      "durationMs": 262
+    },
+    {
+      "provider": "clef",
+      "status": 400,
+      "durationMs": 229
+    },
+    {
+      "provider": "clef",
+      "status": 400,
+      "durationMs": 238
+    },
+    {
+      "provider": "clef",
+      "status": 400,
+      "durationMs": 234
+    },
+    {
+      "provider": "clef",
+      "status": 400,
+      "durationMs": 220
+    },
+    {
+      "provider": "clef",
+      "status": 400,
+      "durationMs": 229
+    },
+    {
+      "provider": "clef",
+      "status": 400,
+      "durationMs": 248
+    },
+    {
+      "provider": "clef",
+      "status": 400,
+      "durationMs": 256
+    }
+  ],
+  "note": "Real production PDF/Clef/OCR pipeline; in-memory database and counted persistence seam; no business index writes. Labels and fixture names never enter provider state."
+}

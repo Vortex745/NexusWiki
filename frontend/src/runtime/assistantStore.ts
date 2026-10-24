@@ -12,6 +12,16 @@ import { fetchAssistants, type AssistantPayload } from "../lib/api"
 
 const SELECTION_STORAGE_KEY = "nexusrag.assistant.selection"
 
+/**
+ * The server's deterministic default assistant (`assistant-default-<tenant>`)
+ * runs the exact same legacy overlay-free path as "no selection", so a stored
+ * id naming it is normalized to null everywhere — it must never surface as a
+ * separate sidebar row next to the hardcoded default entry.
+ */
+export function isDefaultAssistantId(id: string): boolean {
+  return id.startsWith("assistant-default-")
+}
+
 export type AssistantStatus = "idle" | "loading" | "ready" | "error"
 
 export interface AssistantSnapshot {
@@ -26,7 +36,10 @@ export interface AssistantSnapshot {
 function readStoredSelection(): string | null {
   try {
     const raw = window.localStorage.getItem(SELECTION_STORAGE_KEY)
-    return raw === null ? null : JSON.parse(raw)
+    if (raw === null) return null
+    const parsed = JSON.parse(raw) as unknown
+    if (typeof parsed !== "string" || parsed.length === 0 || isDefaultAssistantId(parsed)) return null
+    return parsed
   } catch {
     return null
   }
@@ -71,12 +84,13 @@ class AssistantStore {
     this.invalidate({ status: "loading", error: null })
     try {
       const assistants = await fetchAssistants()
-      // Drop a selection this session is no longer allowed to see.
+      // Drop a selection this session is no longer allowed to see, and keep
+      // the default-assistant id out of the selection entirely (same path as
+      // null — the sidebar's hardcoded row owns that state).
       const listable = new Set(assistants.map((assistant) => assistant.id))
+      const stored = this.snapshot.selectedId
       const selectedId =
-        this.snapshot.selectedId && listable.has(this.snapshot.selectedId)
-          ? this.snapshot.selectedId
-          : null
+        stored && !isDefaultAssistantId(stored) && listable.has(stored) ? stored : null
       this.invalidate({ status: "ready", assistants, selectedId })
       this.persistSelection()
     } catch (error) {

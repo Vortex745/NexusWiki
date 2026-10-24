@@ -5,6 +5,7 @@ import { tmpdir } from "node:os"
 import { join, resolve } from "node:path"
 import type { NormalizedBlock, NormalizedBlockType } from "../../types"
 import type { ParseDocumentInput } from "./markitdown"
+import type { PdfEvidenceException, PdfPageTextRecord } from "../page_evidence/page_evidence"
 import { runBoundedProcess } from "./process"
 
 export interface BuiltinPdfParserOptions {
@@ -432,15 +433,149 @@ export function analyzeStructureRisks(value: unknown): StructureRiskFlags {
   }
 }
 
+/**
+ * Ticket 05: the page-aligned reading of the SAME validated extraction
+ * payload. Where `normalizeBuiltinPdf` fails on a document with no text (that
+ * document has nothing to index), this reading keeps going: every declared page
+ * gets its own text record — empty where the text layer is absent — and the
+ * reasons stay as evidence instead of collapsing into one generic error.
+ */
+export const BUILTIN_PDF_TEXT_LAYER_ABSENT = "text_layer_absent"
+
+export class BuiltinPdfTextLayerAbsentError extends Error {
+  readonly code = BUILTIN_PDF_TEXT_LAYER_ABSENT
+
+  constructor(
+    readonly pageCount: number,
+    readonly pagesWithoutTextBlocks: readonly number[]
+  ) {
+    super(
+      "malformed builtin-pdf output: no text blocks (the PDF likely has no text layer; use ocr-api)"
+    )
+    this.name = "BuiltinPdfTextLayerAbsentError"
+  }
+}
+
+export interface BuiltinPdfPageTextReading {
+  schemaVersion: 1
+  pageCount: number
+  /** Pages whose read produced any content — text spans or a detected table. */
+  pagesWithText: number
+  /** Exactly one record per declared page, in page order, textless pages included. */
+  pageTexts: PdfPageTextRecord[]
+  /** The extraction payload's own coverage warnings, verbatim. */
+  documentWarnings: string[]
+  /** Why the extraction produced nothing, when it did — retained, not collapsed. */
+  exceptions: PdfEvidenceException[]
+}
+
+function parseExtractionInput(value: unknown): unknown {
+  if (typeof value !== "string") return value
+  try {
+    return JSON.parse(value)
+  } catch (error) {
+    throw new Error(
+      `malformed builtin-pdf output: ${error instanceof Error ? error.message : String(error)}`
+    )
+  }
+}
+
+export function readBuiltinPdfPageTexts(
+  value: unknown
+): BuiltinPdfPageTextReading {
+  const output = parseOutput(parseExtractionInput(value))
+
+  const textByPage = new Map<number, string[]>()
+  const tableByPage = new Map<number, string[]>()
+  const pagesWithBlocks = new Set<number>()
+  for (const block of output.blocks) {
+    const existing = textByPage.get(block.page) ?? []
+    existing.push(block.text)
+    textByPage.set(block.page, existing)
+    pagesWithBlocks.add(block.page)
+  }
+  for (const table of output.tables) {
+    const existing = tableByPage.get(table.page) ?? []
+    existing.push(table.markdown)
+    tableByPage.set(table.page, existing)
+  }
+
+  const pageTexts: PdfPageTextRecord[] = []
+  const exceptions: PdfEvidenceException[] = []
+  const documentWarnings = [...output.warnings]
+  let pagesWithText = 0
+
+  if (output.pageCount < 1) {
+    exceptions.push({
+      page: null,
+      code: "no_pages_declared",
+      message: "the extraction payload declares no pages",
+      stage: "text_extraction",
+    })
+    return { schemaVersion: 1, pageCount: output.pageCount, pagesWithText: 0, pageTexts, documentWarnings, exceptions }
+  }
+
+  for (let page = 1; page <= output.pageCount; page += 1) {
+    const blocks = textByPage.get(page) ?? []
+    const tables = tableByPage.get(page) ?? []
+    const parts = [...blocks, ...tables]
+    const text = parts.join("\n\n")
+    if (text) pagesWithText += 1
+    pageTexts.push({
+      page,
+      text,
+      blockCount: blocks.length,
+      tableCount: tables.length,
+      textChars: text.length,
+      status: text ? "extracted" : "text_layer_absent",
+      // Declared from what this extractor actually read on this page.
+      textLayerAbsent: text === "",
+      warnings: [],
+      exceptions: [],
+    })
+  }
+
+  if (output.blocks.length === 0 && output.tables.length === 0) {
+    exceptions.push({
+      page: null,
+      code: "no_text_blocks_in_extraction",
+      message: `the extractor read ${output.pageCount} page(s) and found no text layer content on any of them; the document needs the OCR decision, not an empty-document failure`,
+      stage: "text_extraction",
+    })
+  }
+  if (Number.isInteger(output.stats.pagesWithText) && output.stats.pagesWithText !== pagesWithBlocks.size) {
+    // The script counts pages carrying text spans; this reading counts pages
+    // carrying any content (text spans or a detected table). A disagreement
+    // between the two is kept as evidence, not silently resolved.
+    documentWarnings.push(
+      `extractor stats report ${output.stats.pagesWithText} pages with text spans while the block list carries ${pagesWithBlocks.size}`
+    )
+  }
+
+  return {
+    schemaVersion: 1,
+    pageCount: output.pageCount,
+    pagesWithText,
+    pageTexts,
+    documentWarnings,
+    exceptions,
+  }
+}
+
 export function normalizeBuiltinPdf(
   value: unknown,
   documentId: string
 ): NormalizedBlock[] {
-  const output = parseOutput(value)
+  const output = parseOutput(parseExtractionInput(value))
   if (output.blocks.length === 0) {
-    throw new Error(
-      "malformed builtin-pdf output: no text blocks (the PDF likely has no text layer; use an OCR parser such as mineru or marker)"
+    const pagesWithContent = new Set(
+      [...output.blocks.map((block) => block.page), ...output.tables.map((table) => table.page)]
     )
+    const withoutText: number[] = []
+    for (let page = 1; page <= output.pageCount; page += 1) {
+      if (!pagesWithContent.has(page)) withoutText.push(page)
+    }
+    throw new BuiltinPdfTextLayerAbsentError(output.pageCount, withoutText)
   }
 
   const tablesByPage = new Map<number, RawTable[]>()
@@ -578,6 +713,29 @@ export function normalizeBuiltinPdf(
   return blocks
 }
 
+function wrapParserFailure(error: unknown): Error {
+  const message = error instanceof Error ? error.message : String(error)
+  if (message.startsWith("Parser executable is unavailable:")) {
+    return new Error(
+      `builtin-pdf executable is unavailable. Configure PYTHON_COMMAND. ${message}`
+    )
+  }
+  // The extractor script reports open/decode complaints ("cannot open
+  // PDF: ...", "cannot read PDF pages: ...") as a structured error exit;
+  // re-emit them under the malformed-output marker so classification lands
+  // in permanent_input with protection guidance. Timeout and cancel
+  // messages never carry those shapes and keep their own semantics.
+  if (/cannot (?:open|read) PDF/.test(message)) {
+    return new Error(
+      `builtin-pdf failed: malformed builtin-pdf output: the file could not be opened or decoded (${message})`
+    )
+  }
+  if (message.startsWith("builtin-pdf failed:")) {
+    return error instanceof Error ? error : new Error(message)
+  }
+  return new Error(`builtin-pdf failed: ${message}`)
+}
+
 export class BuiltinPdfParser {
   readonly type = "builtin-pdf" as const
   private lastSummary: {
@@ -599,13 +757,7 @@ export class BuiltinPdfParser {
       const raw = await this.parseRaw(input)
       return this.normalizeRaw(raw, input.documentId)
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error)
-      if (message.startsWith("Parser executable is unavailable:")) {
-        throw new Error(
-          `builtin-pdf executable is unavailable. Configure PYTHON_COMMAND. ${message}`
-        )
-      }
-      throw new Error(`builtin-pdf failed: ${message}`)
+      throw wrapParserFailure(error)
     }
   }
 
@@ -628,14 +780,22 @@ export class BuiltinPdfParser {
     const sourcePath = join(workspace, "input.pdf")
     try {
       await writeFile(sourcePath, input.content, { flag: "wx" })
-      const raw = await runBoundedProcess({
-        command: this.options.command,
-        args: [...(this.options.commandArgs ?? []), scriptPath, sourcePath],
-        cwd: workspace,
-        timeoutMs: this.options.timeoutMs,
-        outputLimitBytes: this.options.outputLimitBytes,
-        signal: input.signal,
-      })
+      // The pipeline's truth seam calls parseRaw directly — the same
+      // failure wrapping as parse() must apply here, or script complaints
+      // reach the classifier bare and land in the unclassified bucket.
+      let raw: string
+      try {
+        raw = await runBoundedProcess({
+          command: this.options.command,
+          args: [...(this.options.commandArgs ?? []), scriptPath, sourcePath],
+          cwd: workspace,
+          timeoutMs: this.options.timeoutMs,
+          outputLimitBytes: this.options.outputLimitBytes,
+          signal: input.signal,
+        })
+      } catch (error) {
+        throw wrapParserFailure(error)
+      }
       // UT-11: capture the extraction summary (coverage warnings, per-file
       // stats) for extractionProvenance — normalizeRaw drops nothing, but the
       // document state and the durable evidence must carry the warnings too.

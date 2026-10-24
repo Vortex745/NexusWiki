@@ -25,7 +25,15 @@ const context: AccessContext = {
 }
 
 function recordingSearcher() {
-  const calls: Array<{ query: string; accessContext?: unknown; retrievalScope?: unknown; channels?: unknown }> = []
+  const calls: Array<{
+    query: string
+    accessContext?: unknown
+    retrievalScope?: unknown
+    channels?: unknown
+    attachments?: unknown
+    webRequested?: unknown
+    signal?: unknown
+  }> = []
   const searcher: Searcher = {
     async search(query, options) {
       calls.push({
@@ -33,6 +41,9 @@ function recordingSearcher() {
         accessContext: options?.accessContext,
         retrievalScope: options?.retrievalScope,
         channels: options?.channels,
+        attachments: options?.attachments,
+        webRequested: options?.webRequested,
+        signal: options?.signal,
       })
       return {
         status: "ok",
@@ -150,4 +161,114 @@ test("Ticket 34: document_lookup enforces tenant, knowledge scope and group visi
     env
   )
   assert.equal(smuggled.outcome, "invalid_args")
+})
+
+// ---------------------------------------------------------------------------
+// PT-02 / PT-03 — the run's server-bound session and web intent reach the
+// tool's search, and nothing the model typed can add either of them.
+// ---------------------------------------------------------------------------
+
+test("PT-02 AC01 / PT-03 AC01: knowledge_search forwards the run's bound session and web opt-in", async () => {
+  const { searcher, calls } = recordingSearcher()
+  const registry = registerBuiltinTools(new ToolRegistry())
+  const service = serviceWith(registry)
+
+  const outcome = await service.invoke(
+    "knowledge_search",
+    { query: "附件退款规则" },
+    {
+      accessContext: context,
+      retrievalScope: { knowledgeBaseIds: [] },
+      searcher,
+      attachments: { sessionId: "sess-bound" },
+      webRequested: true,
+      signal: new AbortController().signal,
+    }
+  )
+  assert.equal(outcome.outcome, "ok")
+  assert.equal(calls.length, 1)
+  assert.deepEqual(
+    calls[0].attachments,
+    { sessionId: "sess-bound" },
+    "the tool search reads the run's OWN session attachments (PT-02 AC01)"
+  )
+  assert.equal(calls[0].webRequested, true, "the tool search carries the run's web opt-in (PT-03 AC01)")
+  assert.deepEqual(calls[0].retrievalScope, { knowledgeBaseIds: [] }, "the locked scope is forwarded verbatim")
+  assert.equal(typeof calls[0].signal, "object", "the linked cancellation signal reaches the search")
+
+  // A run without a session or an opt-in opens neither channel — a tool call
+  // never widens retrieval on its own.
+  const bare = await service.invoke(
+    "knowledge_search",
+    { query: "普通知识问题" },
+    { accessContext: context, retrievalScope: { knowledgeBaseIds: ["kb-1"] }, searcher }
+  )
+  assert.equal(bare.outcome, "ok")
+  assert.equal(calls[1].attachments, undefined, "no bound session → no attachment channel")
+  assert.equal(calls[1].webRequested, undefined, "no opt-in → no web channel")
+})
+
+test("PT-02 AC02: a tool call cannot smuggle a session or a web opt-in through args", async () => {
+  const { searcher, calls } = recordingSearcher()
+  const registry = registerBuiltinTools(new ToolRegistry())
+  const service = serviceWith(registry)
+  const env = { accessContext: context, searcher }
+
+  for (const rawArgs of [
+    { query: "x", sessionId: "sess-victim" },
+    { query: "x", attachments: { sessionId: "sess-victim" } },
+    { query: "x", webRequested: true },
+    { query: "x", useWeb: true },
+  ]) {
+    const refused = await service.invoke("knowledge_search", rawArgs, env)
+    assert.equal(refused.outcome, "invalid_args", JSON.stringify(rawArgs))
+  }
+  assert.equal(calls.length, 0, "a refused call never reaches the searcher")
+
+  // Even with the bound identity present, the smuggled session is not used.
+  const allowed = await service.invoke(
+    "knowledge_search",
+    { query: "x" },
+    { ...env, attachments: { sessionId: "sess-bound" } }
+  )
+  assert.equal(allowed.outcome, "ok")
+  assert.deepEqual(calls[0].attachments, { sessionId: "sess-bound" })
+})
+
+test("PT-02 AC06: an attachment identity never resolves as a knowledge-base document", async () => {
+  const db = openDb(":memory:")
+  const documentRepo = new DocumentRepo(db)
+  const pageIndexRepo = new PageIndexRepository(db)
+  documentRepo.insert({
+    docId: "doc-mine",
+    sourceId: "src-doc-mine",
+    contentHash: "hash-doc-mine",
+    version: 1,
+    title: "退款政策",
+    source: "test",
+    content: "知识库中的退款政策全文",
+    tenantId: "tenant-a",
+    allowedGroups: [],
+    knowledgeBaseId: "kb-1",
+  })
+  const registry = registerBuiltinTools(new ToolRegistry(), { documentRepo, pageIndexRepo })
+  const service = serviceWith(registry)
+
+  // An attachment chunk's documentId IS its attachmentId. Resolving it must be
+  // the same honest "not found" as any other unknown id — never the session's
+  // temporary file presented as a knowledge-base document.
+  const asDocument = await service.invoke(
+    "document_lookup",
+    { documentId: "att-7c9f0a1b-0000-0000-0000-000000000000" },
+    { accessContext: context, retrievalScope: { knowledgeBaseIds: ["kb-1"] } }
+  )
+  assert.equal(asDocument.outcome, "ok")
+  assert.equal((asDocument.result as { found: boolean }).found, false)
+
+  const real = await service.invoke(
+    "document_lookup",
+    { documentId: "doc-mine" },
+    { accessContext: context, retrievalScope: { knowledgeBaseIds: ["kb-1"] } }
+  )
+  assert.equal((real.result as { found: boolean }).found, true)
 })

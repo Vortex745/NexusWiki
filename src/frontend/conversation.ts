@@ -30,6 +30,11 @@ export interface TraceEvent {
   data?: Record<string, unknown>
   result?: {
     status?: string
+    /**
+     * PL-01: the published reply of the terminal — for an unapproved knowledge
+     * draft this is the safe terminal text, never the draft itself.
+     */
+    reply?: string
     references?: Reference[]
     /**
      * Ticket 31 (FAQ-01B): present only when the answer IS the stored
@@ -245,6 +250,40 @@ function createThreadInternal(now: () => Date): Thread {
   }
 }
 
+/**
+ * Persisted UI state outlives the schema that wrote it. Messages saved before
+ * traceEvents/references existed (or by a partial write) arrive without those
+ * arrays; spreading them later throws and takes the whole app down.
+ */
+function normalizePersistedMessage(source: unknown): Message | null {
+  if (!source || typeof source !== "object") return null
+  const message = source as Message
+  if (typeof message.id !== "string" || message.id.length === 0) return null
+  return {
+    ...message,
+    traceEvents: normalizeTraceEvents(message.traceEvents),
+    references: Array.isArray(message.references) ? message.references : [],
+  }
+}
+
+function normalizePersistedThread(source: unknown, now: Date): Thread | null {
+  if (!source || typeof source !== "object") return null
+  const thread = source as Thread
+  if (typeof thread.id !== "string" || thread.id.length === 0) return null
+  const iso = now.toISOString()
+  return {
+    ...thread,
+    title: typeof thread.title === "string" ? thread.title : "新对话",
+    createdAt: typeof thread.createdAt === "string" ? thread.createdAt : iso,
+    updatedAt: typeof thread.updatedAt === "string" ? thread.updatedAt : iso,
+    messages: Array.isArray(thread.messages)
+      ? thread.messages
+          .map(normalizePersistedMessage)
+          .filter((message): message is Message => message !== null)
+      : [],
+  }
+}
+
 export function normalizeTraceEvents(events: TraceEvent[] | undefined): TraceEvent[] {
   if (!Array.isArray(events)) return []
   return events
@@ -287,6 +326,24 @@ export function projectTraceEvents(events: TraceEvent[]): TraceEvent[] {
   )
 }
 
+/**
+ * PL-01: transport success is not answer success. Only these business terminals
+ * may carry draft facts into the visible bubble — for anything else the server
+ * publishes safe terminal text, and the bubble must not read as a reliable
+ * knowledge answer.
+ */
+const PUBLISHABLE_TERMINALS = new Set(["completed", "clarification_required"])
+
+function isUnapprovedTerminal(status: unknown): boolean {
+  // PL-01 AC03/AC04: cancelled is a non-answer too — the run ended without an
+  // approved knowledge answer, and the server publishes 本次回答已取消。 for it.
+  return (
+    typeof status === "string" &&
+    status.length > 0 &&
+    !PUBLISHABLE_TERMINALS.has(status)
+  )
+}
+
 export function mergeTraceEvent(message: Message, event: TraceEvent): void {
   if (!event || typeof event.eventId !== "string") return
   const byId = new Map((message.traceEvents || []).map((item) => [item.eventId, item]))
@@ -296,6 +353,15 @@ export function mergeTraceEvent(message: Message, event: TraceEvent): void {
 
   if (event.type === "done") {
     message.traceStatus = event.result?.status
+    // PL-01 AC03: streaming publishes the same single safe terminal text as
+    // JSON. Unapproved terminals carry no draft, so no fact text is appended.
+    if (
+      isUnapprovedTerminal(event.result?.status) &&
+      typeof event.result?.reply === "string" &&
+      event.result.reply.length > 0
+    ) {
+      message.content = event.result.reply
+    }
     message.references = Array.isArray(event.result?.references)
       ? event.result.references
       : message.references
@@ -309,7 +375,6 @@ export function mergeTraceEvent(message: Message, event: TraceEvent): void {
 /**
  * T57: reference.js helpers absorbed into Conversation. These format
  * reference metadata for display — section path, page number, image asset URL.
- * Previously lived in frontend/js/reference.js as window.ReferenceUi.
  */
 export function formatReferenceLocation(reference: Reference): string {
   const sectionPath = Array.isArray(reference?.sectionPath)
@@ -549,7 +614,8 @@ export class ConversationImpl implements Conversation {
     if (!message.content) {
       message.content = failed ? "处理请求时出现错误，请重试。" : "（回答内容为空）"
     }
-    message.status = failed ? "error" : "complete"
+    message.status =
+      failed || isUnapprovedTerminal(message.traceStatus) ? "error" : "complete"
   }
 
   /**
@@ -557,6 +623,12 @@ export class ConversationImpl implements Conversation {
    * fall back to "已停止生成。" only when no content was produced.
    */
   finalizeAbortedRun(message: Message): void {
+    // A transport abort can race with an already received business terminal.
+    if (message.traceEvents.some((event) => event.type === "done")) {
+      this.finalizeStreamRun(message)
+      return
+    }
+    message.traceStatus = "cancelled"
     if (!message.content) message.content = "已停止生成。"
     message.status = "complete"
   }
@@ -604,7 +676,10 @@ export class ConversationImpl implements Conversation {
       return { ok: false }
     }
     message.content = typeof data?.reply === "string" ? data.reply : "（回答内容为空）"
-    message.status = "complete"
+    // PL-01 AC03/AC05: a payload without a business terminal keeps the existing
+    // compatible display; a current-protocol terminal that did not approve the
+    // draft is never presented as a completed reliable answer.
+    message.status = isUnapprovedTerminal(data?.status) ? "error" : "complete"
     return { ok: true }
   }
 
@@ -619,11 +694,14 @@ export class ConversationImpl implements Conversation {
     const loaded = this.storage.load()
     if (!loaded) return fallbackState
     if (!Array.isArray(loaded.threads)) return fallbackState
-    if (loaded.threads.length === 0) return fallbackState
-    const activeThreadExists = loaded.threads.some((t) => t.id === loaded.activeThreadId)
+    const threads = loaded.threads
+      .map((thread) => normalizePersistedThread(thread, this.now()))
+      .filter((thread): thread is Thread => thread !== null)
+    if (threads.length === 0) return fallbackState
+    const activeThreadExists = threads.some((t) => t.id === loaded.activeThreadId)
     return {
-      threads: loaded.threads,
-      activeThreadId: activeThreadExists ? loaded.activeThreadId : loaded.threads[0].id,
+      threads,
+      activeThreadId: activeThreadExists ? loaded.activeThreadId : threads[0].id,
       streamEnabled: loaded.streamEnabled !== false,
       sidebarCollapsed: loaded.sidebarCollapsed === true,
     }

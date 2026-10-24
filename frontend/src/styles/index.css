@@ -1,66 +1,43 @@
 @import "tailwindcss";
+@import "tw-animate-css";
+@import "shadcn/tailwind.css";
+@import "@fontsource-variable/geist";
+@import "@fontsource-variable/inter";
+@import "./solid-glass.css";
 
-/* mem0/assistant-ui ships dark mode as a `.dark` class on <html>. */
+/* Existing theme ownership uses the .dark class on <html>. */
 @custom-variant dark (&:where(.dark, .dark *));
 
-/* ---------------------------------------------------------------------------
-   Design tokens — Grok clone palette (assistant-ui /examples/grok).
-
-   Two structural rules carried over from that example, not just its hex codes:
-
-   1. Recessed depth. The surface sits a perceptual step AWAY from the canvas in
-      whichever direction reads as a well — darker in light mode (#fdfdfd page /
-      #f8f8f8 field), lighter in dark (#141414 / #212121). Separation comes from
-      a 1px ring, not from elevation, so the shadows are near-zero.
-   2. Inverted primary. The one high-contrast object on screen is the trailing
-      composer button: near-black on light, white on dark. Everything else is
-      neutral, which is what makes that button read as the action.
-
-   Deviations from the example, both deliberate:
-   - `muted` is NOT Grok's #9a9a9a. That measures 2.77:1 on #fdfdfd, and
-     text-muted carries real content here (trace lines, reference excerpts,
-     status text) rather than only placeholder. It gets an AA-compliant step and
-     Grok's light value moves to a separate `faint` token for placeholder-tier
-     text only.
-   - `brand` survives as a low-frequency accent for links, focus rings and
-     active selection. Grok has no accent at all, but it also has no selectable
-     knowledge bases, no citation links and no 21-panel workspace to scan.
---------------------------------------------------------------------------- */
+/* Legacy application aliases map to the official shadcn semantic theme below. */
 @theme {
   --font-sans:
     Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
     "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
   /* Mono carries machine-generated identifiers only: file names, commands,
      diff counts, sequence numbers, timings. */
-  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  --font-mono:
+    "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas,
+    monospace;
 
-  --color-canvas: #fdfdfd;
-  --color-surface: #f8f8f8;
-  --color-surface-subtle: #f0f0f0;
-  --color-line: #e5e5e5;
-  --color-ink: #0d0d0d;
-  /* 4.67:1 against surface-subtle (#f0f0f0), the worst background text-muted
-     actually sits on inside cards. Sizing muted against canvas instead would
-     read 5.24:1 and look safe while failing everywhere it is really used. */
-  --color-muted: #6b6b6b;
-  /* 2.77:1 on canvas — placeholder, watermark and decorative labels only. */
-  --color-faint: #9a9a9a;
+  --color-canvas: var(--background);
+  --color-surface: var(--card);
+  --color-surface-subtle: var(--muted);
+  --color-line: var(--border);
+  --color-ink: var(--foreground);
 
-  --color-primary: #0d0d0d;
-  --color-on-primary: #ffffff;
-  --color-primary-hover: #262626;
+  --color-faint: var(--muted-foreground);
 
-  --color-brand: #4f46e5;
-  --color-brand-hover: #4338ca;
-  --color-brand-subtle: #eef2ff;
-  --color-brand-line: #c7d2fe;
+  --color-on-primary: var(--primary-foreground);
+  --color-primary-hover: var(--primary);
 
-  /* Status semantics. Grok's example has no error state to copy, so these are
-     ours; they are the only hues allowed outside the neutral ramp. Each family
-     ships a three-part set — text, subtle fill, line — because every panel that
-     hand-rolled these previously had to write a `dark:` twin for each one. With
-     the override living in the token, `text-danger` replaces
-     `text-red-600 dark:text-red-400` outright. */
+  --color-brand: var(--foreground);
+  --color-brand-hover: var(--foreground);
+  --color-brand-subtle: var(--surface-muted);
+  --color-brand-line: var(--border);
+  --color-accent: var(--surface-muted);
+  --color-accent-foreground: var(--foreground);
+
+  /* Status colors remain semantic aliases for existing business states. */
   --color-danger: #b91c1c;
   --color-danger-subtle: #fef2f2;
   --color-danger-line: #fecaca;
@@ -78,50 +55,54 @@
   --shadow-card: none;
   --shadow-dialog: 0 20px 45px -15px rgb(13 13 13 / 0.14);
 
-  --radius-window: 2rem;
-  --radius-bubble: 1.5rem;
+  --radius-window: var(--radius-xl);
+  --radius-bubble: var(--radius-xl);
+  /* Every modal panel used to hard-code `rounded-xl`, so the corner could not be
+     moved without touching 15 files. Exposed as `rounded-dialog`. */
+  --radius-dialog: var(--radius-xl);
 
   --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
+  --ease-drawer: cubic-bezier(0.32, 0.72, 0, 1);
 
-  --animate-message-in: message-in 160ms var(--ease-out) both;
-  /* fade-in takes the shared custom ease like every other motion token; the
-     bare `ease-out` keyword would fall back to the weak built-in curve. */
-  --animate-fade-in: fade-in 180ms var(--ease-out) both;
-  /* Welcome suggestions cascade in with a 45ms stagger (set per-card inline). */
-  --animate-suggestion-in: suggestion-in 220ms var(--ease-out) both;
   --animate-pop-in: pop-in 250ms var(--ease-out) both;
 
-  /* transitions.dev — streaming text: words resolve through opacity + blur. */
-  --stream-gap: 60ms;
-  --stream-fade: 350ms;
+  /* Streaming text: each revealed token resolves through opacity + blur.
+     `--stream-fade` is coupled to REVEAL_TOKEN_MS in src/frontend/stream_reveal.ts:
+     fade / step = how many tokens are mid-animation at once, and that ratio is what
+     reads as words arriving (~6-7) rather than one blurred band (~16). Change one and
+     you have to change the other. */
+  --stream-fade: 150ms;
   --stream-blur: 1px;
   --stream-ease: cubic-bezier(0.22, 1, 0.36, 1);
 }
 
 @layer base {
+  :root {
+    --sidebar-accent: var(--surface-muted);
+    --sidebar-accent-foreground: var(--foreground);
+  }
+
   .dark {
+    --sidebar-accent: var(--surface-muted);
+    --sidebar-accent-foreground: var(--foreground);
     /* The ramp inverts direction but keeps the same rule: surface sits a step
        away from canvas and reads as a well, separation comes from the ring. */
-    --color-canvas: #141414;
-    --color-surface: #212121;
-    --color-surface-subtle: #2a2a2a;
-    --color-line: #2a2a2a;
-    /* Grok uses pure white here; softened to #f2f2f2 because this app renders
-       long assistant answers and 19.5:1 body text halates on OLED. */
-    --color-ink: #f2f2f2;
-    /* 4.67:1 against surface-subtle (#2a2a2a). Grok's own #6b6b6b is 3.46:1
-       on canvas and fails outright. */
-    --color-muted: #939393;
-    --color-faint: #6b6b6b;
+    --color-canvas: var(--background);
+    --color-surface: var(--card);
+    --color-surface-subtle: var(--muted);
+    --color-line: var(--border);
 
-    --color-primary: #ffffff;
-    --color-on-primary: #0d0d0d;
-    --color-primary-hover: #e5e5e5;
+    --color-ink: var(--foreground);
 
-    --color-brand: #818cf8;
-    --color-brand-hover: #a5b4fc;
-    --color-brand-subtle: #1e1c2e;
-    --color-brand-line: #3730a3;
+    --color-faint: var(--muted-foreground);
+
+    --color-on-primary: var(--primary-foreground);
+    --color-primary-hover: var(--primary);
+
+    --color-brand: var(--foreground);
+    --color-brand-hover: var(--foreground);
+    --color-brand-subtle: var(--accent);
+    --color-brand-line: var(--border);
 
     --color-danger: #f87171;
     --color-danger-subtle: #2a1515;
@@ -142,7 +123,7 @@
   }
 
   body {
-    @apply overflow-hidden bg-canvas font-sans text-sm leading-6 text-ink antialiased;
+    @apply overflow-hidden font-sans text-sm leading-6 antialiased bg-background text-foreground;
   }
 
   button,
@@ -151,44 +132,35 @@
     letter-spacing: -0.01em;
   }
 
-  /* Lucide geometry is stroke-drawn; morphicons animates that same geometry. */
+  /* 38 text controls, 3 of which set a placeholder colour: the rest were on the
+     UA default, a fixed grey that does not flip with the theme. `faint` is the
+     placeholder-tier token (index.css:47), so this makes all of them theme-aware
+     in one place. Utilities like `placeholder:text-brand` still win on
+     specificity; `opacity` is reset because Firefox dims the colour itself. */
+  ::placeholder {
+    color: var(--color-faint);
+    opacity: 1;
+  }
+
+  /* Only the box: reicon glyphs carry their own fill/stroke per path, and a
+     stroke default inherited here redraws the filled outlines at 1.75px —
+     about 1.6x the ink the glyphs were designed with at the 16px icon size. */
   svg {
-    @apply size-[16px] shrink-0 fill-none stroke-current;
-    stroke-linecap: round;
-    stroke-linejoin: round;
-    stroke-width: 1.75;
+    @apply size-[16px] shrink-0;
   }
 
   [hidden] {
     display: none !important;
   }
 
-  dialog::backdrop {
-    background: rgb(0 0 0 / 0.2);
-  }
-
   ::selection {
     @apply bg-ink text-canvas;
   }
-}
-
-@keyframes message-in {
-  from {
-    transform: translateY(5px);
-    opacity: 0;
+  * {
+    @apply border-border outline-ring/50;
   }
-  to {
-    transform: translateY(0);
-    opacity: 1;
-  }
-}
-
-@keyframes fade-in {
-  from {
-    opacity: 0;
-  }
-  to {
-    opacity: 1;
+  html {
+    @apply font-sans;
   }
 }
 
@@ -217,6 +189,31 @@
   }
 }
 
+/* The running step's only live signal. `running` and `completed` share the same
+   fill, so without this arc "happening now" and "already done" are the same
+   pixel. Linear is deliberate: a spinner is the one place a constant-speed
+   curve belongs. */
+.t-trace-spin {
+  animation: trace-spin 900ms linear infinite;
+}
+
+@keyframes trace-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* Connect only recorded steps; the last marker has no implied next stage. */
+.answer-process-step:not(:last-child)::before {
+  content: "";
+  position: absolute;
+  left: 7.5px;
+  top: 22px;
+  bottom: 0;
+  width: 1px;
+  background: var(--color-line);
+}
+
 /* Pixel-grid loader cells. The per-cell animation is authored inline in
    ThinkingLoader.tsx because each cell needs its own delay; this only owns the
    pulse shape. Cells hold dark, flash lit for ~20% of the cycle, then wait —
@@ -242,9 +239,9 @@
   color: transparent;
   background-image: linear-gradient(
     90deg,
-    var(--color-muted) 35%,
+    var(--muted-foreground) 35%,
     var(--color-ink) 50%,
-    var(--color-muted) 65%
+    var(--muted-foreground) 65%
   );
   background-size: 200% 100%;
   background-repeat: no-repeat;
@@ -272,35 +269,6 @@
   animation: caret-blink 1s steps(2, jump-none) infinite;
 }
 
-@keyframes suggestion-in {
-  from {
-    transform: translateY(6px);
-    opacity: 0;
-  }
-  to {
-    transform: translateY(0);
-    opacity: 1;
-  }
-}
-
-/* Native dialogs open AND close through one transition (the old enter-only
-   keyframes vanished on close). allow-discrete keeps display/overlay alive
-   until the exit transition finishes, so dialog.close() fades out instead of
-   teleporting, and a reopen mid-close retargets instead of restarting.
-   Longhands (not the shorthand) so engines without transition-behavior only
-   drop the discrete part, not the whole fade. */
-dialog {
-  opacity: 0;
-  transform: scale(0.98) translateY(-4px);
-  transition-property: opacity, transform, display, overlay;
-  transition-duration: 180ms;
-  transition-timing-function: var(--ease-out);
-  transition-behavior: allow-discrete;
-}
-dialog[open] {
-  opacity: 1;
-  transform: scale(1) translateY(0);
-}
 .trace-panel {
   opacity: 0;
   transform: translateX(100%);
@@ -312,28 +280,18 @@ dialog[open] {
   opacity: 1;
   transform: translateX(0);
 }
-dialog::backdrop {
-  opacity: 0;
-  transition: opacity 180ms var(--ease-out);
-}
-dialog[open]::backdrop {
-  opacity: 1;
-}
 
 /* Sidebar motion follows the reference rail: the shell eases between its two
    desktop widths while copy fades and slides out of the same layout slot.
    Keeping the nodes mounted avoids a hard cut when the rail changes state. */
 .sidebar-shell {
-  width: 14rem;
-  min-width: 14rem;
-  padding-inline: 0.5rem;
-  transition-property: width, min-width, padding-left, padding-right;
-  transition-duration: 280ms;
-  transition-timing-function: cubic-bezier(0.16, 1, 0.3, 1);
+  width: 100%;
+  min-width: 0;
+  padding-inline: 0.75rem;
 }
 .sidebar-shell[data-collapsed="true"] {
-  width: 3.25rem;
-  min-width: 3.25rem;
+  width: 100%;
+  min-width: 0;
   padding-inline: 0.25rem;
 }
 .sidebar-shell .sidebar-brand {
@@ -367,13 +325,29 @@ dialog[open]::backdrop {
   margin-right: 0;
   padding-left: 0;
   padding-right: 0;
+  /* The badge copies are pill-bordered; 1px each side still measured 1.6px of
+     width at max-width 0, enough to pull its row half a pixel off centre. */
+  border-inline-width: 0;
   opacity: 0;
   translate: -0.5rem 0;
   pointer-events: none;
 }
+/* A zero-width flex item is still charged the row's column-gap, so a row
+   holding one hidden copy sat 8px and a row holding two sat 16px wider than
+   the icon alone — `justify-center` then missed the rail's centre line by half
+   the difference. Only rows that actually carry a copy are touched. */
+.sidebar-shell[data-collapsed="true"] :is(button, div):has(> .sidebar-copy) {
+  column-gap: 0;
+}
 .sidebar-shell .sidebar-module {
   overflow: hidden;
   max-height: 28rem;
+  /* The sidebar body is a column flex container, and these modules were
+     shrinking below their own content and clipping it silently (`overflow:
+     hidden`) once the knowledge-base tree grew past a few rows. They must keep
+     their height; the 最近对话 list below is the one with `overflow-y-auto` and
+     `flex-1`, so it is what absorbs a short window. */
+  flex-shrink: 0;
   opacity: 1;
   transition-property: max-height, opacity, margin, transform;
   transition-duration: 180ms;
@@ -424,11 +398,82 @@ dialog[open]::backdrop {
   display: none;
 }
 
+/* The sidebar's inline disclosure: the 工作区 panel and the 知识库 section both
+   use it. It is not a popover — it grows the sidebar's own flow, so the reveal
+   is the grid track (0fr → 1fr) and the content below travels to make room
+   instead of snapping down. Exit is shorter than enter and carries no stagger —
+   closing should read as one motion, opening as the groups arriving in order. */
+.sidebar-disclosure {
+  display: grid;
+  grid-template-rows: 0fr;
+  margin-top: 0;
+  opacity: 0;
+  pointer-events: none;
+  transition-property: grid-template-rows, margin-top, opacity;
+  transition-duration: 150ms;
+  transition-timing-function: var(--ease-out);
+}
+.sidebar-disclosure[data-open="true"] {
+  grid-template-rows: 1fr;
+  /* Replaces the parent's `gap-1`, which a zero-height item would still be
+     charged and leave 4px of dead space at rest. */
+  margin-top: 0.25rem;
+  opacity: 1;
+  pointer-events: auto;
+  transition-duration: 200ms;
+}
+/* min-height:0 is what lets the track reach zero; overflow:hidden both clips the
+   panel's border at 0 height and opts the item out of its automatic minimum. */
+.sidebar-disclosure > div {
+  min-height: 0;
+  overflow: hidden;
+}
+/* Folder children in the knowledge selector: same disclosure contract as the
+   sections above — the grid track grows and the rows below travel. The folder
+   chevron already rotates 200ms; without this the list teleports while it
+   turns. `inert` on the closed wrapper keeps hidden rows out of the tab order,
+   so no pointer-events hack is needed here. */
+.sidebar-folder-tree {
+  display: grid;
+  grid-template-rows: 0fr;
+  transition-property: grid-template-rows;
+  transition-duration: 200ms;
+  transition-timing-function: var(--ease-out);
+}
+.sidebar-folder-tree[data-open="true"] {
+  grid-template-rows: 1fr;
+}
+.sidebar-folder-tree > div {
+  min-height: 0;
+  overflow: hidden;
+}
+.workspace-section {
+  opacity: 0;
+  translate: 0 4px;
+  transition-property: opacity, translate;
+  transition-duration: 150ms;
+  transition-timing-function: var(--ease-out);
+}
+.sidebar-disclosure[data-open="true"] .workspace-section {
+  opacity: 1;
+  translate: 0 0;
+  transition-duration: 180ms;
+  /* Cascade by DOM position rather than an inline index: the scope gates drop
+     whole sections, so nth-child always counts what actually rendered. */
+  transition-delay: 40ms;
+}
+.sidebar-disclosure[data-open="true"] .workspace-section:nth-child(2) {
+  transition-delay: 80ms;
+}
+.sidebar-disclosure[data-open="true"] .workspace-section:nth-child(3) {
+  transition-delay: 120ms;
+}
+
 @media (max-width: 767px) {
   .sidebar-shell,
   .sidebar-shell[data-collapsed="true"] {
-    width: min(84vw, 280px);
-    min-width: min(84vw, 280px);
+    width: 100%;
+    min-width: 0;
     padding-inline: 0.75rem;
     transition-property: transform;
     transition-duration: 180ms;
@@ -465,6 +510,20 @@ dialog[open]::backdrop {
 .assistant-turn:has([data-stream-revealing="true"]) .assistant-actions {
   opacity: 0;
   pointer-events: none;
+}
+
+/* Hide the scrollbar, keep the scroll. A chat viewport's bar is 15px of chrome
+   that competes with the content and never tells the user anything they can't
+   see; `overflow-y: auto` still works, the wheel, the trackpad, keyboard and
+   the jump-to-bottom button all still scroll, and the bar reappears on the
+   platforms that draw overlay scrollbars anyway. Unlayered on purpose:
+   `::-webkit-scrollbar` is a pseudo-element, so no Tailwind utility competes
+   with it, and the two engine prefixes are the whole job. */
+.scrollbar-hidden {
+  scrollbar-width: none;
+}
+.scrollbar-hidden::-webkit-scrollbar {
+  display: none;
 }
 
 /* Markdown inside assistant bubbles — restrained prose sized to the bubble. */
@@ -509,7 +568,7 @@ dialog[open]::backdrop {
     @apply text-brand underline underline-offset-2;
   }
   .markdown-body blockquote {
-    @apply my-2 border-l-2 border-brand-line pl-3 text-muted;
+    @apply my-2 border-l-2 border-brand-line pl-3 text-muted-foreground;
   }
   .markdown-body code {
     @apply rounded bg-surface-subtle px-1 py-0.5 font-mono text-[0.85em] text-ink;
@@ -542,17 +601,12 @@ dialog[open]::backdrop {
     scroll-behavior: auto !important;
   }
 
-  .animate-message-in,
-  .animate-fade-in,
-  .animate-suggestion-in {
-    animation-duration: 1ms !important;
-    animation-timing-function: steps(1, end) !important;
-  }
-
-  /* Dialog open/close runs on a transition now — collapse it too. */
-  dialog,
-  dialog::backdrop {
-    transition-duration: 1ms !important;
+  /* Select dropdown panel: keep the fade, drop the scale travel. The scale
+     declaration stays away from any transform:none in the same block (minifier
+     folding trap, see MEMORY.md). */
+  [role="listbox"] {
+    transition-property: opacity !important;
+    scale: none !important;
   }
 
   .trace-panel {
@@ -561,15 +615,6 @@ dialog[open]::backdrop {
 
   .trace-panel[data-open="false"] {
     transform: none;
-  }
-
-  [role="group"][data-motion="feedback-reason"] {
-    transition-property: opacity !important;
-    transition-duration: 1ms !important;
-  }
-
-  span[role="group"][data-motion="feedback-reason"][inert] {
-    scale: none !important;
   }
 
   [data-attachment-chip] {
@@ -591,6 +636,14 @@ dialog[open]::backdrop {
 
   span[data-trace-status] {
     scale: none !important;
+  }
+
+  /* tw-animate-css ships no reduced-motion handling of its own, so the
+     accordion keyframes would animate height under reduce. Collapse the
+     duration; the open/closed result still applies. */
+  [data-slot="trace-collapsible-content"],
+  [data-slot="collapsible-content"] {
+    animation-duration: 1ms !important;
   }
 
   /* Toast: keep the fade, drop the slide. */
@@ -631,6 +684,13 @@ dialog[open]::backdrop {
     filter: none !important;
     opacity: 1 !important;
   }
+  /* Freeze the running arc into a closed ring rather than deleting it: it is the
+     only thing that separates a running step from a completed one, and reduced
+     motion must cost the user information. */
+  .t-trace-spin {
+    animation: none !important;
+    border-color: var(--color-primary) !important;
+  }
   /* A blinking caret is motion, not feedback — freeze it lit rather than
      hiding it, since it is the only running indicator left. */
   .t-caret {
@@ -665,6 +725,19 @@ dialog[open]::backdrop {
   .sidebar-shell[data-collapsed="true"] .sidebar-module {
     transform: none !important;
   }
+  /* The disclosure keeps its show/hide (opacity still flips) but stops growing:
+     the height track and the 4px rise are both movement. */
+  .sidebar-disclosure,
+  .sidebar-disclosure[data-open="true"],
+  .sidebar-folder-tree,
+  .sidebar-folder-tree[data-open="true"],
+  .workspace-section {
+    transition-duration: 1ms !important;
+    transition-delay: 0ms !important;
+  }
+  .workspace-section {
+    translate: none !important;
+  }
   .sidebar-search-field {
     scale: none !important;
   }
@@ -673,7 +746,215 @@ dialog[open]::backdrop {
      invisible. */
   .t-shimmer-label {
     animation: none !important;
-    color: var(--color-muted) !important;
-    -webkit-text-fill-color: var(--color-muted) !important;
+    color: var(--muted-foreground) !important;
+    -webkit-text-fill-color: var(--muted-foreground) !important;
+  }
+}
+
+@theme inline {
+  --font-heading: var(--font-sans);
+  --font-sans:
+    "Geist Variable", ui-sans-serif, system-ui, -apple-system, "Segoe UI",
+    "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+  --color-sidebar-ring: var(--sidebar-ring);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar: var(--sidebar);
+  --color-chart-5: var(--chart-5);
+  --color-chart-4: var(--chart-4);
+  --color-chart-3: var(--chart-3);
+  --color-chart-2: var(--chart-2);
+  --color-chart-1: var(--chart-1);
+  --color-ring: var(--ring);
+  --color-input: var(--input);
+  --color-border: var(--border);
+  --color-destructive: var(--destructive);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-accent: var(--accent);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-secondary: var(--secondary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-primary: var(--primary);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-popover: var(--popover);
+  --color-card-foreground: var(--card-foreground);
+  --color-card: var(--card);
+  --color-foreground: var(--foreground);
+  --color-background: var(--background);
+  --radius-sm: calc(var(--radius) * 0.6);
+  --radius-md: calc(var(--radius) * 0.8);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) * 1.4);
+  --radius-2xl: calc(var(--radius) * 1.8);
+  --radius-3xl: calc(var(--radius) * 2.2);
+  --radius-4xl: calc(var(--radius) * 2.6);
+}
+
+:root {
+  --destructive: oklch(0.577 0.245 27.325);
+  --chart-1: oklch(0.87 0 0);
+  --chart-2: oklch(0.556 0 0);
+  --chart-3: oklch(0.439 0 0);
+  --chart-4: oklch(0.371 0 0);
+  --chart-5: oklch(0.269 0 0);
+  --radius: 0.625rem;
+}
+
+.dark {
+  --destructive: oklch(0.704 0.191 22.216);
+  --chart-1: oklch(0.87 0 0);
+  --chart-2: oklch(0.556 0 0);
+  --chart-3: oklch(0.439 0 0);
+  --chart-4: oklch(0.371 0 0);
+  --chart-5: oklch(0.269 0 0);
+}
+
+/* Shared motion: Radix owns presence/focus; CSS only presents the state. */
+:root {
+  --motion-panel: 250ms;
+  --motion-feedback: 120ms;
+  --motion-toast: 200ms;
+  --motion-reduced: 100ms;
+}
+
+:is([data-slot="dialog-overlay"], [data-slot="sheet-overlay"])[data-state="open"] {
+  animation: surface-fade-in var(--motion-panel) var(--ease-out) both;
+}
+:is([data-slot="dialog-overlay"], [data-slot="sheet-overlay"])[data-state="closed"] {
+  animation: surface-fade-out var(--motion-panel) var(--ease-out) both;
+}
+[data-slot="dialog-content"][data-state="open"] {
+  animation: surface-in var(--motion-panel) var(--ease-out) both;
+}
+[data-slot="dialog-content"][data-state="closed"] {
+  animation: surface-out var(--motion-panel) var(--ease-out) both;
+}
+[data-motion-surface="sheet"][data-side="left"] {
+  --sheet-edge: translateX(-100%);
+}
+[data-motion-surface="sheet"][data-side="right"] {
+  --sheet-edge: translateX(100%);
+}
+[data-motion-surface="sheet"][data-side="top"] {
+  --sheet-edge: translateY(-100%);
+}
+[data-motion-surface="sheet"][data-side="bottom"] {
+  --sheet-edge: translateY(100%);
+}
+[data-motion-surface="sheet"][data-state="open"] {
+  animation: sheet-in var(--motion-panel) var(--ease-drawer) both;
+}
+[data-motion-surface="sheet"][data-state="closed"] {
+  animation: sheet-out var(--motion-panel) var(--ease-drawer) both;
+}
+@keyframes surface-in {
+  from { opacity: 0; transform: scale(0.96); }
+  to { opacity: 1; transform: scale(1); }
+}
+@keyframes surface-out {
+  from { opacity: 1; transform: scale(1); }
+  to { opacity: 0; transform: scale(0.96); }
+}
+@keyframes surface-fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+@keyframes surface-fade-out {
+  from { opacity: 1; }
+  to { opacity: 0; }
+}
+@keyframes sheet-in {
+  from { transform: var(--sheet-edge); }
+  to { transform: translate(0); }
+}
+@keyframes sheet-out {
+  from { transform: translate(0); }
+  to { transform: var(--sheet-edge); }
+}
+
+[data-slot="copy-feedback"] {
+  display: inline-grid;
+  width: 1rem;
+  height: 1rem;
+}
+[data-copy-glyph] {
+  grid-area: 1 / 1;
+  transition: opacity var(--motion-feedback) var(--ease-out);
+}
+[data-copy-glyph="check"],
+[data-copied="true"] > [data-copy-glyph="copy"] {
+  opacity: 0;
+}
+[data-copied="true"] > [data-copy-glyph="check"] {
+  opacity: 1;
+}
+
+/* Sonner's state rules have differing specificity; retain its transform values
+   and gesture math, overriding only the presentation timing/properties. */
+[data-sonner-toaster] {
+  transition: transform var(--motion-toast) var(--ease-out);
+}
+[data-sonner-toaster] [data-sonner-toast].cn-toast {
+  transition-property: transform, opacity !important;
+  transition-duration: var(--motion-toast) !important;
+  transition-timing-function: var(--ease-out) !important;
+  animation-duration: var(--motion-toast) !important;
+  animation-timing-function: var(--ease-out) !important;
+}
+[data-sonner-toaster] .cn-toast > :not([data-close-button]) {
+  transition: opacity var(--motion-toast) var(--ease-out) !important;
+}
+[data-sonner-toaster] [data-sonner-toast].cn-toast[data-swiping="true"] {
+  transition: none !important;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :is([data-slot="dialog-content"], [data-motion-surface="sheet"])[data-state="open"] {
+    animation-name: surface-fade-in;
+  }
+  :is([data-slot="dialog-content"], [data-motion-surface="sheet"])[data-state="closed"] {
+    animation-name: surface-fade-out;
+  }
+  :is([data-slot="dialog-content"], [data-motion-surface="sheet"], [data-slot="dialog-overlay"], [data-slot="sheet-overlay"])[data-state] {
+    animation-duration: var(--motion-reduced);
+  }
+  [data-copy-glyph] {
+    transition-duration: var(--motion-reduced);
+  }
+  [data-sonner-toaster],
+  [data-sonner-toaster] [data-sonner-toast].cn-toast,
+  [data-sonner-toaster] .cn-toast > :not([data-close-button]) {
+    transition-property: opacity !important;
+    transition-duration: var(--motion-reduced) !important;
+    animation: none !important;
+  }
+}
+
+/* A keyboard action never waits for decorative motion, including Escape while
+   an entrance is playing. Do not suppress focus or change any input events. */
+html:not([data-motion-input="pointer"]) :is(
+  [data-slot="dialog-content"], [data-slot="dialog-overlay"],
+  [data-motion-surface="sheet"], [data-slot="sheet-overlay"],
+  [data-slot="tooltip-content"], [data-slot="popover-content"],
+  [data-slot="dropdown-menu-content"], [data-slot="select-content"],
+  [data-copy-glyph], [data-sonner-toaster], [data-sonner-toast].cn-toast,
+  [data-sonner-toast].cn-toast > *,
+  .trace-panel
+) {
+  animation: none !important;
+  transition: none !important;
+}
+/* The same semantic palette serves the application and generated components. */
+@layer base {
+  button:not(:disabled),
+  [role="button"]:not([aria-disabled="true"]) {
+    cursor: pointer;
   }
 }

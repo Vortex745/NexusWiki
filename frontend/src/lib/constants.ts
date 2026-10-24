@@ -1,4 +1,5 @@
 import type { TraceEvent } from "@core/conversation"
+import { answerProcessEventLabel } from "../../../src/frontend/answer_process"
 
 export const MAX_ATTACHMENT_BYTES = 128 * 1024
 export const MAX_ATTACHMENTS = 4
@@ -20,6 +21,7 @@ export const TRACE_STATUS_LABELS: Record<string, string> = {
   invalid_citation: "引用无效",
   provider_error: "运行失败",
   cancelled: "已取消",
+  handoff_required: "已转人工",
 }
 
 /** Starter prompts on the empty thread, in the composer's own voice. */
@@ -78,8 +80,7 @@ export const IMPORT_FORMAT_GROUPS = [
 export const IMPORT_PARSER_OPTIONS = [
   { value: "", label: "默认（自动路由）" },
   { value: "markitdown", label: "markitdown" },
-  { value: "marker", label: "marker（扫描件）" },
-  { value: "mineru", label: "mineru（扫描件）" },
+  { value: "ocr-api", label: "OCR API（扫描件与复杂 PDF）" },
   { value: "builtin-pdf", label: "builtin-pdf" },
 ] as const
 
@@ -118,30 +119,8 @@ export function traceStatusLabel(status?: string): string {
 
 /** Human-readable one-liner for a projected trace event, per stage. */
 export function traceEventLabel(event: TraceEvent): string {
-  const data = event.data ?? {}
-  if (event.stage === "route") {
-    // The route event is emitted as `running` before any decision exists, so an
-    // absent decision must not be read as "direct" — that invented a confident
-    // route label for a question the router had not classified yet.
-    if (data.decision === "complex") return "识别为复杂问题"
-    if (data.decision === "ambiguous") return "需要补充问题信息"
-    if (data.decision === "simple") return "识别为知识问答"
-    if (data.decision === "direct") return "识别为直接问答"
-    return "分析问题…"
-  }
-  if (event.stage === "retrieval") {
-    const prefix = data.correction ? "补充检索" : "检索知识库"
-    const count = Number.isInteger(data.resultCount) ? ` · ${data.resultCount} 条结果` : ""
-    const degraded =
-      Array.isArray(data.degradedReasons) && data.degradedReasons.length
-        ? ` · ${data.degradedReasons.length} 个通道降级`
-        : ""
-    return `${prefix}${count}${degraded}`
-  }
-  if (event.stage === "context") return `整理 ${data.evidenceCount || 0} 条证据`
-  if (event.stage === "validation") return data.passed ? "证据校验通过" : "检查证据缺口"
   if (event.stage === "done") return traceStatusLabel(event.result?.status)
-  return "处理回答"
+  return answerProcessEventLabel(event)
 }
 
 export function formatBytes(bytes: number): string {

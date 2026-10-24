@@ -1,3 +1,29 @@
+import { Message } from "../primitives/message"
+import { Bubble, BubbleContent } from "../primitives/bubble"
+import {
+  MessageScrollerProvider,
+  MessageScroller,
+  MessageScrollerViewport,
+  MessageScrollerContent,
+  MessageScrollerItem,
+  MessageScrollerButton,
+} from "../primitives/message-scroller"
+import {
+  InputGroup,
+  InputGroupTextarea,
+  InputGroupAddon,
+} from "../primitives/input-group"
+import {
+  Attachment as AttachmentSurface,
+  AttachmentContent,
+  AttachmentTitle,
+  AttachmentDescription,
+  AttachmentActions,
+} from "../primitives/attachment"
+import { Badge } from "../primitives/badge"
+import { Popover, PopoverTrigger, PopoverContent } from "../primitives/popover"
+import { useEvidence } from "./EvidenceContext"
+import { Button as UiButton } from "@/components/primitives/button"
 import {
   ActionBarPrimitive,
   ComposerPrimitive,
@@ -7,14 +33,11 @@ import {
   useAuiState,
 } from "@assistant-ui/react"
 import type { Reference, TraceEvent } from "@core/conversation"
-import { Cascade } from "loading-dev"
 import {
-  ArrowDown,
   BarChart3,
   Brain,
   Check,
   Copy,
-  Paperclip,
   Pencil,
   RefreshCw,
   SendHorizontal,
@@ -22,10 +45,10 @@ import {
   ThumbsDown,
   ThumbsUp,
   X,
-} from "lucide"
-import { useMemo, useRef, useState, useSyncExternalStore, type CSSProperties } from "react"
+} from "../ui/icons"
+import { createContext, useContext, useState, type CSSProperties } from "react"
 
-import { conversationStore } from "../../conversation/useConversation"
+import { useConversation } from "../../conversation/useConversation"
 import { cn } from "../../lib/cn"
 import {
   FEEDBACK_REASON_CODES,
@@ -33,15 +56,14 @@ import {
   type FeedbackRating,
   type FeedbackReasonCode,
 } from "../../lib/api"
-import { INSIGHT_PATH_STEPS, SUGGESTIONS, traceEventLabel } from "../../lib/constants"
+import { SUGGESTIONS } from "../../lib/constants"
 import { useAppShell } from "../../runtime/AppShellContext"
 import { useMemoryApi } from "../../runtime/MemoryContext"
-import { Icon } from "../ui/Icon"
+import { Icon, SwapIcon } from "../ui/Icon"
 import { TooltipIconButton } from "../ui/TooltipIconButton"
-import { ReasonStream, ShimmerText } from "../ui/transitions"
 import { BranchPicker } from "./BranchPicker"
+import { AnswerProcess } from "./AnswerProcess"
 import { MarkdownText } from "./MarkdownText"
-import { ReferencesPanel, useReferenceHighlight } from "./References"
 import { useStreamReveal } from "./useStreamReveal"
 
 /** Business payload assistant-ui carries through untouched (see convertMessage). */
@@ -52,8 +74,6 @@ interface MessageCustom {
   runId?: string | null
   /** Ticket 31 (FAQ-01B): the direct standard-answer hit, if any. */
   faq?: { entryId: string; version: number; question: string } | null
-  /** Ticket 33 (MEM-01B): the informational memory trace, if any. */
-  memoryUsed?: { ids: string[]; count: number } | null
 }
 
 export interface Attachment {
@@ -71,40 +91,53 @@ export interface Attachment {
 
 export interface ThreadAttachmentsProps {
   attachments: Attachment[]
-  onAdd: (files: File[]) => void
-  onRemove: (id: string) => void
+  onRemove: (id: string) => void | Promise<void>
   /** Ticket 22: promote a ready attachment into the selected knowledge base. */
   onPromote?: (id: string) => void
 }
 
 // ---------------------------------------------------------------------------
-// Thread root — mem0 layout: 42rem column, scroll viewport, sticky pill dock.
+// Thread root — shadcn owns scrolling; assistant-ui owns the conversation.
 // ---------------------------------------------------------------------------
 
-export function Thread({ attachmentsProps }: { attachmentsProps: ThreadAttachmentsProps }) {
+export function Thread({
+  attachmentsProps,
+}: {
+  attachmentsProps: ThreadAttachmentsProps
+}) {
+  const { activeThreadId } = useConversation()
   return (
     <ThreadPrimitive.Root
-      className="box-border flex h-full min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-canvas"
-      style={{ "--thread-max-width": "42rem" } as CSSProperties}
+      className="flex h-full min-h-0 min-w-0 flex-1 flex-col"
+      style={{ "--thread-max-width": "48rem" } as CSSProperties}
     >
-      <ThreadPrimitive.Viewport className="flex min-h-0 flex-1 flex-col items-center overflow-y-auto scroll-smooth px-4 pt-8">
-        <ThreadWelcome />
-        <ThreadPrimitive.Messages
-          components={{ UserMessage, EditComposer, AssistantMessage }}
-        />
+      <MessageScrollerProvider
+        key={activeThreadId}
+        autoScroll
+        defaultScrollPosition="end"
+      >
+        <MessageScroller>
+          <MessageScrollerViewport>
+            <MessageScrollerContent className="mx-auto w-full max-w-[var(--thread-max-width)] px-5 py-8 md:px-8">
+              <MessageScrollerItem messageId="welcome">
+                <ThreadWelcome />
+              </MessageScrollerItem>
+              <ThreadPrimitive.Messages
+                components={{ UserMessage, EditComposer, AssistantMessage }}
+              />
+            </MessageScrollerContent>
+          </MessageScrollerViewport>
+          <MessageScrollerButton aria-label="回到底部" />
+        </MessageScroller>
+      </MessageScrollerProvider>
+      <div className="mx-auto flex w-full max-w-[var(--thread-max-width)] flex-col gap-2 px-4 pb-4 md:px-8">
+        <AttachmentChips {...attachmentsProps} />
+        <Composer />
         <ThreadPrimitive.If empty={false}>
-          <div className="min-h-8 flex-grow" />
+          <p className="text-center text-xs text-muted-foreground">
+            回答由知识库检索生成，请核对关键信息
+          </p>
         </ThreadPrimitive.If>
-      </ThreadPrimitive.Viewport>
-
-      <div className="relative mx-auto flex w-full max-w-[var(--thread-max-width)] flex-col items-center justify-end px-4 pb-4">
-        <ThreadScrollToBottom />
-        <AttachmentChips
-          attachments={attachmentsProps.attachments}
-          onRemove={attachmentsProps.onRemove}
-          {...(attachmentsProps.onPromote ? { onPromote: attachmentsProps.onPromote } : {})}
-        />
-        <Composer attachmentsProps={attachmentsProps} />
       </div>
     </ThreadPrimitive.Root>
   )
@@ -123,59 +156,54 @@ function AttachmentChips({
   attachments,
   onRemove,
   onPromote,
-}: {
-  attachments: Attachment[]
-  onRemove: (id: string) => void
-  onPromote?: (id: string) => void
-}) {
-  if (attachments.length === 0) return null
+}: ThreadAttachmentsProps) {
+  if (!attachments.length) return null
   return (
-    <div className="mb-1.5 flex w-full gap-1.5 overflow-x-auto px-1" aria-live="polite">
+    <div className="flex w-full gap-2 overflow-x-auto" aria-live="polite">
       {attachments.map((attachment) => {
         const status = attachment.status ?? "ready"
-        const promotable = status === "ready" && onPromote !== undefined
         return (
-          <div
+          <AttachmentSurface
             key={attachment.id}
-            className="flex min-w-0 max-w-72 flex-none animate-fade-in items-center gap-1.5 rounded-lg border border-line bg-surface py-1 pl-2.5 pr-1.5 text-xs text-muted shadow-card"
+            size="sm"
+            state={
+              status === "parsing"
+                ? "processing"
+                : status === "failed"
+                  ? "error"
+                  : "done"
+            }
+            data-attachment-chip
           >
-            <span
-              className="overflow-hidden text-ellipsis whitespace-nowrap"
-              title={attachment.name}
-            >
-              {attachment.name}
-            </span>
-            <span
-              className={`flex-none rounded px-1 text-[10px] ${
-                status === "failed"
-                  ? "bg-danger/10 text-danger"
-                  : status === "promoted"
-                    ? "bg-surface-subtle text-ink"
-                    : "bg-surface-subtle text-muted"
-              }`}
-              title={attachment.error ?? ATTACHMENT_STATUS_LABEL[status] ?? status}
-            >
-              {ATTACHMENT_STATUS_LABEL[status] ?? status}
-            </span>
-            {promotable ? (
-              <button
-                type="button"
-                onClick={() => onPromote(attachment.id)}
-                aria-label={`提升附件到知识库：${attachment.name}`}
-                className="flex-none cursor-pointer rounded-md px-1 text-[10px] text-muted/80 transition-colors hover:bg-surface-subtle hover:text-ink"
+            <AttachmentContent>
+              <AttachmentTitle title={attachment.name}>
+                {attachment.name}
+              </AttachmentTitle>
+              <AttachmentDescription title={attachment.error ?? undefined}>
+                {ATTACHMENT_STATUS_LABEL[status] ?? status}
+              </AttachmentDescription>
+            </AttachmentContent>
+            <AttachmentActions>
+              {status === "ready" && onPromote ? (
+                <UiButton
+                  variant="ghost"
+                  size="xs"
+                  aria-label={"提升附件到知识库：" + attachment.name}
+                  onClick={() => onPromote(attachment.id)}
+                >
+                  提升
+                </UiButton>
+              ) : null}
+              <UiButton
+                variant="ghost"
+                size="icon-xs"
+                aria-label={"移除附件：" + attachment.name}
+                onClick={() => void onRemove(attachment.id)}
               >
-                提升
-              </button>
-            ) : null}
-            <button
-              type="button"
-              onClick={() => onRemove(attachment.id)}
-              aria-label={`移除附件：${attachment.name}`}
-              className="grid size-5 flex-none cursor-pointer place-items-center rounded-md text-muted/70 transition-colors hover:bg-surface-subtle hover:text-ink"
-            >
-              <Icon icon={X} className="size-3" />
-            </button>
-          </div>
+                <Icon data-icon="inline-start" icon={X} />
+              </UiButton>
+            </AttachmentActions>
+          </AttachmentSurface>
         )
       })}
     </div>
@@ -189,32 +217,32 @@ function AttachmentChips({
 function ThreadWelcome() {
   const { openMemory } = useAppShell()
   const { memories } = useMemoryApi()
-
   return (
     <ThreadPrimitive.Empty>
-      <div className="flex w-full flex-1 flex-col items-center justify-center">
-        <div className="flex w-full max-w-[var(--thread-max-width)] flex-col items-center text-center">
-          <h1 className="text-center text-[2rem] font-bold leading-[1] tracking-[-0.02em] text-ink md:text-4xl">
-            NexusRAG · 企业知识智能助手
+      <div className="flex min-h-[42dvh] flex-col justify-center gap-6 py-6">
+        <div className="flex flex-col gap-3">
+          <Badge variant="outline" className="w-fit">
+            NexusWiki · 知识工作区
+          </Badge>
+          <h1 className="text-3xl font-semibold tracking-tight md:text-4xl">
+            从一个问题开始。
           </h1>
-          <p className="mt-2 w-5/6 text-center text-base text-muted md:w-3/4">
-            基于长期记忆与知识库多路检索，为您记住偏好、背景与历史事实
+          <p className="max-w-lg text-sm leading-7 text-muted-foreground">
+            连接知识库与上下文记忆，让每个回答都有据可循。
           </p>
-
-          <button
-            type="button"
-            onClick={openMemory}
-            className="mt-2.5 inline-flex items-center gap-1.5 rounded-full border border-brand-line bg-brand-subtle px-3 py-0.5 text-xs font-medium text-brand shadow-card transition-colors hover:bg-brand/10"
-          >
-            <Icon icon={Brain} className="size-3" />
-            {memories.length > 0 ? `已加载 ${memories.length} 条上下文记忆` : "暂无上下文记忆"}
-          </button>
-
-          <div className="mt-10 flex w-full flex-col items-center">
-            <p className="text-sm font-medium text-ink">今天有什么可以帮您的？</p>
-            <ThreadWelcomeSuggestions />
-          </div>
         </div>
+        <UiButton
+          variant="ghost"
+          size="sm"
+          className="w-fit"
+          onClick={openMemory}
+        >
+          <Icon icon={Brain} data-icon="inline-start" />
+          {memories.length > 0
+            ? "已加载 " + memories.length + " 条上下文记忆"
+            : "管理上下文记忆"}
+        </UiButton>
+        <ThreadWelcomeSuggestions />
       </div>
     </ThreadPrimitive.Empty>
   )
@@ -222,18 +250,20 @@ function ThreadWelcome() {
 
 function ThreadWelcomeSuggestions() {
   return (
-    <div className="mt-3 flex w-full flex-col items-center gap-3 md:flex-row md:items-stretch md:justify-center">
-      {SUGGESTIONS.map((suggestion, index) => (
+    <div className="grid gap-3 sm:grid-cols-2">
+      {SUGGESTIONS.map((suggestion) => (
         <ThreadPrimitive.Suggestion
           key={suggestion.prompt}
-          className="flex w-full grow basis-0 flex-col items-center justify-center rounded-[2rem] border border-line bg-surface p-3 transition-[color,background-color,border-color,transform,translate,scale] ease-out hover:bg-brand-subtle active:scale-[0.97] md:max-w-sm animate-suggestion-in"
-          style={{ animationDelay: `${index * 45}ms` }}
           prompt={suggestion.prompt}
           method="replace"
+          asChild
         >
-          <span className="line-clamp-2 text-ellipsis text-sm font-semibold">
+          <UiButton
+            variant="outline"
+            className="h-auto min-h-16 justify-start whitespace-normal px-4 py-3 text-left"
+          >
             {suggestion.label}
-          </span>
+          </UiButton>
         </ThreadPrimitive.Suggestion>
       ))}
     </div>
@@ -244,43 +274,34 @@ function ThreadWelcomeSuggestions() {
 // Composer
 // ---------------------------------------------------------------------------
 
-function Composer({ attachmentsProps }: { attachmentsProps: ThreadAttachmentsProps }) {
-  const fileInputRef = useRef<HTMLInputElement>(null)
-
+function Composer() {
   return (
-    <ComposerPrimitive.Root className="flex w-full flex-wrap items-end rounded-full border border-line bg-surface px-2.5 shadow-composer transition-colors ease-out focus-within:border-brand/20">
-      <TooltipIconButton
-        tooltip="添加文本附件"
-        className="mb-2.5 size-8"
-        onClick={() => fileInputRef.current?.click()}
-      >
-        <Icon icon={Paperclip} className="size-4" />
-      </TooltipIconButton>
-      <input
-        ref={fileInputRef}
-        type="file"
-        accept=".txt,.md,.json,text/plain,application/json"
-        multiple
-        hidden
-        onChange={(event) => {
-          if (event.target.files) attachmentsProps.onAdd(Array.from(event.target.files))
-          event.target.value = ""
-        }}
-      />
-      <ComposerPrimitive.Input
-        rows={1}
-        autoFocus
-        placeholder="输入消息，向 NexusRAG 提问…"
-        className="max-h-40 flex-grow resize-none border-none bg-transparent px-2 py-4 text-sm text-ink outline-none placeholder:text-muted/60 focus:ring-0 disabled:cursor-not-allowed"
-      />
-      <ComposerAction />
+    <ComposerPrimitive.Root>
+      <InputGroup data-material="composer">
+        <ComposerPrimitive.Input asChild>
+          <InputGroupTextarea
+            rows={1}
+            autoFocus
+            aria-label="消息"
+            placeholder="输入消息，向 NexusWiki 提问…"
+            className="max-h-40 min-h-8 resize-none py-1.5"
+          />
+        </ComposerPrimitive.Input>
+        <InputGroupAddon align="inline-end" className="self-end pr-1.5">
+          <ComposerAction />
+        </InputGroupAddon>
+      </InputGroup>
     </ComposerPrimitive.Root>
   )
 }
 
 /**
- * One button drives both states so the icon morphs between send and stop
+ * One button drives both states so the send/stop glyph springs between them
  * instead of swapping elements.
+ *
+ * `opacity` has to be in the transition list: the enabled/disabled swap moves
+ * the whole button between 0.3 and 1, and a list that only names colors and
+ * transforms snaps it instead.
  */
 function ComposerAction() {
   const aui = useAui()
@@ -288,7 +309,9 @@ function ComposerAction() {
   const canSend = useAuiState((s) => s.composer.canSend)
 
   return (
-    <button
+    <UiButton
+      variant="default"
+      size="icon-sm"
       type="button"
       disabled={!isRunning && !canSend}
       onClick={() => {
@@ -298,27 +321,19 @@ function ComposerAction() {
       aria-label={isRunning ? "停止生成" : "发送消息"}
       title={isRunning ? "停止生成" : "发送消息"}
       className={cn(
-        "my-2.5 grid size-8 flex-none cursor-pointer place-items-center rounded-full",
-        "bg-brand text-white transition-[color,background-color,border-color,transform,translate,scale] duration-150 ease-out hover:bg-brand-hover active:scale-[0.97]",
-        "disabled:cursor-not-allowed disabled:opacity-30 disabled:hover:bg-brand",
-        "focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand",
+        "grid size-8 flex-none place-items-center",
+        "active:scale-[0.97]",
+        "disabled:opacity-30",
+        "",
       )}
     >
-      <Icon icon={isRunning ? Square : SendHorizontal} className="size-4" />
-    </button>
-  )
-}
-
-function ThreadScrollToBottom() {
-  return (
-    <ThreadPrimitive.ScrollToBottom asChild>
-      <TooltipIconButton
-        tooltip="回到底部"
-        className="absolute -top-8 rounded-full border border-line bg-surface shadow-card transition-[opacity,background-color,translate,scale] duration-150 ease-out hover:bg-brand-subtle disabled:pointer-events-none disabled:scale-90 disabled:opacity-0"
-      >
-        <Icon icon={ArrowDown} className="size-4" />
-      </TooltipIconButton>
-    </ThreadPrimitive.ScrollToBottom>
+      <SwapIcon
+        data-icon="inline-start"
+        from={SendHorizontal}
+        to={Square}
+        at={isRunning}
+      />
+    </UiButton>
   )
 }
 
@@ -330,52 +345,71 @@ function UserText({ text }: { text: string }) {
   return <p className="whitespace-pre-wrap">{text}</p>
 }
 
+const USER_PARTS = { Text: UserText }
+
 function UserMessage() {
+  const id = useAuiState((s) => s.message.id)
   return (
-    <MessagePrimitive.Root className="grid w-full max-w-[var(--thread-max-width)] auto-rows-auto grid-cols-[minmax(72px,1fr)_auto] gap-y-2 py-4 [&:where(>*)]:col-start-2">
-      <ActionBarPrimitive.Root
-        hideWhenRunning
-        autohide="not-last"
-        className="col-start-1 row-start-2 mr-3 mt-2.5 flex flex-col items-end"
-      >
-        <ActionBarPrimitive.Edit asChild>
-          <TooltipIconButton tooltip="编辑" className="size-6">
-            <Icon icon={Pencil} className="size-3.5" />
-          </TooltipIconButton>
-        </ActionBarPrimitive.Edit>
-      </ActionBarPrimitive.Root>
+    <MessageScrollerItem messageId={id} scrollAnchor>
+      <MessagePrimitive.Root asChild>
+        <Message align="end" className="flex-col items-end gap-2">
+          <ActionBarPrimitive.Root
+            hideWhenRunning
+            autohide="not-last"
+            className="col-start-1 row-start-2 mr-3 mt-2.5 flex flex-col items-end"
+          >
+            <ActionBarPrimitive.Edit asChild>
+              <TooltipIconButton tooltip="编辑" className="size-6">
+                <Icon data-icon="inline-start" icon={Pencil} />
+              </TooltipIconButton>
+            </ActionBarPrimitive.Edit>
+          </ActionBarPrimitive.Root>
 
-      {/* No send animation by design: Enter-to-send is the app's highest-
-          frequency keyboard action — the bubble appears instantly. */}
-      <div className="col-start-2 row-start-2 max-w-[calc(var(--thread-max-width)*0.8)] break-words rounded-3xl bg-brand px-5 py-2.5 text-sm text-white">
-        <MessagePrimitive.Parts components={{ Text: UserText }} />
-      </div>
+          {/* User messages render immediately after sending. */}
+          <Bubble variant="secondary" align="end">
+            <BubbleContent>
+              <MessagePrimitive.Parts components={USER_PARTS} />
+            </BubbleContent>
+          </Bubble>
 
-      <BranchPicker className="col-span-full col-start-1 row-start-3 -mr-1 justify-end" />
-    </MessagePrimitive.Root>
+          <BranchPicker className="col-span-full col-start-1 row-start-3 -mr-1 justify-end" />
+        </Message>
+      </MessagePrimitive.Root>
+    </MessageScrollerItem>
   )
 }
 
 function EditComposer() {
   return (
-    <ComposerPrimitive.Root className="my-4 flex w-full max-w-[var(--thread-max-width)] flex-col gap-2 rounded-xl bg-brand-subtle">
-      <ComposerPrimitive.Input className="flex h-8 w-full resize-none bg-transparent p-4 pb-0 text-ink outline-none" />
+    <ComposerPrimitive.Root className="my-4 flex w-full max-w-[var(--thread-max-width)] flex-col gap-2">
+      <InputGroup data-material="composer-edit">
+        <ComposerPrimitive.Input asChild>
+          <InputGroupTextarea
+            aria-label="编辑消息"
+            className="min-h-20 resize-none"
+          />
+        </ComposerPrimitive.Input>
+      </InputGroup>
       <div className="mx-3 mb-3 flex items-center justify-center gap-2 self-end">
         <ComposerPrimitive.Cancel asChild>
-          <button
+          <UiButton
+            variant="ghost"
+            size="sm"
             type="button"
-            className="h-8 cursor-pointer rounded-[2rem] px-3 text-xs text-muted transition-colors hover:bg-surface/80"
+            className="h-8 px-3"
           >
             取消
-          </button>
+          </UiButton>
         </ComposerPrimitive.Cancel>
         <ComposerPrimitive.Send asChild>
-          <button
+          <UiButton
+            variant="default"
+            size="sm"
             type="button"
-            className="h-8 cursor-pointer rounded-[2rem] bg-brand px-4 text-xs font-medium text-white transition-colors hover:bg-brand-hover"
+            className="h-8 px-4"
           >
             发送
-          </button>
+          </UiButton>
         </ComposerPrimitive.Send>
       </div>
     </ComposerPrimitive.Root>
@@ -386,100 +420,95 @@ function EditComposer() {
 // Assistant turn
 // ---------------------------------------------------------------------------
 
-/** Projected trace events → one line per stage, in answer-path order. */
-function thinkingLines(events: readonly TraceEvent[] | undefined): string[] {
-  if (!events?.length) return []
-  const projected: TraceEvent[] = []
-  const indexes = new Map<string, number>()
-  const normalized = [...events]
-    .filter((event) => event.type !== "answer_delta")
-    .sort((left, right) => left.sequence - right.sequence)
-  normalized.forEach((event) => {
-    const key = `${event.stage}:${event.attempt || 1}:${event.round || 0}`
-    const existingIndex = indexes.get(key)
-    if (existingIndex === undefined) {
-      indexes.set(key, projected.length)
-      projected.push(event)
-    } else {
-      projected[existingIndex] = event
-    }
-  })
-  return INSIGHT_PATH_STEPS.map((step) => {
-    const event = [...projected].reverse().find((item) => item.stage === step.stage)
-    if (!event) return null
-    const marker = event.status === "running" ? "●" : event.status === "failed" || event.status === "cancelled" ? "×" : "✓"
-    return `${marker} ${step.label} — ${traceEventLabel(event)}`
-  }).filter((line): line is string => line !== null)
-}
+/**
+ * Hands the per-message citation handler to the text part. It travels through
+ * context rather than props because the part component itself must stay a
+ * module constant — see ASSISTANT_PARTS.
+ */
+const CitationClickContext = createContext<
+  ((referenceId: string) => void) | null
+>(null)
 
-function ThinkingDots() {
-  // assistant-ui only re-renders Parts on content changes, so trace events
-  // (metadata-only updates) never reach this component through props. Reading
-  // the conversation store directly keeps the transcript live.
-  const snapshot = useSyncExternalStore(
-    conversationStore.subscribe,
-    conversationStore.getSnapshot,
-  )
-  const runningMessage = snapshot.messages.find(
-    (message) => message.id === snapshot.runningMessageId,
-  )
-  const lines = useMemo(
-    () => thinkingLines(runningMessage?.traceEvents),
-    [runningMessage?.traceEvents],
-  )
-  // The running stage's label; before the first event lands, a generic hold.
-  const running = [...lines].reverse().find((line) => line.startsWith("●"))
-  const label = running ? running.slice(2).split(" — ")[0] : "正在思考"
-  return (
-    <div className="flex flex-col gap-3 py-1" role="status" aria-label={label}>
-      <div className="flex h-5 items-center gap-3">
-        <Cascade size={20} duration={1200} />
-        <ShimmerText text={`${label}…`} />
-      </div>
-      {lines.length > 0 && <ReasonStream lines={lines} rows={4} />}
-    </div>
-  )
-}
+/** Whether this message's text should type in from nothing. See AssistantMessage. */
+const RevealIntentContext = createContext(false)
 
-function AssistantText({
-  text,
-  references,
-  onCitationClick,
-}: {
-  text: string
-  references: readonly Reference[]
-  onCitationClick?: (referenceId: string) => void
-}) {
+function AssistantText({ text }: { text: string }) {
   const isRunning = useAuiState((s) => s.message.status?.type === "running")
-  const revealed = useStreamReveal(text)
-  if (!text) return isRunning ? <ThinkingDots /> : null
+  const custom = useAuiState((s) => s.message.metadata?.custom) as
+    | MessageCustom
+    | undefined
+  const onCitationClick = useContext(CitationClickContext)
+  const revealed = useStreamReveal(text, useContext(RevealIntentContext))
   // Keep the per-word blur-in alive for as long as text is still being
   // revealed, not just while the run is open — the reveal outlives the stream
   // on the knowledge routes.
   const revealing = revealed.length < text.length
+  // AnswerProcess owns the waiting state even before a text part exists.
+  if (!text) return null
   return (
     <MarkdownText
       text={revealed}
-      references={references}
-      onCitationClick={onCitationClick}
+      references={custom?.references ?? []}
+      onCitationClick={onCitationClick ?? undefined}
       streaming={isRunning || revealing}
     />
   )
 }
 
+/**
+ * Module-level, shared by every assistant message and every render.
+ *
+ * `MessagePrimitive.Parts` renders `components.Text` as the element type
+ * directly, so a part component created inside a render is a *new type* on every
+ * SSE token: React discards the fiber, `useStreamReveal` re-initialises already
+ * caught up, and the answer lands as one block with no per-word blur-in. Anything
+ * a part needs beyond its own text must come from `useAuiState` or context.
+ */
+const ASSISTANT_PARTS = { Text: AssistantText }
+
+function CopyAction() {
+  const copied = useAuiState((state) => state.message.isCopied)
+  return (
+    <ActionBarPrimitive.Copy asChild>
+      <TooltipIconButton tooltip={copied ? "已复制" : "复制"} className="size-6">
+        <span data-slot="copy-feedback" data-copied={copied} aria-hidden>
+          <Icon data-icon="inline-start" data-copy-glyph="copy" icon={Copy} />
+          <Icon data-icon="inline-start" data-copy-glyph="check" icon={Check} />
+        </span>
+      </TooltipIconButton>
+    </ActionBarPrimitive.Copy>
+  )
+}
+
 function AssistantMessage() {
-  const { openInsight, showToast } = useAppShell()
+  const { openTrace, showToast } = useAppShell()
+  const openEvidence = useEvidence()
   const messageId = useAuiState((s) => s.message.id)
-  const custom = useAuiState((s) => s.message.metadata?.custom as MessageCustom | undefined)
+  const isRunning = useAuiState((s) => s.message.status?.type === "running")
+  const hasError = useAuiState((s) => s.message.status?.type === "incomplete")
+  // Frozen at this message's first render. A live run mounts here while it is
+  // still open and has no parts at all; history and a reload mount already
+  // complete. Deciding on the message instead of on the text part is what lets a
+  // withheld reply that lands in one frame still type itself out: by then the
+  // part mounts with the finished text in hand, and "already finished" is
+  // indistinguishable from "old".
+  const [revealFromZero] = useState(isRunning)
+  const custom = useAuiState(
+    (s) => s.message.metadata?.custom as MessageCustom | undefined,
+  )
   const references = custom?.references ?? []
-  const { detailsRef, highlightedId, focusReference } = useReferenceHighlight()
   // 票 29：反馈按钮只在有 run 的完成回答上出现；提交的是"这一条消息 + 这次运行"。
+  const showReference = (referenceId: string) =>
+    openEvidence({ messageId, referenceId })
   const runId = custom?.runId ?? null
   const [feedback, setFeedback] = useState<FeedbackRating | null>(null)
   const [reasonPickerOpen, setReasonPickerOpen] = useState(false)
   const [submittingFeedback, setSubmittingFeedback] = useState(false)
 
-  const submitFeedback = async (rating: FeedbackRating, reasonCode?: FeedbackReasonCode) => {
+  const submitFeedback = async (
+    rating: FeedbackRating,
+    reasonCode?: FeedbackReasonCode,
+  ) => {
     if (!runId || submittingFeedback) return
     setSubmittingFeedback(true)
     try {
@@ -498,124 +527,141 @@ function AssistantMessage() {
     }
   }
 
-  const parts = useMemo(
-    () => ({
-      Text: (props: { text: string }) => (
-        <AssistantText {...props} references={references} onCitationClick={focusReference} />
-      ),
-    }),
-    [references, focusReference],
-  )
-
   return (
-    <MessagePrimitive.Root className="relative grid w-full max-w-[var(--thread-max-width)] grid-cols-[auto_auto_1fr] grid-rows-[auto_1fr] py-4">
-      <div className="col-span-2 col-start-2 row-start-1 my-1.5 max-w-[calc(var(--thread-max-width)*0.8)] animate-message-in break-words rounded-3xl border border-line bg-surface px-5 py-2.5 leading-7 text-ink shadow-card">
-        <MessagePrimitive.Parts components={parts} />
-        {custom?.faq ? (
-          <div className="mt-2 flex items-center gap-1.5 text-[11px] text-muted">
-            <span
-              className="rounded bg-brand-subtle px-1.5 py-0.5 text-[10px] font-medium text-brand"
-              title={`命中知识库标准问答：${custom.faq.question}`}
-            >
-              FAQ 标准答案 · v{custom.faq.version}
-            </span>
-            <span>来自知识库标准问答（FAQ），非生成内容</span>
-          </div>
-        ) : null}
-        {custom?.memoryUsed && custom.memoryUsed.count > 0 ? (
-          <div className="mt-1.5 flex items-center text-[11px] text-muted">
-            <span
-              className="rounded bg-surface-subtle px-1.5 py-0.5 text-[10px] font-medium text-muted"
-              title="结合了您的长期记忆与偏好（可在记忆面板管理），仅供参考，不是知识库引用来源"
-            >
-              已结合 {custom.memoryUsed.count} 条长期记忆 · 仅供参考，非引用来源
-            </span>
-          </div>
-        ) : null}
-        <ReferencesPanel
-          references={references}
-          detailsRef={detailsRef}
-          highlightedId={highlightedId}
-        />
-      </div>
-
-      <ActionBarPrimitive.Root
-        hideWhenRunning
-        autohideFloat="single-branch"
-        className="col-start-3 row-start-2 ml-1 flex gap-1 text-muted data-[floating]:absolute data-[floating]:rounded-md data-[floating]:border data-[floating]:border-line data-[floating]:bg-surface data-[floating]:p-1 data-[floating]:shadow-card"
-      >
-        <ActionBarPrimitive.Copy asChild>
-          <TooltipIconButton tooltip="复制" className="size-6">
-            <MessagePrimitive.If copied>
-              <Icon icon={Check} className="size-3.5" />
-            </MessagePrimitive.If>
-            <MessagePrimitive.If copied={false}>
-              <Icon icon={Copy} className="size-3.5" />
-            </MessagePrimitive.If>
-          </TooltipIconButton>
-        </ActionBarPrimitive.Copy>
-        <ActionBarPrimitive.Reload asChild>
-          <TooltipIconButton tooltip="重新生成" className="size-6">
-            <Icon icon={RefreshCw} className="size-3.5" />
-          </TooltipIconButton>
-        </ActionBarPrimitive.Reload>
-        <TooltipIconButton
-          tooltip="回答分析"
-          className="size-6"
-          onClick={() => openInsight(messageId)}
-        >
-          <Icon icon={BarChart3} className="size-3.5" />
-        </TooltipIconButton>
-        {runId ? (
-          <>
-            <TooltipIconButton
-              tooltip={feedback === "up" ? "已标记有帮助" : "有帮助"}
-              className="size-6"
-              disabled={submittingFeedback}
-              onClick={() => void submitFeedback("up")}
-            >
-              <Icon
-                icon={ThumbsUp}
-                className={cn("size-3.5", feedback === "up" && "text-brand")}
+    <MessageScrollerItem messageId={messageId}>
+      <MessagePrimitive.Root asChild>
+        <Message className="assistant-turn flex-col gap-3">
+          {/* The message surface groups the answer, process and source actions. */}
+          <Bubble variant="ghost" className="w-full">
+            <BubbleContent className="w-full">
+              <AnswerProcess
+                events={custom?.traceEvents ?? []}
+                traceStatus={custom?.traceStatus}
+                references={references}
+                isRunning={isRunning}
+                hasError={hasError}
+                onReferenceClick={showReference}
               />
-            </TooltipIconButton>
-            <TooltipIconButton
-              tooltip={reasonPickerOpen ? "选择需要改进的原因" : "需要改进"}
-              className="size-6"
-              disabled={submittingFeedback}
-              aria-expanded={reasonPickerOpen}
-              onClick={() => setReasonPickerOpen((current) => !current)}
-            >
-              <Icon
-                icon={ThumbsDown}
-                className={cn("size-3.5", feedback === "down" && "text-red-600")}
-              />
-            </TooltipIconButton>
-          </>
-        ) : null}
-      </ActionBarPrimitive.Root>
+              <RevealIntentContext.Provider value={revealFromZero}>
+                <CitationClickContext.Provider value={showReference}>
+                  <MessagePrimitive.Parts components={ASSISTANT_PARTS} />
+                </CitationClickContext.Provider>
+              </RevealIntentContext.Provider>
+              {custom?.faq ? (
+                <div className="mt-2 flex items-center gap-1.5 text-[11px] text-muted-foreground">
+                  <span
+                    className="rounded bg-brand-subtle px-1.5 py-0.5 text-[10px] font-medium text-brand"
+                    title={`命中知识库标准问答：${custom.faq.question}`}
+                  >
+                    FAQ 标准答案 · v{custom.faq.version}
+                  </span>
+                  <span>来自知识库标准问答（FAQ），非生成内容</span>
+                </div>
+              ) : null}
+              {references.length > 0 ? (
+                <UiButton
+                  variant="outline"
+                  size="sm"
+                  className="mt-4"
+                  onClick={() => openEvidence({ messageId })}
+                >
+                  参考来源 {references.length}
+                </UiButton>
+              ) : null}
+            </BubbleContent>
+          </Bubble>
 
-      {/* 票 29：负面反馈带一个原因码（服务端支持的闭集），提交后可被审阅。 */}
-      {reasonPickerOpen ? (
-        <span
-          role="group"
-          aria-label="反馈原因"
-          className="absolute right-0 bottom-8 z-10 flex flex-wrap items-center gap-1 rounded-md border border-line bg-surface p-1 shadow-card"
-        >
-          {FEEDBACK_REASON_CODES.map(([code, label]) => (
-            <button
-              key={code}
-              type="button"
-              onClick={() => void submitFeedback("down", code)}
-              className="cursor-pointer rounded px-1.5 py-0.5 text-[10px] text-muted transition-colors hover:bg-surface-subtle hover:text-ink focus-visible:outline-2 focus-visible:outline-brand"
-            >
-              {label}
-            </button>
-          ))}
-        </span>
-      ) : null}
+          <ActionBarPrimitive.Root
+            autohideFloat="single-branch"
+            className={cn(
+              "assistant-actions col-start-3 row-start-2 ml-1 flex gap-1 text-muted-foreground",
+              /* Fades in when the answer finishes landing instead of appearing by
+             conditional render. The run closing is not the gate on its own: the
+             knowledge routes close it while the reveal is still typing, so
+             `.assistant-turn:has([data-stream-revealing])` in index.css holds the
+             bar back as well. Opacity only, no slide: the bar sits in a grid cell
+             so a translate would read as a nudge. */
+              "transition-opacity duration-300 ease-out",
+              isRunning ? "pointer-events-none opacity-0" : "opacity-100",
+              "data-[floating]:absolute data-[floating]:rounded-md data-[floating]:border data-[floating]:border-line data-[floating]:bg-surface data-[floating]:p-1",
+            )}
+          >
+            <CopyAction />
+            <ActionBarPrimitive.Reload asChild>
+              <TooltipIconButton tooltip="重新生成" className="size-6">
+                <Icon data-icon="inline-start" icon={RefreshCw} />
+              </TooltipIconButton>
+            </ActionBarPrimitive.Reload>
+            {/* Opens the desktop panel or the mobile Sheet for this answer. */}
+            <span>
+              <TooltipIconButton
+                tooltip="查看链路"
+                className="size-6"
+                onClick={() => openTrace(messageId)}
+              >
+                <Icon data-icon="inline-start" icon={BarChart3} />
+              </TooltipIconButton>
+            </span>
+            {runId ? (
+              <>
+                <TooltipIconButton
+                  tooltip={feedback === "up" ? "已标记有帮助" : "有帮助"}
+                  className="size-6"
+                  disabled={submittingFeedback}
+                  onClick={() => void submitFeedback("up")}
+                >
+                  <Icon
+                    data-icon="inline-start"
+                    icon={ThumbsUp}
+                    className={cn("", feedback === "up" && "text-brand")}
+                  />
+                </TooltipIconButton>
+                <Popover
+                  open={reasonPickerOpen}
+                  onOpenChange={setReasonPickerOpen}
+                >
+                  <PopoverTrigger asChild>
+                    <TooltipIconButton
+                      tooltip={
+                        reasonPickerOpen ? "选择需要改进的原因" : "需要改进"
+                      }
+                      className="size-6"
+                      disabled={submittingFeedback}
+                      aria-expanded={reasonPickerOpen}
+                    >
+                      <Icon
+                        data-icon="inline-start"
+                        icon={ThumbsDown}
+                        className={cn("", feedback === "down" && "text-danger")}
+                      />
+                    </TooltipIconButton>
+                  </PopoverTrigger>
+                  <PopoverContent
+                    side="top"
+                    align="end"
+                    aria-label="反馈原因"
+                    className="flex-row flex-wrap gap-1"
+                  >
+                    {FEEDBACK_REASON_CODES.map(([code, label]) => (
+                      <UiButton
+                        variant="ghost"
+                        size="sm"
+                        key={code}
+                        disabled={submittingFeedback}
+                        onClick={() => void submitFeedback("down", code)}
+                      >
+                        {label}
+                      </UiButton>
+                    ))}
+                  </PopoverContent>
+                </Popover>
+              </>
+            ) : null}
+          </ActionBarPrimitive.Root>
 
-      <BranchPicker className="col-start-2 row-start-2 -ml-2 mr-2" />
-    </MessagePrimitive.Root>
+          <BranchPicker className="col-start-2 row-start-2 -ml-2 mr-2" />
+        </Message>
+      </MessagePrimitive.Root>
+    </MessageScrollerItem>
   )
 }

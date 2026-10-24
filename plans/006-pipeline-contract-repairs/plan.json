@@ -1,0 +1,544 @@
+{
+  "schemaVersion": 1,
+  "updated": "2026-10-08",
+  "tracker": "local",
+  "label": "ready-for-agent",
+  "status": "published",
+  "implementationStatus": "not_started",
+  "currentTurnScope": "specification_decomposition_only",
+  "specification": "spec.md",
+  "executionIndex": "README.md",
+  "sourceAudit": "../../.scratch/pipeline-structure-audit-2026-10-08/report.md",
+  "firstImplementationTicket": "PL-01",
+  "readyLabelMeaning": "规格已整理可由 agent 执行；领取仍需满足真实技术前置和用户实施指令。发布规格不代表业务修复完成。",
+  "testingBoundary": {
+    "primary": [
+      "shared_answer_entry_eventsSource",
+      "actual_chat_http_sse_json",
+      "conversation_public_consumption",
+      "captured_generation_payload"
+    ],
+    "supplemental": [
+      "real_sqlite_pageindex_and_runtime_search",
+      "existing_context_compression_and_eval_service"
+    ],
+    "externalServices": "controlled_replayable_boundaries",
+    "confirmation": {
+      "confirmed": true,
+      "answer": "沿用这些现有边界（推荐）",
+      "source": "2026-10-08 本聊天用户对 to-spec 第2步验收边界的回答"
+    }
+  },
+  "recommendedOrder": [
+    "PL-01",
+    "PL-02",
+    "PL-03",
+    "PL-04",
+    "PL-05",
+    "PL-06"
+  ],
+  "technicalDependencies": [
+    {
+      "from": "PL-04",
+      "to": "PL-05",
+      "reason": "实际上下文观测消费完整材料/预算/压缩任务提供的实际输出来源结果"
+    }
+  ],
+  "decisions": [
+    {
+      "id": "D1",
+      "text": "保留现有模块化 RAG 主拓扑与共享 Answer 入口；本轮只发布本地修复规格，业务实施 not_started。",
+      "tasks": [
+        "PL-01",
+        "PL-02",
+        "PL-03",
+        "PL-04",
+        "PL-05",
+        "PL-06"
+      ]
+    },
+    {
+      "id": "D2",
+      "text": "沿用用户已确认的现有验收边界：共享入口、真实 Chat SSE/JSON、会话公开消费、真实生成 payload；PageIndex 用真实内存 SQLite/搜索边界；外部模型服务可重放。",
+      "tasks": [
+        "PL-01",
+        "PL-02",
+        "PL-03",
+        "PL-04",
+        "PL-05",
+        "PL-06"
+      ]
+    },
+    {
+      "id": "D3",
+      "text": "知识草稿未批准不得公开；公开不足/转人工说明不携带草稿引用，HTTP 成功和业务答复状态分开。",
+      "tasks": [
+        "PL-01"
+      ]
+    },
+    {
+      "id": "D4",
+      "text": "绑定 session、useWeb、身份和 locked scope 沿复杂工具环境传播，不由模型扩大来源权限。",
+      "tasks": [
+        "PL-02"
+      ]
+    },
+    {
+      "id": "D5",
+      "text": "纠错按当前缺口结果优先、稳定身份去重、旧结果剩余补充，不加必需 reranker 或 token 上限。",
+      "tasks": [
+        "PL-03",
+        "PL-04"
+      ]
+    },
+    {
+      "id": "D6",
+      "text": "600 字符 excerpt 为展示；完整获准材料、预算、装配、压缩使用共同内部表示，总量6000/单父块4500默认保持。",
+      "tasks": [
+        "PL-04"
+      ]
+    },
+    {
+      "id": "D7",
+      "text": "候选排序与实际送入生成器的上下文分阶段；保留六项 candidate 指标，新增 generationContextEvidenceRecall 与可用性/版本，不证明模型内部使用或摘要全事实保真。",
+      "tasks": [
+        "PL-05"
+      ]
+    },
+    {
+      "id": "D8",
+      "text": "PL-05 仅技术依赖 PL-04 实际输出结果；PL-03 可独立先修预算饥饿。各票完整交付，不把发布后端与前端拆成半成品。",
+      "tasks": [
+        "PL-01",
+        "PL-03",
+        "PL-04",
+        "PL-05"
+      ]
+    },
+    {
+      "id": "D9",
+      "text": "PageIndex 的租户/KB/ACL/活动资格先于 LIMIT，ES hydration 复检保留；不靠增加候选数修复。",
+      "tasks": [
+        "PL-06"
+      ]
+    },
+    {
+      "id": "D10",
+      "text": "不扩入未经复现的 graph/Router/单工具质量重构、不做 OCR、不新增服务/端点/密钥/生产迁移；真实质量、成本和发生率另测。",
+      "tasks": [
+        "PL-01",
+        "PL-02",
+        "PL-03",
+        "PL-04",
+        "PL-05",
+        "PL-06"
+      ]
+    }
+  ],
+  "tasks": [
+    {
+      "id": "PL-01",
+      "title": "拒绝草稿隔离与终态展示",
+      "file": "issues/01-publication-and-terminal-status.md",
+      "priority": "high",
+      "label": "ready-for-agent",
+      "status": "not_started",
+      "findings": [
+        "F5"
+      ],
+      "dependsOn": [],
+      "delivery": "未通过验证的知识草稿不能经 SSE、JSON 或前端展示为可靠答案；各种业务终态有一致的公开文案。",
+      "decisions": [
+        "D1",
+        "D2",
+        "D3",
+        "D8",
+        "D10"
+      ],
+      "userStories": [
+        "PL-01:US01",
+        "PL-01:US02",
+        "PL-01:US03",
+        "PL-01:US04",
+        "PL-01:US05",
+        "PL-01:US06",
+        "PL-01:US07",
+        "PL-01:US08",
+        "PL-01:US09",
+        "PL-01:US10"
+      ],
+      "acceptanceCriteria": [
+        "PL-01:AC01",
+        "PL-01:AC02",
+        "PL-01:AC03",
+        "PL-01:AC04",
+        "PL-01:AC05",
+        "PL-01:AC06",
+        "PL-01:AC07",
+        "PL-01:AC08",
+        "PL-01:AC09"
+      ],
+      "reproductionIds": [
+        "F5_rejected_draft_in_terminal_reply"
+      ],
+      "verificationCommands": [
+        "node --import tsx --test src/mastra/simple_knowledge_runner.test.ts src/mastra/complex_knowledge_runner.test.ts src/mastra/chat_event_adapter.test.ts src/mastra/shared_answer_entry.contract.test.ts src/mastra/terminal_event_convergence.test.ts src/api/chat.transport.test.ts src/frontend/conversation.test.ts"
+      ],
+      "authorization": "implementation_not_started"
+    },
+    {
+      "id": "PL-02",
+      "title": "复杂工具路径保留授权证据来源",
+      "file": "issues/02-complex-evidence-context.md",
+      "priority": "high",
+      "label": "ready-for-agent",
+      "status": "not_started",
+      "findings": [
+        "F2"
+      ],
+      "dependsOn": [],
+      "delivery": "复杂工具路径获得同一运行已绑定的会话附件和联网意图，来源授权与简单路径一致。",
+      "decisions": [
+        "D1",
+        "D2",
+        "D4",
+        "D10"
+      ],
+      "userStories": [
+        "PL-02:US01",
+        "PL-02:US02",
+        "PL-02:US03",
+        "PL-02:US04",
+        "PL-02:US05",
+        "PL-02:US06",
+        "PL-02:US07",
+        "PL-02:US08",
+        "PL-02:US09",
+        "PL-02:US10"
+      ],
+      "acceptanceCriteria": [
+        "PL-02:AC01",
+        "PL-02:AC02",
+        "PL-02:AC03",
+        "PL-02:AC04",
+        "PL-02:AC05",
+        "PL-02:AC06",
+        "PL-02:AC07",
+        "PL-02:AC08",
+        "PL-02:AC09"
+      ],
+      "reproductionIds": [
+        "F2_complex_attachment_context_lost",
+        "F2_complex_web_opt_in_lost"
+      ],
+      "verificationCommands": [
+        "node --import tsx --test src/mastra/simple_knowledge_runner.test.ts src/mastra/complex_knowledge_runner.test.ts src/tools/complex_loop_invoker.test.ts src/mastra/shared_answer_entry.contract.test.ts src/api/chat.session_binder.test.ts src/api/chat.retrieval_scope.test.ts"
+      ],
+      "authorization": "implementation_not_started"
+    },
+    {
+      "id": "PL-03",
+      "title": "纠错新证据优先进入有限上下文",
+      "file": "issues/03-correction-gap-selection.md",
+      "priority": "high",
+      "label": "ready-for-agent",
+      "status": "not_started",
+      "findings": [
+        "F3"
+      ],
+      "dependsOn": [],
+      "delivery": "补检找回的当前缺口事实优先进入下一轮生成，仍遵守既有总预算和父块限制。",
+      "decisions": [
+        "D1",
+        "D2",
+        "D5",
+        "D8",
+        "D10"
+      ],
+      "userStories": [
+        "PL-03:US01",
+        "PL-03:US02",
+        "PL-03:US03",
+        "PL-03:US04",
+        "PL-03:US05",
+        "PL-03:US06",
+        "PL-03:US07",
+        "PL-03:US08",
+        "PL-03:US09",
+        "PL-03:US10"
+      ],
+      "acceptanceCriteria": [
+        "PL-03:AC01",
+        "PL-03:AC02",
+        "PL-03:AC03",
+        "PL-03:AC04",
+        "PL-03:AC05",
+        "PL-03:AC06",
+        "PL-03:AC07",
+        "PL-03:AC08",
+        "PL-03:AC09"
+      ],
+      "reproductionIds": [
+        "F3_correction_new_evidence_starved"
+      ],
+      "verificationCommands": [
+        "node --import tsx --test src/mastra/simple_knowledge_runner.test.ts src/mastra/complex_knowledge_runner.test.ts src/retrieval/context/assembler.test.ts src/retrieval/complex_loop.test.ts src/answer/context_compressor.test.ts"
+      ],
+      "authorization": "implementation_not_started"
+    },
+    {
+      "id": "PL-04",
+      "title": "完整材料、预算与压缩统一表示",
+      "file": "issues/04-context-material-and-budget.md",
+      "priority": "medium",
+      "label": "ready-for-agent",
+      "status": "not_started",
+      "findings": [
+        "F4"
+      ],
+      "dependsOn": [],
+      "delivery": "展示预览不再替代生成材料；预算、确定性装配和压缩处理同一份授权片段，并提供实际输出的来源记录。",
+      "decisions": [
+        "D1",
+        "D2",
+        "D5",
+        "D6",
+        "D8",
+        "D10"
+      ],
+      "userStories": [
+        "PL-04:US01",
+        "PL-04:US02",
+        "PL-04:US03",
+        "PL-04:US04",
+        "PL-04:US05",
+        "PL-04:US06",
+        "PL-04:US07",
+        "PL-04:US08",
+        "PL-04:US09",
+        "PL-04:US10",
+        "PL-04:US11"
+      ],
+      "acceptanceCriteria": [
+        "PL-04:AC01",
+        "PL-04:AC02",
+        "PL-04:AC03",
+        "PL-04:AC04",
+        "PL-04:AC05",
+        "PL-04:AC06",
+        "PL-04:AC07",
+        "PL-04:AC08",
+        "PL-04:AC09",
+        "PL-04:AC10"
+      ],
+      "reproductionIds": [
+        "F4_compression_budget_uses_preview"
+      ],
+      "verificationCommands": [
+        "node --import tsx --test src/retrieval/context/assembler.test.ts src/retrieval/context/budget.test.ts src/answer/context_compressor.test.ts src/mastra/simple_knowledge_runner.test.ts src/mastra/complex_knowledge_runner.test.ts src/retrieval/complex_loop.test.ts"
+      ],
+      "authorization": "implementation_not_started"
+    },
+    {
+      "id": "PL-05",
+      "title": "实际生成上下文观测与分阶段评测",
+      "file": "issues/05-generation-context-observation.md",
+      "priority": "medium",
+      "label": "ready-for-agent",
+      "status": "not_started",
+      "findings": [
+        "F3",
+        "F4"
+      ],
+      "dependsOn": [
+        "PL-04"
+      ],
+      "delivery": "候选检索指标保留明确语义；另记录生成器收到的真实上下文并单独计算上下文证据召回，不把候选或最终引用当作已采用材料。",
+      "decisions": [
+        "D1",
+        "D2",
+        "D7",
+        "D8",
+        "D10"
+      ],
+      "userStories": [
+        "PL-05:US01",
+        "PL-05:US02",
+        "PL-05:US03",
+        "PL-05:US04",
+        "PL-05:US05",
+        "PL-05:US06",
+        "PL-05:US07",
+        "PL-05:US08",
+        "PL-05:US09",
+        "PL-05:US10",
+        "PL-05:US11",
+        "PL-05:US12"
+      ],
+      "acceptanceCriteria": [
+        "PL-05:AC01",
+        "PL-05:AC02",
+        "PL-05:AC03",
+        "PL-05:AC04",
+        "PL-05:AC05",
+        "PL-05:AC06",
+        "PL-05:AC07",
+        "PL-05:AC08",
+        "PL-05:AC09",
+        "PL-05:AC10"
+      ],
+      "reproductionIds": [
+        "F3_correction_new_evidence_starved",
+        "F4_compression_budget_uses_preview"
+      ],
+      "verificationCommands": [
+        "node --import tsx --test src/evaluation/metrics.test.ts src/evaluation/rerank_parity.test.ts src/evaluation/report_export.test.ts src/evaluation/isolated_resources.test.ts src/evaluation/residue.test.ts src/mastra/shared_answer_entry.contract.test.ts src/frontend/evaluation_dialog.lifecycle.test.ts"
+      ],
+      "authorization": "implementation_not_started"
+    },
+    {
+      "id": "PL-06",
+      "title": "PageIndex 候选资格先于限额",
+      "file": "issues/06-scoped-pageindex-selection.md",
+      "priority": "medium",
+      "label": "ready-for-agent",
+      "status": "not_started",
+      "findings": [
+        "F1"
+      ],
+      "dependsOn": [],
+      "delivery": "PageIndex 的前五个节点从本次允许的范围里选取；他库、他租户、不可见或非活动节点不能占用名额。",
+      "decisions": [
+        "D1",
+        "D2",
+        "D9",
+        "D10"
+      ],
+      "userStories": [
+        "PL-06:US01",
+        "PL-06:US02",
+        "PL-06:US03",
+        "PL-06:US04",
+        "PL-06:US05",
+        "PL-06:US06",
+        "PL-06:US07",
+        "PL-06:US08",
+        "PL-06:US09",
+        "PL-06:US10"
+      ],
+      "acceptanceCriteria": [
+        "PL-06:AC01",
+        "PL-06:AC02",
+        "PL-06:AC03",
+        "PL-06:AC04",
+        "PL-06:AC05",
+        "PL-06:AC06",
+        "PL-06:AC07",
+        "PL-06:AC08",
+        "PL-06:AC09"
+      ],
+      "reproductionIds": [
+        "F1_pageindex_scope_after_limit"
+      ],
+      "verificationCommands": [
+        "node --import tsx --test src/ingestion/tracking/page_index_repo.test.ts src/retrieval/search/searcher.test.ts src/api/chat.retrieval_scope.test.ts src/mastra/shared_answer_entry.contract.test.ts"
+      ],
+      "authorization": "implementation_not_started"
+    }
+  ],
+  "findingCoverage": {
+    "F1": [
+      "PL-06"
+    ],
+    "F2": [
+      "PL-02"
+    ],
+    "F3": [
+      "PL-03",
+      "PL-05"
+    ],
+    "F4": [
+      "PL-04",
+      "PL-05"
+    ],
+    "F5": [
+      "PL-01"
+    ]
+  },
+  "reproductionCoverage": {
+    "F5_rejected_draft_in_terminal_reply": [
+      "PL-01"
+    ],
+    "F2_complex_attachment_context_lost": [
+      "PL-02"
+    ],
+    "F2_complex_web_opt_in_lost": [
+      "PL-02"
+    ],
+    "F3_correction_new_evidence_starved": [
+      "PL-03",
+      "PL-05"
+    ],
+    "F4_compression_budget_uses_preview": [
+      "PL-04",
+      "PL-05"
+    ],
+    "F1_pageindex_scope_after_limit": [
+      "PL-06"
+    ]
+  },
+  "deliveryGate": {
+    "id": "G1",
+    "title": "管线契约修复整体交付",
+    "requiredTasks": [
+      "PL-01",
+      "PL-02",
+      "PL-03",
+      "PL-04",
+      "PL-05",
+      "PL-06"
+    ],
+    "status": "not_started",
+    "criteria": [
+      "逐票全部行为验收通过，六个审计夹具转为正向回归，原 reproduced 缺陷不再成立。",
+      "候选指标和生成上下文指标分阶段、版本和未测口径明确；旧结果不回填伪造上下文。",
+      "相关测试全部通过，最终 npm test / npm run build / npm run typecheck:web / npm run build:web 执行并记录；失败区分变更回归与明确预存问题，新增失败阻止完成。",
+      "真实质量与外部服务全链路若未执行，明确单列未测；控制边界不能写成生产成绩。"
+    ],
+    "commands": [
+      "npm test",
+      "npm run build",
+      "npm run typecheck:web",
+      "npm run build:web"
+    ]
+  },
+  "jev": {
+    "model": "jev-1.13.0",
+    "httpStatus": 200,
+    "elapsedMs": 890,
+    "usage": {
+      "input_tokens": 1642,
+      "output_tokens": 199
+    },
+    "evidence": "jev-response.json",
+    "decisions": {
+      "granularity": "six_behavior_seams",
+      "metricPolicy": "preserve_candidate_add_consumed",
+      "correctionStrategy": "deterministic_gap_first"
+    },
+    "note": "选项概率和confidence不是任务成功率、线上故障率或实施授权。"
+  },
+  "openQuestions": [],
+  "deferred": [
+    {
+      "topic": "真实 corpus 下 graph 能力、Router 与单工具弱命中质量比较",
+      "reason": "审计仅为未测观察，本轮不把它们扩成修复事实或功能任务",
+      "tracker": "../../TODO.md"
+    },
+    {
+      "topic": "真实模型压缩事实保真/费用与运行质量",
+      "reason": "行为 fixture 可确认接口与关键事实，不替代生产质量数据",
+      "tracker": "../../TODO.md"
+    }
+  ]
+}

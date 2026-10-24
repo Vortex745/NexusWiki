@@ -3,7 +3,7 @@
  *
  * This file IS the P3.1 gate ("valid/invalid/unknown fields fixtures").
  * It verifies:
- *   - The schema version is pinned (`CRITIC_VERDICT_SCHEMA_VERSION === 1`).
+ *   - The write schema is v2 while the v1 read schema remains pinned to 1.
  *   - The taxonomy reasons are pinned and disjoint.
  *   - Every fixture in `allFixtures()` classifies to its declared
  *     expectation (valid → verdict present; invalid/unknown → exact reason).
@@ -22,6 +22,7 @@ import {
   CRITIC_VERDICT_SCHEMA_VERSION,
   CRITIC_VERDICT_MAX_BYTES,
   CriticVerdictSchemaV1,
+  CriticVerdictSchemaV2,
   INVALID_REASONS,
   UNKNOWN_REASONS,
   CRITIC_VERDICT_RECOGNIZED_KEYS,
@@ -38,8 +39,97 @@ import {
 // Schema version + constants are pinned (Done criterion: 版本固定)
 // ---------------------------------------------------------------------------
 
-test("P3.1: CRITIC_VERDICT_SCHEMA_VERSION is pinned to 1", () => {
-  assert.equal(CRITIC_VERDICT_SCHEMA_VERSION, 1)
+test("AP-01: current verdict schema is v2 while v1 remains pinned", () => {
+  assert.equal(CRITIC_VERDICT_SCHEMA_VERSION, 2)
+  assert.equal(CriticVerdictSchemaV1.safeParse({
+    schemaVersion: 1, passed: true, hallucination: false, completeness: true,
+  }).success, true)
+  assert.equal(CriticVerdictSchemaV1.safeParse({
+    schemaVersion: 2, passed: true, hallucination: false, completeness: true,
+  }).success, false)
+})
+
+test("AP-01: classifier accepts v2 with a trimmed public answer basis", () => {
+  const result = classifyCriticVerdict(JSON.stringify({
+    schemaVersion: 2,
+    passed: true,
+    hallucination: false,
+    completeness: true,
+    answerBasis: { text: "  依据退款手册说明期限与适用范围。  ", referenceIds: [" evidence-1 "] },
+  }))
+  assert.equal(result.kind, "valid")
+  assert.deepEqual(result.verdict, {
+    schemaVersion: 2,
+    passed: true,
+    hallucination: false,
+    completeness: true,
+    answerBasis: { text: "依据退款手册说明期限与适用范围。", referenceIds: ["evidence-1"] },
+  })
+})
+
+test("AP-01: malformed optional basis is discarded without changing the valid base verdict", () => {
+  const malformed = [
+    null,
+    "raw reasoning",
+    {},
+    { text: "   ", referenceIds: ["evidence-1"] },
+    { text: "据".repeat(241), referenceIds: ["evidence-1"] },
+    { text: "依据退款手册。", referenceIds: [] },
+    { text: "依据退款手册。", referenceIds: ["   "] },
+    { text: "依据退款手册。", referenceIds: ["x".repeat(201)] },
+    { text: "依据退款手册。", referenceIds: Array.from({ length: 9 }, (_, i) => `evidence-${i}`) },
+    { text: "依据退款手册。", referenceIds: [1] },
+    { text: "依据退款手册。", referenceIds: ["evidence-1"], reasoning: "private content" },
+  ]
+  for (const answerBasis of malformed) {
+    const result = classifyCriticVerdict(JSON.stringify({
+      schemaVersion: 2, passed: true, hallucination: false, completeness: true, answerBasis,
+    }))
+    assert.equal(result.kind, "valid", JSON.stringify(answerBasis))
+    assert.equal(result.verdict!.passed, true)
+    assert.equal((result.verdict as unknown as Record<string, unknown>).answerBasis, undefined)
+  }
+})
+
+test("AP-01: v2 accepts the exact bounded summary limits and omitted summaries", () => {
+  const base = { schemaVersion: 2, passed: true, hallucination: false, completeness: true }
+  const answerBasis = { text: "据".repeat(240), referenceIds: Array.from({ length: 8 }, (_, i) => `${i}${"x".repeat(199)}`) }
+  assert.deepEqual(CriticVerdictSchemaV2.parse({ ...base, answerBasis }), { ...base, answerBasis })
+  assert.deepEqual(CriticVerdictSchemaV2.parse(base), base)
+})
+
+test("AP-01: v1 rejects summaries and v2 still rejects malformed base fields or unknown top-level keys", () => {
+  const answerBasis = { text: "依据退款手册。", referenceIds: ["evidence-1"] }
+  const base = { schemaVersion: 2, passed: true, hallucination: false, completeness: true, answerBasis }
+  const cases: Array<{ payload: Record<string, unknown>; reason: string }> = [
+    { payload: { ...base, schemaVersion: 1 }, reason: "extra_dangerous_field" },
+    { payload: { ...base, schemaVersion: 3 }, reason: "schema_version_mismatch" },
+    { payload: { ...base, schemaVersion: "2" }, reason: "schema_version_mismatch" },
+    { payload: { ...base, passed: "true" }, reason: "wrong_type" },
+    { payload: { ...base, missingGap: 3 }, reason: "wrong_type" },
+    { payload: { ...base, suggestion: { text: 3 } }, reason: "wrong_type" },
+    { payload: { ...base, reasoning: "private content" }, reason: "extra_dangerous_field" },
+    { payload: { ...base, answerBasis: null, passed: "true" }, reason: "wrong_type" },
+    { payload: { schemaVersion: 2, hallucination: false, completeness: true, answerBasis }, reason: "missing_required_field" },
+  ]
+  for (const { payload, reason } of cases) {
+    const result = classifyCriticVerdict(JSON.stringify(payload))
+    assert.equal(result.kind, "invalid", JSON.stringify(payload))
+    assert.equal(result.reason, reason)
+    assert.equal(result.verdict, undefined)
+  }
+})
+
+test("AP-01: oversized v2 summary cannot bypass the existing 8 KiB response limit", () => {
+  const result = classifyCriticVerdict(JSON.stringify({
+    schemaVersion: 2,
+    passed: true,
+    hallucination: false,
+    completeness: true,
+    answerBasis: { text: "据".repeat(3000), referenceIds: ["evidence-1"] },
+  }))
+  assert.equal(result.kind, "invalid")
+  assert.equal(result.reason, "oversized_response")
 })
 
 test("P3.1: CRITIC_VERDICT_MAX_BYTES is bounded and explicit", () => {
@@ -224,7 +314,7 @@ test("P3.1 gate: valid fixtures carry a fully-typed verdict", () => {
     const result = classifyCriticVerdict(f.raw)
     assert.equal(result.kind, "valid", `${f.name}`)
     assert.ok(result.verdict, `${f.name} must carry a verdict`)
-    assert.equal(result.verdict!.schemaVersion, 1, `${f.name} verdict.schemaVersion`)
+    assert.equal(result.verdict!.schemaVersion, JSON.parse(f.raw).schemaVersion, `${f.name} verdict.schemaVersion`)
     assert.equal(typeof result.verdict!.passed, "boolean", `${f.name} verdict.passed type`)
     assert.equal(typeof result.verdict!.hallucination, "boolean", `${f.name} verdict.hallucination type`)
     assert.equal(typeof result.verdict!.completeness, "boolean", `${f.name} verdict.completeness type`)

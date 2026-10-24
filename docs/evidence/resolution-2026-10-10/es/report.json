@@ -1,0 +1,16 @@
+{
+  "task": "ES business chunk index routing and float mapping safeguards",
+  "implementationCommit": "b0e553a",
+  "branch": "codex/resolution-es-20261010",
+  "integrationMergeCommit": "3f32766",
+  "implementationFiles": 27,
+  "checks": [
+    {"name": "targeted routing/config/storage/API/retrieval/Wiki tests", "passed": 176, "failed": 0, "skipped": 0, "evidence": "targeted.log"},
+    {"name": "final storage and cleanup additions", "passed": 26, "failed": 0, "skipped": 0, "evidence": "final-additions.log"},
+    {"name": "integration migration/config/store test sync", "passed": 27, "failed": 0, "skipped": 0, "evidence": "integrated.log"},
+    {"name": "backend TypeScript build before and after integration sync", "result": "passed", "evidence": "build-final.log; build-integrated.log"},
+    {"name": "git diff --check", "result": "passed"}
+  ],
+  "localMutations": "Repository changes and scoped branch commits only; no live ES mutation, no .env edits, no index/file deletion, no push.",
+  "unresolved": ["Root owns live migration/cutover and final full regression; those are outside this implementation subtask."]
+}

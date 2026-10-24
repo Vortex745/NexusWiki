@@ -145,3 +145,113 @@ export function sourceIdentityKey(identity: CanonicalSourceIdentity): string {
     .update(JSON.stringify(keyParts))
     .digest("hex")
 }
+
+// ---------------------------------------------------------------------------
+// Ticket 05: original-file identity — the first element of a candidate
+// identity. The bytes decide what the file is; a declared name or MIME type
+// can never promote a derived page render into an original document.
+// ---------------------------------------------------------------------------
+
+export type OriginalFileIdentityErrorCode =
+  | "original_file_bytes_missing"
+  | "original_file_not_pdf"
+  | "preview_substituted_for_original"
+
+export class OriginalFileIdentityError extends Error {
+  constructor(readonly code: OriginalFileIdentityErrorCode, message: string) {
+    super(message)
+    this.name = "OriginalFileIdentityError"
+  }
+}
+
+export interface OriginalFileIdentity {
+  /** Canonical source key when the caller supplied a source identity; null for an anonymous upload. */
+  sourceKey: string | null
+  uri: string | null
+  tenantId: string | null
+  knowledgeBaseId: string | null
+  fileName: string | null
+  mimeType: string | null
+  /** sha256 of the ORIGINAL file bytes, never of a derived artifact. */
+  sha256: string
+  byteLength: number
+}
+
+export interface OriginalFileIdentityInput {
+  bytes: Buffer
+  fileName?: string | null
+  mimeType?: string | null
+  identity?: SourceIdentityInput
+  legacySource?: string
+  fallbackId?: string
+  knowledgeBaseId?: string
+}
+
+const PDF_SIGNATURE = "%PDF-"
+
+function looksLikeRasterPreview(bytes: Buffer): boolean {
+  if (bytes.length >= 8 && bytes[0] === 0x89 && bytes.subarray(1, 4).toString("latin1") === "PNG") return true
+  if (bytes.length >= 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) return true
+  if (bytes.length >= 6 && bytes.subarray(0, 3).toString("latin1") === "GIF") return true
+  return false
+}
+
+/**
+ * Binds the original file of a candidate: its digest, size, declared name and
+ * (when supplied) the canonical source identity it belongs to. A raster — a
+ * page preview — offered as the original is refused here, which is what keeps
+ * derived images from being substituted for the PDF downstream.
+ */
+export function deriveOriginalFileIdentity(input: OriginalFileIdentityInput): OriginalFileIdentity {
+  const bytes = input.bytes
+  if (!Buffer.isBuffer(bytes) || bytes.length === 0) {
+    throw new OriginalFileIdentityError(
+      "original_file_bytes_missing",
+      "the original file identity requires the uploaded bytes, not a metadata record"
+    )
+  }
+  if (looksLikeRasterPreview(bytes)) {
+    throw new OriginalFileIdentityError(
+      "preview_substituted_for_original",
+      `a derived page preview (${input.fileName ?? "unnamed"}) cannot be registered as the original file`
+    )
+  }
+  const declaredPdf =
+    input.identity?.kind === "pdf" ||
+    /\.pdf$/i.test(input.fileName ?? "") ||
+    (input.mimeType ?? "").split(";", 1)[0].trim().toLowerCase() === "application/pdf"
+  if (declaredPdf && bytes.subarray(0, PDF_SIGNATURE.length).toString("latin1") !== PDF_SIGNATURE) {
+    throw new OriginalFileIdentityError(
+      "original_file_not_pdf",
+      `${input.fileName ?? "unnamed"} is declared as a PDF but its bytes carry no %PDF- header`
+    )
+  }
+
+  let sourceKey: string | null = null
+  let uri: string | null = null
+  let tenantId: string | null = null
+  let knowledgeBaseId: string | null = null
+  if (input.identity || input.legacySource) {
+    const resolved = resolveSourceIdentity(
+      input.identity,
+      input.legacySource,
+      input.fallbackId ?? "anonymous-upload",
+      input.knowledgeBaseId
+    )
+    sourceKey = sourceIdentityKey(resolved)
+    uri = resolved.uri
+    tenantId = resolved.tenantId
+    knowledgeBaseId = resolved.knowledgeBaseId
+  }
+
+  return Object.freeze({
+    sourceKey,
+    uri,
+    tenantId,
+    knowledgeBaseId,
+    fileName: input.fileName ?? null,
+    mimeType: input.mimeType ?? null,
+    sha256: createHash("sha256").update(bytes).digest("hex"),
+    byteLength: bytes.length,
+  })
+}

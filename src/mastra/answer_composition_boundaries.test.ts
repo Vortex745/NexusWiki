@@ -304,11 +304,12 @@ test("ARCH-01E #1/#2: the tool registry and MCP bridge are composed in exactly o
   }
   assert.deepEqual(composed["registerBuiltinTools"], [ROUTE_STACK])
   assert.deepEqual(composed["createMcpToolBridge"], [ROUTE_STACK])
-  // The only two invocation services are the route stack's published seam and
-  // the complex loop's own invoker — ONE boundary, two entrances to it.
+  // Answer keeps its two entrances. Wiki administration uses the same
+  // invocation boundary with its own administrator-only tool policy.
   assert.deepEqual(composed["new ToolInvocationService"].sort(), [
     "src/mastra/answer_route_stack.ts",
     "src/tools/complex_loop_adapter.ts",
+    "src/wiki/agent.ts",
   ])
 })
 

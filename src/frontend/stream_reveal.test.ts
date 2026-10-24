@@ -1,67 +1,100 @@
 import assert from "node:assert/strict"
 import test from "node:test"
-import { MAX_REVEAL_PER_FRAME, revealStep } from "./stream_reveal"
+import {
+  REVEAL_MAX_TICKS,
+  REVEAL_TOKEN_MS,
+  revealTo,
+  streamTokens,
+  tokenBoundaries,
+} from "./stream_reveal"
 
-const FRAME_MS = 16
+const latin = "Pistachio is up"
+const cjk = "根据知识库的资料"
+const long = `${"word ".repeat(400)}end`
 
-test("revealStep exposes nothing when already caught up", () => {
-  assert.equal(revealStep(120, 120, FRAME_MS), 0)
-  assert.equal(revealStep(130, 120, FRAME_MS), 0)
+test("streamTokens keeps latin words whole and splits what has no spaces", () => {
+  assert.deepEqual(streamTokens("ab 中文"), ["ab", " ", "中", "文"])
 })
 
-test("revealStep exposes nothing before a frame delta exists", () => {
-  // The first tick only records the timestamp; revealing 0 keeps the very first
-  // frame from dumping the whole backlog.
-  assert.equal(revealStep(0, 500, 0), 0)
-  assert.equal(revealStep(0, 500, -8), 0)
+test("tokenBoundaries absorb trailing whitespace into the preceding token", () => {
+  assert.deepEqual(tokenBoundaries(latin), [10, 13, 15])
 })
 
-test("revealStep never reveals past the target", () => {
-  assert.equal(revealStep(98, 100, 5_000), MAX_REVEAL_PER_FRAME)
-  assert.equal(revealStep(0, 7, 10_000), MAX_REVEAL_PER_FRAME)
+test("tokenBoundaries give every CJK character its own step", () => {
+  assert.deepEqual(tokenBoundaries(cjk), [1, 2, 3, 4, 5, 6, 7, 8])
 })
 
-test("a one-frame burst does not render in one frame", () => {
-  // The knowledge routes land the entire reply in a single SSE frame.
-  const first = revealStep(0, 400, FRAME_MS)
-  assert.equal(first, MAX_REVEAL_PER_FRAME)
-  assert.ok(first > 0 && first < 400, `expected a partial reveal, got ${first}`)
+test("tokenBoundaries ignore leading whitespace and end at the last glyph", () => {
+  assert.deepEqual(tokenBoundaries("  hi"), [4])
+  assert.deepEqual(tokenBoundaries(""), [])
 })
 
-test("a live token trickle reveals at least one character per frame", () => {
-  // The typewriter cadence stays at one character per frame, even when a
-  // provider delta contains multiple characters.
-  assert.equal(revealStep(0, 2, FRAME_MS), MAX_REVEAL_PER_FRAME)
-  assert.equal(revealStep(0, 1, FRAME_MS), 1)
+test("tokenBoundaries treat a markdown emphasis run as separate tokens", () => {
+  // "**go**" has no spaces, so the punctuation dribbles around the word; the
+  // reveal still never cuts a word in half.
+  assert.deepEqual(tokenBoundaries("**go**"), [1, 2, 4, 5, 6])
 })
 
-test("a burst drains in a bounded window and never overshoots", () => {
+test("revealTo holds still when caught up or nothing is due", () => {
+  const boundaries = tokenBoundaries(latin)
+  assert.equal(revealTo(15, 15, 1, boundaries), 15)
+  assert.equal(revealTo(0, 15, 0, boundaries), 0)
+})
+
+test("revealTo lands on token boundaries, never mid-word", () => {
+  const boundaries = new Set(tokenBoundaries(latin))
   let shown = 0
-  let frames = 0
-  const target = 400
-  while (shown < target && frames < 10_000) {
-    const step = revealStep(shown, target, FRAME_MS)
-    assert.ok(step <= target - shown, `frame ${frames} overshoots by ${step - (target - shown)}`)
-    shown += step
-    frames += 1
+  for (let tick = 0; tick < 8; tick += 1) {
+    shown = revealTo(shown, latin.length, 1, tokenBoundaries(latin))
+    assert.ok(shown === 0 || boundaries.has(shown), `tick ${tick} cut at ${shown}`)
   }
-  assert.equal(shown, target)
-  // At one character per frame, a normal answer completes in a few seconds.
-  assert.ok(frames <= 450, `took ${frames} frames (~${(frames * FRAME_MS) / 1000}s) to drain`)
 })
 
-test("a large backlog never jumps by more than the frame cap", () => {
-  assert.equal(revealStep(0, 10_000, FRAME_MS), MAX_REVEAL_PER_FRAME)
-})
-
-test("a one-character-per-frame stream stays caught up", () => {
+test("a one-token-at-a-time stream stays in step with the target", () => {
+  const text = "a b c d e"
+  const boundaries = tokenBoundaries(text)
   let shown = 0
-  let target = 0
-  let maxBacklog = 0
-  for (let frame = 0; frame < 600; frame += 1) {
-    target += 1
-    shown += revealStep(shown, target, FRAME_MS)
-    maxBacklog = Math.max(maxBacklog, target - shown)
+  for (let tick = 0; tick < boundaries.length; tick += 1) {
+    const target = boundaries[tick]
+    shown = revealTo(shown, target, 1, boundaries)
+    assert.equal(shown, target, `tick ${tick} fell behind the arriving token`)
   }
-  assert.equal(maxBacklog, 0)
+  assert.equal(shown, text.length)
+})
+
+test("a single-frame burst drains inside the bounded window", () => {
+  const boundaries = tokenBoundaries(long)
+  let shown = 0
+  let ticks = 0
+  while (shown < long.length && ticks < 10_000) {
+    const next = revealTo(shown, long.length, 1, boundaries)
+    assert.ok(next > shown, `tick ${ticks} made no progress`)
+    assert.ok(next <= long.length, `tick ${ticks} overshot to ${next}`)
+    shown = next
+    ticks += 1
+  }
+  assert.equal(shown, long.length)
+  // The step is sized off the whole reply, so a burst never spends more than the
+  // bounded window typing itself out.
+  assert.ok(ticks <= REVEAL_MAX_TICKS, `took ${ticks} ticks to drain`)
+  assert.ok(ticks * 4 < boundaries.length, `took ${ticks} of ${boundaries.length} ticks`)
+})
+
+test("the final token reveals exactly to the target", () => {
+  const boundaries = tokenBoundaries(long)
+  let shown = 0
+  while (shown < long.length) shown = revealTo(shown, long.length, 64, boundaries)
+  assert.equal(shown, long.length)
+})
+
+test("a short answer keeps the reference cadence instead of accelerating", () => {
+  const boundaries = tokenBoundaries(cjk)
+  let shown = 0
+  let ticks = 0
+  while (shown < cjk.length) {
+    shown = revealTo(shown, cjk.length, 1, boundaries)
+    ticks += 1
+  }
+  assert.equal(ticks, boundaries.length)
+  assert.ok(ticks * REVEAL_TOKEN_MS <= 500, `${ticks * REVEAL_TOKEN_MS}ms for a short reply`)
 })

@@ -144,16 +144,16 @@ test("UT-02 真值清单完整性：样本字节与设计逐页真值哈希一�
   }
 })
 
-test("UT-02 路由对照：PDF 默认候选 marker→builtin-pdf；显式 marker 覆盖为权威单候选", () => {
+test("UT-02 路由对照：PDF 默认文字层提取；历史 marker 覆盖映射到 OCR API", () => {
   const route = selectParserRoute({ fileName: "样本.pdf", mimeType: "application/pdf" })
-  assert.deepEqual(route.candidates, ["marker", "builtin-pdf"])
+  assert.deepEqual(route.candidates, ["builtin-pdf"])
   assert.equal(route.authoritative, false)
   const override = selectParserRoute({
     fileName: "样本.pdf",
     mimeType: "application/pdf",
     override: "marker",
   })
-  assert.deepEqual(override.candidates, ["marker"])
+  assert.deepEqual(override.candidates, ["ocr-api"])
   assert.equal(override.authoritative, true)
   report.routeControl = {
     pdfNoOverride: { candidates: route.candidates, authoritative: route.authoritative },
@@ -438,6 +438,7 @@ test("UT-02 不完整激活复现：UT-04 修复后缺页候选不再替换激�
       rawContent: readFileSync(join(TRUTH_DIR, "simple-body.pdf")),
       fileName: "policy.pdf",
       mimeType: "application/pdf",
+      parserOverride: "builtin-pdf",
       sourceIdentity: { kind: "file", uriOrExternalId: "C:/truth/policy.pdf", namespace: "ut02" },
     })
     assert.equal(v1.status, "pending")
@@ -455,6 +456,7 @@ test("UT-02 不完整激活复现：UT-04 修复后缺页候选不再替换激�
       rawContent: readFileSync(join(TRUTH_DIR, "mixed-scan.pdf")),
       fileName: "policy.pdf",
       mimeType: "application/pdf",
+      parserOverride: "builtin-pdf",
       versionIntent: "new_version",
       sourceIdentity: { kind: "file", uriOrExternalId: "C:/truth/policy.pdf", namespace: "ut02" },
     })
@@ -466,7 +468,7 @@ test("UT-02 不完整激活复现：UT-04 修复后缺页候选不再替换激�
     const documentRepo = new DocumentRepo(db)
     assert.match(
       documentRepo.getActivationBlockReason(v1.docId) ?? "",
-      /activation_evidence_record_missing/,
+      /activation_index_proof_missing/,
       "激活阻碍原因可核对"
     )
 

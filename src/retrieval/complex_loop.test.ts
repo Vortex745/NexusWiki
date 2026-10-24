@@ -2,6 +2,16 @@ import assert from "node:assert/strict"
 import test from "node:test"
 
 import type { RetrievalResult } from "../types"
+import { buildEvidence } from "../answer/evidence"
+// PT-07 — the loop's observation compression is migrated onto the same material
+// contract the knowledge runners use.
+import { ContextCompressorImpl } from "../answer/context_compressor"
+import {
+  ContextAssemblerImpl,
+  modelTokenCount,
+} from "./context/assembler"
+import { computeContextBudget } from "./context/budget"
+import type { AccessContext } from "../access/context"
 import type { SearchOptions, RetrievalChannel } from "./search/interface"
 import type { OpenAI } from "openai"
 import {
@@ -10,6 +20,7 @@ import {
   normalizeToolCall,
   ComplexLoopControllerImpl,
   runComplexLoop,
+  createComplexLoopObservationCompressor,
   type ComplexLoopController,
   type ComplexLoopDecision,
   type ComplexLoopState,
@@ -1103,4 +1114,379 @@ test("T09 §criterion#2+#6: shared budget across runs — prior run used 2 itera
   // The new tool call should NOT be a duplicate
   assert.equal(result.toolCalls[0].duplicate, false)
   assert.equal(result.toolCalls[0].tool, "pageindex_hierarchy")
+})
+
+// ---------------------------------------------------------------------------
+// PT-02 / PT-03 — the loop's OWN searches (the legacy direct path) carry the
+// run's server-bound session, web intent and cancellation signal, and the
+// observations it builds cite each source with its real identity.
+// ---------------------------------------------------------------------------
+
+const loopAccessContext: AccessContext = {
+  tenantId: "tenant-loop",
+  subjectId: "subject-loop",
+  groups: [],
+  scopes: ["chat"],
+}
+
+function attachmentResult(id = "att-1"): RetrievalResult {
+  return {
+    chunk: {
+      id: `${id}:0`,
+      documentId: id,
+      content: "附件的退款规则为七日。",
+      childrenIds: [],
+      metadata: {
+        origin: "attachment",
+        attachmentId: id,
+        attachmentName: "policy.md",
+        attachmentSessionId: "sess-bound",
+        title: "policy.md",
+        source: "附件:policy.md",
+      },
+    },
+    score: 1,
+    source: "attachment",
+    channels: ["attachment"],
+    wikilinks: [],
+  }
+}
+
+test("PT-02 AC04 / PT-03 AC06: loop tool searches carry the run's bound session, web intent and signal", async () => {
+  const controller = scriptController([
+    decisionTool("semantic_lexical_hybrid", "附件退款规则"),
+    decisionSufficient,
+  ])
+  const searcher = scriptSearcher([{ results: [attachmentResult()] }])
+  const signal = new AbortController().signal
+  const retrievalScope = { knowledgeBaseIds: [] as string[] }
+
+  await runComplexLoop(
+    { controller, searcher: searcher as any, assembler: mockAssembler() },
+    {
+      query: "附件退款规则与例外",
+      accessContext: loopAccessContext,
+      retrievalScope,
+      attachments: { sessionId: "sess-bound" },
+      webRequested: true,
+      signal,
+    }
+  )
+
+  assert.equal(searcher.calls.length, 1, "the loop's tool search ran once")
+  const options = searcher.calls[0].options as SearchOptions
+  assert.deepEqual(
+    options.attachments,
+    { sessionId: "sess-bound" },
+    "the loop's search must read the run's own session attachments (PT-02 AC01/AC04)"
+  )
+  assert.equal(
+    options.webRequested,
+    true,
+    "the loop's search must carry the run's web-search opt-in (PT-03 AC01/AC06)"
+  )
+  assert.equal(options.signal, signal, "cancellation must reach the loop's searches")
+  assert.deepEqual(options.retrievalScope, retrievalScope, "the locked scope is never rebuilt")
+  assert.equal(options.accessContext, loopAccessContext, "the run identity is the same object")
+})
+
+test("PT-03 AC03: a loop without a session or web intent opens neither extra channel", async () => {
+  const controller = scriptController([
+    decisionTool("semantic_lexical_hybrid", "知识库问题"),
+    decisionSufficient,
+  ])
+  const searcher = scriptSearcher([{ results: [makeResult("r1")] }])
+
+  await runComplexLoop(
+    { controller, searcher: searcher as any, assembler: mockAssembler() },
+    { query: "知识库问题", accessContext: loopAccessContext }
+  )
+
+  const options = searcher.calls[0].options as SearchOptions
+  assert.equal(options.attachments, undefined, "no session → no attachment channel")
+  assert.equal(options.webRequested, undefined, "no opt-in → no web channel")
+})
+
+test("PT-02 AC06: loop observations cite the authoritative Evidence identity", async () => {
+  const attachment = attachmentResult()
+  const authoritative = buildEvidence([attachment])
+  const citationMaps: Array<ReadonlyMap<string, string> | undefined> = []
+  const assembler: ComplexLoopAssembler = {
+    assemble: async (_results, citationIds) => {
+      citationMaps.push(citationIds)
+      return "observation"
+    },
+  }
+  const controller = scriptController([
+    decisionTool("semantic_lexical_hybrid", "附件退款规则"),
+    decisionSufficient,
+  ])
+  const searcher = scriptSearcher([{ results: [attachment] }])
+
+  const result = await runComplexLoop(
+    { controller, searcher: searcher as any, assembler },
+    { query: "附件退款规则", accessContext: loopAccessContext, attachments: { sessionId: "sess-bound" } }
+  )
+
+  assert.equal(citationMaps.length, 1)
+  const loopCitationId = citationMaps[0]!.get(`${attachment.chunk.documentId}\0${attachment.chunk.id}`)
+  assert.equal(
+    loopCitationId,
+    authoritative[0].id,
+    "the loop must cite the same Evidence id the route publishes — a fabricated id resolves the attachment as a knowledge-base document"
+  )
+  assert.notEqual(loopCitationId, `ev_${attachment.chunk.documentId}_${attachment.chunk.id}`)
+  assert.deepEqual(
+    controller.calls[1].accumulatedEvidenceIds,
+    authoritative.map((item) => item.id),
+    "the loop state reports authoritative ids to the controller"
+  )
+  // The attachment result survives the loop unchanged, so the assembler and
+  // the reference list still see origin=attachment.
+  assert.equal(result.results[0].chunk.metadata.origin, "attachment")
+  assert.equal(result.results[0].chunk.metadata.attachmentSessionId, "sess-bound")
+})
+
+// ---------------------------------------------------------------------------
+// PT-07 AC01/AC03/AC07/AC09/AC10 — the loop's observation compressor runs on
+// the same complete material as the final answer.
+//
+// `createComplexLoopObservationCompressor` is the adapter the complex runner
+// hands to `runComplexLoop`. Before it, the observation was compressed through
+// a bridge onto `ContextCompressor.compress(evidence, …)`, which bypasses when
+// the sum of the 600-character public previews fits the budget — so a tool
+// observation could sit on 30,000 tokens of parent material, compress nothing,
+// and show the next tool decision only the previews (finding F4). The adapter
+// changes no loop budget: the same iteration and tool-call gates, the same ACL,
+// the same authoritative Evidence ids.
+// ---------------------------------------------------------------------------
+
+const PT07_LOOP_TAIL = "尾部关键例外：特定商品不适用无理由退款。"
+
+function pt07LoopChild(id: string, content: string): RetrievalResult {
+  return {
+    chunk: {
+      id,
+      documentId: `doc-${id}`,
+      content,
+      childrenIds: [],
+      metadata: { kind: "child", source: `${id}.md` },
+    },
+    score: 1,
+    source: "vector",
+    wikilinks: [],
+  }
+}
+
+/** Two children under parents that carry them: ~9,200 tokens of candidate material. */
+function pt07LoopOversizedMaterial(): RetrievalResult[] {
+  return [
+    `${"背景".repeat(350)}${PT07_LOOP_TAIL}`,
+    `${"说明".repeat(350)}尾部时效例外：定制商品需人工审核。`,
+  ].map((content, index) => {
+    const result = pt07LoopChild(`obs-${index}`, content)
+    result.parentChunk = {
+      id: `parent-obs-${index}`,
+      documentId: result.chunk.documentId,
+      content: `${"甲".repeat(3_000)}${content}${"乙".repeat(3_000)}`,
+      childrenIds: [],
+      metadata: { kind: "parent", source: `parent-obs-${index}.md` },
+    }
+    return result
+  })
+}
+
+function makeLoopCompressionClient(behavior: { content?: () => string; abort?: boolean } = {}) {
+  const prompts: string[] = []
+  let calls = 0
+  const client = {
+    chat: {
+      completions: {
+        create: async (request: any): Promise<any> => {
+          calls += 1
+          if (behavior.abort) {
+            const err = new Error("compression cancelled")
+            err.name = "AbortError"
+            throw err
+          }
+          prompts.push(
+            (request.messages ?? []).map((m: any) => String(m.content)).join("\n")
+          )
+          return {
+            choices: [
+              {
+                message: {
+                  role: "assistant",
+                  content: behavior.content?.() ?? "压缩观察：不可退款（特定商品）；30 天内。",
+                },
+              },
+            ],
+          }
+        },
+      },
+    },
+  }
+  return {
+    client: client as unknown as OpenAI,
+    prompts,
+    get calls(): number {
+      return calls
+    },
+  }
+}
+
+test("PT-07 AC01/AC03: the loop observation compresses on the material, never on the preview sum", async () => {
+  const results = pt07LoopOversizedMaterial()
+  const evidence = buildEvidence(results)
+  // The audited precondition: the preview sum says the budget is fine.
+  const preview = computeContextBudget(evidence)
+  assert.equal(preview.overBudget, false, "the preview the old bridge measured stays under budget")
+
+  const recorder = makeLoopCompressionClient()
+  const adapter = createComplexLoopObservationCompressor({
+    assembler: new ContextAssemblerImpl(),
+    compressor: new ContextCompressorImpl(recorder.client, "mock-model"),
+  })
+  const compressed = await adapter.compress(results, "退款 例外", { maxContextTokens: 6_000 })
+
+  assert.ok(compressed, "F4 is gone: the oversized observation material IS compressed")
+  assert.ok(recorder.calls > 0)
+  assert.ok(
+    recorder.prompts.some((prompt) => prompt.includes(PT07_LOOP_TAIL)),
+    "the compressor sees the fact past character 600, not just the preview"
+  )
+  assert.ok(modelTokenCount(compressed.context) <= 6_000, "and the result is inside the budget")
+  assert.ok(compressed.context.includes("[cite:"), "with its citation headers intact")
+})
+
+test("PT-07 AC03: a fitting observation material costs no model call at all", async () => {
+  const recorder = makeLoopCompressionClient()
+  const adapter = createComplexLoopObservationCompressor({
+    assembler: new ContextAssemblerImpl(),
+    compressor: new ContextCompressorImpl(recorder.client, "mock-model"),
+  })
+  const out = await adapter.compress(
+    [pt07LoopChild("small", "标准商品七日退款。")],
+    "退款",
+    { maxContextTokens: 6_000 }
+  )
+  assert.equal(out, null, "within budget ⇒ the loop keeps its deterministic observation")
+  assert.equal(recorder.calls, 0, "and pays nothing for it")
+})
+
+test("PT-07 AC10: the adapter never raises the caller's budget and cancels through the same signal", async () => {
+  const recorder = makeLoopCompressionClient({ abort: true })
+  const adapter = createComplexLoopObservationCompressor({
+    assembler: new ContextAssemblerImpl(),
+    compressor: new ContextCompressorImpl(recorder.client, "mock-model"),
+  })
+  await assert.rejects(
+    () =>
+      adapter.compress(pt07LoopOversizedMaterial(), "退款 例外", {
+        maxContextTokens: 6_000,
+      }),
+    (err: unknown) => (err as Error).name === "AbortError",
+    "a cancelled compression call is not swallowed as a fallback"
+  )
+
+  // A caller asking for a smaller budget gets the smaller decision.
+  const tight = makeLoopCompressionClient({ content: () => "长".repeat(2_000) })
+  const tightAdapter = createComplexLoopObservationCompressor({
+    assembler: new ContextAssemblerImpl(),
+    compressor: new ContextCompressorImpl(tight.client, "mock-model"),
+  })
+  const refused = await tightAdapter.compress(pt07LoopOversizedMaterial(), "退款", {
+    maxContextTokens: 1_200,
+  })
+  assert.equal(refused, null, "an output still over the caller's budget is refused, not adopted")
+})
+
+test("PT-07 AC07: a refused observation compression leaves the loop on its deterministic observation", async () => {
+  const controller = scriptController([
+    decisionTool("semantic_lexical_hybrid", "q1"),
+    decisionSufficient,
+  ])
+  const searcher = scriptSearcher([{ results: pt07LoopOversizedMaterial() }])
+  const recorder = makeLoopCompressionClient({ content: () => "" })
+  const result = await runComplexLoop({
+    controller,
+    searcher: searcher as never,
+    assembler: new ContextAssemblerImpl(),
+    compressor: createComplexLoopObservationCompressor({
+      assembler: new ContextAssemblerImpl(),
+      compressor: new ContextCompressorImpl(recorder.client, "mock-model"),
+    }),
+  }, { query: "退款 例外" })
+
+  assert.equal(result.toolCalls[0].compressionRan, false)
+  assert.ok(
+    result.finalObservation.includes(PT07_LOOP_TAIL),
+    "the fallback observation is the deterministic material, and it is in budget"
+  )
+  assert.ok(modelTokenCount(result.finalObservation) <= 6_000)
+})
+
+test("PT-07 AC09/AC10: the loop keeps its budgets and its legacy callers through the same adapter", async () => {
+  // Compression wired, material oversized: the gates are unchanged.
+  const controller = scriptController([
+    decisionTool("semantic_lexical_hybrid", "q1"),
+    decisionTool("pageindex_hierarchy", "q2"),
+    decisionTool("graph_navigation", "q3"),
+    decisionTool("semantic_lexical_hybrid", "q4"),
+    decisionSufficient,
+  ])
+  const searcher = scriptSearcher([
+    { results: pt07LoopOversizedMaterial() },
+    { results: [pt07LoopChild("x2", "补充内容。")] },
+    { results: [pt07LoopChild("x3", "更多补充。")] },
+    { results: [pt07LoopChild("x4", "仍然补充。")] },
+  ])
+  const recorder = makeLoopCompressionClient()
+  const result = await runComplexLoop({
+    controller,
+    searcher: searcher as never,
+    assembler: new ContextAssemblerImpl(),
+    compressor: createComplexLoopObservationCompressor({
+      assembler: new ContextAssemblerImpl(),
+      compressor: new ContextCompressorImpl(recorder.client, "mock-model"),
+    }),
+  }, { query: "退款 例外" })
+
+  assert.equal(
+    result.iterationsExecuted <= COMPLEX_LOOP_MAX_ITERATIONS,
+    true,
+    "the migration does not touch the iteration budget"
+  )
+  assert.equal(
+    result.toolCallsExecuted <= COMPLEX_LOOP_MAX_TOOL_CALLS,
+    true,
+    "nor the tool-call budget"
+  )
+  assert.equal(result.iterationsExecuted, COMPLEX_LOOP_MAX_ITERATIONS)
+  assert.equal(result.toolCallsExecuted, 3, "the same gate that bound this run before the migration")
+  assert.equal(result.toolCalls[0].compressionRan, true, "and the observation still compresses")
+
+  // A legacy string-only assembler + preview compressor keeps its old shape.
+  const legacyController = scriptController([
+    decisionTool("semantic_lexical_hybrid", "q1"),
+    decisionSufficient,
+  ])
+  const legacySearcher = scriptSearcher([{ results: [makeResult("legacy")] }])
+  const legacyCompressor = mockCompressor("compress")
+  const legacy = await runComplexLoop({
+    controller: legacyController,
+    searcher: legacySearcher as never,
+    assembler: mockAssembler("legacy-observation"),
+    compressor: createComplexLoopObservationCompressor({
+      assembler: mockAssembler("legacy-observation"),
+      compressor: legacyCompressor as never,
+    }),
+  }, { query: "q" })
+  assert.equal(legacy.toolCalls[0].compressionRan, true)
+  assert.equal(legacy.toolCalls[0].compressionOutputTokens, 500)
+  assert.ok(
+    legacy.finalObservation.includes("compressed-context"),
+    "a preview-only compressor is still honoured exactly as before"
+  )
+  assert.equal(legacyCompressor.calls, 1, "one compression attempt per iteration, no extra pass")
 })

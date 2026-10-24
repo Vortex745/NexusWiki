@@ -218,6 +218,61 @@ test("Ticket 11: filters by status, tag and folder, with facets over the visible
   }
 })
 
+test("A deleted (retired) document leaves the catalog: rows, total and facets", async () => {
+  const setup = buildApp({ scopes: ["chat", "admin"] })
+  try {
+    setup.service.ensureDefault("demo")
+    const kb = setup.service.create("demo", "Docs")
+    seed(setup, { knowledgeBaseId: kb.id, title: "A", status: "completed", metadata: { tags: ["policy"], folder: "HR" }, activate: true })
+    const gone = seed(setup, { knowledgeBaseId: kb.id, title: "B", status: "completed", metadata: { tags: ["legal"], folder: "IT" }, activate: true })
+    seed(setup, { knowledgeBaseId: kb.id, title: "C", status: "completed" })
+
+    // The catalog's delete action is the source retirement command; the rows
+    // survive (tombstone + citation traceability) but must stop being listed.
+    const { server, port } = await listen(setup.app)
+    try {
+      const before = await request(port, `/knowledge-bases/${kb.id}/documents`)
+      assert.equal(before.json?.total, 3)
+      assert.deepEqual(before.json?.tags, ["legal", "policy"])
+      assert.deepEqual(before.json?.folders, ["HR", "IT"])
+
+      setup.db.prepare("UPDATE sources SET lifecycle_state = 'retired' WHERE source_id = ?")
+        .run(setup.repo.get(gone)!.sourceId)
+
+      const after = await request(port, `/knowledge-bases/${kb.id}/documents`)
+      assert.equal(after.status, 200)
+      assert.equal(after.json?.total, 2, "the deleted document is out of the count")
+      assert.deepEqual(
+        (after.json?.documents as Array<{ title: string }>).map((doc) => doc.title),
+        ["C", "A"],
+        "newest first, and the deleted one is gone",
+      )
+      // A facet that only the deleted document carried would offer a filter
+      // that always answers "no documents match".
+      assert.deepEqual(after.json?.tags, ["policy"])
+      assert.deepEqual(after.json?.folders, ["HR"])
+      for (const doc of after.json?.documents as Array<Record<string, unknown>>) {
+        assert.equal(doc.retired, false, "every listed row is live")
+      }
+
+      // The version view stays reachable for a citation from a past answer.
+      assert.equal((await request(port, `/documents/${gone}`)).status, 200)
+
+      // Deleting every remaining row empties the catalog without breaking it.
+      setup.db.prepare("UPDATE sources SET lifecycle_state = 'retired'").run()
+      const emptied = await request(port, `/knowledge-bases/${kb.id}/documents`)
+      assert.equal(emptied.json?.total, 0)
+      assert.deepEqual(emptied.json?.documents, [])
+      assert.deepEqual(emptied.json?.tags, [])
+      assert.deepEqual(emptied.json?.folders, [])
+    } finally {
+      server.close()
+    }
+  } finally {
+    setup.db.close()
+  }
+})
+
 test("Ticket 11: readers see only group-authorized metadata; admins see all; read-only", async () => {
   const setup = buildApp({ scopes: ["chat"] }) // viewer groups: ["demo-tech"]
   try {

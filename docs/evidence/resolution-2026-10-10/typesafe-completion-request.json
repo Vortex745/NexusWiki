@@ -1,0 +1,88 @@
+{
+  "model": "jev-latest",
+  "state": {
+    "objective": "Implement approved PT09/ES/PDF repair plan and assess completion honestly",
+    "implemented": [
+      "PT09 real-body negative controls and before/after cleanup checks",
+      "All business Elasticsearch routes use selected index; explicit eval index isolated",
+      "Acknowledged write-barrier reindex preserves122 documents,85 vectors1024dims,37 parent chunks,all source/access/routing hashes and461fractional values; old index kept",
+      "Same-document retry completed114chunks; storeGraph done",
+      "PDF v2 single9legal joint Choice raw confidence/probabilities strictly validated; v1 historical viewing only; nonreusable faults; emptyOCR distinctly rejected"
+    ],
+    "tests": {
+      "fullRegression": {
+        "tests": 3645,
+        "pass": 3644,
+        "fail": 0,
+        "skip": 1,
+        "skipReason": "preexisting frozen ARCH-01A"
+      },
+      "backendBuild": "passed",
+      "frontendTypecheck": "passed",
+      "frontendBuild": "passed known large bundle warning",
+      "pt09": "3/3; adjacent90/90",
+      "esLiveAcceptance": "UT16/17/21 six of six passed"
+    },
+    "independentLivePdf": {
+      "pdfs": 16,
+      "rounds": 3,
+      "documents": 48,
+      "labelledInputPages": 30,
+      "observedPageStages": 114,
+      "match": 99,
+      "falseReject": 9,
+      "falseAccept": 6,
+      "falseAcceptFixtures": "partially rasterized and raster-image digits each all three rounds",
+      "schemaErrors": 0,
+      "softwareConsistencyErrors": 0,
+      "apiCalls": 145,
+      "clef200": 123,
+      "ocr200": 21,
+      "ocr429": 1,
+      "enablement": "remains OFF; semantic launch criterion failed"
+    },
+    "review": "write barrier, lost lock response, external error privacy, malformed OCR precedence fixed with regressions",
+    "remaining": [
+      "PDF semantic falseaccept and false rejection unresolved; must not claim autonomous rollout ready",
+      "A preexisting frozen test remains skipped",
+      "TypeSafe service was region-blocked previously; actual current result required"
+    ],
+    "scope": "Local implementation and controlled migration only. No deletion, production database migration, push or public PR; original preexisting staged work preserved."
+  },
+  "questions": {
+    "implementation_complete": {
+      "type": "noul",
+      "instructions": "Does the supplied evidence support completion of the scoped code changes, local ES migration and regression repairs, while explicitly retaining failed PDF semantic enablement? Judge the code/maintenance delivery separately from autonomous launch.",
+      "criteria": {
+        "true": "Scoped implementation and data repair delivered and tested; conditional disabled fallback complies with failure plan.",
+        "false": "A required code or local data acceptance remains unimplemented or its evidence is contradicted."
+      }
+    },
+    "all_acceptance_complete": {
+      "type": "noul",
+      "instructions": "Have ALL acceptance criteria including independent semantic PDF no-false-accept and model-based completion confidence actually been achieved? Tests alone do not imply semantic accuracy.",
+      "criteria": {
+        "true": "Every criterion achieved with genuine evidence.",
+        "false": "At least one stated criterion remains failed, skipped or unverified."
+      }
+    },
+    "pdf_enablement_safe": {
+      "type": "noul",
+      "instructions": "Does this independent real sample justify enabling the default PDF quality workflow for autonomous acceptance now?",
+      "criteria": {
+        "true": "No critical acceptance gap in the stated sample.",
+        "false": "Repeated missing visible information false accepts or other critical gaps block enabling."
+      }
+    },
+    "completion_status": {
+      "type": "choice",
+      "instructions": "Choose the most honest overall delivery status given scoped implementation, failed semantic enablement, and preserved disabled behavior.",
+      "criteria": {
+        "complete_all_criteria": "All implementation and quality criteria met with no unresolved required evidence.",
+        "implemented_with_explicit_quality_gap": "Code and local maintenance delivered but independent semantic enablement failed; default OFF and followup explicit.",
+        "incomplete_implementation": "Required code/data repairs missing or regression failures remain.",
+        "insufficient_evidence": "Evidence is too incomplete or contradictory to classify."
+      }
+    }
+  }
+}

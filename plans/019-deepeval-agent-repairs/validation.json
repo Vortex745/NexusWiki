@@ -1,0 +1,164 @@
+{
+  "timestamp": "2026-10-21T19:47:09.187Z",
+  "status": "passed",
+  "checks": [
+    {
+      "name": "templates",
+      "result": "passed",
+      "evidence": {
+        "files": 10,
+        "requiredSections": 7
+      }
+    },
+    {
+      "name": "publication_statuses",
+      "result": "passed",
+      "evidence": {
+        "invalid": [],
+        "implementationAuthorized": false
+      }
+    },
+    {
+      "name": "extensive_stories_and_acceptance",
+      "result": "passed",
+      "evidence": {
+        "stories": 100,
+        "acceptance": 100,
+        "allUnchecked": true
+      }
+    },
+    {
+      "name": "implementation_decisions_no_paths_or_snippets",
+      "result": "passed",
+      "evidence": {
+        "invalid": []
+      }
+    },
+    {
+      "name": "no_unresolved_placeholders",
+      "result": "passed",
+      "evidence": {
+        "invalid": []
+      }
+    },
+    {
+      "name": "parent_coverage_exact",
+      "result": "passed",
+      "evidence": {
+        "sourceItems": 10,
+        "parentStories": 100,
+        "parentAcceptance": 100
+      }
+    },
+    {
+      "name": "dependency_and_gate_dag",
+      "result": "passed",
+      "evidence": {
+        "tasks": 10,
+        "technicalFrontier": [
+          "E1",
+          "E3",
+          "A1",
+          "A2",
+          "A3"
+        ],
+        "initialAfterImplementationAuthorization": [
+          "E1",
+          "E3"
+        ],
+        "gates": [
+          {
+            "id": "G-P0",
+            "status": "not_run"
+          },
+          {
+            "id": "G-RERANK-LIVE",
+            "status": "not_run"
+          }
+        ]
+      }
+    },
+    {
+      "name": "suggested_order",
+      "result": "passed",
+      "evidence": {
+        "order": [
+          "E1",
+          "E3",
+          "E2",
+          "E4",
+          "A1",
+          "A2",
+          "A3",
+          "E5",
+          "T1",
+          "T2"
+        ]
+      }
+    },
+    {
+      "name": "decision_ownership",
+      "result": "passed",
+      "evidence": {
+        "decisions": 18,
+        "errors": []
+      }
+    },
+    {
+      "name": "local_links",
+      "result": "passed",
+      "evidence": {
+        "count": 57,
+        "missing": []
+      }
+    },
+    {
+      "name": "source_map_and_approval",
+      "result": "passed",
+      "evidence": {
+        "source": ".scratch/deepeval-repair-plan-20261022/plan.md",
+        "sha256": "43dbc932f0ebd4201bc086abe200ebf15217293d15dc2c40c9c93c04bd3b7bbd",
+        "matchedItems": [
+          "E1",
+          "E2",
+          "E3",
+          "E4",
+          "A1",
+          "A2",
+          "A3",
+          "E5",
+          "T1",
+          "T2"
+        ],
+        "testSeam": {
+          "status": "confirmed",
+          "answer": "沿用这些测试边界（推荐）",
+          "primary": [
+            "真实HTTP JSON/SSE",
+            "现有评测命令",
+            "隔离SQLite"
+          ],
+          "supplementary": [
+            "事实/规范化/反向断言",
+            "统计/汇总",
+            "重试/文件锁/落盘故障"
+          ],
+          "online": [
+            "真实Jev校准",
+            "真实Rerank-on",
+            "实际延迟与degraded验收"
+          ]
+        }
+      }
+    }
+  ],
+  "totals": {
+    "specifications": 10,
+    "user_stories": 100,
+    "acceptance_criteria": 100,
+    "decisions": 18
+  },
+  "businessVerification": "not_run",
+  "onlineVerification": "not_run",
+  "implementation": "not_started"
+}

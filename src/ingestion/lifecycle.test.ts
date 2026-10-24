@@ -877,7 +877,11 @@ test("a stale worker callback cannot mutate a newer attempt", async () => {
     const currentRun = lifecycle.runNext()
     await starts[1].promise
     releases[0].resolve()
-    await assert.rejects(staleRun, /failure could not be recorded/)
+    // Ticket 25: the superseded execution reports stale and writes nothing —
+    // the retry budget below (failCount 1) is the recovery's own record.
+    const staleResult = await staleRun
+    assert.equal(staleResult?.stale, true)
+    assert.equal(staleResult?.success, false)
 
     const stillRunning = lifecycle.getStatus(submitted.docId)
     assert.equal(stillRunning?.task?.status, "running")

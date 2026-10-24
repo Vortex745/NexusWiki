@@ -44,6 +44,7 @@ const PARSER_OVERRIDES = new Set<ParserType>([
   "mineru",
   "builtin-pdf",
   "direct-txt",
+  "ocr-api",
 ])
 
 export interface ParserSelectionInput {
@@ -58,13 +59,7 @@ export interface ParserDecision {
 }
 
 export interface ParserRouteInfo {
-  /**
-   * Preference-ordered parser candidates. The pipeline walks the list and
-   * uses the first candidate whose runtime is actually available, so a
-   * missing optional parser degrades gracefully instead of failing the
-   * import. An explicit override (`authoritative: true`) always yields a
-   * single candidate and is used strictly.
-   */
+  /** One type-matched parser; failures never switch OCR providers. */
   candidates: ParserType[]
   reason: string
   authoritative: boolean
@@ -79,7 +74,7 @@ function parserOverride(value: string): ParserType {
     return value
   }
   throw new Error(
-    `Unsupported parser override: ${value}. Expected markitdown, marker, mineru, or builtin-pdf.`
+    `Unsupported parser override: ${value}. Expected markitdown, ocr-api, builtin-pdf, or direct-txt.`
   )
 }
 
@@ -89,13 +84,18 @@ function parserOverride(value: string): ParserType {
 // recorded reason) instead of hijacking the file into a wrong-class parser.
 type ParserFileClass = "pdf" | "image" | "text"
 const PARSER_COMPATIBLE_CLASSES: Record<ParserType, Set<ParserFileClass>> = {
-  // markitdown is the general text converter; an explicit markitdown choice
-  // on a simple PDF is a legitimate text-extraction path and stays honored.
-  markitdown: new Set<ParserFileClass>(["text", "pdf"]),
+  // Ticket 21: markitdown is the general text converter — and ONLY that. It
+  // has no raw seam, no page structure and no extraction evidence row, so a
+  // PDF routed through it could never produce the page evidence the quality
+  // gate grounds an audit on. An explicit markitdown choice on a PDF is
+  // normalized to the type-matched route (original intent preserved in the
+  // recorded reason), exactly like any other wrong-class override.
+  markitdown: new Set<ParserFileClass>(["text"]),
   marker: new Set<ParserFileClass>(["pdf"]),
   "builtin-pdf": new Set<ParserFileClass>(["pdf"]),
   // mineru is the OCR-aware extractor for images and also handles PDFs.
   mineru: new Set<ParserFileClass>(["pdf", "image"]),
+  "ocr-api": new Set<ParserFileClass>(["pdf", "image"]),
   // UT-10: the faithful TXT path is strictly plain text — no other format may
   // enter it (structured text like .md/.csv keeps its markdown-aware route).
   "direct-txt": new Set<ParserFileClass>(["text"]),
@@ -143,8 +143,10 @@ export function selectParserRoute(input: ParserSelectionInput): ParserRouteInfo 
       }
     }
     return {
-      candidates: [parser],
-      reason: "explicit parser override",
+      candidates: [parser === "marker" || parser === "mineru" ? "ocr-api" : parser],
+      reason: parser === "marker" || parser === "mineru"
+        ? `${parser} legacy OCR override mapped to ocr-api`
+        : "explicit parser override",
       authoritative: true,
     }
   }
@@ -152,10 +154,8 @@ export function selectParserRoute(input: ParserSelectionInput): ParserRouteInfo 
   const extension = extname(input.fileName).toLowerCase()
   if (extension === ".pdf") {
     return {
-      // builtin-pdf ships with the repo and needs only python + PyMuPDF,
-      // so PDF import never hard-fails on a missing optional runtime.
-      candidates: ["marker", "builtin-pdf"],
-      reason: "PDF documents require layout-aware parsing",
+      candidates: ["builtin-pdf"],
+      reason: "PDF documents use text-layer extraction; select ocr-api for OCR",
       authoritative: false,
     }
   }
@@ -172,8 +172,8 @@ export function selectParserRoute(input: ParserSelectionInput): ParserRouteInfo 
   }
   if ([".bmp", ".heic", ".jpeg", ".jpg", ".png", ".tif", ".tiff"].includes(extension)) {
     return {
-      candidates: ["mineru"],
-      reason: "image documents require OCR-aware parsing",
+      candidates: ["ocr-api"],
+      reason: "image documents use the OCR API",
       authoritative: false,
     }
   }
@@ -188,15 +188,15 @@ export function selectParserRoute(input: ParserSelectionInput): ParserRouteInfo 
   const mimeType = input.mimeType?.split(";", 1)[0].trim().toLowerCase()
   if (mimeType === "application/pdf") {
     return {
-      candidates: ["marker", "builtin-pdf"],
-      reason: "PDF documents require layout-aware parsing",
+      candidates: ["builtin-pdf"],
+      reason: "PDF documents use text-layer extraction; select ocr-api for OCR",
       authoritative: false,
     }
   }
   if (mimeType?.startsWith("image/")) {
     return {
-      candidates: ["mineru"],
-      reason: "image documents require OCR-aware parsing",
+      candidates: ["ocr-api"],
+      reason: "image documents use the OCR API",
       authoritative: false,
     }
   }

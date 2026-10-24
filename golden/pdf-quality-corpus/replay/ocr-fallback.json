@@ -1,0 +1,450 @@
+{
+  "schemaVersion": "pdf-quality-replay-v1",
+  "scenarios": [
+    {
+      "schemaVersion": "pdf-quality-replay-v1",
+      "scenarioId": "ocr--faithful-candidate--scanned-textless",
+      "service": "ocr",
+      "stage": "ocr-fallback",
+      "fixture": "scanned-textless",
+      "caseKinds": [
+        "pass"
+      ],
+      "coversPages": [
+        1,
+        2
+      ],
+      "maxImagesPerRequest": 4,
+      "timeoutMs": 120000,
+      "externalServiceDependency": "none",
+      "authoredFrom": "整篇 OCR 候选文本逐页等于 corpus-manifest 登记的可见内容（corpus-visible-lines），代表一次理想识别，用于票 13 的正向恢复路径。",
+      "answersSource": {
+        "kind": "corpus-visible-lines",
+        "fixture": "scanned-textless",
+        "stage": "ocr-candidate"
+      },
+      "attempts": [
+        {
+          "attempt": 1,
+          "outcome": "answered",
+          "latencyMs": 900,
+          "pages": [
+            {
+              "page": 1,
+              "text": "扫描件第一页：这是纯图像页，没有文本层。\n发票号 INV-77881，校验词 扫-1。"
+            },
+            {
+              "page": 2,
+              "text": "扫描件第二页：图像里的正文第二段。\n本页只有像素，校验词 扫-2。"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "schemaVersion": "pdf-quality-replay-v1",
+      "scenarioId": "ocr--faithful-candidate--image-cover",
+      "service": "ocr",
+      "stage": "ocr-fallback",
+      "fixture": "image-cover",
+      "caseKinds": [
+        "pass"
+      ],
+      "coversPages": [
+        1,
+        2
+      ],
+      "maxImagesPerRequest": 4,
+      "timeoutMs": 120000,
+      "externalServiceDependency": "none",
+      "authoredFrom": "整篇 OCR 候选文本逐页等于 corpus-manifest 登记的可见内容（corpus-visible-lines），代表一次理想识别，用于票 13 的正向恢复路径。",
+      "answersSource": {
+        "kind": "corpus-visible-lines",
+        "fixture": "image-cover",
+        "stage": "ocr-candidate"
+      },
+      "attempts": [
+        {
+          "attempt": 1,
+          "outcome": "answered",
+          "latencyMs": 900,
+          "pages": [
+            {
+              "page": 1,
+              "text": "封面（整页图像）：产品质量门验收\nCOVER-42"
+            },
+            {
+              "page": 2,
+              "text": "正文第一页：封面之后从这里开始，校验词 封-2。"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "schemaVersion": "pdf-quality-replay-v1",
+      "scenarioId": "ocr--faithful-candidate--garbled",
+      "service": "ocr",
+      "stage": "ocr-fallback",
+      "fixture": "garbled",
+      "caseKinds": [
+        "pass"
+      ],
+      "coversPages": [
+        1,
+        2
+      ],
+      "maxImagesPerRequest": 4,
+      "timeoutMs": 120000,
+      "externalServiceDependency": "none",
+      "authoredFrom": "整篇 OCR 候选文本逐页等于 corpus-manifest 登记的可见内容（corpus-visible-lines），代表一次理想识别，用于票 13 的正向恢复路径。",
+      "answersSource": {
+        "kind": "corpus-visible-lines",
+        "fixture": "garbled",
+        "stage": "ocr-candidate"
+      },
+      "attempts": [
+        {
+          "attempt": 1,
+          "outcome": "answered",
+          "latencyMs": 900,
+          "pages": [
+            {
+              "page": 1,
+              "text": "本页肉眼看到的是正常印刷文本：退款时限七天，校验词 乱-1。"
+            },
+            {
+              "page": 2,
+              "text": "对照页：文本层与页面一致，校验词 乱-2。"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "schemaVersion": "pdf-quality-replay-v1",
+      "scenarioId": "ocr--incomplete-candidate--mixed-text-scan",
+      "service": "ocr",
+      "stage": "ocr-fallback",
+      "fixture": "mixed-text-scan",
+      "caseKinds": [
+        "fail"
+      ],
+      "coversPages": [
+        1,
+        2,
+        3
+      ],
+      "maxImagesPerRequest": 4,
+      "timeoutMs": 120000,
+      "externalServiceDependency": "none",
+      "authoredFrom": "OCR 候选在第 2 页返回空文本（真实识别失败的形状），用来配对第二次审计的 content-missing 失败。",
+      "answersSource": {
+        "kind": "corpus-visible-lines",
+        "fixture": "mixed-text-scan",
+        "stage": "ocr-candidate",
+        "defect": "page-2-empty"
+      },
+      "attempts": [
+        {
+          "attempt": 1,
+          "outcome": "answered",
+          "latencyMs": 900,
+          "pages": [
+            {
+              "page": 1,
+              "text": "混合样本第一页：文本层存在，校验词 混-1。"
+            },
+            {
+              "page": 2,
+              "text": ""
+            },
+            {
+              "page": 3,
+              "text": "混合样本第三页：文本层存在，校验词 混-3。"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "schemaVersion": "pdf-quality-replay-v1",
+      "scenarioId": "ocr--fabricated-candidate--scanned-textless",
+      "service": "ocr",
+      "stage": "ocr-fallback",
+      "fixture": "scanned-textless",
+      "caseKinds": [
+        "fail"
+      ],
+      "coversPages": [
+        1,
+        2
+      ],
+      "maxImagesPerRequest": 4,
+      "timeoutMs": 120000,
+      "externalServiceDependency": "none",
+      "authoredFrom": "OCR 候选在第 2 页多出页面上不存在的句子（幻觉/串行），必须被第二次审计按 content-fabricated 拒绝。",
+      "answersSource": {
+        "kind": "corpus-visible-lines",
+        "fixture": "scanned-textless",
+        "stage": "ocr-candidate",
+        "defect": "page-2-fabricated"
+      },
+      "attempts": [
+        {
+          "attempt": 1,
+          "outcome": "answered",
+          "latencyMs": 900,
+          "pages": [
+            {
+              "page": 1,
+              "text": "扫描件第一页：这是纯图像页，没有文本层。\n发票号 INV-77881，校验词 扫-1。"
+            },
+            {
+              "page": 2,
+              "text": "扫描件第二页：图像里的正文第二段。\n本页只有像素，校验词 扫-2。\n本页不存在的一句话：无条件全额退款。"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "schemaVersion": "pdf-quality-replay-v1",
+      "scenarioId": "ocr--blank-page-empty-candidate--blank-page",
+      "service": "ocr",
+      "stage": "ocr-fallback",
+      "fixture": "blank-page",
+      "caseKinds": [
+        "uncertain"
+      ],
+      "coversPages": [
+        1,
+        2,
+        3
+      ],
+      "maxImagesPerRequest": 4,
+      "timeoutMs": 120000,
+      "externalServiceDependency": "none",
+      "authoredFrom": "OCR 对每一页都返回空文本：没有任何内容可以被确认，第二次审计只能是 uncertain，不能是 pass。",
+      "answersSource": {
+        "kind": "corpus-visible-lines",
+        "fixture": "blank-page",
+        "stage": "ocr-candidate",
+        "defect": "all-empty"
+      },
+      "attempts": [
+        {
+          "attempt": 1,
+          "outcome": "answered",
+          "latencyMs": 700,
+          "pages": [
+            {
+              "page": 1,
+              "text": ""
+            },
+            {
+              "page": 2,
+              "text": ""
+            },
+            {
+              "page": 3,
+              "text": ""
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "schemaVersion": "pdf-quality-replay-v1",
+      "scenarioId": "ocr--malformed-response--scanned-textless",
+      "service": "ocr",
+      "stage": "ocr-fallback",
+      "fixture": "scanned-textless",
+      "caseKinds": [
+        "malformed"
+      ],
+      "coversPages": [
+        1,
+        2
+      ],
+      "maxImagesPerRequest": 4,
+      "timeoutMs": 120000,
+      "externalServiceDependency": "none",
+      "authoredFrom": "OCR 返回了非法 JSON（截断响应体）：必须按协议无效处理，不能当成「没有内容」。",
+      "answersSource": {
+        "kind": "none",
+        "fixture": "scanned-textless",
+        "stage": "ocr-candidate"
+      },
+      "attempts": [
+        {
+          "attempt": 1,
+          "outcome": "malformed",
+          "latencyMs": 200,
+          "httpStatus": 200,
+          "bodyRaw": "{\"result\":{\"pages\":[{\"page\":1,\"text\":"
+        }
+      ]
+    },
+    {
+      "schemaVersion": "pdf-quality-replay-v1",
+      "scenarioId": "ocr--timeout-then-faithful--scanned-textless",
+      "service": "ocr",
+      "stage": "ocr-fallback",
+      "fixture": "scanned-textless",
+      "caseKinds": [
+        "timeout",
+        "recovery"
+      ],
+      "coversPages": [
+        1,
+        2
+      ],
+      "maxImagesPerRequest": 4,
+      "timeoutMs": 120000,
+      "externalServiceDependency": "none",
+      "authoredFrom": "第一次 OCR 超时，一次有界重试后拿到与语料可见内容一致的候选。",
+      "answersSource": {
+        "kind": "corpus-visible-lines",
+        "fixture": "scanned-textless",
+        "stage": "ocr-candidate"
+      },
+      "attempts": [
+        {
+          "attempt": 1,
+          "outcome": "timeout",
+          "latencyMs": 120000
+        },
+        {
+          "attempt": 2,
+          "outcome": "answered",
+          "latencyMs": 900,
+          "pages": [
+            {
+              "page": 1,
+              "text": "扫描件第一页：这是纯图像页，没有文本层。\n发票号 INV-77881，校验词 扫-1。"
+            },
+            {
+              "page": 2,
+              "text": "扫描件第二页：图像里的正文第二段。\n本页只有像素，校验词 扫-2。"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "schemaVersion": "pdf-quality-replay-v1",
+      "scenarioId": "ocr--cancelled--scanned-textless",
+      "service": "ocr",
+      "stage": "ocr-fallback",
+      "fixture": "scanned-textless",
+      "caseKinds": [
+        "cancellation"
+      ],
+      "coversPages": [
+        1,
+        2
+      ],
+      "maxImagesPerRequest": 4,
+      "timeoutMs": 120000,
+      "externalServiceDependency": "none",
+      "authoredFrom": "OCR 请求被取消：AbortError，票 19/25 用它断言取消不被改写成质量失败。",
+      "answersSource": {
+        "kind": "none",
+        "fixture": "scanned-textless",
+        "stage": "ocr-candidate"
+      },
+      "attempts": [
+        {
+          "attempt": 1,
+          "outcome": "cancelled",
+          "latencyMs": 30
+        }
+      ]
+    },
+    {
+      "schemaVersion": "pdf-quality-replay-v1",
+      "scenarioId": "ocr--recovery-reuse--scanned-textless",
+      "service": "ocr",
+      "stage": "ocr-fallback",
+      "fixture": "scanned-textless",
+      "caseKinds": [
+        "recovery"
+      ],
+      "coversPages": [
+        1,
+        2
+      ],
+      "maxImagesPerRequest": 4,
+      "timeoutMs": 120000,
+      "externalServiceDependency": "none",
+      "authoredFrom": "恢复路径复用已持久化的 OCR 候选，不重新调用 OCR（invocations=0）。",
+      "answersSource": {
+        "kind": "corpus-visible-lines",
+        "fixture": "scanned-textless",
+        "stage": "ocr-candidate"
+      },
+      "attempts": [
+        {
+          "attempt": 1,
+          "outcome": "answered-from-durable-evidence",
+          "reusedFromAttempt": 1,
+          "latencyMs": 4,
+          "pages": [
+            {
+              "page": 1,
+              "text": "扫描件第一页：这是纯图像页，没有文本层。\n发票号 INV-77881，校验词 扫-1。"
+            },
+            {
+              "page": 2,
+              "text": "扫描件第二页：图像里的正文第二段。\n本页只有像素，校验词 扫-2。"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "schemaVersion": "pdf-quality-replay-v1",
+      "scenarioId": "ocr--unavailable-exhausted--scanned-textless",
+      "service": "ocr",
+      "stage": "ocr-fallback",
+      "fixture": "scanned-textless",
+      "caseKinds": [
+        "service-fault"
+      ],
+      "coversPages": [
+        1,
+        2
+      ],
+      "maxImagesPerRequest": 4,
+      "timeoutMs": 120000,
+      "externalServiceDependency": "none",
+      "authoredFrom": "OCR 连续三次服务端错误：重试耗尽得到服务不可用终态，绝不能被当成质量 pass。",
+      "answersSource": {
+        "kind": "none",
+        "fixture": "scanned-textless",
+        "stage": "ocr-candidate"
+      },
+      "attempts": [
+        {
+          "attempt": 1,
+          "outcome": "service-error",
+          "latencyMs": 400,
+          "httpStatus": 429
+        },
+        {
+          "attempt": 2,
+          "outcome": "service-error",
+          "latencyMs": 400,
+          "httpStatus": 500
+        },
+        {
+          "attempt": 3,
+          "outcome": "service-error",
+          "latencyMs": 400,
+          "httpStatus": 503
+        }
+      ]
+    }
+  ]
+}

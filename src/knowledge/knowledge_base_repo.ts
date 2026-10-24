@@ -62,6 +62,27 @@ export interface KnowledgeBaseRepo {
     description: string,
     updatedAt: string
   ): boolean
+
+  /**
+   * Move a knowledge base into a folder, or out of every folder when
+   * `folderId` is null. Scoped by tenant; returns false when no row matched
+   * (→ 404). The caller validates the target folder belongs to the same
+   * tenant — this method only writes the reference.
+   */
+  setFolderId(
+    id: string,
+    tenantId: string,
+    folderId: string | null,
+    updatedAt: string
+  ): boolean
+
+  /**
+   * Ungroup every knowledge base of one folder, used when the folder itself is
+   * deleted. Returns how many rows were released. Membership is a naming aid,
+   * so this never archives, never deletes, and never touches a base's own
+   * status or scope.
+   */
+  clearFolderChildren(folderId: string, tenantId: string, updatedAt: string): number
 }
 
 interface StoredKnowledgeBase {
@@ -71,12 +92,13 @@ interface StoredKnowledgeBase {
   description: string
   status: string
   embedding_profile: string
+  folder_id: string | null
   created_at: string
   updated_at: string
 }
 
 const SELECT_COLUMNS = `id, tenant_id, name, description, status,
-       embedding_profile, created_at, updated_at`
+       embedding_profile, folder_id, created_at, updated_at`
 
 function rowToKnowledgeBase(row: StoredKnowledgeBase): KnowledgeBase {
   return {
@@ -86,6 +108,9 @@ function rowToKnowledgeBase(row: StoredKnowledgeBase): KnowledgeBase {
     description: row.description,
     status: row.status as KnowledgeBaseStatus,
     embeddingProfile: row.embedding_profile,
+    // An old row (pre-ALTER) and a deliberately ungrouped one are the same
+    // thing to the read path: no folder.
+    folderId: row.folder_id ?? null,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   }
@@ -98,8 +123,8 @@ export class SqliteKnowledgeBaseRepo implements KnowledgeBaseRepo {
     this.db.prepare(
       `INSERT OR IGNORE INTO knowledge_bases (
         id, tenant_id, name, description, status,
-        embedding_profile, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+        embedding_profile, folder_id, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
     ).run(
       knowledgeBase.id,
       knowledgeBase.tenantId,
@@ -107,6 +132,7 @@ export class SqliteKnowledgeBaseRepo implements KnowledgeBaseRepo {
       knowledgeBase.description,
       knowledgeBase.status,
       knowledgeBase.embeddingProfile,
+      knowledgeBase.folderId,
       knowledgeBase.createdAt,
       knowledgeBase.updatedAt
     )
@@ -161,5 +187,26 @@ export class SqliteKnowledgeBaseRepo implements KnowledgeBaseRepo {
        WHERE id = ? AND tenant_id = ?`
     ).run(description, updatedAt, id, tenantId)
     return result.changes > 0
+  }
+
+  setFolderId(
+    id: string,
+    tenantId: string,
+    folderId: string | null,
+    updatedAt: string
+  ): boolean {
+    const result = this.db.prepare(
+      `UPDATE knowledge_bases SET folder_id = ?, updated_at = ?
+       WHERE id = ? AND tenant_id = ?`
+    ).run(folderId, updatedAt, id, tenantId)
+    return result.changes > 0
+  }
+
+  clearFolderChildren(folderId: string, tenantId: string, updatedAt: string): number {
+    const result = this.db.prepare(
+      `UPDATE knowledge_bases SET folder_id = NULL, updated_at = ?
+       WHERE folder_id = ? AND tenant_id = ?`
+    ).run(updatedAt, folderId, tenantId)
+    return result.changes
   }
 }

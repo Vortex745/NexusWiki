@@ -56,6 +56,8 @@ export interface Assistant {
   name: string
   description: string
   status: AssistantStatus
+  /** Sidebar curation: false = hidden from the sidebar selector (admin-set). */
+  sidebarVisible: boolean
   /** Group visibility axis (same semantics as documents/allowed_groups). */
   allowedGroups: string[]
   currentVersion: number
@@ -118,12 +120,21 @@ export class AssistantArchivedError extends Error {
   }
 }
 
+/** A tenant's deterministic default assistant can be archived but never removed. */
+export class AssistantDefaultError extends Error {
+  constructor() {
+    super("the default assistant cannot be deleted")
+    this.name = "AssistantDefaultError"
+  }
+}
+
 interface AssistantRow {
   id: string
   tenant_id: string
   name: string
   description: string
   status: AssistantStatus
+  sidebar_visible: number
   allowed_groups: string
   current_version: number
   created_at: string
@@ -145,6 +156,9 @@ function rowToAssistant(row: AssistantRow): Assistant {
     name: row.name,
     description: row.description,
     status: row.status,
+    // `!== 0` (not `=== 1`) so a row that somehow predates the column still
+    // reads as visible — the pre-column behavior, not a mass hiding.
+    sidebarVisible: row.sidebar_visible !== 0,
     allowedGroups: JSON.parse(row.allowed_groups) as string[],
     currentVersion: row.current_version,
     createdAt: row.created_at,
@@ -295,6 +309,41 @@ export class AssistantService {
 
   restore(id: string, tenantId: string): Assistant {
     return this.setStatus(id, tenantId, "active")
+  }
+
+  /**
+   * Sidebar curation — flips the visibility flag WITHOUT minting a version:
+   * versions carry only execution configuration, and this toggle changes no
+   * execution semantics. The tenant's default assistant is always visible
+   * (refused here; the UI disables the checkbox as the convenience half).
+   * Setting the flag on an archived row is allowed on purpose: it records the
+   * curator's intent and takes effect again after a restore.
+   */
+  setSidebarVisible(id: string, tenantId: string, visible: boolean): Assistant {
+    if (id === defaultAssistantId(tenantId)) throw new AssistantDefaultError()
+    const existing = this.get(id, tenantId)
+    if (!existing) throw new AssistantNotFoundError()
+    this.db
+      .prepare(`UPDATE assistants SET sidebar_visible = ?, updated_at = ? WHERE id = ? AND tenant_id = ?`)
+      .run(visible ? 1 : 0, this.now().toISOString(), id, tenantId)
+    return this.get(id, tenantId) as Assistant
+  }
+
+  /**
+   * Physical delete — unlike archive, the row and its version history are
+   * gone. Past conversations naming the id fall through to the chat route's
+   * 404 and evaluation snapshots keep their immutable copy, so nothing else
+   * references the row. The tenant's default assistant is refuse here (the
+   * UI hides the button too; this is the enforced half of that contract).
+   */
+  remove(id: string, tenantId: string): void {
+    if (id === defaultAssistantId(tenantId)) throw new AssistantDefaultError()
+    const existing = this.get(id, tenantId)
+    if (!existing) throw new AssistantNotFoundError()
+    this.db.transaction(() => {
+      this.db.prepare(`DELETE FROM assistant_versions WHERE assistant_id = ?`).run(id)
+      this.db.prepare(`DELETE FROM assistants WHERE id = ? AND tenant_id = ?`).run(id, tenantId)
+    })()
   }
 
   get(id: string, tenantId: string): AssistantWithVersion | null {

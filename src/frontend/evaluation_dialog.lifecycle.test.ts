@@ -69,11 +69,24 @@ function harness() {
   runInNewContext(compiled, {
     exports,
     require(name: string) {
+      // UI primitives are inert host nodes; the real dialog's business hooks and transport stay under test.
+      if (name.includes("/primitives/")) return { Button:"button", Input:"input", Textarea:"textarea", DialogTitle:"h2", RadioGroup:"radiogroup", RadioGroupItem:"radio", ToggleGroup:"group", ToggleGroupItem:"button", Alert:"alert", AlertDescription:"description", FieldSet:"fieldset", FieldLegend:"legend" }
+      if (name.endsWith("/Controls")) return {Button:"button",Select:"select",TextInput:"input",TextArea:"textarea",Field:"field",Checkbox:"checkbox",EmptyState:"empty",StatusBadge:"badge"}
+      if (name.endsWith("/Dialog")) return {Dialog:"dialog",PanelDialog:"dialog"}
       if (name === "react") return react
       if (name === "react/jsx-runtime") return { jsx: (type: any, props: any) => ({ type, props }), jsxs: (type: any, props: any) => ({ type, props }) }
       if (name.endsWith("/api")) return api
       if (name.endsWith("/constants")) return { EVALUATION_POLL_MS: 1 }
       if (name.endsWith("/cn")) return { cn: (...values: any[]) => values.join(" ") }
+      if (name.endsWith("/Dialog")) return { Dialog: "dialog" }
+      if (name.endsWith("/Controls")) {
+        return {
+          Button: "button",
+          Select: "select",
+          TextArea: "textarea",
+          TextInput: "input",
+        }
+      }
       return {}
     },
     window: { setInterval(callback: () => void) { const id = timers.size + 1; timers.set(id, callback); return id }, clearInterval(id: number) { timers.delete(id) } },

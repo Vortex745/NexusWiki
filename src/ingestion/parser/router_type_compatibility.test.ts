@@ -39,20 +39,24 @@ test("UT-06 路由：TXT 携带 PDF 专用 override 归一到文本路径且记�
 test("UT-06 路由：类型兼容的 override 保持权威单候选，既有格式不受影响", () => {
   // PDF 上显式选择 PDF 类解析器 → 权威。
   const markerOnPdf = selectParserRoute({ fileName: "a.pdf", mimeType: "application/pdf", override: "marker" })
-  assert.deepEqual(markerOnPdf.candidates, ["marker"])
+  assert.deepEqual(markerOnPdf.candidates, ["ocr-api"])
   assert.equal(markerOnPdf.authoritative, true)
   // mineru 同样支持 PDF（OCR 提取器）→ 权威保持既有行为。
   const mineruOnPdf = selectParserRoute({ fileName: "scan.pdf", override: "mineru" })
-  assert.deepEqual(mineruOnPdf.candidates, ["mineru"])
+  assert.deepEqual(mineruOnPdf.candidates, ["ocr-api"])
   assert.equal(mineruOnPdf.authoritative, true)
-  // markitdown 是通用文本转换器：显式选择简单 PDF 的 markitdown 合法。
+  // Ticket 21: markitdown is the text converter only — an explicit markitdown
+  // choice on a PDF normalizes to the type-matched route (builtin-pdf), since
+  // markitdown has no raw seam or page evidence the quality gate could ground.
   const markitdownOnPdf = selectParserRoute({ fileName: "simple.pdf", mimeType: "application/pdf", override: "markitdown" })
-  assert.deepEqual(markitdownOnPdf.candidates, ["markitdown"])
-  assert.equal(markitdownOnPdf.authoritative, true)
+  assert.deepEqual(markitdownOnPdf.candidates, ["builtin-pdf"])
+  assert.equal(markitdownOnPdf.authoritative, false)
+  assert.match(markitdownOnPdf.reason, /markitdown/)
+  assert.match(markitdownOnPdf.reason, /not compatible with pdf files/)
 
   // 无 override 的自动路由回归：PDF / 图片 / 文本 / Markdown / CSV。
-  assert.deepEqual(selectParserRoute({ fileName: "a.pdf" }).candidates, ["marker", "builtin-pdf"])
-  assert.deepEqual(selectParserRoute({ fileName: "a.png" }).candidates, ["mineru"])
+  assert.deepEqual(selectParserRoute({ fileName: "a.pdf" }).candidates, ["builtin-pdf"])
+  assert.deepEqual(selectParserRoute({ fileName: "a.png" }).candidates, ["ocr-api"])
   // UT-10：.txt / text/plain 走保真 direct-txt；结构化文本（md/csv）不变。
   assert.deepEqual(selectParserRoute({ fileName: "a.txt" }).candidates, ["direct-txt"])
   assert.deepEqual(selectParserRoute({ fileName: "notes.md" }).candidates, ["markitdown"])
@@ -60,7 +64,7 @@ test("UT-06 路由：类型兼容的 override 保持权威单候选，既有格�
 
   // 图片上选择文本/PDF 解析器 → 归一到 OCR 路径。
   const markerOnPng = selectParserRoute({ fileName: "scan.png", override: "marker" })
-  assert.deepEqual(markerOnPng.candidates, ["mineru"])
+  assert.deepEqual(markerOnPng.candidates, ["ocr-api"])
   assert.match(markerOnPng.reason, /marker/)
 
   // 无法确认的类型不得盲目声明兼容。

@@ -32,6 +32,7 @@ import {
   type ProbeProfile,
 } from "../src/release/smoke_harness"
 import { DETERMINISTIC_PROBE_IMPLEMENTATIONS } from "../src/release/deterministic_probes"
+import { ocrApiProbe } from "../src/release/ocr_api_probe"
 import { verifyRollback } from "../src/release/rollback_check"
 
 async function main(): Promise<void> {
@@ -61,7 +62,7 @@ async function main(): Promise<void> {
   console.log(`Running deterministic probes (profile: ${profile})...`)
   const evidence = await runAllProbes({
     profile,
-    implementations: DETERMINISTIC_PROBE_IMPLEMENTATIONS,
+    implementations: { ...DETERMINISTIC_PROBE_IMPLEMENTATIONS, "ocr-api": ocrApiProbe },
   })
 
   for (const result of evidence.results) {

@@ -107,3 +107,67 @@ test("ARCH-01E #6: the route stack publishes one runner and no tool internals", 
   assert.deepEqual(Object.keys(stack).sort(), ["runner"])
   assert.equal(typeof stack.runner, "function")
 })
+
+test("Clef route stack uses the configured provider once and preserves its trace", async () => {
+  const previousFetch = globalThis.fetch
+  const db = openDb(":memory:")
+  let cloudflareCalls = 0
+  let chatCalls = 0
+  globalThis.fetch = async (input, init) => {
+    cloudflareCalls++
+    assert.match(String(input), /^https:\/\/api\.cloudflare\.com\/client\/v4\/accounts\//)
+    assert.ok(init?.signal, "real provider call must be cancellable")
+    const request = JSON.parse(String(init?.body))
+    assert.equal(request.state.query, "它怎么设置？")
+    return Response.json({
+      success: true,
+      result: {
+        model: "clef",
+        answers: { route: {
+          type: "choice", choice: "ambiguous", confidence: 0.65,
+          probabilities: { direct: 0.05, simple: 0.1, ambiguous: 0.8, complex: 0.05 },
+        } },
+        usage: { input_tokens: 45, output_tokens: 0 },
+      },
+    })
+  }
+  try {
+    const stack = await createAnswerRouteStack({
+      config: {
+        ...config, decisionProvider: "clef", cloudflareAccountId: "test-account",
+        cloudflareApiToken: "test-token", decisionRequestTimeoutMs: 1_000,
+      },
+      answerModelClient: {
+        chat: { completions: { create: async () => {
+          chatCalls++
+          return { choices: [{ message: { content: "direct" } }] }
+        } } },
+      } as unknown as OpenAI,
+      db,
+      createSearcher: (() => ({})) as never,
+      conversationStore: {
+        loadConversationMemory: () => ({ recentTurns: [], summary: null }),
+        savePendingClarification: () => {},
+        consumePendingClarification: () => null,
+        saveValidatedTurn: () => {},
+      } as unknown as ConversationStore,
+      handoffStore: {} as HandoffStore,
+      streamDirectReply: async function* () { yield "unused" },
+    })
+    const result = await stack.runner({
+      message: "它怎么设置？", runId: "clef-route-stack", sessionId: "clef-stack-session",
+      signal: new AbortController().signal,
+      accessContext: { tenantId: "default", subjectId: "test", groups: [], scopes: ["chat"] },
+    })
+    assert.equal(result.status, "clarification_required")
+    assert.equal(result.routeTrace.decision, "ambiguous")
+    assert.equal(result.routeTrace.routingModel?.actualModel, "clef")
+    assert.equal(result.routeTrace.routingModel?.usage.totalTokens, 45)
+    assert.equal(result.routeTrace.routingModel?.confidence, 0.65)
+    assert.equal(cloudflareCalls, 1)
+    assert.equal(chatCalls, 0, "Clef replaces the Chat classifier")
+  } finally {
+    globalThis.fetch = previousFetch
+    db.close()
+  }
+})

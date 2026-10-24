@@ -1,0 +1,84 @@
+{
+  "model": "jev-latest",
+  "state": {
+    "task": "Split an already discussed upload integrity and recovery plan into actionable LOCAL issue specifications. Do not implement business code or interview the user again.",
+    "confirmed_requirements": [
+      "Preserve all effective information, retain original files and trace sources. Layout reproduction is unnecessary.",
+      "First validate TXT and simple text PDFs. Scanned, mixed and unverified complex PDFs remain awaiting verification; OCR is later.",
+      "Unknown or failed completeness must prevent activation; the last valid version stays usable.",
+      "Measure upload start to fully verified searchable content, with transfer, queue, parse, verify, chunk, embed and index timings.",
+      "Conservative traceable cleaning; retain footnotes, marginal notes and suspected headers unless independent evidence proves redundancy.",
+      "Select installed compatible parsers by file type; PDF options do not affect TXT. Retry only bounded transient failures.",
+      "Independent synthetic truth then representative local documents; do not send real file contents to Jev.",
+      "Baseline before setting p50/p95 and completion targets. No workload SLA has been agreed.",
+      "Resume the same persisted document and task, reuse only verified artifacts with matching source hash and stage configuration versions.",
+      "Keep other supported formats; reject empty, oversized and mismatched inputs; evaluate only PDF/TXT.",
+      "Deliver core parsing, integrity and recovery in batch one; frontend scheduling, cancellation and progress in batch two."
+    ],
+    "observed_failures": [
+      "TXT inherited a PDF-only parser override; a missing executable was retried four times.",
+      "PDF normalization dropped coverage warnings; mixed PDFs could be accepted with only one extracted page.",
+      "Column reading order and table/header preservation failed synthetic checks.",
+      "Stage completion currently permits activation without an independent completeness gate.",
+      "Raw file and SHA256 exist, but extracted artifact provenance is not persisted.",
+      "Frontend probes confirmed excess concurrency, preflight races, falsely successful cancellation, late polling overwrite and ETA origin resets."
+    ],
+    "test_surfaces": "Prefer existing file upload, status and resume HTTP interfaces plus the ingestion lifecycle. Add parser/artifact tests only where independent truth cannot be checked through those surfaces. Browser tests belong to batch two.",
+    "candidate_16": {
+      "core": [
+        "01 Independent truth fixtures and before-fix baseline",
+        "02 File admission and type-compatible routing",
+        "03 Capability/error classification and bounded retry",
+        "04 Durable extraction and provenance evidence",
+        "05 Faithful TXT path and measured cold-start improvement",
+        "06 Conservative PDF normalization and complex-file escalation",
+        "07 Source span and chunk coverage verification",
+        "08 Integrity lifecycle gate and previous-version protection",
+        "09 Indexed manifest, visibility and retrieval verification",
+        "10 Same-document/task recovery, compatibility and restart safety",
+        "11 Core end-to-end acceptance and matched performance comparison"
+      ],
+      "frontend": [
+        "12 Preflight and bounded queue scheduling",
+        "13 Resume and awaiting-verification status integration",
+        "14 Confirmed cancellation and late-response convergence",
+        "15 Stable timing origin, ETA and stage progress",
+        "16 Integrated browser acceptance"
+      ]
+    },
+    "alternatives": {
+      "six_phases": "Six larger tickets: baseline; routing/retry; extraction/cleaning/chunking; gate/index/recovery; core acceptance; all frontend work. Fewer shared-contract handoffs, but large tickets mix distinct failures and acceptance criteria.",
+      "twenty_four": "Twenty-four narrower tickets by separate schema, adapter, storage, status/API, validator and frontend component edits. Easier small diffs, but many tickets lack independently observable behavior and require repeated shared contract changes."
+    },
+    "scope_constraints": "One repository with existing adapters, lifecycle and local ready-for-agent labels. No GitHub publication, deployment, arbitrary PDF completeness promises, per-file AI decisions or new core framework. Plan labels do not imply dependencies complete or authorization to implement."
+  },
+  "questions": {
+    "task_granularity": {
+      "type": "choice",
+      "instructions": "Choose the task granularity that best balances independently observable acceptance, review size, dependency overhead and the user's fixed two-batch scope. Evaluate all options from the evidence; do not infer completion from ticket labels.",
+      "criteria": {
+        "six_phases": "Use the six larger tickets described in state.alternatives.six_phases.",
+        "sixteen_behavior_tickets": "Use the sixteen behavior and acceptance packages in state.candidate_16, defining shared contracts once and recording real dependencies.",
+        "twenty_four_layer_tickets": "Use the twenty-four narrower technical-layer tickets described in state.alternatives.twenty_four."
+      }
+    },
+    "integrity_and_index_boundary": {
+      "type": "choice",
+      "instructions": "Given an activation guard that must require both content integrity and verified searchable indexing, which ticket boundary best permits independent failure reproduction and shared activation correctness?",
+      "criteria": {
+        "separate_shared_guard": "Separate content-integrity lifecycle and indexed visibility verification tickets, define a shared verification contract in the former, and prohibit activation until both proofs exist.",
+        "single_large_gate_ticket": "Merge content-integrity checks, index manifest/visibility and lifecycle activation into a single ticket to minimize changes to the guard.",
+        "index_success_suffices": "Treat successful index writes as enough evidence of completeness and activation."
+      }
+    },
+    "baseline_order": {
+      "type": "choice",
+      "instructions": "For the user's goal of measuring speed and complete success rate without relaxing integrity, when should independent-truth fixtures and a before-fix baseline be established?",
+      "criteria": {
+        "before_behavior_changes": "Establish an independent oracle and record an isolated current baseline first. Known failures are recorded observations, not reasons to weaken the oracle. Repeat the same samples after implementation.",
+        "after_all_fixes": "Build fixtures and gather the first baseline only after routing, cleaning, activation and recovery changes.",
+        "reuse_old_test_passes": "Use historical unit-test pass ratios and model confidence as the completion-rate baseline."
+      }
+    }
+  }
+}

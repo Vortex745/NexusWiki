@@ -291,7 +291,7 @@ test("UT-10 路由边界：其他格式不误入保真 TXT 路径", () => {
   assert.deepEqual(selectParserRoute({ fileName: "doc.docx", mimeType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document" }).candidates, ["markitdown"])
   // 显式 direct-txt override 在非文本类上被归一（类型匹配语义不变）。
   const overrideOnPdf = selectParserRoute({ fileName: "a.pdf", mimeType: "application/pdf", override: "direct-txt" })
-  assert.deepEqual(overrideOnPdf.candidates, ["marker", "builtin-pdf"])
+  assert.deepEqual(overrideOnPdf.candidates, ["builtin-pdf"])
   assert.match(overrideOnPdf.reason, /direct-txt is not compatible with pdf files/)
 })
 

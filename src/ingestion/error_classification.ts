@@ -6,6 +6,12 @@
 // - 取消保留取消语义，绝不落入普通重试；
 // - 分类是机器可读的稳定理由码，供任务状态返回原因与允许操作；
 // - 不自动安装软件，理由里不携带凭据或正文。
+//
+// Ticket 18: the bounded retry budget lives here — one table shared by the
+// task runner (lifecycle) and the PDF quality gate's per-page Clef requests —
+// so a transient fault means the same wait-and-retry policy wherever it met
+// the pipeline, and no caller can grow a private, driftier budget.
+import { PDF_QUALITY_REJECTION_CODE, PdfQualityRejectionError } from "./quality/pdf_ocr_fallback_flag"
 
 export type IngestionFailureCategory =
   | "capability_missing"
@@ -19,7 +25,35 @@ export interface IngestionErrorClassification {
   reasonCode: string
   /** 只有暂时故障为 true——即唯一允许进入 2s/4s/8s 有界重试的类别。 */
   retryable: boolean
+  /**
+   * Ticket 17: 用户可执行的修复引导（状态 API 直接返回）。仅当失败
+   * "可能与我们无法显式探测的输入属性相关"（如 PDF 加密在 renderer 侧只
+   * 表现为 open/decode 失败）时给出——引导不得退化成笼统错误。
+   */
+  userGuidance?: string
+  /**
+   * Ticket 26: the audit's own detailed reason codes (e.g. `quality_failed:3`,
+   * `service_failure:timeout:5`), carried verbatim so the failure record can
+   * distinguish a true quality rejection from gate service unavailability —
+   * the coarse category alone cannot. Absent for every non-quality failure.
+   */
+  reasonCodes?: string[]
 }
+
+/** Provider failures carry a category without exposing remote message text. */
+export class OcrApiError extends Error {
+  constructor(message: string, readonly category: IngestionFailureCategory, readonly reasonCode?: "ocr_empty_page_unverified", readonly page?: number) {
+    super(message)
+    this.name = "OcrApiError"
+  }
+}
+
+/**
+ * The single bounded transient-retry budget: one initial attempt plus these
+ * waits between retries. Only the "transient" category may consume it, and
+ * only while entries remain — an exhausted budget is terminal, never a loop.
+ */
+export const RETRY_DELAYS_MS = [2_000, 4_000, 8_000] as const
 
 export const INGESTION_FAILURE_REASON_CODES = {
   cancelled: "ingestion_cancelled",
@@ -29,6 +63,8 @@ export const INGESTION_FAILURE_REASON_CODES = {
   unrouteableType: "unrouteable_type",
   transientServiceError: "transient_service_error",
   unclassifiedTreatedPermanent: "unclassified_error_no_transient_basis",
+  pdfQualityGateRejected: PDF_QUALITY_REJECTION_CODE,
+  ocrEmptyPageUnverified: "ocr_empty_page_unverified",
 } as const
 
 /** 允许操作（机器可读，状态 API 直接返回）。 */
@@ -80,10 +116,20 @@ function classify(message: string): IngestionErrorClassification {
     message.includes("type_conflict") ||
     message.includes("unsupported_type")
   ) {
+    // Ticket 17: 内置渲染器打开 AES-256 加密 PDF 时不报加密信号，失败会
+    // 晚些以 open/decode 抱怨出现——因此 PDF 的 open/decode 失败"可能与
+    // 密码保护相关"，即便没有显式加密标签，引导也必须点名密码/重导出。
+    const isPdfOpenFailure = /malformed builtin-pdf output/i.test(message)
     return {
       category: "permanent_input",
       reasonCode: INGESTION_FAILURE_REASON_CODES.malformedParserOutput,
       retryable: false,
+      ...(isPdfOpenFailure
+        ? {
+            userGuidance:
+              "this PDF could not be opened or decoded; if it is password-protected or encrypted, remove the password or re-export it as a regular PDF, then retry",
+          }
+        : {}),
     }
   }
   // 4) 有依据的暂时故障：限流、超时、连接抖动、明确的暂时性措辞或 5xx。
@@ -110,6 +156,35 @@ function classify(message: string): IngestionErrorClassification {
 }
 
 export function classifyIngestionError(error: unknown): IngestionErrorClassification {
+  // Ticket 18: a quality rejection is terminal for the candidate — the gate
+  // already spent its own bounded retry budget inside the audit. Classify by
+  // type, not by message, so a reason code that names a timeout
+  // (`service_failure:timeout:1`) can never re-enter the transient class and
+  // start a second full-import retry loop over the same candidate.
+  if (error instanceof PdfQualityRejectionError) {
+    return {
+      category: "permanent_input",
+      reasonCode: INGESTION_FAILURE_REASON_CODES.pdfQualityGateRejected,
+      retryable: false,
+      // Ticket 26: the audit evidence rides with the classification so the
+      // status API can render page-level reasons and separate a quality
+      // rejection from a gate service fault (both are permanent_input).
+      reasonCodes: [...error.reasonCodes],
+    }
+  }
+  if (error instanceof OcrApiError) {
+    return {
+      category: error.category,
+      reasonCode: error.reasonCode ?? (error.category === "capability_missing"
+        ? "ocr_api_not_configured_or_unauthorized"
+        : error.category === "transient" ? "ocr_api_transient_error" : "ocr_api_invalid_input_or_output"),
+      retryable: error.category === "transient",
+      ...(error.reasonCode === "ocr_empty_page_unverified" ? { userGuidance: `OCR returned unverified empty content on page ${error.page}; inspect the original page and re-export the PDF before retrying. This does not confirm a blank page.` } : {}),
+    }
+  }
+  if (error instanceof Error && error.name === "AbortError") {
+    return { category: "cancelled", reasonCode: INGESTION_FAILURE_REASON_CODES.cancelled, retryable: false }
+  }
   const message = error instanceof Error ? error.message : String(error)
   return classify(message)
 }

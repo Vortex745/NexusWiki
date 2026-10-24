@@ -90,6 +90,7 @@ function seedDeterministicNamespace(setup: Setup): DemoConfigExport {
       description: base.description,
       status: "active",
       embeddingProfile: EMBEDDING_PROFILE,
+      folderId: null,
       createdAt: timestamp,
       updatedAt: timestamp,
     })

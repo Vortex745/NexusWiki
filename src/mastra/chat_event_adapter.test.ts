@@ -29,6 +29,95 @@ import type { AnswerRunEvent, AnswerRunResult, AnswerTerminalStatus } from "../t
 import type { AnswerRunOptions } from "../answer/generation";
 import { singleTenantAccessContext } from "../access/context";
 
+test("AP-02: detailed stages arrive before runner completion and never expose a live basis", async () => {
+  let releaseRunner!: () => void;
+  const held = new Promise<void>((resolve) => { releaseRunner = resolve; });
+  let settled = false;
+  const adapter = createMastraChatEventAdapter({
+    runner: async (input) => {
+      input.onStageProgress?.("retrieval", {
+        status: "completed", round: 2, data: { correction: true, resultCount: 3 },
+      });
+      input.onStageProgress?.("context", { round: 2, data: { phase: "draft", evidenceCount: 2 } });
+      input.onStageProgress?.("validation", {
+        status: "completed", round: 2,
+        data: { passed: true, answerBasis: { text: "尚未公开的依据", referenceIds: ["ev-1"] } },
+      });
+      await held;
+      settled = true;
+      return makeFakeRunnerOutput();
+    },
+  });
+  const iterator = adapter("test", { runId: "run-live-details" })[Symbol.asyncIterator]();
+  try {
+    await iterator.next(); // route opener
+    const retrieval = (await iterator.next()).value!;
+    assert.equal(settled, false);
+    assert.equal(retrieval.status, "completed");
+    assert.equal(retrieval.round, 2);
+    assert.ok(retrieval.type === "progress" && retrieval.stage === "retrieval");
+    assert.deepEqual(retrieval.data, { correction: true, resultCount: 3 });
+    const context = (await iterator.next()).value!;
+    assert.ok(context.type === "progress" && context.stage === "context");
+    assert.equal(context.data.phase, "draft");
+    const validation = (await iterator.next()).value!;
+    assert.ok(validation.type === "progress" && validation.stage === "validation");
+    assert.equal(validation.data.passed, true);
+    assert.equal(validation.data.answerBasis, undefined);
+  } finally {
+    releaseRunner();
+    for await (const _event of { [Symbol.asyncIterator]: () => iterator }) { /* drain */ }
+  }
+});
+
+test("AP-02: an in-flight abort drops queued stages and deltas, with one cancelled terminal", async () => {
+  const controller = new AbortController();
+  const adapter = createMastraChatEventAdapter({ runner: async (input) => {
+    input.onStageProgress?.("retrieval", { status: "completed", data: { resultCount: 2 } });
+    controller.abort();
+    input.onStageProgress?.("context", { data: { phase: "draft" } });
+    input.onAnswerDelta?.("late answer");
+    const error = new Error("cancelled");
+    error.name = "AbortError";
+    throw error;
+  } });
+  const events = await collectEvents(adapter, "q", { signal: controller.signal });
+  assert.deepEqual(events.map((event) => event.type === "done" ? event.result.status : event.stage), ["route", "cancelled"]);
+});
+
+test("AP-02: only completed, passed validation publishes a basis bound to final references", async () => {
+  const reference = { id: "ev-1", documentId: "doc-1", documentVersionId: "doc-1-v1", documentVersion: 1, chunkId: "chunk-1", title: "Policy", excerpt: "30 days", source: "vector" as const, channels: ["vector" as const], score: 0.9, wikilinks: [] };
+  for (const status of ["completed", "insufficient_evidence", "invalid_citation", "provider_error", "handoff_required", "cancelled"] as const) {
+    const events = await collectEvents(createMastraChatEventAdapter({ runner: makeFakeRunner(makeFakeRunnerOutput({
+      status, references: [reference],
+      validationTrace: { round: 2, passed: true, answerBasis: { text: "  依据已核对的资料。  ", referenceIds: ["ev-1", "ev-1"] } },
+    })) }), "q");
+    const validation = events.find((event) => event.type === "progress" && event.stage === "validation");
+    assert.ok(validation?.type === "progress" && validation.stage === "validation");
+    assert.deepEqual(validation.data.answerBasis, status === "completed" ? { text: "依据已核对的资料。", referenceIds: ["ev-1"] } : undefined);
+    assert.equal(validation.round, 2);
+  }
+  for (const referenceIds of [[], ["unknown"], ["ev-1", "unknown"], [" "]]) {
+    const events = await collectEvents(createMastraChatEventAdapter({ runner: makeFakeRunner(makeFakeRunnerOutput({
+      references: [reference],
+      validationTrace: { passed: true, answerBasis: { text: "摘要", referenceIds } },
+    })) }), "q");
+    const validation = events.find((event) => event.type === "progress" && event.stage === "validation");
+    assert.ok(validation?.type === "progress" && validation.stage === "validation");
+    assert.equal(validation.data.answerBasis, undefined);
+  }
+});
+
+test("AP-02: replay keeps initial retrieval counts in round one while preserving correction counts", async () => {
+  const events = await collectEvents(createMastraChatEventAdapter({ runner: async (input) => {
+    input.onStageProgress?.("retrieval", { status: "completed", round: 1, data: { resultCount: 5 } });
+    input.onStageProgress?.("retrieval", { status: "completed", round: 2, data: { correction: true, resultCount: 1 } });
+    return makeFakeRunnerOutput({ retrievalTrace: { resultCount: 5 } });
+  } }), "q");
+  const retrieval = events.filter((event) => event.type === "progress" && event.stage === "retrieval");
+  assert.deepEqual(retrieval.map((event) => ({ round: event.round, count: event.type === "progress" && event.stage === "retrieval" ? event.data.resultCount : undefined })), [{ round: 1, count: 5 }, { round: 2, count: 1 }, { round: 1, count: 5 }]);
+});
+
 // ---------------------------------------------------------------------------
 // Fake MastraRunner — returns a controlled output for testing.
 // ---------------------------------------------------------------------------

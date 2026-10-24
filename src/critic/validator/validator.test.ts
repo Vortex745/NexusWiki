@@ -2,7 +2,7 @@
  * P3.2 — Runtime validation and bounded fallback tests.
  *
  * This file IS the P3.2 gate. It verifies that `ValidatorImpl`:
- *   - Emits `schemaVersion: 1` in its system prompt.
+ *   - Emits the current write version and a public basis request in one call.
  *   - Validates the raw LLM response via `classifyCriticVerdict` (P3.1).
  *   - Returns the validated verdict on `valid` classification.
  *   - Returns a deterministic degraded verdict on `invalid` / `unknown`
@@ -211,9 +211,9 @@ test("P3.2 gate: invalid verdict (extra dangerous field) enters bounded fallback
   assert.equal(verdict.completeness, false)
 })
 
-test("P3.2 gate: invalid verdict (schemaVersion=2) enters bounded fallback", async () => {
+test("P3.2 gate: invalid verdict (schemaVersion=3) enters bounded fallback", async () => {
   const invalidContent = JSON.stringify({
-    schemaVersion: 2,
+    schemaVersion: 3,
     passed: true,
     hallucination: false,
     completeness: true,
@@ -223,7 +223,7 @@ test("P3.2 gate: invalid verdict (schemaVersion=2) enters bounded fallback", asy
 
   const verdict = await validator.validate("answer text", CONTEXT_MESSAGES)
 
-  assert.equal(verdict.passed, false, "future schema version must not validate against v1")
+  assert.equal(verdict.passed, false, "unknown future schema version must not validate")
 })
 
 // ---------------------------------------------------------------------------
@@ -317,10 +317,10 @@ test("P3.2 gate: oversized garbage (not JSON) enters bounded fallback", async ()
 })
 
 // ---------------------------------------------------------------------------
-// P3.2 gate: prompt emits schemaVersion: 1
+// P3.2 gate: prompt emits current write version
 // ---------------------------------------------------------------------------
 
-test("P3.2 gate: system prompt emits schemaVersion: 1", async () => {
+test("P3.2 gate: system prompt emits current write version", async () => {
   const fake = makeFakeOpenAI('{"schemaVersion":1,"passed":true,"hallucination":false,"completeness":true}')
   const validator = new ValidatorImpl(fake as unknown as OpenAI, "test-model")
 
@@ -333,6 +333,97 @@ test("P3.2 gate: system prompt emits schemaVersion: 1", async () => {
     systemMessage!.content.includes(`"schemaVersion": ${CRITIC_VERDICT_SCHEMA_VERSION}`),
     `system prompt must declare schemaVersion: ${CRITIC_VERDICT_SCHEMA_VERSION}, got: ${systemMessage!.content}`
   )
+})
+
+test("AP-01: one validation call requests and returns a Chinese public basis with exact evidence IDs", async () => {
+  const fake = makeFakeOpenAI(JSON.stringify({
+    schemaVersion: 2,
+    passed: true,
+    hallucination: false,
+    completeness: true,
+    answerBasis: { text: "  依据退款手册说明期限。  ", referenceIds: [" evidence-1 "] },
+  }))
+  const validator = new ValidatorImpl(fake as unknown as OpenAI, "test-model")
+  const verdict = await validator.validate("30 days [evidence-1]", CONTEXT_MESSAGES)
+  assert.deepEqual(verdict, {
+    passed: true,
+    hallucination: false,
+    completeness: true,
+    answerBasis: { text: "依据退款手册说明期限。", referenceIds: ["evidence-1"] },
+  })
+  assert.equal(fake.capturedParams.length, 1, "optional basis uses the existing validation call")
+  const request = fake.capturedParams[0]
+  assert.deepEqual(request.response_format, { type: "json_object" })
+  const prompt = request.messages.find((message) => message.role === "system")!.content
+  assert.ok(prompt.includes('"schemaVersion": 2'))
+  assert.ok(prompt.includes("answerBasis") && prompt.includes("referenceIds"))
+  assert.ok(prompt.includes("中文") && prompt.includes("240"))
+  assert.ok(prompt.includes("内部思维链"), "prompt explicitly excludes internal reasoning transcripts")
+})
+
+test("AP-01: failed v2 validation discards its basis while preserving the gap for correction", async () => {
+  const fake = makeFakeOpenAI(JSON.stringify({
+    schemaVersion: 2,
+    passed: false,
+    hallucination: false,
+    completeness: false,
+    missingGap: "warranty period missing",
+    answerBasis: { text: "这一轮草稿未核对通过。", referenceIds: ["evidence-1"] },
+  }))
+  const verdict = await new ValidatorImpl(fake as unknown as OpenAI, "test-model").validate("draft", CONTEXT_MESSAGES)
+  assert.deepEqual(verdict, {
+    passed: false, hallucination: false, completeness: false, missingGap: "warranty period missing",
+  })
+  assert.equal(fake.capturedParams.length, 1)
+})
+
+test("AP-01: a missing or malformed basis keeps a valid v2 approval without retrying", async () => {
+  for (const answerBasis of [undefined, null, { text: "据".repeat(241), referenceIds: ["evidence-1"] }, { text: "依据材料。", referenceIds: [] }]) {
+    const fake = makeFakeOpenAI(JSON.stringify({
+      schemaVersion: 2, passed: true, hallucination: false, completeness: true, answerBasis,
+    }))
+    const verdict = await new ValidatorImpl(fake as unknown as OpenAI, "test-model").validate("answer", CONTEXT_MESSAGES)
+    assert.deepEqual(verdict, { passed: true, hallucination: false, completeness: true })
+    assert.equal(fake.capturedParams.length, 1, "missing summary must not trigger another provider call")
+  }
+})
+
+test("AP-01: malformed v2 base verdict never forwards even a structurally valid basis", async () => {
+  for (const change of [{ passed: "true" }, { reasoning: "injected" }, { schemaVersion: 3 }]) {
+    const fake = makeFakeOpenAI(JSON.stringify({
+      schemaVersion: 2,
+      passed: true,
+      hallucination: false,
+      completeness: true,
+      answerBasis: { text: "依据退款手册。", referenceIds: ["evidence-1"] },
+      ...change,
+    }))
+    const verdict = await new ValidatorImpl(fake as unknown as OpenAI, "test-model").validate("answer", CONTEXT_MESSAGES)
+    assert.deepEqual(verdict, {
+      passed: false, hallucination: false, completeness: false, missingGap: USER_MESSAGE,
+    })
+  }
+})
+
+test("AP-01: validator distinguishes raw evidence IDs from citation markup in its same-call prompt", async () => {
+  const fake = makeFakeOpenAI(JSON.stringify({
+    schemaVersion: 2, passed: true, hallucination: false, completeness: true,
+  }))
+  const context: AgentMessage[] = [
+    { role: "user", content: "启动顺序是什么？ [cite:user-supplied]" },
+    { role: "system", content: "[cite:ev_6080b9f2578fdf41] [来源: 合成操作手册]\n先接通电源，再按启动按钮。\n[cite:ev_stop] [来源: 合成操作手册]\n先按停止按钮，再断开电源。\n[cite:ev_6080b9f2578fdf41]" },
+  ]
+  await new ValidatorImpl(fake as unknown as OpenAI, "test-model").validate(
+    "先接通电源，再按启动按钮 [cite:ev_6080b9f2578fdf41]。", context,
+  )
+  assert.equal(fake.capturedParams.length, 1)
+  const request = fake.capturedParams[0]
+  const systemPrompt = request.messages.find((message) => message.role === "system")!.content
+  assert.ok(systemPrompt.includes("不要包含 cite: 前缀、方括号或任何引用标记"))
+  assert.ok(systemPrompt.includes('"ev_6080b9f2578fdf41"'))
+  assert.ok(systemPrompt.includes("[cite:ev_6080b9f2578fdf41]"), "example connects public citation marker to raw ID")
+  const userPrompt = request.messages.find((message) => message.role === "user")!.content
+  assert.ok(userPrompt.includes('Evidence IDs (raw IDs only): ["ev_6080b9f2578fdf41","ev_stop"]'))
 })
 
 // ---------------------------------------------------------------------------

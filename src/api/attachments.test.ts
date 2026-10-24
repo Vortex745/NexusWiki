@@ -111,6 +111,22 @@ test("an upload is listed with its parse status, usage and the session limits", 
   }
 })
 
+test("a percent-encoded UTF-8 attachment name round-trips through the header", async () => {
+  // Browser clients percent-encode x-file-name (the Headers constructor
+  // throws on non-Latin-1 values); the route decodes it back to the name.
+  const harness = buildHarness()
+  const { base, close } = await listen(harness.app)
+  try {
+    const created = await upload(base, "sess-utf8", encodeURIComponent("会议纪要.md"), "# 纪要")
+    assert.equal(created.status, 201)
+    const listed = await list(base, "sess-utf8")
+    const payload = listed.body as unknown as { attachments: Array<{ name: string }> }
+    assert.deepEqual(payload.attachments.map((item) => item.name), ["会议纪要.md"])
+  } finally {
+    await close()
+  }
+})
+
 test("limits and unsupported types answer per file, not as a failed batch", async () => {
   const harness = buildHarness()
   const { base, close } = await listen(harness.app)

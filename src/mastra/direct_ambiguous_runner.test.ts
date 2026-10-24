@@ -155,6 +155,35 @@ test("T09 #1 direct route: no retrieval, Evidence, or Citation (references=[])",
   assert.deepEqual(output.validationTrace, {}, "direct route has no validation trace (no Critic)")
 })
 
+test("MEM-02 regression: memory intent uses recalled memories as non-citable prompt context", async () => {
+  let capturedSystemPrompt: string | undefined
+  const runner = createDirectAmbiguousMastraRunner({
+    router: {
+      async decide(): Promise<RouterDecision> {
+        throw new Error("memory intent must bypass the router")
+      },
+    },
+    streamDirectReply: async function* (_message, _signal, options) {
+      capturedSystemPrompt = options?.systemPrompt
+      yield "记忆答案"
+    },
+  })
+
+  const output = await runner(makeRunnerInput({
+    message: "提醒我一下我们的长期记忆里记录了什么。",
+    memoryIntent: true,
+    longTermMemories: [{ id: "mem-1", content: "偏好简洁回答" }],
+  }))
+
+  assert.equal(output.status, "completed")
+  assert.equal(output.reply, "记忆答案")
+  assert.deepEqual(output.references, [])
+  assert.equal(output.routeTrace.decision, "direct")
+  assert.match(capturedSystemPrompt ?? "", /长期记忆查询约束/)
+  assert.match(capturedSystemPrompt ?? "", /偏好简洁回答/)
+  assert.match(capturedSystemPrompt ?? "", /不得生成或展示任何引用/)
+})
+
 test("T09 #1 direct route: empty stream produces empty reply + completed", async () => {
   const runner = createDirectAmbiguousMastraRunner({
     router: makeFakeRouter("direct"),

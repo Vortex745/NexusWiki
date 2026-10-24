@@ -59,6 +59,11 @@ import {
   type RunResourceBudgetOptions,
 } from "../runtime/run_context"
 import { withBudget } from "../runtime/deadline"
+import {
+  isDraftPublishable,
+  publicTerminalCopy,
+} from "../answer/terminal_copy"
+import { bindAnswerBasis } from "./answer_basis"
 
 /**
  * Transport-level event source signature — structurally identical to
@@ -144,6 +149,8 @@ export interface MastraRunnerInput {
    * through `renderMemoryPromptSuffix` — never as evidence or citations.
    */
   longTermMemories?: import("./memory_prompt").RecalledMemory[]
+  /** Explicit saved-memory inspection query; bypasses knowledge retrieval. */
+  memoryIntent?: boolean
   /** Route preparation produced once by the dispatch runner. Standalone
    * route runners may omit it and perform their own ownership check. */
   preparedRoute?: PreparedMastraRoute
@@ -154,6 +161,28 @@ export interface MastraRunnerInput {
    * the adapter subtracts tokens already published live. Optional: runners
    * that omit the hook keep the buffered end-of-run replay. */
   onAnswerDelta?: (token: string) => void
+  /**
+   * Real stage boundaries and known results while the runner is in flight.
+   * A one-argument call remains a running opener. The final aggregated traces
+   * stay authoritative; live validation details never publish answerBasis.
+   */
+  onStageProgress?: <S extends ProgressStage>(stage: S, details?: StageProgressDetails<S>) => void
+}
+
+/** The four stages a progress event can report on. */
+export type ProgressStage = "route" | "retrieval" | "context" | "validation"
+
+export interface StageProgressData {
+  route: RouteTraceData
+  retrieval: RetrievalTraceData
+  context: ContextTraceData
+  validation: ValidationTraceData
+}
+
+export interface StageProgressDetails<S extends ProgressStage> {
+  status?: "running" | "completed" | "failed"
+  round?: number
+  data?: StageProgressData[S]
 }
 
 export interface PreparedMastraRoute {
@@ -300,6 +329,17 @@ function makeAnswerDeltaEvent(
   return { ...base, type: "answer_delta", stage: "answer", token } as AnswerRunEvent
 }
 
+/**
+ * Progress message per stage. Live and post-run events for a stage share one
+ * message so the two are indistinguishable apart from their payload data.
+ */
+const STAGE_PROGRESS_MESSAGE: Record<ProgressStage, string> = {
+  route: "Routing query",
+  retrieval: "Retrieving evidence",
+  context: "Contextualizing",
+  validation: "Validating draft",
+}
+
 function makeDoneEvent(
   base: Omit<AnswerRunEvent, "type" | "message" | "data" | "token" | "result">,
   result: AnswerRunResult
@@ -411,6 +451,11 @@ export function createMastraChatEventAdapter(
     let terminalEmitted = false
     let traceFailure: unknown
     let runContext: RunContext | undefined
+    const stageRounds: Partial<Record<ProgressStage, number>> = {}
+    let initialRetrievalRound: number | undefined
+    const stageStatuses = new Map<string, AnswerRunEvent["status"]>()
+    const stageKey = (stage: ProgressStage, round: number, data: StageProgressData[ProgressStage]): string =>
+      `${stage}:${round}:${stage === "context" ? (data as ContextTraceData).phase ?? "assembly" : ""}`
     const nextSequence = () => ++sequence
 
     /**
@@ -455,6 +500,14 @@ export function createMastraChatEventAdapter(
         status: "completed",
         runStartedAt,
       })
+      base.round = stage === "validation"
+        ? (data as ValidationTraceData).round ?? stageRounds[stage] ?? 0
+        : stage === "retrieval"
+          ? initialRetrievalRound ?? 0
+        : stageRounds[stage] ?? 0
+      // A final trace enriches the actual stage result; it cannot turn a
+      // reported provider failure into a successful completion.
+      if (stageStatuses.get(stageKey(stage, base.round, data)) === "failed") base.status = "failed"
       const event = makeProgressEvent(base, {
         type: "progress",
         stage,
@@ -481,28 +534,50 @@ export function createMastraChatEventAdapter(
       // When budgetMs is omitted: pass `signal` directly (pre-P7.2
       // behavior — backward compat).
       let runnerOutput: MastraRunnerOutput
-      // Live answer-delta bridge: streaming runners publish tokens through
-      // input.onAnswerDelta as they arrive; the adapter drains that queue and
-      // yields answer_delta events while the runner is still executing, so
-      // the transport sees true token-level streaming. Tokens already
+      // Live signal bridge: streaming runners publish tokens through
+      // input.onAnswerDelta and settled stages through input.onStageProgress as
+      // they happen; the adapter drains that queue and yields events while the
+      // runner is still executing, so the transport sees true in-run progress
+      // instead of one final burst. One ordered queue keeps a stage event from
+      // overtaking the tokens that were produced before it. Tokens already
       // published live are subtracted from the runnerOutput.tokens replay —
       // runners that ignore the hook keep the buffered end-of-run replay.
-      const liveDeltas: string[] = []
+      type LiveSignal =
+        | { kind: "delta"; token: string }
+        | { kind: "stage"; stage: ProgressStage; details?: StageProgressDetails<ProgressStage> }
+      const liveSignals: LiveSignal[] = []
       let deltasPublished = 0
       let runnerSettled = false
+      let runnerFailed = false
+      let runnerSignal = signal
       let wakeDrainer: (() => void) | null = null
-      const onAnswerDelta = (token: string): void => {
-        liveDeltas.push(token)
+      const wake = (): void => {
         wakeDrainer?.()
         wakeDrainer = null
+      }
+      const onAnswerDelta = (token: string): void => {
+        if (terminalEmitted || runnerSettled || runnerSignal.aborted) return
+        liveSignals.push({ kind: "delta", token })
+        wake()
+      }
+      const onStageProgress: NonNullable<MastraRunnerInput["onStageProgress"]> = (
+        stage, details
+      ): void => {
+        if (terminalEmitted || runnerSettled || runnerSignal.aborted) return
+        // Only final business completion can publish a model basis. Copy the
+        // payload now so a runner cannot mutate a queued validation record.
+        const data = details?.data ? { ...details.data } : undefined
+        if (data) delete (data as ValidationTraceData).answerBasis
+        liveSignals.push({ kind: "stage", stage, details: { ...details, data } })
+        wake()
       }
       const markRunnerSettled = (): void => {
         runnerSettled = true
-        wakeDrainer?.()
-        wakeDrainer = null
+        wake()
       }
-      const invokeRunner = (ctxSignal: AbortSignal): Promise<MastraRunnerOutput> =>
-        runner({
+      const invokeRunner = (ctxSignal: AbortSignal): Promise<MastraRunnerOutput> => {
+        runnerSignal = ctxSignal
+        return runner({
           message: validatedMessage,
           runId,
           sessionId,
@@ -521,7 +596,9 @@ export function createMastraChatEventAdapter(
           // Ticket 36 (WEB-01): the explicit web-search opt-in flag.
           ...(runOptions?.useWeb === true ? { useWeb: true } : {}),
           onAnswerDelta,
+          onStageProgress,
         })
+      }
 
       // Early route progress: lights up downstream thinking UIs during the
       // route/retrieval latency window instead of after the whole run.
@@ -560,24 +637,59 @@ export function createMastraChatEventAdapter(
         }
         return invokeRunner(signal)
       })()
-      runnerPromise.then(markRunnerSettled, markRunnerSettled)
-
-      // Drain live deltas until the runner settles and the queue empties.
+      runnerPromise.then(markRunnerSettled, () => {
+        runnerFailed = true
+        markRunnerSettled()
+      })
+      // Drain live signals until the runner settles and the queue empties.
       while (true) {
-        if (liveDeltas.length > 0) {
-          deltasPublished += 1
-          const base = makeBaseEvent({
-            runId,
-            sessionId,
-            caseId,
-            sequence: nextSequence(),
-            stage: "answer",
-            status: "running",
-            runStartedAt,
-          })
-          const event = makeAnswerDeltaEvent(base, liveDeltas.shift()!)
-          notifyObservers(event)
-          yield event
+        if (runnerSignal.aborted && (!runnerSettled || runnerFailed)) {
+          liveSignals.length = 0
+          await runnerPromise
+          checkAbort(runnerSignal, "live event publication")
+        }
+        const signal = liveSignals.shift()
+        if (signal) {
+          if (signal.kind === "delta") {
+            deltasPublished += 1
+            const base = makeBaseEvent({
+              runId,
+              sessionId,
+              caseId,
+              sequence: nextSequence(),
+              stage: "answer",
+              status: "running",
+              runStartedAt,
+            })
+            const event = makeAnswerDeltaEvent(base, signal.token)
+            notifyObservers(event)
+            yield event
+          } else {
+            const base = makeBaseEvent({
+              runId,
+              sessionId,
+              caseId,
+              sequence: nextSequence(),
+              stage: signal.stage,
+              status: signal.details?.status ?? "running",
+              runStartedAt,
+            })
+            base.round = signal.details?.round ?? 0
+            stageRounds[signal.stage] = base.round
+            if (signal.stage === "retrieval") initialRetrievalRound ??= base.round
+            stageStatuses.set(stageKey(signal.stage, base.round, signal.details?.data ?? {}), base.status)
+            const event = makeProgressEvent(base, {
+              type: "progress",
+              stage: signal.stage,
+              message: STAGE_PROGRESS_MESSAGE[signal.stage],
+              data: (signal.details?.data ?? {}) as RouteTraceData &
+                RetrievalTraceData &
+                ContextTraceData &
+                ValidationTraceData,
+            })
+            notifyObservers(event)
+            yield event
+          }
           continue
         }
         if (runnerSettled) break
@@ -602,10 +714,14 @@ export function createMastraChatEventAdapter(
 
       // GATE 4 — validation (Critic per T03 §6).
       if (Object.keys(runnerOutput.validationTrace).length > 0) {
+        const { answerBasis, ...validationTrace } = runnerOutput.validationTrace
+        const publicBasis = runnerOutput.status === "completed" && validationTrace.passed === true
+          ? bindAnswerBasis(answerBasis, runnerOutput.references)
+          : undefined
         yield* emitProgress(
           "validation",
           "Validating draft",
-          runnerOutput.validationTrace
+          { ...validationTrace, ...(publicBasis ? { answerBasis: publicBasis } : {}) }
         )
       }
 
@@ -644,9 +760,16 @@ export function createMastraChatEventAdapter(
         })
         const event = makeDoneEvent(base, {
           runId,
-          reply: runnerOutput.reply,
+          // PL-01: the transport republishes nothing the runner did not approve.
+          // Any other business terminal (including one this protocol does not
+          // define) publishes the safe terminal text and no citations.
+          reply: isDraftPublishable(runnerOutput.status)
+            ? runnerOutput.reply
+            : publicTerminalCopy(runnerOutput.status),
           status: runnerOutput.status,
-          references: runnerOutput.references,
+          references: isDraftPublishable(runnerOutput.status)
+            ? runnerOutput.references
+            : [],
           degradation: runnerOutput.degradation,
           summarizationUsage: runnerOutput.summarizationUsage,
           summarizationDurationMs: runnerOutput.summarizationDurationMs,
@@ -691,7 +814,10 @@ export function createMastraChatEventAdapter(
         })
         const event = makeDoneEvent(base, {
           runId,
-          reply: "",
+          // PL-01 AC04: a cancelled or provider-failed run publishes its own
+          // defined terminal copy here too — an empty reply left the streaming
+          // client with a placeholder that differed from the JSON transport.
+          reply: publicTerminalCopy(isAbort ? "cancelled" : "provider_error"),
           status: isAbort ? "cancelled" : "provider_error",
           references: [],
           degradation: {

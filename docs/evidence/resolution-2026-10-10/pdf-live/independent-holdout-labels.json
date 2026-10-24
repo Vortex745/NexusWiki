@@ -1,0 +1,36 @@
+{
+  "schemaVersion": 1,
+  "assessor": "independent rendered-page and extraction review",
+  "evidenceBasis": "Viewed all four holdout PNGs at original detail and read only their corresponding raw text files. No fixture creation code or model outputs inspected.",
+  "secondAuditCondition": "pass only when the actual OCR candidate faithfully transcribes visible text, numbers and units. Empty/no-textblocks candidates remain ocr_empty_page_unverified and never automatically pass.",
+  "labels": [
+    {
+      "fixture": "holdout-image-digits.pdf",
+      "page": 1,
+      "expectedLocalAudit": "fail",
+      "expectedSecondAuditAfterOcr": "pass",
+      "rationale": "The rendered page visibly contains Pressure: 12.7 kPa and Flow: 48.6 L/min beneath the heading. Local extracted text contains only the heading and introductory sentence, omitting both measurements and their units. Faithful OCR must include these values."
+    },
+    {
+      "fixture": "holdout-small-raster.pdf",
+      "page": 1,
+      "expectedLocalAudit": "fail",
+      "expectedSecondAuditAfterOcr": "pass",
+      "rationale": "The rendered page visibly contains the small-text statement Maximum current: 3.8 A at 24 V. Local extraction contains only the heading and introduction, omitting this substantive current and voltage specification. Faithful OCR must preserve both values and units."
+    },
+    {
+      "fixture": "holdout-decoration.pdf",
+      "page": 1,
+      "expectedLocalAudit": "pass",
+      "expectedSecondAuditAfterOcr": "pass",
+      "rationale": "The only visible text is Equipment report and Readings and status for the current installation, both present in local extraction. The circle, rectangle and triangle contain no text or measurements. Decorative shapes introduce no missing textual content; OCR is not required by this local audit."
+    },
+    {
+      "fixture": "holdout-complete-mixed.pdf",
+      "page": 1,
+      "expectedLocalAudit": "pass",
+      "expectedSecondAuditAfterOcr": "pass",
+      "rationale": "The rendered page repeats Pressure: 12.7 kPa and Flow: 48.6 L/min in the large upper graphic and a smaller lower transcription. Local extraction includes the heading, introduction and both complete measurements with correct units. All distinct visible textual information is covered, despite omitting the redundant graphical copy; OCR is not required by this local audit."
+    }
+  ]
+}

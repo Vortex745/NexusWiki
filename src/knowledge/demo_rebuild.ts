@@ -1,3 +1,4 @@
+import { resolveChunkIndexName, DEFAULT_ES_CHUNK_INDEX } from "../config"
 import type { Client } from "@elastic/elasticsearch"
 import type { Driver } from "neo4j-driver"
 import type { DB } from "../ingestion/tracking/db"
@@ -113,7 +114,7 @@ export const DEMO_REBUILD_SQLITE_TABLES = [
  * indices are NOT listed here: a crashed evaluation scope is released by its
  * own tool (`npm run eval:residue`), and this path must stay exact.
  */
-export const DEMO_REBUILD_ES_INDEXES = ["kefu-rag-chunks"] as const
+export const DEMO_REBUILD_ES_INDEXES = [DEFAULT_ES_CHUNK_INDEX] as const
 
 /** Every Elasticsearch call here is bounded — a hung cluster must not hang the
  * operator, and a delete must never be retried silently. */
@@ -159,6 +160,7 @@ export interface DemoRebuildClients {
   db: DB
   es: Client
   graph: DemoRebuildGraph
+  indexName?: string
 }
 
 export interface DemoRebuildInventory {
@@ -238,7 +240,7 @@ export async function inventoryDemoRebuild(
   }
 
   const esIndexes: DemoRebuildInventory["esIndexes"] = []
-  for (const index of DEMO_REBUILD_ES_INDEXES) {
+  for (const index of [resolveChunkIndexName(clients.indexName)]) {
     try {
       const exists = await clients.es.indices.exists(
         { index },

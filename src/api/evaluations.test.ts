@@ -18,6 +18,7 @@ import {
   EVAL_EXPORT_METRIC_KEYS,
 } from "../evaluation/report_export"
 import type { EvalModelOverrides } from "../evaluation/service"
+import type { GenerationContextSnapshot } from "../types"
 import type { Reranker } from "../retrieval/search/interface"
 import type { AppConfig } from "../config"
 import type { AnswerRunEvent, AnswerRunResult, RankedCandidateObservation } from "../types"
@@ -109,6 +110,13 @@ interface FakeScopeOptions {
   /** Ticket 10: terminal status the done event reports (default "completed"). */
   doneStatus?: string
   doneStatusByCase?: Record<string, AnswerRunResult["status"]>
+  /**
+   * PL-05 / PT-09: emit a `context` stage event carrying this snapshot, so the
+   * HTTP path can be shown to score the generation-context stage from the
+   * snapshot the run published (a real run producing that object is proven in
+   * src/mastra/pt09_live_context.test.ts, not here).
+   */
+  contextSnapshot?: GenerationContextSnapshot
   omitDone?: boolean
   /** Ticket 13: which generation round produced the observed context. */
   finalContextRound?: number
@@ -233,6 +241,19 @@ class FakeScope implements IsolatedEvalResources {
                 : {}),
             },
           })
+          if (options.contextSnapshot) {
+            yield progressEvent(runOptions, {
+              type: "progress",
+              stage: "context",
+              message: "context",
+              data: {
+                evidenceCount: options.contextSnapshot.entries.length,
+                contextLength: options.contextSnapshot.contextLength,
+                compressionRan: options.contextSnapshot.representation === "compressed",
+                generationContext: options.contextSnapshot,
+              },
+            })
+          }
           if (options.omitDone) return
           yield progressEvent(runOptions, {
             type: "done",
@@ -288,6 +309,8 @@ function progressEvent(
         }
       }
     | { type: "done"; stage: "done"; result: AnswerRunResult }
+    /** PL-05 / PT-09: the context stage carries the run's actual-context trace. */
+    | { type: "progress"; stage: "context"; message: string; data: Record<string, unknown> }
 ): AnswerRunEvent {
   return {
     schemaVersion: 1,
@@ -992,6 +1015,7 @@ test("a scored case reports all six retrieval metrics and the ranking's real sou
       "bleu-1",
       "bleu-2",
       "bleu-4",
+      "generationContextEvidenceRecall",
       "map",
       "mrr",
       "ndcg@10",
@@ -1016,7 +1040,7 @@ test("a scored case reports all six retrieval metrics and the ranking's real sou
     )
 
     // One metric version and one effective sample size for every average.
-    const summary = detail.metrics as { version: string; metrics: Record<string, { value: number | null; sampleSize: number; notApplicable: number }> }
+    const summary = detail.metrics as { version: string; context?: { version: string }; metrics: Record<string, { value: number | null; sampleSize: number; notApplicable: number }> }
     assert.equal(summary.version, "eval-metrics-v2")
     for (const key of ["precision", "recall", "ndcg@3", "ndcg@10", "mrr", "map"]) {
       assert.deepEqual(
@@ -1026,6 +1050,27 @@ test("a scored case reports all six retrieval metrics and the ranking's real sou
       )
     }
     assert.equal(summary.metrics.map.value, 0.5, "the aggregate of per-case AP is MAP")
+
+    // PL-05 / PT-09: this harness's event stream carries no generation-context
+    // snapshot, so the context stage must say "not measured, and why" instead of
+    // borrowing the candidate stage's hit or inventing a 0. Its own version stamp
+    // travels with it so the two stages can never be silently mixed.
+    assert.equal(summary.context?.version, "generation-context-v1")
+    assert.deepEqual(
+      {
+        value: summary.metrics.generationContextEvidenceRecall.value,
+        sampleSize: summary.metrics.generationContextEvidenceRecall.sampleSize,
+        notApplicable: summary.metrics.generationContextEvidenceRecall.notApplicable,
+      },
+      { value: null, sampleSize: 0, notApplicable: 1 },
+      "an unmeasured context stage is null with an explicit count, never 0"
+    )
+    const availability = cases[0].generationContextAvailability as string
+    assert.ok(
+      availability === "missing_snapshot" || availability === "not_generated",
+      `the context stage must explain itself, got ${availability}`
+    )
+    assert.ok(String(cases[0].generationContextReason).length > 0, "an unavailable reason is stated")
   } finally {
     await harness.close()
   }
@@ -1051,6 +1096,7 @@ test("a failed case reports no retrieval metrics instead of six zeros", async ()
       "rouge-1": null,
       "rouge-2": null,
       "rouge-l": null,
+      generationContextEvidenceRecall: null,
     })
     assert.equal(cases[0].ordering, undefined, "no scored ranking means no score source")
     const summary = detail.metrics as { metrics: Record<string, { value: number | null; sampleSize: number; notApplicable: number }> }
@@ -1236,6 +1282,9 @@ const NULL_METRICS = {
   "rouge-1": null,
   "rouge-2": null,
   "rouge-l": null,
+  // PL-05: the context stage rides along as its own key and stays null until a
+  // real generation-context-v1 snapshot exists — never a fabricated 0.
+  generationContextEvidenceRecall: null,
 }
 
 /** Three cases; the per-case options above decide how each one behaves. */
@@ -1430,7 +1479,15 @@ test("terminal failure events exclude failed cases from every metric while remai
     }
     assert.equal(cases[2].outcome, "answered")
     const summary = detail.metrics as { metrics: Record<string, { sampleSize: number; notApplicable: number }> }
-    for (const metric of Object.values(summary.metrics)) {
+    for (const [key, metric] of Object.entries(summary.metrics)) {
+      if (key === "generationContextEvidenceRecall") {
+        // PL-05: this harness's event stream carries no generation-context
+        // snapshot, so the context stage stays unmeasured for all three cases
+        // instead of borrowing the candidate stage's sample size.
+        assert.equal(metric.sampleSize, 0)
+        assert.equal(metric.notApplicable, 3)
+        continue
+      }
       assert.equal(metric.sampleSize, 1)
       assert.equal(metric.notApplicable, 2)
     }
@@ -2258,8 +2315,8 @@ test("allowed overrides are visible on that task's cases and never on the shared
     const failedCase = (failedDetail.cases as Array<Record<string, unknown>>)[0]
     assert.equal(failedCase.outcome, "failed")
     assert.equal(failedCase.modelProfile, undefined, "no terminal result means no model snapshot")
-    assert.equal(Object.keys(failedCase.metrics as object).length, 12)
-    assert.deepEqual(Object.values(failedCase.metrics as Record<string, null>), new Array(12).fill(null))
+    assert.equal(Object.keys(failedCase.metrics as object).length, 13)
+    assert.deepEqual(Object.values(failedCase.metrics as Record<string, null>), new Array(13).fill(null))
   } finally {
     await harness.close()
   }
@@ -2668,6 +2725,108 @@ test("shutdown cancels and bounds active work and a restarted process starts emp
     assert.deepEqual(listed.body.tasks, [], "重启后没有可查询的记录")
     const gone = await api(harness.port, `/api/evaluations/${id}`)
     assert.equal(gone.status, 404, "重启前的任务 id 不再是可读的引用")
+  } finally {
+    await harness.close()
+  }
+})
+
+test("PT-09:AC01/AC09 an HTTP evaluation task scores and exports the context stage from the run's published snapshot", async () => {
+  const snapshot: GenerationContextSnapshot = {
+    version: "generation-context-v1",
+    generationRound: 2,
+    representation: "deterministic_partial",
+    tokenCount: 512,
+    contextLength: 900,
+    entries: [
+      {
+        evidenceId: "ev_refund",
+        documentId: "doc-refund-policy",
+        chunkId: "chunk-1",
+        outputOrder: 1,
+        representation: "deterministic_partial",
+        span: { start: 40, end: 160, coverage: "partial" },
+        tokens: 300,
+      },
+    ],
+    omissions: [
+      {
+        evidenceId: "ev_cut",
+        documentId: "doc-shipping-policy",
+        chunkId: "chunk-2",
+        reason: "budget_exhausted",
+      },
+    ],
+    digest: "0123456789abcdef",
+  }
+  const harness = await buildHarness({ contextSnapshot: snapshot })
+  try {
+    const created = await createTask(harness.port, { datasetId: "refund-single-case" })
+    const detail = await pollTerminal(harness.port, created.body.id as string)
+    const item = (detail.cases as Array<Record<string, unknown>>)[0]
+    assert.equal(item.outcome, "answered")
+    assert.equal(
+      item.generationContextAvailability,
+      "measured",
+      "the stage is scored from the snapshot the run published"
+    )
+    assert.equal(item.generationContextVersion, "generation-context-v1")
+    assert.equal(item.generationContextRound, 2)
+    assert.equal(item.generationContextRepresentation, "deterministic_partial")
+    assert.equal(item.generationContextTokenCount, 512)
+    const metrics = item.metrics as Record<string, number | null>
+    assert.equal(
+      typeof metrics.generationContextEvidenceRecall,
+      "number",
+      "a measured stage must carry a number, not null"
+    )
+    assert.ok(
+      metrics.generationContextEvidenceRecall !== null &&
+        metrics.generationContextEvidenceRecall >= 0 &&
+        metrics.generationContextEvidenceRecall <= 1
+    )
+    // The candidate stage keeps its own keys and values beside it (AC06).
+    for (const key of ["precision", "recall", "ndcg@3", "ndcg@10", "mrr", "map"]) {
+      assert.ok(key in metrics, `${key} must survive the new stage`)
+    }
+    assert.equal(
+      (detail.metrics as { context?: { version: string } }).context?.version,
+      "generation-context-v1"
+    )
+
+    const csv = await fetch(
+      `http://127.0.0.1:${harness.port}/api/evaluations/${created.body.id}/export?format=csv`
+    )
+    assert.equal(csv.status, 200)
+    const text = await csv.text()
+    const [header] = text.split("\r\n")
+    assert.ok(
+      header.includes("generation_context_availability") &&
+        header.includes("generation_context_round"),
+      "the export carries the stage's own availability columns"
+    )
+    assert.ok(text.includes(",measured,"), "the CSV states the availability it computed")
+    assert.ok(
+      header.includes("generationContextEvidenceRecall"),
+      "the new metric is an export column beside the six candidate metrics"
+    )
+
+    const json = await fetch(
+      `http://127.0.0.1:${harness.port}/api/evaluations/${created.body.id}/export?format=json`
+    )
+    const payload = (await json.json()) as {
+      formatVersion: number
+      task: { cases: Array<Record<string, unknown>> }
+    }
+    assert.equal(payload.formatVersion, 3)
+    assert.equal(
+      payload.task.cases[0].generationContextAvailability,
+      "measured",
+      "API, page and export read the same computed stage (AC09)"
+    )
+    assert.equal(
+      JSON.stringify(payload.task.cases[0].metrics),
+      JSON.stringify(item.metrics)
+    )
   } finally {
     await harness.close()
   }

@@ -35,15 +35,13 @@
 //     flags + bounded errors, privacyCheck, droppedCount) — never raw
 //     prompts, answers, tokens, credentials, or auth material.
 //
-// Candidate-mode (OP-05 unsatisfied): the real `langfuse` npm package +
-// Langfuse cloud service are not provisioned. The probe uses an internal
-// RecordingLangfuseClient (implements trace() + fetchTrace()) as the
-// candidate-mode substitute — same pattern as T19/T20/T24/T25 candidate-mode
-// probes. The RealLangfuseExporter is exercised end-to-end: real export()
-// calls traverse the production event→trace mapping logic. When OP-05 is
-// lifted, the fixture swaps in a real `langfuse` npm client wrapping the
-// Langfuse REST API for fetchTrace — probe code is production code exercised
-// end-to-end.
+// Real mode (OP-05 lifted): the `langfuse` npm package is installed and
+// `createRealLangfuseClient` (src/answer/langfuse_client.ts) builds a real
+// client with REST fetchTrace. Fixtures may inject that client via
+// `readbackClient` — the probe then exercises the real export→ingest→poll
+// round-trip end-to-end and records candidateMode=false. When no readbackClient
+// is supplied, the probe falls back to the internal RecordingLangfuseClient
+// (candidate mode, candidateMode=true) so local verification needs no service.
 //
 // Rollback boundary: remove this module; no online runtime behavior changes
 // (per Ticket 26 rollback spec — probe is a verification-only artifact).
@@ -96,7 +94,15 @@ export interface LangfuseRoundTripProbeFixture {
    * defaults (raw prompts/answers/tokens excluded from export).
    */
   privacyMarker: string
-  /** Optional: SDK version recorded in outputs (default "candidate-3.x"). */
+  /**
+   * Real-mode client (OP-05 lifted): when provided, this client is used as
+   * BOTH the export target and the read-back source instead of the internal
+   * RecordingLangfuseClient — the probe then verifies an actual configured
+   * run reaches the Langfuse service and records candidateMode=false.
+   * Typical value: createRealLangfuseClient(...) from src/answer/langfuse_client.ts.
+   */
+  readbackClient?: LangfuseClient
+  /** Optional: SDK version recorded in outputs (default "candidate-3.x"; "langfuse-sdk" in real mode). */
   sdkVersion?: string
   /** Optional test hook: when true, happy-path fetchTrace always returns undefined. */
   happyPathFetchAlwaysUndefined?: boolean
@@ -361,7 +367,7 @@ async function runEndpointOutageScenario(): Promise<FailureScenarioResult> {
     // Unexpected throw — NOT one of the 4 documented failure modes. Marking
     // it "passed" would conflate unexpected throws with documented failures
     // (reviewers grepping for outage would be unable to distinguish them).
-    // Same fix as Ticket 25 ragas_shadow_cli runFailureScenario catch.
+    // Same defensive shape as the other probe failure scenarios.
     const msg = err instanceof Error ? err.message : String(err)
     return {
       mode: "endpointOutage",
@@ -566,19 +572,54 @@ export const langfuseRoundTripProbe: ProbeImplementation = async (
     }
   }
 
-  const sdkVersion = fixture.sdkVersion ?? DEFAULT_SDK_VERSION
+  // Real-mode resolution: readbackClient switches the probe from candidate
+  // (recording) mode to a live export→ingest→read-back round-trip.
+  const realReadback = fixture.readbackClient
+  const hasRealReadback = !!realReadback
+  // Test hooks simulate RecordingLangfuseClient misbehavior — they have no
+  // meaning against a real client. Reject the combination instead of
+  // silently ignoring either input (fail clearly, same style as the guards
+  // above).
+  if (hasRealReadback && typeof realReadback.fetchTrace !== "function") {
+    return {
+      ok: false,
+      reason: "fixture.readbackClient must implement fetchTrace (use createRealLangfuseClient from src/answer/langfuse_client.ts)",
+      durationMs: Date.now() - start,
+    }
+  }
+  if (hasRealReadback &&
+    (fixture.happyPathFetchAlwaysUndefined || fixture.happyPathFetchThrow || fixture.happyPathTraceThrow)) {
+    return {
+      ok: false,
+      reason: "happyPath* test hooks apply to candidate (RecordingLangfuseClient) mode only and conflict with fixture.readbackClient",
+      durationMs: Date.now() - start,
+    }
+  }
+
+  const sdkVersion = fixture.sdkVersion ?? (hasRealReadback ? "langfuse-sdk" : DEFAULT_SDK_VERSION)
   const host = fixture.config.baseUrl ?? DEFAULT_LANGFUSE_HOST
 
   // --- Phase 1: Happy path — exercise RealLangfuseExporter end-to-end ---
+  // Real mode exports through the injected client (background SDK ingestion);
+  // candidate mode uses the in-memory recorder with optional misbehavior hooks.
   const happyClient = new RecordingLangfuseClient()
-  if (fixture.happyPathFetchAlwaysUndefined) happyClient.fetchAlwaysUndefined = true
-  if (fixture.happyPathFetchThrow) happyClient.fetchThrowError = fixture.happyPathFetchThrow
-  if (fixture.happyPathTraceThrow) happyClient.traceThrowError = fixture.happyPathTraceThrow
+  if (!hasRealReadback) {
+    if (fixture.happyPathFetchAlwaysUndefined) happyClient.fetchAlwaysUndefined = true
+    if (fixture.happyPathFetchThrow) happyClient.fetchThrowError = fixture.happyPathFetchThrow
+    if (fixture.happyPathTraceThrow) happyClient.traceThrowError = fixture.happyPathTraceThrow
+  }
+  const exportTarget: LangfuseClient = realReadback ?? happyClient
+  // Capture-point narrowing: guards above fail fast on a capability-less
+  // client; here the typeof check doubles as the compile-time refinement.
+  const readbackFetch =
+    realReadback && typeof realReadback.fetchTrace === "function"
+      ? realReadback.fetchTrace.bind(realReadback)
+      : (id: string) => happyClient.fetchTrace(id)
 
   let exporter: RealLangfuseExporter | null = null
   let droppedCount = 0
   try {
-    exporter = new RealLangfuseExporter(happyClient, { chatModel: "probe-chat-model" })
+    exporter = new RealLangfuseExporter(exportTarget, { chatModel: "probe-chat-model" })
     for (const event of fixture.events) {
       exporter.export(event)
     }
@@ -597,7 +638,7 @@ export const langfuseRoundTripProbe: ProbeImplementation = async (
         sdkVersion,
         droppedCount,
         revision: fixture.revision,
-        candidateMode: true,
+        candidateMode: hasRealReadback ? false : true,
       },
       durationMs: Date.now() - start,
     }
@@ -609,7 +650,7 @@ export const langfuseRoundTripProbe: ProbeImplementation = async (
   try {
     for (let i = 0; i < POLL_ATTEMPTS; i++) {
       try {
-        snapshot = await happyClient.fetchTrace(fixture.expectedRunId)
+        snapshot = await readbackFetch(fixture.expectedRunId)
         if (snapshot) break
       } catch (err) {
         lastFetchError = err
@@ -656,7 +697,7 @@ export const langfuseRoundTripProbe: ProbeImplementation = async (
         sdkVersion,
         droppedCount,
         revision: fixture.revision,
-        candidateMode: true,
+        candidateMode: hasRealReadback ? false : true,
       },
       durationMs: Date.now() - start,
     }
@@ -708,7 +749,7 @@ export const langfuseRoundTripProbe: ProbeImplementation = async (
       allFailuresPassed,
       droppedCount,
       revision: fixture.revision,
-      candidateMode: true,
+      candidateMode: hasRealReadback ? false : true,
     },
     durationMs: Date.now() - start,
   }

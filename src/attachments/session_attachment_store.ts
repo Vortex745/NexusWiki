@@ -83,14 +83,16 @@ export class SqliteSessionAttachmentStore {
     mimeType: string | null
     bytes: number
     content: string
+    /** Ticket 21: the UPLOADED bytes, kept so promotion re-submits the original. */
+    rawContent?: Buffer
     now: string
   }): void {
     this.db
       .prepare(
         `INSERT INTO session_attachments
-           (id, session_id, tenant_id, subject_id, name, mime_type, bytes, status, content,
+           (id, session_id, tenant_id, subject_id, name, mime_type, bytes, status, content, raw_content,
             created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, 'parsing', ?, ?, ?)`
+         VALUES (?, ?, ?, ?, ?, ?, ?, 'parsing', ?, ?, ?, ?)`
       )
       .run(
         record.id,
@@ -101,6 +103,7 @@ export class SqliteSessionAttachmentStore {
         record.mimeType,
         record.bytes,
         record.content,
+        record.rawContent ?? null,
         record.now,
         record.now
       )
@@ -136,6 +139,26 @@ export class SqliteSessionAttachmentStore {
       )
       .get(id, sessionId, tenantId, subjectId) as { content: string } | undefined
     return row?.content ?? null
+  }
+
+  /**
+   * Ticket 21: the uploaded BYTES of an owned attachment — what promotion
+   * submits so the knowledge-base candidate is the original file. NULL for
+   * legacy rows uploaded before this column existed (those keep the decode).
+   */
+  getRawContent(
+    id: string,
+    sessionId: string,
+    tenantId: string,
+    subjectId: string
+  ): Buffer | null {
+    const row = this.db
+      .prepare(
+        `SELECT raw_content FROM session_attachments
+         WHERE id = ? AND session_id = ? AND tenant_id = ? AND subject_id = ?`
+      )
+      .get(id, sessionId, tenantId, subjectId) as { raw_content: Buffer | null } | undefined
+    return row?.raw_content ?? null
   }
 
   listForSession(sessionId: string, tenantId: string, subjectId: string): SessionAttachment[] {
@@ -215,7 +238,7 @@ export class SqliteSessionAttachmentStore {
     const retire = this.db.transaction(() => {
       const changed = this.db
         .prepare(
-          `UPDATE session_attachments SET status = 'retired', content = '', updated_at = ?
+          `UPDATE session_attachments SET status = 'retired', content = '', raw_content = NULL, updated_at = ?
            WHERE session_id = ? AND tenant_id = ? AND subject_id = ?
              AND status IN ('parsing','ready','failed')`
         )
@@ -250,7 +273,7 @@ export class SqliteSessionAttachmentStore {
     const retire = this.db.transaction(() => {
       const changed = this.db
         .prepare(
-          `UPDATE session_attachments SET status = 'retired', content = '', updated_at = ?
+          `UPDATE session_attachments SET status = 'retired', content = '', raw_content = NULL, updated_at = ?
            WHERE id = ? AND session_id = ? AND tenant_id = ? AND subject_id = ?
              AND status IN ('parsing','ready','failed')`
         )

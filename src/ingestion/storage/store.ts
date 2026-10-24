@@ -3,7 +3,7 @@ import { type OpenAI } from "openai"
 import { setTimeout as delay } from "node:timers/promises"
 import type { Driver } from "neo4j-driver"
 import type { Chunk, Entity, Wikilink } from "../../types"
-import { loadConfig } from "../../config"
+import { loadConfig, resolveChunkIndexName } from "../../config"
 import {
   createElasticsearchClient,
   createOpenAIClient,
@@ -11,7 +11,6 @@ import {
 } from "../../clients"
 import { getDriver } from "../../graph"
 
-const INDEX_NAME = "kefu-rag-chunks"
 const DEFAULT_CHUNK_BATCH_SIZE = 64
 const DEFAULT_EMBEDDING_BATCH_MAX_BYTES = 150 * 1024
 const EMBEDDING_REQUEST_TIMEOUT_MS = 60_000
@@ -113,6 +112,64 @@ const CHUNK_KEYWORD_PROPERTIES = {
 }
 
 /**
+ * Explicit `float` leaves for fractional-capable numeric values inside chunk
+ * metadata (pdf parser output: per-block font size, table-overlap boxes).
+ * Dynamic mapping pins the first-seen shape, so a document whose values are
+ * all whole numbers pins `long` and fractional values from later documents
+ * are silently truncated on ingest — JSON cannot carry a "56.0" literal to
+ * keep the shapes uniform. Integer-constructed neighbors
+ * (page/index/headingLevel) cannot conflict with themselves and stay
+ * dynamic. Keep in sync with CHUNK_METADATA_FLOAT_LEAF_PATHS.
+ */
+export const CHUNK_METADATA_FLOAT_PROPERTIES = {
+  normalizedBlocks: {
+    type: "object" as const,
+    properties: {
+      boundingBox: { type: "float" as const },
+      metadata: {
+        type: "object" as const,
+        properties: {
+          fontSize: { type: "float" as const },
+          overlapsTable: {
+            type: "object" as const,
+            properties: {
+              bbox: { type: "float" as const },
+            },
+          },
+        },
+      },
+    },
+  },
+}
+
+/**
+ * Live-mapping paths (below `metadata`) that must be mapped `float`. A leaf
+ * that is missing receives an additive mapping repair. A leaf pinned to a
+ * different type requires migration; never attempt an unsupported conversion.
+ */
+export const CHUNK_METADATA_FLOAT_LEAF_PATHS = [
+  ["normalizedBlocks", "metadata", "fontSize"],
+  ["normalizedBlocks", "metadata", "overlapsTable", "bbox"],
+  ["normalizedBlocks", "boundingBox"],
+] as const
+
+/** A mapping node as returned by indices.getMapping, narrowed for walking. */
+interface MappingNode {
+  type?: string
+  properties?: Record<string, MappingNode>
+}
+
+/** Type of the mapping leaf at `path` below `node`, or undefined if unmapped. */
+function mappingLeafType(node: MappingNode | undefined, path: readonly string[]): string | undefined {
+  let current: MappingNode | undefined = node
+  for (const key of path) {
+    current = current?.properties?.[key]
+    if (!current) return undefined
+  }
+  return current?.type
+}
+
+/**
  * T21 Knowledge persistence deep module dependencies.
  *
  * Injecting these allows the pipeline to share clients across runs and tests
@@ -164,6 +221,7 @@ export class ESStore {
     batchMaxChunks?: number
     batchMaxBytes?: number
   }) {
+    let configuredIndex: string | undefined
     if (clients?.client && clients.embeddingClient && clients.embeddingModel && clients.embeddingDimensions) {
       this.client = clients.client
       this.embeddingClient = clients.embeddingClient
@@ -173,6 +231,7 @@ export class ESStore {
       this.embeddingBatchMaxBytes = clients.batchMaxBytes ?? DEFAULT_EMBEDDING_BATCH_MAX_BYTES
     } else {
       const cfg = loadConfig()
+      configuredIndex = cfg.esChunkIndexName
       this.client = clients?.client ?? createElasticsearchClient({
         node: cfg.esNode,
         apiKey: cfg.esApiKey || undefined,
@@ -191,7 +250,7 @@ export class ESStore {
       this.embeddingBatchMaxBytes = clients?.batchMaxBytes
         ?? cfg.embeddingBatchMaxBytes ?? DEFAULT_EMBEDDING_BATCH_MAX_BYTES
     }
-    this.indexName = clients?.indexName ?? INDEX_NAME
+    this.indexName = resolveChunkIndexName(clients?.indexName, { esChunkIndexName: configuredIndex })
   }
 
   /** Eval refactor Ticket 02: the chunk index this store reads/writes. */
@@ -223,10 +282,39 @@ export class ESStore {
         )
       }
       const properties = mapping[this.indexName]?.mappings.properties ?? {}
+      const metadataMapping = (properties as { metadata?: unknown }).metadata as
+        | MappingNode
+        | undefined
+      const conflicts = CHUNK_METADATA_FLOAT_LEAF_PATHS.filter((path) => {
+        const type = mappingLeafType(metadataMapping, path)
+        return type !== undefined && type !== "float"
+      })
+      if (conflicts.length) {
+        throw new Error(`Elasticsearch index ${this.indexName}: migration required for ${
+          conflicts.map((path) => `metadata.${path.join(".")}`).join(", ")
+        }; preserve the source and migrate to a new float-mapped index before switching ES_CHUNK_INDEX`)
+      }
       if (Object.keys(CHUNK_KEYWORD_PROPERTIES).some((name) => !(name in properties))) {
         await this.client.indices.putMapping({
           index: this.indexName,
           properties: CHUNK_KEYWORD_PROPERTIES,
+        })
+      }
+      // Only missing leaves reach this additive repair; conflicts were
+      // rejected before any mapping writes, preserving the migration source.
+      if (
+        CHUNK_METADATA_FLOAT_LEAF_PATHS.some(
+          (path) => mappingLeafType(metadataMapping, path) !== "float"
+        )
+      ) {
+        await this.client.indices.putMapping({
+          index: this.indexName,
+          properties: {
+            metadata: {
+              type: "object",
+              properties: CHUNK_METADATA_FLOAT_PROPERTIES,
+            },
+          },
         })
       }
       return
@@ -247,7 +335,10 @@ export class ESStore {
             index: true,
             similarity: "cosine",
           },
-          metadata: { type: "object" },
+          metadata: {
+            type: "object",
+            properties: CHUNK_METADATA_FLOAT_PROPERTIES,
+          },
         },
       },
     })
@@ -313,6 +404,12 @@ export class ESStore {
                 return await this.embeddingClient.embeddings.create({
                   model: this.embeddingModel,
                   input: passages.map(({ content }) => content),
+                  // The Node OpenAI SDK defaults embeddings to base64; some
+                  // providers serve a truncated vector on that path (Zhipu
+                  // embedding-2 returned 256 dims vs the 1024 mapping).
+                  // Float encoding returns the full vector — fail loudly on
+                  // mismatch instead of poisoning the index.
+                  encoding_format: "float",
                 }, { signal, timeout: EMBEDDING_REQUEST_TIMEOUT_MS, maxRetries: 0 })
               } catch (error) {
                 if (isRateLimited(error) && attempt < 3) {

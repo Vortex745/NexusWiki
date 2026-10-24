@@ -1,0 +1,50 @@
+{
+  "timestamp": "2026-10-22T03:42:55.191+08:00",
+  "tracker": "local",
+  "label": "ready-for-agent",
+  "status": "published",
+  "implementation": "not_started",
+  "implementation_authorized": false,
+  "scope": "local_specs_only",
+  "test_seam_approval": {
+    "status": "confirmed",
+    "answer": "沿用这些测试边界（推荐）"
+  },
+  "specifications": 10,
+  "user_stories": 100,
+  "acceptance_criteria": 100,
+  "decisions": 18,
+  "source": ".scratch/deepeval-repair-plan-20261022/plan.md",
+  "authoritative_entry": "plans/019-deepeval-agent-repairs/README.md",
+  "business_tests": "not_run",
+  "online_evaluation": "not_run",
+  "external_tracker_sync": false,
+  "validation": "passed",
+  "validated_at": "2026-10-22T03:47:09.074+08:00",
+  "checksBefore": 136,
+  "checksAfter": 144,
+  "historicalOpenItemsPreserved": true,
+  "stateFiles": [
+    "AGENTS.md",
+    "MEMORY.md",
+    "progress.md",
+    "verify.json"
+  ],
+  "sourceSha256": "43dbc932f0ebd4201bc086abe200ebf15217293d15dc2c40c9c93c04bd3b7bbd",
+  "documentHashes": {
+    "README.md": "6f618c4c30776e865b5ae04bab2296ccd76dbe19d1a04fe9af5b2c40a9ec2dbf",
+    "spec.md": "94e379002b53775e7c8698141f7b8ed51c923988a6877c67a824c27ef43b7299",
+    "plan.json": "e346664c4c3dff0fa82dee5999a16bea57af1b00b8cc4ac1c121919964398c94",
+    "source-map.md": "f329b34ab63ea6d5a57bd069c2f360d6b8a73a1fcdf3f19355bbc37155bb4e87",
+    "issues/e1-dataset-and-fact-contracts.md": "1b0b699329b5489ce60ff09e27d7932bb49a01e55cf263f5cfe52c430ad31cfe",
+    "issues/e2-jev-calibration-and-applicability.md": "96e4d56db19a8ca2c966d9f5d6660d3c85aa1c1e145b272296a41df177cf1e2b",
+    "issues/e3-runtime-retries-and-persistence.md": "39ef0aefdbb147bfe39c52c45d5c349740c68e0824209f11d0d9e855932c78ba",
+    "issues/e4-repeated-baseline-and-honest-reporting.md": "db9c367cfc646ca5f8ac23de0570648a87e34ef7007f1b461df0a5cfba0e8095",
+    "issues/a1-faq-inline-citation.md": "f640caba7b92fd8b6420b15ac39a530cdd399068247ed6abaa37ab12ec22b04c",
+    "issues/a2-clear-out-of-domain-routing.md": "409b457adc458b33fced8d5a747dd60aa6c2d9d886d9854a72175562c3c20e37",
+    "issues/a3-pageindex-applicability.md": "f886b2a96971578d6061e431432ab3c98df3c3e9916a0d31cad219918f019ff7",
+    "issues/e5-rerank-capability-coverage.md": "d65a1573d122b4ede1930ed69dc63550cd6a594a718353e65ee0b20b099ea357",
+    "issues/t1-behavior-and-isolation-matrix.md": "c5742ac32848392e9bc44baea0902fa379834b1c578f45a47e2933c938baee62",
+    "issues/t2-latency-and-degradation-gates.md": "e4309ce122f548b8b9e2da8b65e387d9f19f3afa0de7a151df014e7f8df97efc"
+  }
+}

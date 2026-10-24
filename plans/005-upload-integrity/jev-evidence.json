@@ -1,0 +1,43 @@
+{
+  "timestamp": "2026-10-03T14:35:10.732Z",
+  "requestPath": "plans/005-upload-integrity/jev-request.json",
+  "elapsedMs": 1072,
+  "model": "jev-1.13.0",
+  "answers": {
+    "task_granularity": {
+      "type": "choice",
+      "choice": "sixteen_behavior_tickets",
+      "confidence": 0.99,
+      "probabilities": {
+        "six_phases": 0,
+        "sixteen_behavior_tickets": 1,
+        "twenty_four_layer_tickets": 0
+      }
+    },
+    "integrity_and_index_boundary": {
+      "type": "choice",
+      "choice": "separate_shared_guard",
+      "confidence": 1,
+      "probabilities": {
+        "single_large_gate_ticket": 0,
+        "separate_shared_guard": 1,
+        "index_success_suffices": 0
+      }
+    },
+    "baseline_order": {
+      "type": "choice",
+      "choice": "before_behavior_changes",
+      "confidence": 1,
+      "probabilities": {
+        "after_all_fixes": 0,
+        "before_behavior_changes": 1,
+        "reuse_old_test_passes": 0
+      }
+    }
+  },
+  "usage": {
+    "input_tokens": 1616,
+    "output_tokens": 159
+  },
+  "interpretation": "Actual Jev decision support for local specification decomposition. The thirteen user requirements were already confirmed. Adopted the sixteen-ticket recommendation, separate integrity/index proofs under one activation guard, and baseline before fixes. Probabilities are option distributions, not measured ingestion success rates or engineering feasibility. Business implementation has not started."
+}

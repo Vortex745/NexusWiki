@@ -44,6 +44,8 @@ import { ContextualizerImpl } from "../answer/contextualizer"
 import { SummarizerImpl } from "../answer/summarizer"
 import { ContextCompressorImpl } from "../answer/context_compressor"
 import { RouterImpl } from "../retrieval/router/router"
+import { ClefRouter } from "../retrieval/router/clef_router"
+import { executeDecisionCall } from "../runtime/decision_call"
 import type { SearcherImpl } from "../retrieval/search/searcher"
 import { ContextAssemblerImpl } from "../retrieval/context/assembler"
 import { PlannerImpl } from "../retrieval/planner/planner"
@@ -98,7 +100,7 @@ export interface AnswerMcpCapabilities {
 export interface AnswerRouteStackContext {
   /** Read for the chat model, the direct-reply agent and the MCP policy. */
   config: AppConfig
-  /** The shared chat client every router, planner, critic and generator uses. */
+  /** Shared Chat client for generation and the optional Chat route provider. */
   answerModelClient: OpenAI
   /** Process db: the read-only document/PageIndex lookups behind the tools. */
   db: DB
@@ -146,7 +148,14 @@ export async function createAnswerRouteStack(
   const resolveTenantId = (accessContext: AccessContext) =>
     accessContext.tenantId
 
-  const router = new RouterImpl(chatClient, cfg.openaiChatModel)
+  const router = cfg.decisionProvider === "clef"
+    ? new ClefRouter({
+      accountId: cfg.cloudflareAccountId ?? "",
+      apiToken: cfg.cloudflareApiToken ?? "",
+      timeoutMs: cfg.decisionRequestTimeoutMs ?? 10_000,
+      execute: executeDecisionCall,
+    })
+    : new RouterImpl(chatClient, cfg.openaiChatModel)
   const streamDirectReply =
     context.streamDirectReply ??
     (await createDirectReplyStream({
@@ -210,6 +219,7 @@ export async function createAnswerRouteStack(
   // would spawn that child on a composition that then aborts, with no handle to
   // close it.
   const toolRegistry = registerBuiltinTools(new ToolRegistry(), {
+    db,
     documentRepo: new DocumentRepo(db),
     // Read-only lookups over the same db the retrieval stack searches.
     pageIndexRepo: new PageIndexRepository(db),

@@ -1,4 +1,5 @@
 import type { IngestSpanNode, IngestStatus } from "./api"
+import { describeFailure } from "./qualityReasons"
 
 export type ImportStatus =
   | "queued"
@@ -31,6 +32,12 @@ export interface ImportOutcome {
   /** A prior version remains active — the blocked candidate replaced nothing
    * usable. Only claimed when a previous version actually exists (version > 1). */
   oldVersionUsable: boolean
+  /** Ticket 26: failed-state evidence — the stable classification reason code. */
+  reasonCode?: string
+  /** Ticket 26: the page-quality audit's own detailed reason codes. */
+  reasonCodes?: string[]
+  /** Ticket 26: protection-related input failures carry re-export guidance. */
+  userGuidance?: string
 }
 
 /** Stable activation-gate reason codes → explainable copy (UT-26); unknown
@@ -70,6 +77,30 @@ const STAGES = [
   { name: "storeGraph", label: "关联数据写入", shortLabel: "图谱" },
 ] as const
 
+/** Ticket 26: the derived PDF-quality sub-steps (span-output evidence only). */
+const PDF_SUBSTEP_LABELS = {
+  pdfExtract: { label: "打开与提取", shortLabel: "提取" },
+  pdfAudit: { label: "质量审计", shortLabel: "审计" },
+  pdfOcr: { label: "OCR 回退", shortLabel: "OCR" },
+  pdfOcrAudit: { label: "OCR 审计", shortLabel: "OCR审" },
+} as const
+
+/** Classification reason codes that fail BEFORE any audit could run. */
+const PARSER_SIDE_FAILURE_CODES: ReadonlySet<string> = new Set([
+  "parser_capability_missing",
+  "no_usable_parser",
+  "malformed_parser_output",
+  "unrouteable_type",
+])
+
+export interface PdfQualityWorkflow {
+  gated: boolean
+  /** Null when nothing was audited. */
+  ocrFallbackUsed: boolean | null
+  /** "pass" | "reject" | null — the chunk span output's recorded verdict. */
+  verdict: string | null
+}
+
 export interface UploadProgress {
   loaded: number
   total: number
@@ -105,7 +136,9 @@ export function estimateImportRemainingMs(
   const sizeFactor = Math.max(0.5, Math.min(4, fileSize / 1_000_000 || 1))
   const estimated = progress.stages.reduce((remaining, stage) => {
     if (stage.status === "done" || stage.status === "skipped") return remaining
-    return remaining + STAGE_ESTIMATE_MS[stage.name] * sizeFactor
+    // Derived sub-steps (ticket 26) have no private estimate; they share the
+    // chunk stage's budget window, so they contribute zero here.
+    return remaining + (STAGE_ESTIMATE_MS[stage.name] ?? 0) * sizeFactor
   }, 0)
   const completedDuration = progress.stages.reduce((elapsed, stage) =>
     elapsed + (stage.status === "done" ? stage.durationMs ?? 0 : 0), 0)
@@ -115,7 +148,19 @@ export function estimateImportRemainingMs(
 }
 
 export function buildImportSteps(progress: ImportProgress, isLocal: boolean, uploaded: boolean): ImportStep[] {
-  const stages = STAGES.map(({ name, shortLabel }) => ({
+  // Ticket 26: a gated PDF run shows its quality sub-steps in the bar — the
+  // stages array already carries them (derived in deriveIngestProgress) ahead
+  // of the coarse chunk stage.
+  const gated = progress.stages.some((stage) => stage.name in PDF_SUBSTEP_LABELS)
+  const sourceStages: ReadonlyArray<{ name: string; shortLabel: string }> = gated
+    ? progress.stages.map((stage) => ({
+        name: stage.name,
+        shortLabel: stage.name in PDF_SUBSTEP_LABELS
+          ? PDF_SUBSTEP_LABELS[stage.name as keyof typeof PDF_SUBSTEP_LABELS].shortLabel
+          : STAGES.find((entry) => entry.name === stage.name)?.shortLabel ?? stage.name,
+      }))
+    : STAGES
+  const stages = sourceStages.map(({ name, shortLabel }) => ({
     name,
     label: shortLabel,
     status: progress.stages.find((stage) => stage.name === name)?.status ?? "pending" as ImportStep["status"],
@@ -124,7 +169,9 @@ export function buildImportSteps(progress: ImportProgress, isLocal: boolean, upl
     stages.forEach((stage) => { stage.status = "skipped" })
   }
   if (progress.status === "failed" && !stages.some((stage) => stage.status === "failed") && (uploaded || !isLocal)) {
-    const firstPending = stages.find((stage) => stage.status === "pending")
+    // Generic failure attribution: the first PENDING SPAN-BACKED stage —
+    // derived sub-steps carry their own evidence-backed attribution.
+    const firstPending = stages.find((stage) => stage.status === "pending" && !(stage.name in PDF_SUBSTEP_LABELS))
     if (firstPending) firstPending.status = "failed"
   }
   if (!isLocal) return stages
@@ -142,6 +189,8 @@ export interface ImportProgress {
   error: string | null
   /** UT-26: structured end-state (null while the row is still in flight). */
   outcome: ImportOutcome | null
+  /** Ticket 26: the PDF quality workflow evidence (null for non-PDF runs). */
+  pdf: PdfQualityWorkflow | null
   stages: Array<{
     name: string
     label: string
@@ -207,6 +256,10 @@ export function deriveIngestProgress(payload: IngestStatus): ImportProgress {
               blockReasons: [],
               allowedOperations: payload.failure?.allowedOperations ?? [],
               oldVersionUsable: version != null && !version.active && version.version > 1,
+              // Ticket 26: the raw evidence the failure copy keys off.
+              reasonCode: payload.failure?.reasonCode,
+              ...(payload.failure?.reasonCodes?.length ? { reasonCodes: payload.failure.reasonCodes } : {}),
+              ...(payload.failure?.userGuidance ? { userGuidance: payload.failure.userGuidance } : {}),
             }
           : status === "cancelled"
             ? { state: "cancelled", blockReasons: [], allowedOperations: [], oldVersionUsable: false }
@@ -215,7 +268,13 @@ export function deriveIngestProgress(payload: IngestStatus): ImportProgress {
               : null
   const retryAt = payload.task?.nextAttemptAt ?? null
   const waitingForRetry = status === "pending" && root?.span.status === "failed"
-  const stages = STAGES.map(({ name, label }) => {
+  const stages: Array<{
+    name: string
+    label: string
+    status: IngestSpanNode["span"]["status"]
+    durationMs: number | null
+    output: Record<string, unknown> | null
+  }> = STAGES.map(({ name, label }) => {
     const span = root?.children.find((node) => node.span.name === name)?.span
     return {
       name,
@@ -225,6 +284,67 @@ export function deriveIngestProgress(payload: IngestStatus): ImportProgress {
       output: span?.output ?? null,
     }
   })
+  // Ticket 26: the PDF quality workflow evidence — the chunk span's persisted
+  // input names the effective switch (available even when the stage failed
+  // before any output), the output carries the audit verdict, and a
+  // quality-rejection failure record names the gate outright.
+  const chunkSpan = root?.children.find((node) => node.span.name === "chunk")?.span ?? null
+  const chunkOutput = chunkSpan?.output ?? null
+  const failureRecord = payload.failure ?? null
+  const workflow = typeof chunkOutput?.pdfQualityWorkflow === "string" ? chunkOutput.pdfQualityWorkflow : null
+  const pdf: PdfQualityWorkflow | null = workflow === "pdf_quality_workflow_enabled" ||
+    chunkSpan?.input?.pdfOcrFallbackEnabled === true ||
+    failureRecord?.reasonCode === "pdf_quality_gate_rejected"
+    ? {
+        gated: true,
+        ocrFallbackUsed: typeof chunkOutput?.pdfQualityOcrFallbackUsed === "boolean"
+          ? chunkOutput.pdfQualityOcrFallbackUsed
+          : null,
+        verdict: typeof chunkOutput?.pdfQualityGateVerdict === "string" ? chunkOutput.pdfQualityGateVerdict : null,
+      }
+    : null
+  if (pdf?.gated) {
+    // Derived sub-steps between upload and the coarse chunk stage: open +
+    // extract, the Clef audit, and (when evidence shows it) the OCR fallback
+    // with its second audit. Statuses come from evidence only — the audit
+    // failing means extraction succeeded; parser-side codes fail extraction.
+    const chunkStatus = stages.find((stage) => stage.name === "chunk")?.status ?? "pending"
+    const failedParserSide = status === "failed" && (
+      (failureRecord?.reasonCode != null && PARSER_SIDE_FAILURE_CODES.has(failureRecord.reasonCode)) ||
+      failureRecord?.userGuidance != null
+    )
+    const auditFailed = status === "failed" && failureRecord?.reasonCode === "pdf_quality_gate_rejected"
+    const auditDone = pdf.verdict === "pass"
+    const substeps: Array<{ name: keyof typeof PDF_SUBSTEP_LABELS; status: IngestSpanNode["span"]["status"] }> = [
+      {
+        name: "pdfExtract" as const,
+        status: (failedParserSide ? "failed"
+          : auditFailed || auditDone || chunkStatus === "done" ? "done"
+          : chunkStatus === "running" ? "running" : "pending") as IngestSpanNode["span"]["status"],
+      },
+      {
+        name: "pdfAudit" as const,
+        // While the chunk span runs we cannot tell extraction from auditing,
+        // so the audit stays pending until its own evidence lands.
+        status: (auditFailed ? "failed" : auditDone ? "done" : "pending") as IngestSpanNode["span"]["status"],
+      },
+    ]
+    if (pdf.ocrFallbackUsed) {
+      substeps.push(
+        { name: "pdfOcr" as const, status: "done" as const },
+        { name: "pdfOcrAudit" as const, status: "done" as const },
+      )
+    }
+    stages.unshift(
+      ...substeps.map(({ name, status: subStatus }) => ({
+        name,
+        label: PDF_SUBSTEP_LABELS[name as keyof typeof PDF_SUBSTEP_LABELS].label,
+        status: subStatus,
+        durationMs: null,
+        output: null,
+      })),
+    )
+  }
   const done = stages.filter((stage) => stage.status === "done").length
   const current = stages.find((stage) => stage.status === "running")
   const failed = root?.children.find((node) => node.span.status === "failed")?.span
@@ -232,21 +352,33 @@ export function deriveIngestProgress(payload: IngestStatus): ImportProgress {
   const storeChunks = root?.children.find((node) => node.span.name === "storeChunks")?.span
   const embeddingRateLimitCount = numberOutput(storeChunks?.output ?? null, "embeddingRateLimitCount")
   const rateLimitWaitMs = numberOutput(storeChunks?.output ?? null, "rateLimitWaitMs")
+  // Ticket 26: failure copy keys off the stable reason codes, never the coarse
+  // error class — a quality rejection reports its plain-language categories
+  // (merged pages; a service fault reports unavailability without asking to
+  // replace the file, already inside the mapped reasons).
+  const describedFailure = failureRecord ? describeFailure(failureRecord) : null
   const summary = status === "completed" ? "处理完成"
     : status === "pending_review" ? "处理完成，但内容待校验，未替换现有版本"
     : status === "business_review" ? "处理完成，等待业务审批"
     : status === "cancelled" ? "已取消"
+    : status === "failed" && failureRecord?.reasonCode === "pdf_quality_gate_rejected" ? "上传失败"
     : status === "failed" ? `${stages.find((stage) => stage.status === "failed")?.label ?? "处理"}失败`
     : waitingForRetry ? "等待自动重试"
     : status === "pending" ? "等待处理"
     : current ? `正在${current.label}` : "正在完成处理"
+  const failureError = status === "failed" && describedFailure
+    ? describedFailure.reasons.join("；")
+    : null
   return {
     status,
     percent: status === "completed" ? 100 : waitingForRetry ? 0
       : status === "processing" && !root ? null : Math.min(95, done / STAGES.length * 100),
     summary,
-    error: status === "failed" || waitingForRetry ? failed?.errorMessage ?? root?.span.errorMessage ?? "处理失败" : null,
+    error: status === "failed" || waitingForRetry
+      ? failureError ?? failed?.errorMessage ?? root?.span.errorMessage ?? "处理失败"
+      : null,
     outcome,
+    pdf,
     stages,
     parser: typeof chunk?.output?.parser === "string" ? chunk.output.parser : null,
     chunkCount: typeof chunk?.output?.chunkCount === "number" ? chunk.output.chunkCount : null,
@@ -264,7 +396,7 @@ export function initialImportProgress(status: ImportStatus): ImportProgress {
     summary: status === "queued" ? "等待上传" : status === "uploading" ? "正在上传文件"
       : status === "completed" ? "处理完成" : status === "failed" ? "上传失败"
       : status === "cancelled" ? "已取消" : status === "processing" ? "正在处理" : "等待处理",
-    error: null, outcome: null, stages: [], parser: null, chunkCount: null, retryCount: 0, retryAt: null,
+    error: null, outcome: null, pdf: null, stages: [], parser: null, chunkCount: null, retryCount: 0, retryAt: null,
     embeddingRateLimitCount: 0, rateLimitWaitMs: 0,
   }
 }

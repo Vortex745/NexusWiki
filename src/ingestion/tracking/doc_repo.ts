@@ -510,6 +510,19 @@ export class DocumentRepo {
     return (row?.status as DocumentStatus | undefined) ?? null
   }
 
+  /**
+   * Ticket 21: the retained original bytes of a document, for the production
+   * quality gate — the page evidence it audits must be a grounding of THESE
+   * bytes, and the persisted envelope binds their hash. Null when the
+   * submission carried no source bytes.
+   */
+  getRawContent(docId: string): Buffer | null {
+    const row = this.db.prepare(
+      `SELECT raw_content FROM documents WHERE doc_id = ?`
+    ).get(docId) as { raw_content: Buffer | null } | undefined
+    return row?.raw_content ?? null
+  }
+
   // ---- Ticket UT-04: joint activation gate -------------------------------
 
   /**

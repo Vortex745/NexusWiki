@@ -24,12 +24,12 @@ import { evaluateActivationGate } from "./activation_gate"
 import { IngestionStoreImpl } from "./storage"
 import type { Chunk } from "../types"
 import { createElasticsearchClient } from "../clients"
-import { loadConfig } from "../config"
+import { loadConfig, resolveChunkIndexName } from "../config"
 
 const HERE = dirname(__filename)
 process.env.OPENAI_API_KEY = process.env.OPENAI_API_KEY || "test-key"
 // 真实 ES/嵌入配置来自生产 .env（与生产代码一致；不覆盖已有环境变量）。
-dotenvConfig({ override: false })
+dotenvConfig({ path: process.env.DOTENV_CONFIG_PATH, override: false })
 // loadConfig() 是进程级 memoize：必须在任何 loadConfig 调用之前固定隔离库。
 process.env.SQLITE_PATH = join(mkdtempSync(join(tmpdir(), "kefu-rag-ut16-")), "ingestion.db")
 
@@ -148,6 +148,7 @@ test("UT-16 集成：真实 ES 写入后核验通过，重复写入幂等且故�
     embeddingClient: deterministicEmbeddingClient(config.embeddingDimensions),
     embeddingModel: config.embeddingModel,
     embeddingDimensions: config.embeddingDimensions,
+    indexName: resolveChunkIndexName(undefined, config),
   })
 
   const captured: Chunk[] = []
@@ -174,7 +175,8 @@ test("UT-16 集成：真实 ES 写入后核验通过，重复写入幂等且故�
     rawContent: readFileSync(join(TRUTH_DIR_TXT, "utf8-baseline.txt")),
     fileName: "utf8-baseline.txt",
     mimeType: "text/plain",
-    sourceIdentity: { kind: "file", uriOrExternalId: "C:/truth/ut16/baseline.txt", namespace: "ut16" },
+    knowledgeBaseId: "kb-ut16",
+    sourceIdentity: { kind: "file", uriOrExternalId: "C:/truth/ut16/baseline.txt", namespace: "ut16", tenantId: "ut16" },
   })
   const result = await lifecycle.runNext()
   assert.ok(result?.success, "摄取必须完成")
@@ -246,7 +248,7 @@ test("UT-16 集成：真实 ES 写入后核验通过，重复写入幂等且故�
   // 清理隔离测试数据。
   await es.deleteByQuery({
     index: store.chunkIndexName,
-    query: { term: { documentId: submitted.docId } },
+    query: { bool: { filter: [{ term: { documentId: submitted.docId } }, { term: { tenantId: "ut16" } }] } },
     conflicts: "proceed",
     refresh: true,
   })
@@ -266,6 +268,7 @@ test("UT-17 收尾前：旧版本保护——v2 内容待校验被拒后 v1 仍�
     embeddingClient: deterministicEmbeddingClient(config.embeddingDimensions),
     embeddingModel: config.embeddingModel,
     embeddingDimensions: config.embeddingDimensions,
+    indexName: resolveChunkIndexName(undefined, config),
   })
   const storeProxy = {
     storeChunks: async (chunks: Chunk[], meta: unknown, signal?: AbortSignal) =>
@@ -291,7 +294,7 @@ test("UT-17 收尾前：旧版本保护——v2 内容待校验被拒后 v1 仍�
     rawContent: readFileSync(join(TRUTH_DIR_PDF, "simple-body.pdf")),
     fileName: "policy.pdf",
     mimeType: "application/pdf",
-    sourceIdentity: { kind: "file", uriOrExternalId: "C:/truth/ut17/policy.pdf", namespace: "ut17" },
+    sourceIdentity: { kind: "file", uriOrExternalId: "C:/truth/ut17/policy.pdf", namespace: "ut17", tenantId: "ut17" },
   })
   const run1 = await lifecycle.runNext()
   assert.ok(run1?.success)
@@ -310,7 +313,7 @@ test("UT-17 收尾前：旧版本保护——v2 内容待校验被拒后 v1 仍�
     fileName: "policy.pdf",
     mimeType: "application/pdf",
     versionIntent: "new_version",
-    sourceIdentity: { kind: "file", uriOrExternalId: "C:/truth/ut17/policy.pdf", namespace: "ut17" },
+    sourceIdentity: { kind: "file", uriOrExternalId: "C:/truth/ut17/policy.pdf", namespace: "ut17", tenantId: "ut17" },
   })
   const run2 = await lifecycle.runNext()
   assert.ok(run2?.success, "v2 阶段完成（内容待校验在门槛层拒绝）")
@@ -324,13 +327,13 @@ test("UT-17 收尾前：旧版本保护——v2 内容待校验被拒后 v1 仍�
   // 清理隔离测试数据（v1+v2 同源）。
   await es.deleteByQuery({
     index: store.chunkIndexName,
-    query: { term: { documentId: v1.docId } },
+    query: { bool: { filter: [{ term: { documentId: v1.docId } }, { term: { tenantId: "ut17" } }] } },
     conflicts: "proceed",
     refresh: true,
   })
   await es.deleteByQuery({
     index: store.chunkIndexName,
-    query: { term: { documentId: v2.docId } },
+    query: { bool: { filter: [{ term: { documentId: v2.docId } }, { term: { tenantId: "ut17" } }] } },
     conflicts: "proceed",
     refresh: true,
   })

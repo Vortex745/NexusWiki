@@ -1,0 +1,2535 @@
+{
+  "schemaVersion": "pdf-quality-corpus-v1",
+  "ticket": "pdf-quality-02",
+  "generatedBy": "golden/pdf-quality-corpus/generate.py",
+  "generatedWith": {
+    "library": "PyMuPDF",
+    "libraryVersion": "1.28.0",
+    "font": "china-s",
+    "pageSizePt": [
+      595,
+      842
+    ],
+    "metadataDateFixed": "D:20260101000000Z",
+    "clefMaxImagesPerRequest": 4
+  },
+  "annotationProvenance": {
+    "method": "designed-before-write",
+    "statement": "每一页的可见内容与期望裁决来自 generate.py 的 DESIGN 常量表，写在 PDF 字节之前；期望由 closedSetRule 从载体、文本层设计、结构义务与可见行数这些文档自身属性推导，不读取任何提取器、Clef 或 OCR 的输出。",
+    "notDerivedFrom": [
+      "pymupdf-get-text",
+      "pdfminer",
+      "clef-service-output",
+      "ocr-service-output"
+    ],
+    "independentVerification": "页数、能否打开、以及「损坏/加密/不可打开是否真的读不出来」由 Node 端 pdf-lib 在 src/ingestion/pdf_quality_corpus/corpus.test.ts 里独立核对；pdf-lib 不是生产解析器（生产路径 scripts/builtin_pdf_extract.py 走 PyMuPDF），因此这条核对不构成自我确认。",
+    "structureObligationRule": "带结构义务的页面对本地文本候选的独立期望只能是 uncertain：文档自身的声明无法证明义务已被保留，而发布规则要求 uncertain 阻断激活。pass 只允许出现在逐维证据齐备的回放脚本里；票 07 的评估器负责拒绝用概率或置信度把 uncertain 折成 pass。",
+    "closedSetRule": "本地文本候选（stage=local）：1) 载体是纯图像且页面上有人眼可见文字 ⇒ fail + text-layer-absent（本地文本层按构造不可能表示这些内容）；2) 文本层与页面字形不对应 ⇒ fail + garbled-text-layer；3) 文本层只覆盖了部分可见内容 ⇒ fail + content-missing；4) 设计上的空页 ⇒ pass + none（没有可丢失内容，但该页必须作为证据存在）；5) 文本层按设计等于可见内容但带结构义务 ⇒ uncertain + structure-unverified（表格对齐、表头-值关系、分栏顺序、脚注位置、公式保真都无法由文档自身自证，pass 只能由逐维证据支撑）；6) 其余纯文本单栏页 ⇒ pass + none；7) 加密/损坏/不可打开 ⇒ fail + document-unreadable 且 auditEligible=false，不得进入审计。OCR 候选（stage=ocr-candidate）：干净印刷 raster 的可见内容应被恢复 ⇒ 无结构义务时 pass + none；带结构义务时仍是 uncertain + structure-unverified。"
+  },
+  "externalServiceDependency": "none",
+  "readerToleranceObservations": [
+    {
+      "reader": "pdf-lib 1.17.1（语料独立核对用，非生产解析器）",
+      "observation": "拒绝加载 encrypted-aes256 / damaged-truncated / damaged-corrupt-object-headers / unopenable-not-a-pdf / unopenable-stub-header；其余 12 个样本按标注页数读出。"
+    },
+    {
+      "reader": "PyMuPDF（生产提取器 scripts/builtin_pdf_extract.py 所用库）",
+      "observation": "只清掉交叉引用表的样本会被它自行重建并读出全部页；PNG 字节改名 .pdf 也会被它当作一页文档打开。因此语料改用「对象关键字全部破坏」与「OLE 容器字节」两种两个阅读器都拒绝的损坏，不把阅读器宽容度当成文档真值。加密样本对它暴露 1 页但读取内容即抛错。"
+    }
+  ],
+  "verdicts": [
+    "pass",
+    "fail",
+    "uncertain"
+  ],
+  "issueLabels": [
+    "none",
+    "text-layer-absent",
+    "garbled-text-layer",
+    "content-missing",
+    "content-fabricated",
+    "reading-order-broken",
+    "structure-flattened",
+    "structure-unverified",
+    "page-image-unavailable",
+    "document-unreadable",
+    "audit-incomplete"
+  ],
+  "dimensions": [
+    "completeness",
+    "accuracy",
+    "readingOrder",
+    "structureFidelity"
+  ],
+  "carriers": [
+    "text-layer",
+    "image-only",
+    "image-plus-text-layer",
+    "image-plus-garbled-text-layer",
+    "blank",
+    "unreadable"
+  ],
+  "pageLayouts": [
+    "single-column",
+    "two-column",
+    "table",
+    "image-cover",
+    "blank",
+    "mixed",
+    "rasterized",
+    "unreadable"
+  ],
+  "textRoles": [
+    "title",
+    "body",
+    "footnote",
+    "table-cell",
+    "formula",
+    "caption",
+    "image-only-text",
+    "label"
+  ],
+  "structureObligations": [
+    "table-cell-alignment",
+    "header-value-relation",
+    "column-reading-order",
+    "footnote-retention",
+    "formula-fidelity",
+    "page-position",
+    "image-presence",
+    "number-and-negation-fidelity"
+  ],
+  "requiredCategories": [
+    "pure-text",
+    "scanned",
+    "mixed",
+    "blank-page",
+    "image-cover",
+    "garbled",
+    "table",
+    "multi-column",
+    "encrypted",
+    "damaged",
+    "unopenable"
+  ],
+  "categories": [
+    "pure-text",
+    "scanned",
+    "mixed",
+    "blank-page",
+    "image-cover",
+    "garbled",
+    "table",
+    "multi-column",
+    "encrypted",
+    "damaged",
+    "unopenable",
+    "footnote",
+    "formula",
+    "partial-rasterization",
+    "batch-splitting"
+  ],
+  "labelDimensionMap": {
+    "none": {
+      "completeness": "pass",
+      "accuracy": "pass",
+      "readingOrder": "pass",
+      "structureFidelity": "pass"
+    },
+    "text-layer-absent": {
+      "completeness": "fail",
+      "accuracy": "uncertain",
+      "readingOrder": "uncertain",
+      "structureFidelity": "uncertain"
+    },
+    "garbled-text-layer": {
+      "completeness": "fail",
+      "accuracy": "fail",
+      "readingOrder": "uncertain",
+      "structureFidelity": "uncertain"
+    },
+    "content-missing": {
+      "completeness": "fail",
+      "accuracy": "uncertain",
+      "readingOrder": "uncertain",
+      "structureFidelity": "uncertain"
+    },
+    "content-fabricated": {
+      "completeness": "uncertain",
+      "accuracy": "fail",
+      "readingOrder": "uncertain",
+      "structureFidelity": "uncertain"
+    },
+    "reading-order-broken": {
+      "completeness": "pass",
+      "accuracy": "pass",
+      "readingOrder": "fail",
+      "structureFidelity": "uncertain"
+    },
+    "structure-flattened": {
+      "completeness": "pass",
+      "accuracy": "pass",
+      "readingOrder": "uncertain",
+      "structureFidelity": "fail"
+    },
+    "structure-unverified": {
+      "completeness": "uncertain",
+      "accuracy": "uncertain",
+      "readingOrder": "uncertain",
+      "structureFidelity": "uncertain"
+    },
+    "page-image-unavailable": {
+      "completeness": "uncertain",
+      "accuracy": "uncertain",
+      "readingOrder": "uncertain",
+      "structureFidelity": "uncertain"
+    },
+    "document-unreadable": {
+      "completeness": "fail",
+      "accuracy": "fail",
+      "readingOrder": "fail",
+      "structureFidelity": "fail"
+    },
+    "audit-incomplete": {
+      "completeness": "uncertain",
+      "accuracy": "uncertain",
+      "readingOrder": "uncertain",
+      "structureFidelity": "uncertain"
+    }
+  },
+  "fixtures": [
+    {
+      "fixtureId": "pure-text",
+      "file": "pdfs/pure-text.pdf",
+      "categories": [
+        "pure-text"
+      ],
+      "fileSha256": "6448be20547f6805df532b13f98723ec8e55397412fdf50c21675dd4e69d13df",
+      "fileBytes": 3435,
+      "pageCount": 3,
+      "evidencePageCount": 3,
+      "pageMappingFormat": "1-based-contiguous",
+      "byteStableOnRegeneration": true,
+      "openableByIndependentReader": true,
+      "auditEligible": true,
+      "documentOutcome": "auditable",
+      "documentExpectation": {
+        "verdict": null,
+        "issueLabels": [],
+        "requiresZeroServiceCalls": false,
+        "note": "整篇结果由逐页裁决归约得出，清单不预设 pass：票 07/09 的归约器负责全页 pass 的条件。"
+      },
+      "productionMethod": "PyMuPDF 新建 3 页 A4，用内置 china-s 字体把设计常量逐行写进文本层；固定元数据日期并钉死 trailer /ID。",
+      "productionNotes": "文本层内容与可见内容按构造一一对应，因此本地候选的独立期望只能是 pass + none。",
+      "sourceDocument": {
+        "identity": "qg02-pure-text",
+        "kind": "locally-generated",
+        "origin": "由本仓库的 golden/pdf-quality-corpus/generate.py 生成，不是下载或第三方的真实业务文档。",
+        "title": "PDF 质量门语料样本 pure-text",
+        "producer": "pdf-quality-corpus-generator",
+        "creationDateFixed": "D:20260101000000Z",
+        "downloadUrl": null
+      },
+      "pages": [
+        {
+          "page": 1,
+          "carrier": "text-layer",
+          "layout": "single-column",
+          "blankByDesign": false,
+          "textLayerAuthored": "faithful",
+          "visible": [
+            {
+              "line": "质量门语料：纯文本样本",
+              "role": "title"
+            },
+            {
+              "line": "第一页：退款政策适用于所有 2026 年的订单。",
+              "role": "body"
+            },
+            {
+              "line": "订单 A-2026-1001，金额 50 元，校验词 纯-1。",
+              "role": "body"
+            }
+          ],
+          "structureObligations": [],
+          "expected": {
+            "local": {
+              "verdict": "pass",
+              "issueLabels": [
+                "none"
+              ],
+              "dimensions": {
+                "completeness": "pass",
+                "accuracy": "pass",
+                "readingOrder": "pass",
+                "structureFidelity": "pass"
+              }
+            },
+            "ocrCandidate": {
+              "verdict": "pass",
+              "issueLabels": [
+                "none"
+              ],
+              "dimensions": {
+                "completeness": "pass",
+                "accuracy": "pass",
+                "readingOrder": "pass",
+                "structureFidelity": "pass"
+              }
+            }
+          },
+          "annotation": {
+            "authoredBy": "ticket-02:generate.py DESIGN table",
+            "independentOfImplementationOutput": true,
+            "derivation": "closedSetRule 命中记录：载体=text-layer，文本层设计=faithful，结构义务=-，可见行数=3，文件可独立打开=True ⇒ local=pass + none，ocr-candidate=pass + none。可见内容由 generate.py 常量逐字给出，写 PDF 之前就已确定。",
+            "consultedSources": [],
+            "documentPropertyUsed": [
+              "declared-carrier:text-layer",
+              "declared-text-layer:faithful",
+              "declared-visible-line-count:3"
+            ]
+          },
+          "note": null
+        },
+        {
+          "page": 2,
+          "carrier": "text-layer",
+          "layout": "single-column",
+          "blankByDesign": false,
+          "textLayerAuthored": "faithful",
+          "visible": [
+            {
+              "line": "第二页：不支持过期后补办，也不支持跨店抵扣。",
+              "role": "body"
+            },
+            {
+              "line": "Order A-2026-1002: quantity 3, unit price 12.5。",
+              "role": "body"
+            },
+            {
+              "line": "审核时限为三个工作日，校验词 纯-2。",
+              "role": "body"
+            }
+          ],
+          "structureObligations": [],
+          "expected": {
+            "local": {
+              "verdict": "pass",
+              "issueLabels": [
+                "none"
+              ],
+              "dimensions": {
+                "completeness": "pass",
+                "accuracy": "pass",
+                "readingOrder": "pass",
+                "structureFidelity": "pass"
+              }
+            },
+            "ocrCandidate": {
+              "verdict": "pass",
+              "issueLabels": [
+                "none"
+              ],
+              "dimensions": {
+                "completeness": "pass",
+                "accuracy": "pass",
+                "readingOrder": "pass",
+                "structureFidelity": "pass"
+              }
+            }
+          },
+          "annotation": {
+            "authoredBy": "ticket-02:generate.py DESIGN table",
+            "independentOfImplementationOutput": true,
+            "derivation": "closedSetRule 命中记录：载体=text-layer，文本层设计=faithful，结构义务=-，可见行数=3，文件可独立打开=True ⇒ local=pass + none，ocr-candidate=pass + none。可见内容由 generate.py 常量逐字给出，写 PDF 之前就已确定。",
+            "consultedSources": [],
+            "documentPropertyUsed": [
+              "declared-carrier:text-layer",
+              "declared-text-layer:faithful",
+              "declared-visible-line-count:3"
+            ]
+          },
+          "note": null
+        },
+        {
+          "page": 3,
+          "carrier": "text-layer",
+          "layout": "single-column",
+          "blankByDesign": false,
+          "textLayerAuthored": "faithful",
+          "visible": [
+            {
+              "line": "第三页：申诉渠道 support@example.com。",
+              "role": "body"
+            },
+            {
+              "line": "结尾校验词：终线-质量门-88。",
+              "role": "body"
+            }
+          ],
+          "structureObligations": [],
+          "expected": {
+            "local": {
+              "verdict": "pass",
+              "issueLabels": [
+                "none"
+              ],
+              "dimensions": {
+                "completeness": "pass",
+                "accuracy": "pass",
+                "readingOrder": "pass",
+                "structureFidelity": "pass"
+              }
+            },
+            "ocrCandidate": {
+              "verdict": "pass",
+              "issueLabels": [
+                "none"
+              ],
+              "dimensions": {
+                "completeness": "pass",
+                "accuracy": "pass",
+                "readingOrder": "pass",
+                "structureFidelity": "pass"
+              }
+            }
+          },
+          "annotation": {
+            "authoredBy": "ticket-02:generate.py DESIGN table",
+            "independentOfImplementationOutput": true,
+            "derivation": "closedSetRule 命中记录：载体=text-layer，文本层设计=faithful，结构义务=-，可见行数=2，文件可独立打开=True ⇒ local=pass + none，ocr-candidate=pass + none。可见内容由 generate.py 常量逐字给出，写 PDF 之前就已确定。",
+            "consultedSources": [],
+            "documentPropertyUsed": [
+              "declared-carrier:text-layer",
+              "declared-text-layer:faithful",
+              "declared-visible-line-count:2"
+            ]
+          },
+          "note": null
+        }
+      ],
+      "idPinned": true,
+      "trailerIdDerivedFrom": "sha256(qg02:pure-text)"
+    },
+    {
+      "fixtureId": "text-long-6p",
+      "file": "pdfs/text-long-6p.pdf",
+      "categories": [
+        "pure-text",
+        "batch-splitting"
+      ],
+      "fileSha256": "2e79006c469e46534b8d0d8951160b424761f75f89edae5792ccdce8940a0af6",
+      "fileBytes": 3430,
+      "pageCount": 6,
+      "evidencePageCount": 6,
+      "pageMappingFormat": "1-based-contiguous",
+      "byteStableOnRegeneration": true,
+      "openableByIndependentReader": true,
+      "auditEligible": true,
+      "documentOutcome": "auditable",
+      "documentExpectation": {
+        "verdict": null,
+        "issueLabels": [],
+        "requiresZeroServiceCalls": false,
+        "note": "整篇结果由逐页裁决归约得出，清单不预设 pass：票 07/09 的归约器负责全页 pass 的条件。"
+      },
+      "productionMethod": "同上，但生成 6 页，用来证明「每次最多 4 张图」的切分场景有真实文件可喂。",
+      "productionNotes": "票 09/10 用它断言超限输入必须切分而不是静默截断。",
+      "sourceDocument": {
+        "identity": "qg02-text-long-6p",
+        "kind": "locally-generated",
+        "origin": "由本仓库的 golden/pdf-quality-corpus/generate.py 生成，不是下载或第三方的真实业务文档。",
+        "title": "PDF 质量门语料样本 text-long-6p",
+        "producer": "pdf-quality-corpus-generator",
+        "creationDateFixed": "D:20260101000000Z",
+        "downloadUrl": null
+      },
+      "pages": [
+        {
+          "page": 1,
+          "carrier": "text-layer",
+          "layout": "single-column",
+          "blankByDesign": false,
+          "textLayerAuthored": "faithful",
+          "visible": [
+            {
+              "line": "纯文本长样本 第1页：批次切分用页，校验词 长-1。",
+              "role": "body"
+            }
+          ],
+          "structureObligations": [],
+          "expected": {
+            "local": {
+              "verdict": "pass",
+              "issueLabels": [
+                "none"
+              ],
+              "dimensions": {
+                "completeness": "pass",
+                "accuracy": "pass",
+                "readingOrder": "pass",
+                "structureFidelity": "pass"
+              }
+            },
+            "ocrCandidate": {
+              "verdict": "pass",
+              "issueLabels": [
+                "none"
+              ],
+              "dimensions": {
+                "completeness": "pass",
+                "accuracy": "pass",
+                "readingOrder": "pass",
+                "structureFidelity": "pass"
+              }
+            }
+          },
+          "annotation": {
+            "authoredBy": "ticket-02:generate.py DESIGN table",
+            "independentOfImplementationOutput": true,
+            "derivation": "closedSetRule 命中记录：载体=text-layer，文本层设计=faithful，结构义务=-，可见行数=1，文件可独立打开=True ⇒ local=pass + none，ocr-candidate=pass + none。可见内容由 generate.py 常量逐字给出，写 PDF 之前就已确定。",
+            "consultedSources": [],
+            "documentPropertyUsed": [
+              "declared-carrier:text-layer",
+              "declared-text-layer:faithful",
+              "declared-visible-line-count:1"
+            ]
+          },
+          "note": null
+        },
+        {
+          "page": 2,
+          "carrier": "text-layer",
+          "layout": "single-column",
+          "blankByDesign": false,
+          "textLayerAuthored": "faithful",
+          "visible": [
+            {
+              "line": "纯文本长样本 第2页：批次切分用页，校验词 长-2。",
+              "role": "body"
+            }
+          ],
+          "structureObligations": [],
+          "expected": {
+            "local": {
+              "verdict": "pass",
+              "issueLabels": [
+                "none"
+              ],
+              "dimensions": {
+                "completeness": "pass",
+                "accuracy": "pass",
+                "readingOrder": "pass",
+                "structureFidelity": "pass"
+              }
+            },
+            "ocrCandidate": {
+              "verdict": "pass",
+              "issueLabels": [
+                "none"
+              ],
+              "dimensions": {
+                "completeness": "pass",
+                "accuracy": "pass",
+                "readingOrder": "pass",
+                "structureFidelity": "pass"
+              }
+            }
+          },
+          "annotation": {
+            "authoredBy": "ticket-02:generate.py DESIGN table",
+            "independentOfImplementationOutput": true,
+            "derivation": "closedSetRule 命中记录：载体=text-layer，文本层设计=faithful，结构义务=-，可见行数=1，文件可独立打开=True ⇒ local=pass + none，ocr-candidate=pass + none。可见内容由 generate.py 常量逐字给出，写 PDF 之前就已确定。",
+            "consultedSources": [],
+            "documentPropertyUsed": [
+              "declared-carrier:text-layer",
+              "declared-text-layer:faithful",
+              "declared-visible-line-count:1"
+            ]
+          },
+          "note": null
+        },
+        {
+          "page": 3,
+          "carrier": "text-layer",
+          "layout": "single-column",
+          "blankByDesign": false,
+          "textLayerAuthored": "faithful",
+          "visible": [
+            {
+              "line": "纯文本长样本 第3页：批次切分用页，校验词 长-3。",
+              "role": "body"
+            }
+          ],
+          "structureObligations": [],
+          "expected": {
+            "local": {
+              "verdict": "pass",
+              "issueLabels": [
+                "none"
+              ],
+              "dimensions": {
+                "completeness": "pass",
+                "accuracy": "pass",
+                "readingOrder": "pass",
+                "structureFidelity": "pass"
+              }
+            },
+            "ocrCandidate": {
+              "verdict": "pass",
+              "issueLabels": [
+                "none"
+              ],
+              "dimensions": {
+                "completeness": "pass",
+                "accuracy": "pass",
+                "readingOrder": "pass",
+                "structureFidelity": "pass"
+              }
+            }
+          },
+          "annotation": {
+            "authoredBy": "ticket-02:generate.py DESIGN table",
+            "independentOfImplementationOutput": true,
+            "derivation": "closedSetRule 命中记录：载体=text-layer，文本层设计=faithful，结构义务=-，可见行数=1，文件可独立打开=True ⇒ local=pass + none，ocr-candidate=pass + none。可见内容由 generate.py 常量逐字给出，写 PDF 之前就已确定。",
+            "consultedSources": [],
+            "documentPropertyUsed": [
+              "declared-carrier:text-layer",
+              "declared-text-layer:faithful",
+              "declared-visible-line-count:1"
+            ]
+          },
+          "note": null
+        },
+        {
+          "page": 4,
+          "carrier": "text-layer",
+          "layout": "single-column",
+          "blankByDesign": false,
+          "textLayerAuthored": "faithful",
+          "visible": [
+            {
+              "line": "纯文本长样本 第4页：批次切分用页，校验词 长-4。",
+              "role": "body"
+            }
+          ],
+          "structureObligations": [],
+          "expected": {
+            "local": {
+              "verdict": "pass",
+              "issueLabels": [
+                "none"
+              ],
+              "dimensions": {
+                "completeness": "pass",
+                "accuracy": "pass",
+                "readingOrder": "pass",
+                "structureFidelity": "pass"
+              }
+            },
+            "ocrCandidate": {
+              "verdict": "pass",
+              "issueLabels": [
+                "none"
+              ],
+              "dimensions": {
+                "completeness": "pass",
+                "accuracy": "pass",
+                "readingOrder": "pass",
+                "structureFidelity": "pass"
+              }
+            }
+          },
+          "annotation": {
+            "authoredBy": "ticket-02:generate.py DESIGN table",
+            "independentOfImplementationOutput": true,
+            "derivation": "closedSetRule 命中记录：载体=text-layer，文本层设计=faithful，结构义务=-，可见行数=1，文件可独立打开=True ⇒ local=pass + none，ocr-candidate=pass + none。可见内容由 generate.py 常量逐字给出，写 PDF 之前就已确定。",
+            "consultedSources": [],
+            "documentPropertyUsed": [
+              "declared-carrier:text-layer",
+              "declared-text-layer:faithful",
+              "declared-visible-line-count:1"
+            ]
+          },
+          "note": null
+        },
+        {
+          "page": 5,
+          "carrier": "text-layer",
+          "layout": "single-column",
+          "blankByDesign": false,
+          "textLayerAuthored": "faithful",
+          "visible": [
+            {
+              "line": "纯文本长样本 第5页：批次切分用页，校验词 长-5。",
+              "role": "body"
+            }
+          ],
+          "structureObligations": [],
+          "expected": {
+            "local": {
+              "verdict": "pass",
+              "issueLabels": [
+                "none"
+              ],
+              "dimensions": {
+                "completeness": "pass",
+                "accuracy": "pass",
+                "readingOrder": "pass",
+                "structureFidelity": "pass"
+              }
+            },
+            "ocrCandidate": {
+              "verdict": "pass",
+              "issueLabels": [
+                "none"
+              ],
+              "dimensions": {
+                "completeness": "pass",
+                "accuracy": "pass",
+                "readingOrder": "pass",
+                "structureFidelity": "pass"
+              }
+            }
+          },
+          "annotation": {
+            "authoredBy": "ticket-02:generate.py DESIGN table",
+            "independentOfImplementationOutput": true,
+            "derivation": "closedSetRule 命中记录：载体=text-layer，文本层设计=faithful，结构义务=-，可见行数=1，文件可独立打开=True ⇒ local=pass + none，ocr-candidate=pass + none。可见内容由 generate.py 常量逐字给出，写 PDF 之前就已确定。",
+            "consultedSources": [],
+            "documentPropertyUsed": [
+              "declared-carrier:text-layer",
+              "declared-text-layer:faithful",
+              "declared-visible-line-count:1"
+            ]
+          },
+          "note": null
+        },
+        {
+          "page": 6,
+          "carrier": "text-layer",
+          "layout": "single-column",
+          "blankByDesign": false,
+          "textLayerAuthored": "faithful",
+          "visible": [
+            {
+              "line": "纯文本长样本 第6页：批次切分用页，校验词 长-6。",
+              "role": "body"
+            }
+          ],
+          "structureObligations": [],
+          "expected": {
+            "local": {
+              "verdict": "pass",
+              "issueLabels": [
+                "none"
+              ],
+              "dimensions": {
+                "completeness": "pass",
+                "accuracy": "pass",
+                "readingOrder": "pass",
+                "structureFidelity": "pass"
+              }
+            },
+            "ocrCandidate": {
+              "verdict": "pass",
+              "issueLabels": [
+                "none"
+              ],
+              "dimensions": {
+                "completeness": "pass",
+                "accuracy": "pass",
+                "readingOrder": "pass",
+                "structureFidelity": "pass"
+              }
+            }
+          },
+          "annotation": {
+            "authoredBy": "ticket-02:generate.py DESIGN table",
+            "independentOfImplementationOutput": true,
+            "derivation": "closedSetRule 命中记录：载体=text-layer，文本层设计=faithful，结构义务=-，可见行数=1，文件可独立打开=True ⇒ local=pass + none，ocr-candidate=pass + none。可见内容由 generate.py 常量逐字给出，写 PDF 之前就已确定。",
+            "consultedSources": [],
+            "documentPropertyUsed": [
+              "declared-carrier:text-layer",
+              "declared-text-layer:faithful",
+              "declared-visible-line-count:1"
+            ]
+          },
+          "note": null
+        }
+      ],
+      "idPinned": true,
+      "trailerIdDerivedFrom": "sha256(qg02:text-long-6p)"
+    },
+    {
+      "fixtureId": "scanned-textless",
+      "file": "pdfs/scanned-textless.pdf",
+      "categories": [
+        "scanned"
+      ],
+      "fileSha256": "86f68b49e17ca75c504ce20525199310f25b5ca262d42fbc56db6aa18f029289",
+      "fileBytes": 42432,
+      "pageCount": 2,
+      "evidencePageCount": 2,
+      "pageMappingFormat": "1-based-contiguous",
+      "byteStableOnRegeneration": true,
+      "openableByIndependentReader": true,
+      "auditEligible": true,
+      "documentOutcome": "auditable",
+      "documentExpectation": {
+        "verdict": null,
+        "issueLabels": [],
+        "requiresZeroServiceCalls": false,
+        "note": "整篇结果由逐页裁决归约得出，清单不预设 pass：票 07/09 的归约器负责全页 pass 的条件。"
+      },
+      "productionMethod": "把设计文本先渲染成 PNG（raster_page），再整页插入目标 PDF；插入图像不会创建文本层。",
+      "productionNotes": "本机没有 scanner：扫描件用「数字排版渲染成图像」这一诚实 route 产生，raster 是干净印刷体，所以 OCR 候选的期望是 pass；真实复印件退化在 coverage-map.unrepresented 里显式登记。",
+      "sourceDocument": {
+        "identity": "qg02-scanned-textless",
+        "kind": "locally-generated",
+        "origin": "由本仓库的 golden/pdf-quality-corpus/generate.py 生成，不是下载或第三方的真实业务文档。",
+        "title": "PDF 质量门语料样本 scanned-textless",
+        "producer": "pdf-quality-corpus-generator",
+        "creationDateFixed": "D:20260101000000Z",
+        "downloadUrl": null
+      },
+      "pages": [
+        {
+          "page": 1,
+          "carrier": "image-only",
+          "layout": "rasterized",
+          "blankByDesign": false,
+          "textLayerAuthored": "absent",
+          "visible": [
+            {
+              "line": "扫描件第一页：这是纯图像页，没有文本层。",
+              "role": "image-only-text"
+            },
+            {
+              "line": "发票号 INV-77881，校验词 扫-1。",
+              "role": "image-only-text"
+            }
+          ],
+          "structureObligations": [],
+          "expected": {
+            "local": {
+              "verdict": "fail",
+              "issueLabels": [
+                "text-layer-absent"
+              ],
+              "dimensions": {
+                "completeness": "fail",
+                "accuracy": "uncertain",
+                "readingOrder": "uncertain",
+                "structureFidelity": "uncertain"
+              }
+            },
+            "ocrCandidate": {
+              "verdict": "pass",
+              "issueLabels": [
+                "none"
+              ],
+              "dimensions": {
+                "completeness": "pass",
+                "accuracy": "pass",
+                "readingOrder": "pass",
+                "structureFidelity": "pass"
+              }
+            }
+          },
+          "annotation": {
+            "authoredBy": "ticket-02:generate.py DESIGN table",
+            "independentOfImplementationOutput": true,
+            "derivation": "closedSetRule 命中记录：载体=image-only，文本层设计=absent，结构义务=-，可见行数=2，文件可独立打开=True ⇒ local=fail + text-layer-absent，ocr-candidate=pass + none。可见内容由 generate.py 常量逐字给出，写 PDF 之前就已确定。",
+            "consultedSources": [],
+            "documentPropertyUsed": [
+              "declared-carrier:image-only",
+              "declared-text-layer:absent",
+              "declared-visible-line-count:2"
+            ]
+          },
+          "note": "整页是 150dpi 的印刷字 raster，没有文本层。"
+        },
+        {
+          "page": 2,
+          "carrier": "image-only",
+          "layout": "rasterized",
+          "blankByDesign": false,
+          "textLayerAuthored": "absent",
+          "visible": [
+            {
+              "line": "扫描件第二页：图像里的正文第二段。",
+              "role": "image-only-text"
+            },
+            {
+              "line": "本页只有像素，校验词 扫-2。",
+              "role": "image-only-text"
+            }
+          ],
+          "structureObligations": [],
+          "expected": {
+            "local": {
+              "verdict": "fail",
+              "issueLabels": [
+                "text-layer-absent"
+              ],
+              "dimensions": {
+                "completeness": "fail",
+                "accuracy": "uncertain",
+                "readingOrder": "uncertain",
+                "structureFidelity": "uncertain"
+              }
+            },
+            "ocrCandidate": {
+              "verdict": "pass",
+              "issueLabels": [
+                "none"
+              ],
+              "dimensions": {
+                "completeness": "pass",
+                "accuracy": "pass",
+                "readingOrder": "pass",
+                "structureFidelity": "pass"
+              }
+            }
+          },
+          "annotation": {
+            "authoredBy": "ticket-02:generate.py DESIGN table",
+            "independentOfImplementationOutput": true,
+            "derivation": "closedSetRule 命中记录：载体=image-only，文本层设计=absent，结构义务=-，可见行数=2，文件可独立打开=True ⇒ local=fail + text-layer-absent，ocr-candidate=pass + none。可见内容由 generate.py 常量逐字给出，写 PDF 之前就已确定。",
+            "consultedSources": [],
+            "documentPropertyUsed": [
+              "declared-carrier:image-only",
+              "declared-text-layer:absent",
+              "declared-visible-line-count:2"
+            ]
+          },
+          "note": null
+        }
+      ],
+      "idPinned": true,
+      "trailerIdDerivedFrom": "sha256(qg02:scanned-textless)"
+    },
+    {
+      "fixtureId": "mixed-text-scan",
+      "file": "pdfs/mixed-text-scan.pdf",
+      "categories": [
+        "mixed",
+        "scanned"
+      ],
+      "fileSha256": "d4cb2f644ed6f2a074577ac314f7639a8027370670389adefc6276fc2b1d2fde",
+      "fileBytes": 19420,
+      "pageCount": 3,
+      "evidencePageCount": 3,
+      "pageMappingFormat": "1-based-contiguous",
+      "byteStableOnRegeneration": true,
+      "openableByIndependentReader": true,
+      "auditEligible": true,
+      "documentOutcome": "auditable",
+      "documentExpectation": {
+        "verdict": null,
+        "issueLabels": [],
+        "requiresZeroServiceCalls": false,
+        "note": "整篇结果由逐页裁决归约得出，清单不预设 pass：票 07/09 的归约器负责全页 pass 的条件。"
+      },
+      "productionMethod": "第 1、3 页写文本层；第 2 页整页插入渲染好的 PNG。",
+      "productionNotes": "文档级「部分成功」的形状：本地审计必须给出页级 fail，而不是一个整篇结论。",
+      "sourceDocument": {
+        "identity": "qg02-mixed-text-scan",
+        "kind": "locally-generated",
+        "origin": "由本仓库的 golden/pdf-quality-corpus/generate.py 生成，不是下载或第三方的真实业务文档。",
+        "title": "PDF 质量门语料样本 mixed-text-scan",
+        "producer": "pdf-quality-corpus-generator",
+        "creationDateFixed": "D:20260101000000Z",
+        "downloadUrl": null
+      },
+      "pages": [
+        {
+          "page": 1,
+          "carrier": "text-layer",
+          "layout": "single-column",
+          "blankByDesign": false,
+          "textLayerAuthored": "faithful",
+          "visible": [
+            {
+              "line": "混合样本第一页：文本层存在，校验词 混-1。",
+              "role": "body"
+            }
+          ],
+          "structureObligations": [],
+          "expected": {
+            "local": {
+              "verdict": "pass",
+              "issueLabels": [
+                "none"
+              ],
+              "dimensions": {
+                "completeness": "pass",
+                "accuracy": "pass",
+                "readingOrder": "pass",
+                "structureFidelity": "pass"
+              }
+            },
+            "ocrCandidate": {
+              "verdict": "pass",
+              "issueLabels": [
+                "none"
+              ],
+              "dimensions": {
+                "completeness": "pass",
+                "accuracy": "pass",
+                "readingOrder": "pass",
+                "structureFidelity": "pass"
+              }
+            }
+          },
+          "annotation": {
+            "authoredBy": "ticket-02:generate.py DESIGN table",
+            "independentOfImplementationOutput": true,
+            "derivation": "closedSetRule 命中记录：载体=text-layer，文本层设计=faithful，结构义务=-，可见行数=1，文件可独立打开=True ⇒ local=pass + none，ocr-candidate=pass + none。可见内容由 generate.py 常量逐字给出，写 PDF 之前就已确定。",
+            "consultedSources": [],
+            "documentPropertyUsed": [
+              "declared-carrier:text-layer",
+              "declared-text-layer:faithful",
+              "declared-visible-line-count:1"
+            ]
+          },
+          "note": null
+        },
+        {
+          "page": 2,
+          "carrier": "image-only",
+          "layout": "rasterized",
+          "blankByDesign": false,
+          "textLayerAuthored": "absent",
+          "visible": [
+            {
+              "line": "混合样本第二页：这一页只有图像，校验词 混-2。",
+              "role": "image-only-text"
+            }
+          ],
+          "structureObligations": [],
+          "expected": {
+            "local": {
+              "verdict": "fail",
+              "issueLabels": [
+                "text-layer-absent"
+              ],
+              "dimensions": {
+                "completeness": "fail",
+                "accuracy": "uncertain",
+                "readingOrder": "uncertain",
+                "structureFidelity": "uncertain"
+              }
+            },
+            "ocrCandidate": {
+              "verdict": "pass",
+              "issueLabels": [
+                "none"
+              ],
+              "dimensions": {
+                "completeness": "pass",
+                "accuracy": "pass",
+                "readingOrder": "pass",
+                "structureFidelity": "pass"
+              }
+            }
+          },
+          "annotation": {
+            "authoredBy": "ticket-02:generate.py DESIGN table",
+            "independentOfImplementationOutput": true,
+            "derivation": "closedSetRule 命中记录：载体=image-only，文本层设计=absent，结构义务=-，可见行数=1，文件可独立打开=True ⇒ local=fail + text-layer-absent，ocr-candidate=pass + none。可见内容由 generate.py 常量逐字给出，写 PDF 之前就已确定。",
+            "consultedSources": [],
+            "documentPropertyUsed": [
+              "declared-carrier:image-only",
+              "declared-text-layer:absent",
+              "declared-visible-line-count:1"
+            ]
+          },
+          "note": "第 2 页整页是图像。"
+        },
+        {
+          "page": 3,
+          "carrier": "text-layer",
+          "layout": "single-column",
+          "blankByDesign": false,
+          "textLayerAuthored": "faithful",
+          "visible": [
+            {
+              "line": "混合样本第三页：文本层存在，校验词 混-3。",
+              "role": "body"
+            }
+          ],
+          "structureObligations": [],
+          "expected": {
+            "local": {
+              "verdict": "pass",
+              "issueLabels": [
+                "none"
+              ],
+              "dimensions": {
+                "completeness": "pass",
+                "accuracy": "pass",
+                "readingOrder": "pass",
+                "structureFidelity": "pass"
+              }
+            },
+            "ocrCandidate": {
+              "verdict": "pass",
+              "issueLabels": [
+                "none"
+              ],
+              "dimensions": {
+                "completeness": "pass",
+                "accuracy": "pass",
+                "readingOrder": "pass",
+                "structureFidelity": "pass"
+              }
+            }
+          },
+          "annotation": {
+            "authoredBy": "ticket-02:generate.py DESIGN table",
+            "independentOfImplementationOutput": true,
+            "derivation": "closedSetRule 命中记录：载体=text-layer，文本层设计=faithful，结构义务=-，可见行数=1，文件可独立打开=True ⇒ local=pass + none，ocr-candidate=pass + none。可见内容由 generate.py 常量逐字给出，写 PDF 之前就已确定。",
+            "consultedSources": [],
+            "documentPropertyUsed": [
+              "declared-carrier:text-layer",
+              "declared-text-layer:faithful",
+              "declared-visible-line-count:1"
+            ]
+          },
+          "note": null
+        }
+      ],
+      "idPinned": true,
+      "trailerIdDerivedFrom": "sha256(qg02:mixed-text-scan)"
+    },
+    {
+      "fixtureId": "blank-page",
+      "file": "pdfs/blank-page.pdf",
+      "categories": [
+        "blank-page"
+      ],
+      "fileSha256": "492f6481f03f0592fa7efba715b095857b3e3e962e5a4707dd8b5c834c6a130c",
+      "fileBytes": 2151,
+      "pageCount": 3,
+      "evidencePageCount": 3,
+      "pageMappingFormat": "1-based-contiguous",
+      "byteStableOnRegeneration": true,
+      "openableByIndependentReader": true,
+      "auditEligible": true,
+      "documentOutcome": "auditable",
+      "documentExpectation": {
+        "verdict": null,
+        "issueLabels": [],
+        "requiresZeroServiceCalls": false,
+        "note": "整篇结果由逐页裁决归约得出，清单不预设 pass：票 07/09 的归约器负责全页 pass 的条件。"
+      },
+      "productionMethod": "三页 A4，第二页 new_page() 之后不写任何内容、也不写文本层。",
+      "productionNotes": "空页不是「缺页」：票 05 要求每一页都产出文本记录与预览。",
+      "sourceDocument": {
+        "identity": "qg02-blank-page",
+        "kind": "locally-generated",
+        "origin": "由本仓库的 golden/pdf-quality-corpus/generate.py 生成，不是下载或第三方的真实业务文档。",
+        "title": "PDF 质量门语料样本 blank-page",
+        "producer": "pdf-quality-corpus-generator",
+        "creationDateFixed": "D:20260101000000Z",
+        "downloadUrl": null
+      },
+      "pages": [
+        {
+          "page": 1,
+          "carrier": "text-layer",
+          "layout": "single-column",
+          "blankByDesign": false,
+          "textLayerAuthored": "faithful",
+          "visible": [
+            {
+              "line": "空页样本第一页：校验词 空-1。",
+              "role": "body"
+            }
+          ],
+          "structureObligations": [],
+          "expected": {
+            "local": {
+              "verdict": "pass",
+              "issueLabels": [
+                "none"
+              ],
+              "dimensions": {
+                "completeness": "pass",
+                "accuracy": "pass",
+                "readingOrder": "pass",
+                "structureFidelity": "pass"
+              }
+            },
+            "ocrCandidate": {
+              "verdict": "pass",
+              "issueLabels": [
+                "none"
+              ],
+              "dimensions": {
+                "completeness": "pass",
+                "accuracy": "pass",
+                "readingOrder": "pass",
+                "structureFidelity": "pass"
+              }
+            }
+          },
+          "annotation": {
+            "authoredBy": "ticket-02:generate.py DESIGN table",
+            "independentOfImplementationOutput": true,
+            "derivation": "closedSetRule 命中记录：载体=text-layer，文本层设计=faithful，结构义务=-，可见行数=1，文件可独立打开=True ⇒ local=pass + none，ocr-candidate=pass + none。可见内容由 generate.py 常量逐字给出，写 PDF 之前就已确定。",
+            "consultedSources": [],
+            "documentPropertyUsed": [
+              "declared-carrier:text-layer",
+              "declared-text-layer:faithful",
+              "declared-visible-line-count:1"
+            ]
+          },
+          "note": null
+        },
+        {
+          "page": 2,
+          "carrier": "blank",
+          "layout": "blank",
+          "blankByDesign": true,
+          "textLayerAuthored": "absent",
+          "visible": [],
+          "structureObligations": [
+            "page-position"
+          ],
+          "expected": {
+            "local": {
+              "verdict": "pass",
+              "issueLabels": [
+                "none"
+              ],
+              "dimensions": {
+                "completeness": "pass",
+                "accuracy": "pass",
+                "readingOrder": "pass",
+                "structureFidelity": "pass"
+              }
+            },
+            "ocrCandidate": {
+              "verdict": "pass",
+              "issueLabels": [
+                "none"
+              ],
+              "dimensions": {
+                "completeness": "pass",
+                "accuracy": "pass",
+                "readingOrder": "pass",
+                "structureFidelity": "pass"
+              }
+            }
+          },
+          "annotation": {
+            "authoredBy": "ticket-02:generate.py DESIGN table",
+            "independentOfImplementationOutput": true,
+            "derivation": "closedSetRule 命中记录：载体=blank，文本层设计=absent，结构义务=page-position，可见行数=0，文件可独立打开=True ⇒ local=pass + none，ocr-candidate=pass + none。可见内容由 generate.py 常量逐字给出，写 PDF 之前就已确定。",
+            "consultedSources": [],
+            "documentPropertyUsed": [
+              "declared-carrier:blank",
+              "declared-text-layer:absent",
+              "declared-structure-obligations:page-position",
+              "declared-blank-by-design"
+            ]
+          },
+          "note": "设计上的空页：页上什么都没有，但这一页必须作为一条证据存在。"
+        },
+        {
+          "page": 3,
+          "carrier": "text-layer",
+          "layout": "single-column",
+          "blankByDesign": false,
+          "textLayerAuthored": "faithful",
+          "visible": [
+            {
+              "line": "空页样本第三页：页位必须保持为第三页，校验词 空-3。",
+              "role": "body"
+            }
+          ],
+          "structureObligations": [],
+          "expected": {
+            "local": {
+              "verdict": "pass",
+              "issueLabels": [
+                "none"
+              ],
+              "dimensions": {
+                "completeness": "pass",
+                "accuracy": "pass",
+                "readingOrder": "pass",
+                "structureFidelity": "pass"
+              }
+            },
+            "ocrCandidate": {
+              "verdict": "pass",
+              "issueLabels": [
+                "none"
+              ],
+              "dimensions": {
+                "completeness": "pass",
+                "accuracy": "pass",
+                "readingOrder": "pass",
+                "structureFidelity": "pass"
+              }
+            }
+          },
+          "annotation": {
+            "authoredBy": "ticket-02:generate.py DESIGN table",
+            "independentOfImplementationOutput": true,
+            "derivation": "closedSetRule 命中记录：载体=text-layer，文本层设计=faithful，结构义务=-，可见行数=1，文件可独立打开=True ⇒ local=pass + none，ocr-candidate=pass + none。可见内容由 generate.py 常量逐字给出，写 PDF 之前就已确定。",
+            "consultedSources": [],
+            "documentPropertyUsed": [
+              "declared-carrier:text-layer",
+              "declared-text-layer:faithful",
+              "declared-visible-line-count:1"
+            ]
+          },
+          "note": null
+        }
+      ],
+      "idPinned": true,
+      "trailerIdDerivedFrom": "sha256(qg02:blank-page)"
+    },
+    {
+      "fixtureId": "image-cover",
+      "file": "pdfs/image-cover.pdf",
+      "categories": [
+        "image-cover"
+      ],
+      "fileSha256": "2dbb54c89d56ddffcc4f04fcdef67eb4d78da480cc585856aba0e8badcbdc7cc",
+      "fileBytes": 26074,
+      "pageCount": 2,
+      "evidencePageCount": 2,
+      "pageMappingFormat": "1-based-contiguous",
+      "byteStableOnRegeneration": true,
+      "openableByIndependentReader": true,
+      "auditEligible": true,
+      "documentOutcome": "auditable",
+      "documentExpectation": {
+        "verdict": null,
+        "issueLabels": [],
+        "requiresZeroServiceCalls": false,
+        "note": "整篇结果由逐页裁决归约得出，清单不预设 pass：票 07/09 的归约器负责全页 pass 的条件。"
+      },
+      "productionMethod": "在临时页上渲染标题文字 + 六个填充色块（draw_rect），整页转 150dpi PNG 后作为第 1 页插入。",
+      "productionNotes": "图像封面是「有可见文字但没有文本层」的典型页；图片语义本身登记为能力缺口。",
+      "sourceDocument": {
+        "identity": "qg02-image-cover",
+        "kind": "locally-generated",
+        "origin": "由本仓库的 golden/pdf-quality-corpus/generate.py 生成，不是下载或第三方的真实业务文档。",
+        "title": "PDF 质量门语料样本 image-cover",
+        "producer": "pdf-quality-corpus-generator",
+        "creationDateFixed": "D:20260101000000Z",
+        "downloadUrl": null
+      },
+      "pages": [
+        {
+          "page": 1,
+          "carrier": "image-only",
+          "layout": "image-cover",
+          "blankByDesign": false,
+          "textLayerAuthored": "absent",
+          "visible": [
+            {
+              "line": "封面（整页图像）：产品质量门验收",
+              "role": "image-only-text"
+            },
+            {
+              "line": "COVER-42",
+              "role": "image-only-text"
+            }
+          ],
+          "structureObligations": [],
+          "expected": {
+            "local": {
+              "verdict": "fail",
+              "issueLabels": [
+                "text-layer-absent"
+              ],
+              "dimensions": {
+                "completeness": "fail",
+                "accuracy": "uncertain",
+                "readingOrder": "uncertain",
+                "structureFidelity": "uncertain"
+              }
+            },
+            "ocrCandidate": {
+              "verdict": "pass",
+              "issueLabels": [
+                "none"
+              ],
+              "dimensions": {
+                "completeness": "pass",
+                "accuracy": "pass",
+                "readingOrder": "pass",
+                "structureFidelity": "pass"
+              }
+            }
+          },
+          "annotation": {
+            "authoredBy": "ticket-02:generate.py DESIGN table",
+            "independentOfImplementationOutput": true,
+            "derivation": "closedSetRule 命中记录：载体=image-only，文本层设计=absent，结构义务=-，可见行数=2，文件可独立打开=True ⇒ local=fail + text-layer-absent，ocr-candidate=pass + none。可见内容由 generate.py 常量逐字给出，写 PDF 之前就已确定。",
+            "consultedSources": [],
+            "documentPropertyUsed": [
+              "declared-carrier:image-only",
+              "declared-text-layer:absent",
+              "declared-visible-line-count:2"
+            ]
+          },
+          "note": "封面整页是一张 raster：标题文字与装饰色块都在像素里。"
+        },
+        {
+          "page": 2,
+          "carrier": "text-layer",
+          "layout": "single-column",
+          "blankByDesign": false,
+          "textLayerAuthored": "faithful",
+          "visible": [
+            {
+              "line": "正文第一页：封面之后从这里开始，校验词 封-2。",
+              "role": "body"
+            }
+          ],
+          "structureObligations": [],
+          "expected": {
+            "local": {
+              "verdict": "pass",
+              "issueLabels": [
+                "none"
+              ],
+              "dimensions": {
+                "completeness": "pass",
+                "accuracy": "pass",
+                "readingOrder": "pass",
+                "structureFidelity": "pass"
+              }
+            },
+            "ocrCandidate": {
+              "verdict": "pass",
+              "issueLabels": [
+                "none"
+              ],
+              "dimensions": {
+                "completeness": "pass",
+                "accuracy": "pass",
+                "readingOrder": "pass",
+                "structureFidelity": "pass"
+              }
+            }
+          },
+          "annotation": {
+            "authoredBy": "ticket-02:generate.py DESIGN table",
+            "independentOfImplementationOutput": true,
+            "derivation": "closedSetRule 命中记录：载体=text-layer，文本层设计=faithful，结构义务=-，可见行数=1，文件可独立打开=True ⇒ local=pass + none，ocr-candidate=pass + none。可见内容由 generate.py 常量逐字给出，写 PDF 之前就已确定。",
+            "consultedSources": [],
+            "documentPropertyUsed": [
+              "declared-carrier:text-layer",
+              "declared-text-layer:faithful",
+              "declared-visible-line-count:1"
+            ]
+          },
+          "note": null
+        }
+      ],
+      "idPinned": true,
+      "trailerIdDerivedFrom": "sha256(qg02:image-cover)"
+    },
+    {
+      "fixtureId": "garbled",
+      "file": "pdfs/garbled.pdf",
+      "categories": [
+        "garbled"
+      ],
+      "fileSha256": "90fffb8a96db09a17f8ee19f4e53bcc8723129ac9d6840c53cd4cc8dbe17304d",
+      "fileBytes": 22141,
+      "pageCount": 2,
+      "evidencePageCount": 2,
+      "pageMappingFormat": "1-based-contiguous",
+      "byteStableOnRegeneration": true,
+      "openableByIndependentReader": true,
+      "auditEligible": true,
+      "documentOutcome": "auditable",
+      "documentExpectation": {
+        "verdict": null,
+        "issueLabels": [],
+        "requiresZeroServiceCalls": false,
+        "note": "整篇结果由逐页裁决归约得出，清单不预设 pass：票 07/09 的归约器负责全页 pass 的条件。"
+      },
+      "productionMethod": "第 1 页先插入干净印刷 raster，再在同一坐标用 render_mode=3（既不填充也不描边，肉眼不可见）写入 to_garble() 产生的乱码文本层；第 2 页是正常的忠实文本层作为对照。",
+      "productionNotes": "这是真实扫描件带坏 OCR 文本层的形状：肉眼读到正常文字，文本层读到乱码，因此该页图像与该页文本必须判 fail + garbled-text-layer。生成器会按原始字节校验乱码确实在内容流里、干净句子确实不在。",
+      "sourceDocument": {
+        "identity": "qg02-garbled",
+        "kind": "locally-generated",
+        "origin": "由本仓库的 golden/pdf-quality-corpus/generate.py 生成，不是下载或第三方的真实业务文档。",
+        "title": "PDF 质量门语料样本 garbled",
+        "producer": "pdf-quality-corpus-generator",
+        "creationDateFixed": "D:20260101000000Z",
+        "downloadUrl": null
+      },
+      "pages": [
+        {
+          "page": 1,
+          "carrier": "image-plus-garbled-text-layer",
+          "layout": "rasterized",
+          "blankByDesign": false,
+          "textLayerAuthored": "garbled",
+          "visible": [
+            {
+              "line": "本页肉眼看到的是正常印刷文本：退款时限七天，校验词 乱-1。",
+              "role": "image-only-text"
+            }
+          ],
+          "structureObligations": [],
+          "expected": {
+            "local": {
+              "verdict": "fail",
+              "issueLabels": [
+                "garbled-text-layer"
+              ],
+              "dimensions": {
+                "completeness": "fail",
+                "accuracy": "fail",
+                "readingOrder": "uncertain",
+                "structureFidelity": "uncertain"
+              }
+            },
+            "ocrCandidate": {
+              "verdict": "pass",
+              "issueLabels": [
+                "none"
+              ],
+              "dimensions": {
+                "completeness": "pass",
+                "accuracy": "pass",
+                "readingOrder": "pass",
+                "structureFidelity": "pass"
+              }
+            }
+          },
+          "annotation": {
+            "authoredBy": "ticket-02:generate.py DESIGN table",
+            "independentOfImplementationOutput": true,
+            "derivation": "closedSetRule 命中记录：载体=image-plus-garbled-text-layer，文本层设计=garbled，结构义务=-，可见行数=1，文件可独立打开=True ⇒ local=fail + garbled-text-layer，ocr-candidate=pass + none。可见内容由 generate.py 常量逐字给出，写 PDF 之前就已确定。",
+            "consultedSources": [],
+            "documentPropertyUsed": [
+              "declared-carrier:image-plus-garbled-text-layer",
+              "declared-text-layer:garbled",
+              "declared-visible-line-count:1"
+            ]
+          },
+          "note": "可见文字来自 raster；文本层是 UTF-8→Latin-1 的确定性乱码，以 render mode 3 不可见写入。"
+        },
+        {
+          "page": 2,
+          "carrier": "text-layer",
+          "layout": "single-column",
+          "blankByDesign": false,
+          "textLayerAuthored": "faithful",
+          "visible": [
+            {
+              "line": "对照页：文本层与页面一致，校验词 乱-2。",
+              "role": "body"
+            }
+          ],
+          "structureObligations": [],
+          "expected": {
+            "local": {
+              "verdict": "pass",
+              "issueLabels": [
+                "none"
+              ],
+              "dimensions": {
+                "completeness": "pass",
+                "accuracy": "pass",
+                "readingOrder": "pass",
+                "structureFidelity": "pass"
+              }
+            },
+            "ocrCandidate": {
+              "verdict": "pass",
+              "issueLabels": [
+                "none"
+              ],
+              "dimensions": {
+                "completeness": "pass",
+                "accuracy": "pass",
+                "readingOrder": "pass",
+                "structureFidelity": "pass"
+              }
+            }
+          },
+          "annotation": {
+            "authoredBy": "ticket-02:generate.py DESIGN table",
+            "independentOfImplementationOutput": true,
+            "derivation": "closedSetRule 命中记录：载体=text-layer，文本层设计=faithful，结构义务=-，可见行数=1，文件可独立打开=True ⇒ local=pass + none，ocr-candidate=pass + none。可见内容由 generate.py 常量逐字给出，写 PDF 之前就已确定。",
+            "consultedSources": [],
+            "documentPropertyUsed": [
+              "declared-carrier:text-layer",
+              "declared-text-layer:faithful",
+              "declared-visible-line-count:1"
+            ]
+          },
+          "note": null
+        }
+      ],
+      "idPinned": true,
+      "trailerIdDerivedFrom": "sha256(qg02:garbled)"
+    },
+    {
+      "fixtureId": "table-grid",
+      "file": "pdfs/table-grid.pdf",
+      "categories": [
+        "table"
+      ],
+      "fileSha256": "d69ed1158fb6003e01c532907affddc591cf5b5a1da5cb199806d8edf7738832",
+      "fileBytes": 4779,
+      "pageCount": 1,
+      "evidencePageCount": 1,
+      "pageMappingFormat": "1-based-contiguous",
+      "byteStableOnRegeneration": true,
+      "openableByIndependentReader": true,
+      "auditEligible": true,
+      "documentOutcome": "auditable",
+      "documentExpectation": {
+        "verdict": null,
+        "issueLabels": [],
+        "requiresZeroServiceCalls": false,
+        "note": "整篇结果由逐页裁决归约得出，清单不预设 pass：票 07/09 的归约器负责全页 pass 的条件。"
+      },
+      "productionMethod": "draw_line 画 4 列 x 4 行网格，逐格用文本层写入表头（label）与数据（table-cell），表下再写一行正文说明。",
+      "productionNotes": "可见内容按「表头行→数据行→说明行」的阅读顺序登记，文本层内容是完整的；期望仍是 uncertain，因为表格对齐与表头-值关系是否保留无法由文档自身自证。",
+      "sourceDocument": {
+        "identity": "qg02-table-grid",
+        "kind": "locally-generated",
+        "origin": "由本仓库的 golden/pdf-quality-corpus/generate.py 生成，不是下载或第三方的真实业务文档。",
+        "title": "PDF 质量门语料样本 table-grid",
+        "producer": "pdf-quality-corpus-generator",
+        "creationDateFixed": "D:20260101000000Z",
+        "downloadUrl": null
+      },
+      "pages": [
+        {
+          "page": 1,
+          "carrier": "text-layer",
+          "layout": "table",
+          "blankByDesign": false,
+          "textLayerAuthored": "faithful",
+          "visible": [
+            {
+              "line": "费用项目",
+              "role": "label"
+            },
+            {
+              "line": "金额",
+              "role": "label"
+            },
+            {
+              "line": "是否可退",
+              "role": "label"
+            },
+            {
+              "line": "手续费",
+              "role": "table-cell"
+            },
+            {
+              "line": "50元",
+              "role": "table-cell"
+            },
+            {
+              "line": "是",
+              "role": "table-cell"
+            },
+            {
+              "line": "运费",
+              "role": "table-cell"
+            },
+            {
+              "line": "30元",
+              "role": "table-cell"
+            },
+            {
+              "line": "否",
+              "role": "table-cell"
+            },
+            {
+              "line": "打包费",
+              "role": "table-cell"
+            },
+            {
+              "line": "20元",
+              "role": "table-cell"
+            },
+            {
+              "line": "是",
+              "role": "table-cell"
+            },
+            {
+              "line": "表格下方说明：以上费率不含税，校验词 表-1。",
+              "role": "body"
+            }
+          ],
+          "structureObligations": [
+            "table-cell-alignment",
+            "header-value-relation",
+            "number-and-negation-fidelity"
+          ],
+          "expected": {
+            "local": {
+              "verdict": "uncertain",
+              "issueLabels": [
+                "structure-unverified"
+              ],
+              "dimensions": {
+                "completeness": "uncertain",
+                "accuracy": "uncertain",
+                "readingOrder": "uncertain",
+                "structureFidelity": "uncertain"
+              }
+            },
+            "ocrCandidate": {
+              "verdict": "uncertain",
+              "issueLabels": [
+                "structure-unverified"
+              ],
+              "dimensions": {
+                "completeness": "uncertain",
+                "accuracy": "uncertain",
+                "readingOrder": "uncertain",
+                "structureFidelity": "uncertain"
+              }
+            }
+          },
+          "annotation": {
+            "authoredBy": "ticket-02:generate.py DESIGN table",
+            "independentOfImplementationOutput": true,
+            "derivation": "closedSetRule 命中记录：载体=text-layer，文本层设计=faithful，结构义务=table-cell-alignment,header-value-relation,number-and-negation-fidelity，可见行数=13，文件可独立打开=True ⇒ local=uncertain + structure-unverified，ocr-candidate=uncertain + structure-unverified。可见内容由 generate.py 常量逐字给出，写 PDF 之前就已确定。",
+            "consultedSources": [],
+            "documentPropertyUsed": [
+              "declared-carrier:text-layer",
+              "declared-text-layer:faithful",
+              "declared-visible-line-count:13",
+              "declared-structure-obligations:table-cell-alignment,header-value-relation,number-and-negation-fidelity"
+            ]
+          },
+          "note": "网格线与单元格文字都在文本层；行列对应关系必须由证据证明，不能由页数证明。"
+        }
+      ],
+      "idPinned": true,
+      "trailerIdDerivedFrom": "sha256(qg02:table-grid)"
+    },
+    {
+      "fixtureId": "two-column",
+      "file": "pdfs/two-column.pdf",
+      "categories": [
+        "multi-column"
+      ],
+      "fileSha256": "ccfbcd1f254919ba759f66c751b10b765a7622103f00993a820a461aae3181f4",
+      "fileBytes": 2643,
+      "pageCount": 1,
+      "evidencePageCount": 1,
+      "pageMappingFormat": "1-based-contiguous",
+      "byteStableOnRegeneration": true,
+      "openableByIndependentReader": true,
+      "auditEligible": true,
+      "documentOutcome": "auditable",
+      "documentExpectation": {
+        "verdict": null,
+        "issueLabels": [],
+        "requiresZeroServiceCalls": false,
+        "note": "整篇结果由逐页裁决归约得出，清单不预设 pass：票 07/09 的归约器负责全页 pass 的条件。"
+      },
+      "productionMethod": "一页 A4，左栏 x=72、右栏 x=315，各自按 y 递增写入；内容流顺序刻意与阅读顺序一致。",
+      "productionNotes": "分栏的判定不依赖「内容是否都在」，而依赖「顺序是否还是左栏→右栏」，所以期望是 uncertain。",
+      "sourceDocument": {
+        "identity": "qg02-two-column",
+        "kind": "locally-generated",
+        "origin": "由本仓库的 golden/pdf-quality-corpus/generate.py 生成，不是下载或第三方的真实业务文档。",
+        "title": "PDF 质量门语料样本 two-column",
+        "producer": "pdf-quality-corpus-generator",
+        "creationDateFixed": "D:20260101000000Z",
+        "downloadUrl": null
+      },
+      "pages": [
+        {
+          "page": 1,
+          "carrier": "text-layer",
+          "layout": "two-column",
+          "blankByDesign": false,
+          "textLayerAuthored": "faithful",
+          "visible": [
+            {
+              "line": "左栏一：退货时限为七天。",
+              "role": "body"
+            },
+            {
+              "line": "左栏二：需保留原始包装。",
+              "role": "body"
+            },
+            {
+              "line": "左栏三：运费由买家承担，不支持口头承诺。",
+              "role": "body"
+            },
+            {
+              "line": "右栏一：发票需在三十天内开具。",
+              "role": "body"
+            },
+            {
+              "line": "右栏二：金额上限 500 元。",
+              "role": "body"
+            },
+            {
+              "line": "右栏三：校验词 栏-1。",
+              "role": "body"
+            }
+          ],
+          "structureObligations": [
+            "column-reading-order",
+            "number-and-negation-fidelity"
+          ],
+          "expected": {
+            "local": {
+              "verdict": "uncertain",
+              "issueLabels": [
+                "structure-unverified"
+              ],
+              "dimensions": {
+                "completeness": "uncertain",
+                "accuracy": "uncertain",
+                "readingOrder": "uncertain",
+                "structureFidelity": "uncertain"
+              }
+            },
+            "ocrCandidate": {
+              "verdict": "uncertain",
+              "issueLabels": [
+                "structure-unverified"
+              ],
+              "dimensions": {
+                "completeness": "uncertain",
+                "accuracy": "uncertain",
+                "readingOrder": "uncertain",
+                "structureFidelity": "uncertain"
+              }
+            }
+          },
+          "annotation": {
+            "authoredBy": "ticket-02:generate.py DESIGN table",
+            "independentOfImplementationOutput": true,
+            "derivation": "closedSetRule 命中记录：载体=text-layer，文本层设计=faithful，结构义务=column-reading-order,number-and-negation-fidelity，可见行数=6，文件可独立打开=True ⇒ local=uncertain + structure-unverified，ocr-candidate=uncertain + structure-unverified。可见内容由 generate.py 常量逐字给出，写 PDF 之前就已确定。",
+            "consultedSources": [],
+            "documentPropertyUsed": [
+              "declared-carrier:text-layer",
+              "declared-text-layer:faithful",
+              "declared-visible-line-count:6",
+              "declared-structure-obligations:column-reading-order,number-and-negation-fidelity"
+            ]
+          },
+          "note": "内容流先写满左栏再写右栏；人眼阅读顺序同样是左栏→右栏。"
+        }
+      ],
+      "idPinned": true,
+      "trailerIdDerivedFrom": "sha256(qg02:two-column)"
+    },
+    {
+      "fixtureId": "footnote",
+      "file": "pdfs/footnote.pdf",
+      "categories": [
+        "footnote",
+        "multi-column"
+      ],
+      "fileSha256": "a55497f73913dccb2a6f8568b3bb97c34a6c5b0b1f66101e518196dc5ceb622f",
+      "fileBytes": 2432,
+      "pageCount": 1,
+      "evidencePageCount": 1,
+      "pageMappingFormat": "1-based-contiguous",
+      "byteStableOnRegeneration": true,
+      "openableByIndependentReader": true,
+      "auditEligible": true,
+      "documentOutcome": "auditable",
+      "documentExpectation": {
+        "verdict": null,
+        "issueLabels": [],
+        "requiresZeroServiceCalls": false,
+        "note": "整篇结果由逐页裁决归约得出，清单不预设 pass：票 07/09 的归约器负责全页 pass 的条件。"
+      },
+      "productionMethod": "正文 16/11pt 写在页面上部，脚注 8pt 写在页底（y=780），全部走文本层。",
+      "productionNotes": "脚注与正文同页且都必须保留；是否被页眉页脚过滤吞掉属于结构保真，期望 uncertain。",
+      "sourceDocument": {
+        "identity": "qg02-footnote",
+        "kind": "locally-generated",
+        "origin": "由本仓库的 golden/pdf-quality-corpus/generate.py 生成，不是下载或第三方的真实业务文档。",
+        "title": "PDF 质量门语料样本 footnote",
+        "producer": "pdf-quality-corpus-generator",
+        "creationDateFixed": "D:20260101000000Z",
+        "downloadUrl": null
+      },
+      "pages": [
+        {
+          "page": 1,
+          "carrier": "text-layer",
+          "layout": "single-column",
+          "blankByDesign": false,
+          "textLayerAuthored": "faithful",
+          "visible": [
+            {
+              "line": "脚注样本标题",
+              "role": "title"
+            },
+            {
+              "line": "正文一：退款申请需在七天内提交。",
+              "role": "body"
+            },
+            {
+              "line": "正文二：不支持口头申请。",
+              "role": "body"
+            },
+            {
+              "line": "正文三：审核时限为三个工作日。",
+              "role": "body"
+            },
+            {
+              "line": "※ 脚注：本条款不适用于 2026-01-01 之前的订单。",
+              "role": "footnote"
+            }
+          ],
+          "structureObligations": [
+            "footnote-retention",
+            "page-position"
+          ],
+          "expected": {
+            "local": {
+              "verdict": "uncertain",
+              "issueLabels": [
+                "structure-unverified"
+              ],
+              "dimensions": {
+                "completeness": "uncertain",
+                "accuracy": "uncertain",
+                "readingOrder": "uncertain",
+                "structureFidelity": "uncertain"
+              }
+            },
+            "ocrCandidate": {
+              "verdict": "uncertain",
+              "issueLabels": [
+                "structure-unverified"
+              ],
+              "dimensions": {
+                "completeness": "uncertain",
+                "accuracy": "uncertain",
+                "readingOrder": "uncertain",
+                "structureFidelity": "uncertain"
+              }
+            }
+          },
+          "annotation": {
+            "authoredBy": "ticket-02:generate.py DESIGN table",
+            "independentOfImplementationOutput": true,
+            "derivation": "closedSetRule 命中记录：载体=text-layer，文本层设计=faithful，结构义务=footnote-retention,page-position，可见行数=5，文件可独立打开=True ⇒ local=uncertain + structure-unverified，ocr-candidate=uncertain + structure-unverified。可见内容由 generate.py 常量逐字给出，写 PDF 之前就已确定。",
+            "consultedSources": [],
+            "documentPropertyUsed": [
+              "declared-carrier:text-layer",
+              "declared-text-layer:faithful",
+              "declared-visible-line-count:5",
+              "declared-structure-obligations:footnote-retention,page-position"
+            ]
+          },
+          "note": "脚注是 8pt、位于页底 y=780 的可见正文；任何页脚过滤器把它当噪声丢掉都是内容损失。"
+        }
+      ],
+      "idPinned": true,
+      "trailerIdDerivedFrom": "sha256(qg02:footnote)"
+    },
+    {
+      "fixtureId": "formula-inline",
+      "file": "pdfs/formula-inline.pdf",
+      "categories": [
+        "formula"
+      ],
+      "fileSha256": "d3579280853ecc3bc1ffe2cd36e4bfcdac92aa494345a74224be2b2dc19d71c8",
+      "fileBytes": 2081,
+      "pageCount": 1,
+      "evidencePageCount": 1,
+      "pageMappingFormat": "1-based-contiguous",
+      "byteStableOnRegeneration": true,
+      "openableByIndependentReader": true,
+      "auditEligible": true,
+      "documentOutcome": "auditable",
+      "documentExpectation": {
+        "verdict": null,
+        "issueLabels": [],
+        "requiresZeroServiceCalls": false,
+        "note": "整篇结果由逐页裁决归约得出，清单不预设 pass：票 07/09 的归约器负责全页 pass 的条件。"
+      },
+      "productionMethod": "文本层逐行写入含幂标记与分式的公式文本，全部使用 ASCII 数学写法以避免字体缺字。",
+      "productionNotes": "风险在于候选可能把 a^2 变成 a2 或整段重排；这属于文本准确性与结构保真，期望 uncertain。",
+      "sourceDocument": {
+        "identity": "qg02-formula-inline",
+        "kind": "locally-generated",
+        "origin": "由本仓库的 golden/pdf-quality-corpus/generate.py 生成，不是下载或第三方的真实业务文档。",
+        "title": "PDF 质量门语料样本 formula-inline",
+        "producer": "pdf-quality-corpus-generator",
+        "creationDateFixed": "D:20260101000000Z",
+        "downloadUrl": null
+      },
+      "pages": [
+        {
+          "page": 1,
+          "carrier": "text-layer",
+          "layout": "single-column",
+          "blankByDesign": false,
+          "textLayerAuthored": "faithful",
+          "visible": [
+            {
+              "line": "公式样本标题",
+              "role": "title"
+            },
+            {
+              "line": "勾股定理 a^2 + b^2 = c^2 与圆周率 3.14159。",
+              "role": "formula"
+            },
+            {
+              "line": "级数求和 1 + 1/4 + 1/9 = 1.3611，校验词 式-1。",
+              "role": "formula"
+            }
+          ],
+          "structureObligations": [
+            "formula-fidelity"
+          ],
+          "expected": {
+            "local": {
+              "verdict": "uncertain",
+              "issueLabels": [
+                "structure-unverified"
+              ],
+              "dimensions": {
+                "completeness": "uncertain",
+                "accuracy": "uncertain",
+                "readingOrder": "uncertain",
+                "structureFidelity": "uncertain"
+              }
+            },
+            "ocrCandidate": {
+              "verdict": "uncertain",
+              "issueLabels": [
+                "structure-unverified"
+              ],
+              "dimensions": {
+                "completeness": "uncertain",
+                "accuracy": "uncertain",
+                "readingOrder": "uncertain",
+                "structureFidelity": "uncertain"
+              }
+            }
+          },
+          "annotation": {
+            "authoredBy": "ticket-02:generate.py DESIGN table",
+            "independentOfImplementationOutput": true,
+            "derivation": "closedSetRule 命中记录：载体=text-layer，文本层设计=faithful，结构义务=formula-fidelity，可见行数=3，文件可独立打开=True ⇒ local=uncertain + structure-unverified，ocr-candidate=uncertain + structure-unverified。可见内容由 generate.py 常量逐字给出，写 PDF 之前就已确定。",
+            "consultedSources": [],
+            "documentPropertyUsed": [
+              "declared-carrier:text-layer",
+              "declared-text-layer:faithful",
+              "declared-visible-line-count:3",
+              "declared-structure-obligations:formula-fidelity"
+            ]
+          },
+          "note": "公式用普通文本字符写成（a^2 + b^2 = c^2、1 + 1/4 + 1/9 = 1.3611），不依赖任何特殊字形。"
+        }
+      ],
+      "idPinned": true,
+      "trailerIdDerivedFrom": "sha256(qg02:formula-inline)"
+    },
+    {
+      "fixtureId": "partially-rasterized",
+      "file": "pdfs/partially-rasterized.pdf",
+      "categories": [
+        "partial-rasterization",
+        "mixed"
+      ],
+      "fileSha256": "46c45d4c82bada2b78c073eff809851273109928b631e034981516ced6e23c4f",
+      "fileBytes": 21169,
+      "pageCount": 1,
+      "evidencePageCount": 1,
+      "pageMappingFormat": "1-based-contiguous",
+      "byteStableOnRegeneration": true,
+      "openableByIndependentReader": true,
+      "auditEligible": true,
+      "documentOutcome": "auditable",
+      "documentExpectation": {
+        "verdict": null,
+        "issueLabels": [],
+        "requiresZeroServiceCalls": false,
+        "note": "整篇结果由逐页裁决归约得出，清单不预设 pass：票 07/09 的归约器负责全页 pass 的条件。"
+      },
+      "productionMethod": "同一页上混排：两行正文 + 一段只存在于 PNG 图像里的文字 + 一行图注。",
+      "productionNotes": "可见内容有一部分永远进不了文本层，因此本地候选必须 fail + content-missing，而不是整页都没有文本。生成器按原始字节校验第 3 行确实不在文本层里。",
+      "sourceDocument": {
+        "identity": "qg02-partially-rasterized",
+        "kind": "locally-generated",
+        "origin": "由本仓库的 golden/pdf-quality-corpus/generate.py 生成，不是下载或第三方的真实业务文档。",
+        "title": "PDF 质量门语料样本 partially-rasterized",
+        "producer": "pdf-quality-corpus-generator",
+        "creationDateFixed": "D:20260101000000Z",
+        "downloadUrl": null
+      },
+      "pages": [
+        {
+          "page": 1,
+          "carrier": "image-plus-text-layer",
+          "layout": "mixed",
+          "blankByDesign": false,
+          "textLayerAuthored": "faithful-partial",
+          "visible": [
+            {
+              "line": "混排页第一行：这一行在文本层里。",
+              "role": "body"
+            },
+            {
+              "line": "混排页第二行：这一行也在文本层里。",
+              "role": "body"
+            },
+            {
+              "line": "混排页第三行：这一行只存在于图像里，校验词 缺-3。",
+              "role": "image-only-text"
+            },
+            {
+              "line": "图 1：上方插图在文本层里没有对应物。",
+              "role": "caption"
+            }
+          ],
+          "structureObligations": [
+            "image-presence",
+            "page-position"
+          ],
+          "expected": {
+            "local": {
+              "verdict": "fail",
+              "issueLabels": [
+                "content-missing"
+              ],
+              "dimensions": {
+                "completeness": "fail",
+                "accuracy": "uncertain",
+                "readingOrder": "uncertain",
+                "structureFidelity": "uncertain"
+              }
+            },
+            "ocrCandidate": {
+              "verdict": "uncertain",
+              "issueLabels": [
+                "structure-unverified"
+              ],
+              "dimensions": {
+                "completeness": "uncertain",
+                "accuracy": "uncertain",
+                "readingOrder": "uncertain",
+                "structureFidelity": "uncertain"
+              }
+            }
+          },
+          "annotation": {
+            "authoredBy": "ticket-02:generate.py DESIGN table",
+            "independentOfImplementationOutput": true,
+            "derivation": "closedSetRule 命中记录：载体=image-plus-text-layer，文本层设计=faithful-partial，结构义务=image-presence,page-position，可见行数=4，文件可独立打开=True ⇒ local=fail + content-missing，ocr-candidate=uncertain + structure-unverified。可见内容由 generate.py 常量逐字给出，写 PDF 之前就已确定。",
+            "consultedSources": [],
+            "documentPropertyUsed": [
+              "declared-carrier:image-plus-text-layer",
+              "declared-text-layer:faithful-partial",
+              "declared-visible-line-count:4",
+              "declared-structure-obligations:image-presence,page-position"
+            ]
+          },
+          "note": "第 1、2 行与图注在文本层里；第 3 行只作为图像像素存在。"
+        }
+      ],
+      "idPinned": true,
+      "trailerIdDerivedFrom": "sha256(qg02:partially-rasterized)"
+    },
+    {
+      "fixtureId": "encrypted-aes256",
+      "file": "pdfs/encrypted-aes256.pdf",
+      "categories": [
+        "encrypted"
+      ],
+      "fileSha256": "ed1549c0884d570dfc66d8ca17060057e7fdc1890c3023c6336fda08c931ebc0",
+      "fileBytes": 3010,
+      "pageCount": 1,
+      "evidencePageCount": 1,
+      "pageMappingFormat": "1-based-contiguous",
+      "byteStableOnRegeneration": false,
+      "openableByIndependentReader": false,
+      "auditEligible": false,
+      "documentOutcome": "input-failure",
+      "documentExpectation": {
+        "verdict": "fail",
+        "issueLabels": [
+          "document-unreadable"
+        ],
+        "requiresZeroServiceCalls": true,
+        "note": "必须在任何 Clef/OCR 调用之前判为输入失败，不得被当成质量 pass，也不得产出部分内容后宣布成功。"
+      },
+      "productionMethod": "PyMuPDF 以 PDF_ENCRYPT_AES_256、owner_pw 与 user_pw 保存：/Encrypt 字典存在，字符串与流全部加密。",
+      "productionNotes": "口令写在清单里，是公开测试向量而不是凭据：它不指向任何服务或账号，也不来自任何环境变量。实测 pdf-lib 直接拒绝加载，PyMuPDF 打开后读取任何一页都会抛错。",
+      "sourceDocument": {
+        "identity": "qg02-encrypted-aes256",
+        "kind": "locally-generated",
+        "origin": "由本仓库的 golden/pdf-quality-corpus/generate.py 生成，不是下载或第三方的真实业务文档。",
+        "title": "PDF 质量门语料样本 encrypted-aes256",
+        "producer": "pdf-quality-corpus-generator",
+        "creationDateFixed": "D:20260101000000Z",
+        "downloadUrl": null
+      },
+      "pages": [
+        {
+          "page": 1,
+          "carrier": "unreadable",
+          "layout": "unreadable",
+          "blankByDesign": false,
+          "textLayerAuthored": "unreadable",
+          "visible": [],
+          "structureObligations": [],
+          "expected": {
+            "local": {
+              "verdict": "fail",
+              "issueLabels": [
+                "document-unreadable"
+              ],
+              "dimensions": {
+                "completeness": "fail",
+                "accuracy": "fail",
+                "readingOrder": "fail",
+                "structureFidelity": "fail"
+              }
+            },
+            "ocrCandidate": {
+              "verdict": "fail",
+              "issueLabels": [
+                "document-unreadable"
+              ],
+              "dimensions": {
+                "completeness": "fail",
+                "accuracy": "fail",
+                "readingOrder": "fail",
+                "structureFidelity": "fail"
+              }
+            }
+          },
+          "annotation": {
+            "authoredBy": "ticket-02:generate.py DESIGN table",
+            "independentOfImplementationOutput": true,
+            "derivation": "closedSetRule 命中记录：载体=unreadable，文本层设计=unreadable，结构义务=-，可见行数=0，文件可独立打开=False ⇒ local=fail + document-unreadable，ocr-candidate=fail + document-unreadable。可见内容由 generate.py 常量逐字给出，写 PDF 之前就已确定。",
+            "consultedSources": [],
+            "documentPropertyUsed": [
+              "file-not-openable-by-any-pdf-reader"
+            ]
+          },
+          "note": "页树能被枚举（阅读器报 1 页），但没有任何一页的内容能在无口令下读出，因此不登记可见行。"
+        }
+      ],
+      "fixturePasswordTestVector": "pdf-quality-gate-test-vector",
+      "passwordIsNotACredential": true,
+      "passwordNote": "fixture 口令是公开测试向量，用来证明「没有口令就读不出来」；它不是凭据，不指向任何服务或账号。",
+      "byteStabilityNote": "PDF AES-256 加密每次写入随机 salt/IV，因此重跑生成的字节会变；样本身份由这里的 sha256 钉住，并由「没有口令就读不出任何页」这一不变量核对。",
+      "encryptDictionary": true,
+      "cleartextBodyBytes": false
+    },
+    {
+      "fixtureId": "damaged-truncated",
+      "file": "pdfs/damaged-truncated.pdf",
+      "categories": [
+        "damaged"
+      ],
+      "fileSha256": "ae4a1c5a46ef0fc3b86f4a27f905223bbcd4201d41d1727089145902108f5196",
+      "fileBytes": 730,
+      "pageCount": 1,
+      "evidencePageCount": 1,
+      "pageMappingFormat": "1-based-contiguous",
+      "byteStableOnRegeneration": true,
+      "openableByIndependentReader": false,
+      "auditEligible": false,
+      "documentOutcome": "input-failure",
+      "documentExpectation": {
+        "verdict": "fail",
+        "issueLabels": [
+          "document-unreadable"
+        ],
+        "requiresZeroServiceCalls": true,
+        "note": "必须在任何 Clef/OCR 调用之前判为输入失败，不得被当成质量 pass，也不得产出部分内容后宣布成功。"
+      },
+      "productionMethod": "先生成一份完整 1 页 PDF，再按字节数保留前 45%（截掉交叉引用表与 trailer），不引入随机性。",
+      "productionNotes": "损坏方式是写死的比例切片，任何一次重跑都落到同一个字节长度；生成器断言截断结果里已无 startxref/trailer，并实测 pdf-lib 与 PyMuPDF 都拒绝打开该文件。",
+      "sourceDocument": {
+        "identity": "qg02-damaged-truncated",
+        "kind": "locally-generated",
+        "origin": "由本仓库的 golden/pdf-quality-corpus/generate.py 生成，不是下载或第三方的真实业务文档。",
+        "title": "PDF 质量门语料样本 damaged-truncated",
+        "producer": "pdf-quality-corpus-generator",
+        "creationDateFixed": "D:20260101000000Z",
+        "downloadUrl": null
+      },
+      "pages": [
+        {
+          "page": 1,
+          "carrier": "unreadable",
+          "layout": "unreadable",
+          "blankByDesign": false,
+          "textLayerAuthored": "unreadable",
+          "visible": [],
+          "structureObligations": [],
+          "expected": {
+            "local": {
+              "verdict": "fail",
+              "issueLabels": [
+                "document-unreadable"
+              ],
+              "dimensions": {
+                "completeness": "fail",
+                "accuracy": "fail",
+                "readingOrder": "fail",
+                "structureFidelity": "fail"
+              }
+            },
+            "ocrCandidate": {
+              "verdict": "fail",
+              "issueLabels": [
+                "document-unreadable"
+              ],
+              "dimensions": {
+                "completeness": "fail",
+                "accuracy": "fail",
+                "readingOrder": "fail",
+                "structureFidelity": "fail"
+              }
+            }
+          },
+          "annotation": {
+            "authoredBy": "ticket-02:generate.py DESIGN table",
+            "independentOfImplementationOutput": true,
+            "derivation": "closedSetRule 命中记录：载体=unreadable，文本层设计=unreadable，结构义务=-，可见行数=0，文件可独立打开=False ⇒ local=fail + document-unreadable，ocr-candidate=fail + document-unreadable。可见内容由 generate.py 常量逐字给出，写 PDF 之前就已确定。",
+            "consultedSources": [],
+            "documentPropertyUsed": [
+              "file-not-openable-by-any-pdf-reader"
+            ]
+          },
+          "note": "交叉引用表与 trailer 都在截断区间之外：没有任何阅读器能重建页树。"
+        }
+      ],
+      "intactSourceBytes": 1623,
+      "damageMethod": "deterministic-truncation-to-45-percent"
+    },
+    {
+      "fixtureId": "damaged-corrupt-object-headers",
+      "file": "pdfs/damaged-corrupt-object-headers.pdf",
+      "categories": [
+        "damaged"
+      ],
+      "fileSha256": "e444f6e491a7ec947aa1e444b9b552b1aa39e1c42b12d8a68f9f7fe19fb0d400",
+      "fileBytes": 1972,
+      "pageCount": 2,
+      "evidencePageCount": 2,
+      "pageMappingFormat": "1-based-contiguous",
+      "byteStableOnRegeneration": true,
+      "openableByIndependentReader": false,
+      "auditEligible": false,
+      "documentOutcome": "input-failure",
+      "documentExpectation": {
+        "verdict": "fail",
+        "issueLabels": [
+          "document-unreadable"
+        ],
+        "requiresZeroServiceCalls": true,
+        "note": "必须在任何 Clef/OCR 调用之前判为输入失败，不得被当成质量 pass，也不得产出部分内容后宣布成功。"
+      },
+      "productionMethod": "先生成完整 2 页 PDF，再把每一个间接对象的关键字 `N 0 obj` 等长改写为 `N 0 Xbj`（对象数量、trailer 与 startxref 都原样保留）。",
+      "productionNotes": "这是「对象全部无法解析」的损坏：没有任何阅读器能靠重建交叉引用救回来。刻意不采用「只清掉交叉引用表」的损坏方式，因为实测两个阅读器都会自行重建并读出全部两页，那种样本的能不能打开取决于阅读器宽容度。",
+      "sourceDocument": {
+        "identity": "qg02-damaged-corrupt-object-headers",
+        "kind": "locally-generated",
+        "origin": "由本仓库的 golden/pdf-quality-corpus/generate.py 生成，不是下载或第三方的真实业务文档。",
+        "title": "PDF 质量门语料样本 damaged-corrupt-object-headers",
+        "producer": "pdf-quality-corpus-generator",
+        "creationDateFixed": "D:20260101000000Z",
+        "downloadUrl": null
+      },
+      "pages": [
+        {
+          "page": 1,
+          "carrier": "unreadable",
+          "layout": "unreadable",
+          "blankByDesign": false,
+          "textLayerAuthored": "unreadable",
+          "visible": [],
+          "structureObligations": [],
+          "expected": {
+            "local": {
+              "verdict": "fail",
+              "issueLabels": [
+                "document-unreadable"
+              ],
+              "dimensions": {
+                "completeness": "fail",
+                "accuracy": "fail",
+                "readingOrder": "fail",
+                "structureFidelity": "fail"
+              }
+            },
+            "ocrCandidate": {
+              "verdict": "fail",
+              "issueLabels": [
+                "document-unreadable"
+              ],
+              "dimensions": {
+                "completeness": "fail",
+                "accuracy": "fail",
+                "readingOrder": "fail",
+                "structureFidelity": "fail"
+              }
+            }
+          },
+          "annotation": {
+            "authoredBy": "ticket-02:generate.py DESIGN table",
+            "independentOfImplementationOutput": true,
+            "derivation": "closedSetRule 命中记录：载体=unreadable，文本层设计=unreadable，结构义务=-，可见行数=0，文件可独立打开=False ⇒ local=fail + document-unreadable，ocr-candidate=fail + document-unreadable。可见内容由 generate.py 常量逐字给出，写 PDF 之前就已确定。",
+            "consultedSources": [],
+            "documentPropertyUsed": [
+              "file-not-openable-by-any-pdf-reader"
+            ]
+          },
+          "note": null
+        },
+        {
+          "page": 2,
+          "carrier": "unreadable",
+          "layout": "unreadable",
+          "blankByDesign": false,
+          "textLayerAuthored": "unreadable",
+          "visible": [],
+          "structureObligations": [],
+          "expected": {
+            "local": {
+              "verdict": "fail",
+              "issueLabels": [
+                "document-unreadable"
+              ],
+              "dimensions": {
+                "completeness": "fail",
+                "accuracy": "fail",
+                "readingOrder": "fail",
+                "structureFidelity": "fail"
+              }
+            },
+            "ocrCandidate": {
+              "verdict": "fail",
+              "issueLabels": [
+                "document-unreadable"
+              ],
+              "dimensions": {
+                "completeness": "fail",
+                "accuracy": "fail",
+                "readingOrder": "fail",
+                "structureFidelity": "fail"
+              }
+            }
+          },
+          "annotation": {
+            "authoredBy": "ticket-02:generate.py DESIGN table",
+            "independentOfImplementationOutput": true,
+            "derivation": "closedSetRule 命中记录：载体=unreadable，文本层设计=unreadable，结构义务=-，可见行数=0，文件可独立打开=False ⇒ local=fail + document-unreadable，ocr-candidate=fail + document-unreadable。可见内容由 generate.py 常量逐字给出，写 PDF 之前就已确定。",
+            "consultedSources": [],
+            "documentPropertyUsed": [
+              "file-not-openable-by-any-pdf-reader"
+            ]
+          },
+          "note": null
+        }
+      ],
+      "intactSourceBytes": 1972,
+      "intactObjectCount": 11,
+      "damageMethod": "every-indirect-object-keyword-rewritten-0-obj-to-0-Xbj"
+    },
+    {
+      "fixtureId": "unopenable-not-a-pdf",
+      "file": "pdfs/unopenable-not-a-pdf.pdf",
+      "categories": [
+        "unopenable"
+      ],
+      "fileSha256": "bda6d427cfa254d05ef68e5742c32bc5cd987257ebfb01dcad7ae56178030258",
+      "fileBytes": 520,
+      "pageCount": 0,
+      "evidencePageCount": 0,
+      "pageMappingFormat": "1-based-contiguous",
+      "byteStableOnRegeneration": true,
+      "openableByIndependentReader": false,
+      "auditEligible": false,
+      "documentOutcome": "input-failure",
+      "documentExpectation": {
+        "verdict": "fail",
+        "issueLabels": [
+          "document-unreadable"
+        ],
+        "requiresZeroServiceCalls": true,
+        "note": "必须在任何 Clef/OCR 调用之前判为输入失败，不得被当成质量 pass，也不得产出部分内容后宣布成功。"
+      },
+      "productionMethod": "写入 OLE 复合文档魔数（D0 CF 11 E0 A1 B1 1A E1）+ 由 sha256 确定性生成的 512 字节载荷，文件名 .pdf。",
+      "productionNotes": "这类输入在任何提取器之前就该被判为打不开：它根本不是 PDF，因此不声明页数。刻意不用图片字节，因为实测 PyMuPDF 会把 PNG 当作文档打开。",
+      "sourceDocument": {
+        "identity": "qg02-unopenable-not-a-pdf",
+        "kind": "locally-generated",
+        "origin": "由本仓库的 golden/pdf-quality-corpus/generate.py 生成，不是下载或第三方的真实业务文档。",
+        "title": "PDF 质量门语料样本 unopenable-not-a-pdf",
+        "producer": "pdf-quality-corpus-generator",
+        "creationDateFixed": "D:20260101000000Z",
+        "downloadUrl": null
+      },
+      "pages": [],
+      "firstFourBytesHex": "d0cf11e0",
+      "container": "ole-compound-file",
+      "containsPdfHeader": false
+    },
+    {
+      "fixtureId": "unopenable-stub-header",
+      "file": "pdfs/unopenable-stub-header.pdf",
+      "categories": [
+        "unopenable"
+      ],
+      "fileSha256": "a3ebaaa52c17500a99e88365dc71ae0fb07ec3eecc09fb9a04d7c9e565ff0ab7",
+      "fileBytes": 132,
+      "pageCount": 0,
+      "evidencePageCount": 0,
+      "pageMappingFormat": "1-based-contiguous",
+      "byteStableOnRegeneration": true,
+      "openableByIndependentReader": false,
+      "auditEligible": false,
+      "documentOutcome": "input-failure",
+      "documentExpectation": {
+        "verdict": "fail",
+        "issueLabels": [
+          "document-unreadable"
+        ],
+        "requiresZeroServiceCalls": true,
+        "note": "必须在任何 Clef/OCR 调用之前判为输入失败，不得被当成质量 pass，也不得产出部分内容后宣布成功。"
+      },
+      "productionMethod": "手写固定字节：保留 %PDF-1.7 头与 %%EOF，但整份文件不含任何间接对象、没有目录、没有交叉引用表。",
+      "productionNotes": "只有头的「PDF」是打不开的：它连「有哪些页」都无法声明，因此 pageCount=0、页真值为空。",
+      "sourceDocument": {
+        "identity": "qg02-unopenable-stub-header",
+        "kind": "locally-generated",
+        "origin": "由本仓库的 golden/pdf-quality-corpus/generate.py 生成，不是下载或第三方的真实业务文档。",
+        "title": "PDF 质量门语料样本 unopenable-stub-header",
+        "producer": "pdf-quality-corpus-generator",
+        "creationDateFixed": "D:20260101000000Z",
+        "downloadUrl": null
+      },
+      "pages": [],
+      "firstFourBytesHex": "25504446",
+      "containsIndirectObject": false
+    }
+  ]
+}

@@ -1,0 +1,65 @@
+{
+  "docId": "87b1c7d3-6918-4e77-97c1-ac719502aca1",
+  "document": {
+    "status": "completed",
+    "version": 1
+  },
+  "indexCounts": {
+    "kefu-rag-chunks": 55,
+    "kefu-rag-chunks-v2-20261010": 114
+  },
+  "processingSpans": [
+    {
+      "name": "ingest",
+      "kind": "root",
+      "status": "failed"
+    },
+    {
+      "name": "chunk",
+      "kind": "stage",
+      "status": "done"
+    },
+    {
+      "name": "wikify",
+      "kind": "stage",
+      "status": "done"
+    },
+    {
+      "name": "storeChunks",
+      "kind": "stage",
+      "status": "failed"
+    },
+    {
+      "name": "storeGraph",
+      "kind": "stage",
+      "status": "skipped"
+    },
+    {
+      "name": "ingest",
+      "kind": "root",
+      "status": "done"
+    },
+    {
+      "name": "chunk",
+      "kind": "stage",
+      "status": "done"
+    },
+    {
+      "name": "wikify",
+      "kind": "stage",
+      "status": "done"
+    },
+    {
+      "name": "storeChunks",
+      "kind": "stage",
+      "status": "done"
+    },
+    {
+      "name": "storeGraph",
+      "kind": "stage",
+      "status": "done"
+    }
+  ],
+  "graphRelationsWithProvenance": 0,
+  "graphNodes": []
+}

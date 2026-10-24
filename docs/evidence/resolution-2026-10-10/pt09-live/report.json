@@ -1,0 +1,23 @@
+{
+  "status": "completed",
+  "implementationCommit": "21fef96c4263099842662b5c1737c539a2a34cc0",
+  "scope": [
+    "src/ingestion/index_verification.test.ts",
+    "src/ingestion/core_acceptance.test.ts"
+  ],
+  "command": "DOTENV_CONFIG_PATH=<main .env>, PYTHON_COMMAND=E:/miniconda3/python.exe node --import dotenv/config --import tsx --test src/ingestion/index_verification.test.ts src/ingestion/core_acceptance.test.ts",
+  "red": "3 passed, 3 failed: UT16/17 wrong default index on injected store; UT21 wrong direct read index",
+  "green": "6 passed, 0 failed, 0 skipped",
+  "safeguards": [
+    "Original index remained untouched/locked; no index deletion",
+    "Explicit ut16/ut17/ut21 test tenant identities",
+    "Cleanup query narrowed by test tenant and random document IDs",
+    "UT16 idempotence and missing-chunk negative controls preserved",
+    "UT17 rejected v2 preserves active v1 assertion preserved",
+    "UT21 pending denominator, real embedding/retrieval and partial-index recovery preserved"
+  ],
+  "logs": [
+    "red.log",
+    "green.log"
+  ]
+}

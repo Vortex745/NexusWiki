@@ -24,6 +24,8 @@ export interface Parser {
 
 export type { ParserType } from "../../types"
 export { MarkItDownParser } from "./markitdown"
+// Historical offline adapters/normalizers: production routing never selects
+// these runtimes. Keep persisted provenance and diagnostic fixtures readable.
 export { MarkerParser, normalizeMarker } from "./marker"
 export type { MarkerParserOptions } from "./marker"
 export { MinerUParser, normalizeMinerU } from "./mineru"
@@ -37,6 +39,8 @@ export type {
 export { normalizeMarkItDown } from "./normalize"
 export { runBoundedProcess } from "./process"
 export { DirectTextParser, decodeTextBytes } from "./direct_text"
+export { OcrApiParser } from "./ocr_api"
+export type { OcrApiParserOptions } from "./ocr_api"
 export type { TextDecodeProvenance } from "./direct_text"
 export type { BoundedProcessInput } from "./process"
 export { isParserOverride, selectParser, selectParserRoute } from "./router"

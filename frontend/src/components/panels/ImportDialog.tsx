@@ -1,3 +1,11 @@
+import { Field as FormField, FieldLabel } from "@/components/primitives/field"
+import SegmentedControl from "../arc/segmented-control/segmented-control"
+import { Input } from "@/components/primitives/input"
+import { NumberField } from "../arc/number-field/number-field"
+import { Button as UiButton } from "@/components/primitives/button"
+import { Select as UiSelect } from "@/components/ui/Controls"
+import { PanelDialog } from "../ui/Dialog"
+import { DialogTitle } from "../primitives/dialog"
 import { Database, X } from "../ui/icons"
 import { useCallback, useEffect, useRef, useState } from "react"
 
@@ -17,7 +25,13 @@ import {
   type DocumentFolderPayload,
 } from "../../lib/api"
 import { cn } from "../../lib/cn"
-import { formatBytes, IMPORT_CONCURRENCY, IMPORT_MAX_FILES_HINT, IMPORT_MAX_FILE_BYTES, IMPORT_POLL_MS } from "../../lib/constants"
+import {
+  formatBytes,
+  IMPORT_CONCURRENCY,
+  IMPORT_MAX_FILES_HINT,
+  IMPORT_MAX_FILE_BYTES,
+  IMPORT_POLL_MS,
+} from "../../lib/constants"
 import {
   buildImportRows,
   categoryForPath,
@@ -39,11 +53,23 @@ import { useAppShell } from "../../runtime/AppShellContext"
 import { knowledgeStore, useKnowledgeBases } from "../../runtime/knowledgeStore"
 import { useSignedInSession } from "../../runtime/SessionContext"
 import { Icon } from "../ui/Icon"
-import { deriveIngestProgress, describeActivationReasons, describeAllowedOperations, initialImportProgress, type ImportProgress as Progress, type ImportStatus, type UploadProgress } from "../../lib/ingestProgress"
+import {
+  deriveIngestProgress,
+  describeActivationReasons,
+  describeAllowedOperations,
+  initialImportProgress,
+  type ImportProgress as Progress,
+  type ImportStatus,
+  type UploadProgress,
+} from "../../lib/ingestProgress"
+import {
+  describeFailure,
+  PDF_PROTECTION_GUIDANCE,
+  type FailureRecordLike,
+} from "../../lib/qualityReasons"
 import { ImportProgress } from "./ImportProgress"
 import { ImportDropzone, type DropzonePick } from "./ImportDropzone"
 import { ImportAdvancedOptions } from "./ImportAdvancedOptions"
-
 
 /**
  * The import dialog (tickets 03/05/06/07): a two-path importer. What the user
@@ -124,13 +150,15 @@ const STATUS_TEXT: Record<ImportStatus, string> = {
 function statusBadgeClass(status: ImportStatus): string {
   if (status === "completed") return "bg-success-subtle text-success"
   if (status === "failed") return "bg-danger-subtle text-danger"
-  if (status === "pending_review" || status === "business_review") return "bg-warning-subtle text-warning"
-  return "bg-surface text-muted"
+  if (status === "pending_review" || status === "business_review")
+    return "bg-warning-subtle text-warning"
+  return "bg-surface text-muted-foreground"
 }
 
 function createId(prefix: string): string {
   const randomId =
-    typeof globalThis.crypto !== "undefined" && typeof globalThis.crypto.randomUUID === "function"
+    typeof globalThis.crypto !== "undefined" &&
+    typeof globalThis.crypto.randomUUID === "function"
       ? globalThis.crypto.randomUUID()
       : `${Date.now()}-${Math.random().toString(16).slice(2)}`
   return `${prefix}-${randomId}`
@@ -141,7 +169,10 @@ function fallbackBaseName(): string {
 }
 
 function parseTags(tagsText: string): string[] {
-  return tagsText.split(",").map((tag) => tag.trim()).filter(Boolean)
+  return tagsText
+    .split(",")
+    .map((tag) => tag.trim())
+    .filter(Boolean)
 }
 
 function errorMessageOf(error: unknown): string {
@@ -179,9 +210,12 @@ export function ImportDialog({
   /** Sidebar badge (ticket 08): rows that still owe the user an outcome. */
   onActiveCountChange?: (activeCount: number) => void
 }) {
-  const dialogRef = useRef<HTMLDialogElement>(null)
   const { showToast, openDocument, openKnowledge } = useAppShell()
-  const { activeKnowledgeBases: bases, folders, status: baseStatus } = useKnowledgeBases()
+  const {
+    activeKnowledgeBases: bases,
+    folders,
+    status: baseStatus,
+  } = useKnowledgeBases()
   const canCreate = useSignedInSession()?.scopes.includes("admin") ?? false
   const [knowledgeBaseId, setKnowledgeBaseId] = useState("")
   const [newBaseName, setNewBaseName] = useState("")
@@ -189,8 +223,12 @@ export function ImportDialog({
   const [showCreateBase, setShowCreateBase] = useState(false)
   // The directory this batch is filed into. A document folder belongs to ONE
   // knowledge base, so the picker waits for a target base.
-  const [documentFolders, setDocumentFolders] = useState<DocumentFolderPayload[]>([])
-  const [documentFoldersStatus, setDocumentFoldersStatus] = useState<"idle" | "loading" | "ready">("idle")
+  const [documentFolders, setDocumentFolders] = useState<
+    DocumentFolderPayload[]
+  >([])
+  const [documentFoldersStatus, setDocumentFoldersStatus] = useState<
+    "idle" | "loading" | "ready"
+  >("idle")
   const [documentFolderId, setDocumentFolderId] = useState("")
   const [categoryCreatorOpen, setCategoryCreatorOpen] = useState(false)
   const [categoryDraft, setCategoryDraft] = useState("")
@@ -206,7 +244,9 @@ export function ImportDialog({
   const [submitting, setSubmitting] = useState(false)
   const [waves, setWaves] = useState<ImportWave[]>([])
   const [queue, setQueue] = useState<ImportItem[]>([])
-  const [confirmingDeleteId, setConfirmingDeleteId] = useState<string | null>(null)
+  const [confirmingDeleteId, setConfirmingDeleteId] = useState<string | null>(
+    null,
+  )
 
   const queueRef = useRef<ImportItem[]>([])
   queueRef.current = queue
@@ -231,17 +271,13 @@ export function ImportDialog({
     epochRef.current.set(id, next)
     return next
   }, [])
-  const epochOf = useCallback((id: string): number => epochRef.current.get(id) ?? 0, [])
+  const epochOf = useCallback(
+    (id: string): number => epochRef.current.get(id) ?? 0,
+    [],
+  )
   const pollTimer = useRef<number | null>(null)
   const pollingRef = useRef(false)
   const completionNotifiedRef = useRef(false)
-
-  useEffect(() => {
-    const dialog = dialogRef.current
-    if (!dialog) return
-    if (open && !dialog.open) dialog.showModal()
-    else if (!open && dialog.open) dialog.close()
-  }, [open])
 
   useEffect(() => {
     if (open) void knowledgeStore.refresh()
@@ -292,18 +328,29 @@ export function ImportDialog({
    * is written EAGERLY — React defers state updaters until render, but workers
    * and row actions read the ref in the same tick as the mutation, so the
    * updater form silently starved the upload scheduler (found in live testing). */
-  const mutateQueue = useCallback((mutate: (current: ImportItem[]) => ImportItem[]) => {
-    queueRef.current = mutate(queueRef.current)
-    setQueue(queueRef.current)
-  }, [])
+  const mutateQueue = useCallback(
+    (mutate: (current: ImportItem[]) => ImportItem[]) => {
+      queueRef.current = mutate(queueRef.current)
+      setQueue(queueRef.current)
+    },
+    [],
+  )
 
-  const updateItem = useCallback((id: string, patch: Partial<ImportItem>) => {
-    mutateQueue((current) => current.map((item) => (item.id === id ? { ...item, ...patch } : item)))
-  }, [mutateQueue])
+  const updateItem = useCallback(
+    (id: string, patch: Partial<ImportItem>) => {
+      mutateQueue((current) =>
+        current.map((item) => (item.id === id ? { ...item, ...patch } : item)),
+      )
+    },
+    [mutateQueue],
+  )
 
-  const appendQueue = useCallback((items: ImportItem[]) => {
-    mutateQueue((current) => [...current, ...items])
-  }, [mutateQueue])
+  const appendQueue = useCallback(
+    (items: ImportItem[]) => {
+      mutateQueue((current) => [...current, ...items])
+    },
+    [mutateQueue],
+  )
 
   /** Registers a wave in BOTH the state and its ref: workers read the ref in
    * the same tick as enqueue, before React re-renders. */
@@ -312,9 +359,12 @@ export function ImportDialog({
     setWaves((current) => [...current, wave])
   }, [])
 
-  const removeItem = useCallback((id: string) => {
-    mutateQueue((current) => current.filter((item) => item.id !== id))
-  }, [mutateQueue])
+  const removeItem = useCallback(
+    (id: string) => {
+      mutateQueue((current) => current.filter((item) => item.id !== id))
+    },
+    [mutateQueue],
+  )
 
   const stopPollingIfDone = useCallback(() => {
     const hasPending = queueRef.current.some(
@@ -325,17 +375,30 @@ export function ImportDialog({
       pollTimer.current = null
     }
     const terminal = new Set<string>(IMPORT_TERMINAL_STATUSES)
-    const settled = queueRef.current.length > 0 && liveWorkersRef.current === 0 &&
+    const settled =
+      queueRef.current.length > 0 &&
+      liveWorkersRef.current === 0 &&
       queueRef.current.every((item) => terminal.has(item.status))
     if (settled && !completionNotifiedRef.current) {
       completionNotifiedRef.current = true
-      const completed = queueRef.current.filter((item) => item.status === "completed").length
-      const failed = queueRef.current.filter((item) => item.status === "failed").length
-      const cancelled = queueRef.current.filter((item) => item.status === "cancelled").length
+      const completed = queueRef.current.filter(
+        (item) => item.status === "completed",
+      ).length
+      const failed = queueRef.current.filter(
+        (item) => item.status === "failed",
+      ).length
+      const cancelled = queueRef.current.filter(
+        (item) => item.status === "cancelled",
+      ).length
       // UT-26: review holds are terminal for polling but not "success" — they
       // get their own bucket in the summary line.
-      const held = queueRef.current.filter((item) => item.status === "pending_review" || item.status === "business_review").length
-      showToast(`处理结束：${completed} 成功${failed ? `，${failed} 失败` : ""}${cancelled ? `，${cancelled} 已取消` : ""}${held ? `，${held} 待确认` : ""}`)
+      const held = queueRef.current.filter(
+        (item) =>
+          item.status === "pending_review" || item.status === "business_review",
+      ).length
+      showToast(
+        `处理结束：${completed} 成功${failed ? `，${failed} 失败` : ""}${cancelled ? `，${cancelled} 已取消` : ""}${held ? `，${held} 待确认` : ""}`,
+      )
       if (completed > 0) onIngested?.()
     }
   }, [onIngested, showToast])
@@ -347,28 +410,51 @@ export function ImportDialog({
       // fetch is in flight owns the row; the stale response is discarded.
       const gen = epochOf(item.id)
       try {
-        const progress = deriveIngestProgress(await fetchIngestStatus(item.docId))
+        const progress = deriveIngestProgress(
+          await fetchIngestStatus(item.docId),
+        )
         const now = Date.now()
-        const processingStartedAt = progress.status === "processing" && item.status !== "processing"
-          ? now : item.processingStartedAt
-        const changed = !item.progress || progress.summary !== item.progress.summary ||
-          progress.stages.some((stage, index) => stage.status !== item.progress?.stages[index]?.status)
-        const lastProgressAt = changed ? now : item.lastProgressAt ?? now
-        const stalled = now - lastProgressAt >= IMPORT_STALL_MS && !item.timeoutWarned
-        if (stalled) showToast(`${item.fileName} 处理超时，请查看文档状态或稍后重试`)
+        const processingStartedAt =
+          progress.status === "processing" && item.status !== "processing"
+            ? now
+            : item.processingStartedAt
+        const changed =
+          !item.progress ||
+          progress.summary !== item.progress.summary ||
+          progress.stages.some(
+            (stage, index) =>
+              stage.status !== item.progress?.stages[index]?.status,
+          )
+        const lastProgressAt = changed ? now : (item.lastProgressAt ?? now)
+        const stalled =
+          now - lastProgressAt >= IMPORT_STALL_MS && !item.timeoutWarned
+        if (stalled)
+          showToast(`${item.fileName} 处理超时，请查看文档状态或稍后重试`)
         // UT-29: a newer operation (resume/cancel) owns the row now — this
         // stale poll response must not overwrite it.
         if (epochOf(item.id) !== gen) return
         updateItem(item.id, {
-          status: progress.status, progress, error: progress.status === "failed" ? progress.error : null,
-          checkedAt: new Date().toISOString(), syncError: stalled || item.timeoutWarned ? "处理时间超过预期，服务器可能仍在运行" : null,
-          lastProgressAt, timeoutWarned: stalled || item.timeoutWarned, processingStartedAt,
+          status: progress.status,
+          progress,
+          error: progress.status === "failed" ? progress.error : null,
+          checkedAt: new Date().toISOString(),
+          syncError:
+            stalled || item.timeoutWarned
+              ? "处理时间超过预期，服务器可能仍在运行"
+              : null,
+          lastProgressAt,
+          timeoutWarned: stalled || item.timeoutWarned,
+          processingStartedAt,
         })
       } catch (err) {
-        const timedOut = Date.now() - (item.lastProgressAt ?? Date.now()) >= IMPORT_STALL_MS && !item.timeoutWarned
+        const timedOut =
+          Date.now() - (item.lastProgressAt ?? Date.now()) >= IMPORT_STALL_MS &&
+          !item.timeoutWarned
         if (timedOut) showToast(`${item.fileName} 状态查询超时，请检查服务连接`)
         updateItem(item.id, {
-          syncError: timedOut ? "状态查询持续超时，请检查服务连接" : errorMessageOf(err),
+          syncError: timedOut
+            ? "状态查询持续超时，请检查服务连接"
+            : errorMessageOf(err),
           timeoutWarned: timedOut || item.timeoutWarned,
         })
       }
@@ -396,7 +482,10 @@ export function ImportDialog({
 
   const startPolling = useCallback(() => {
     if (pollTimer.current !== null) return
-    pollTimer.current = window.setInterval(() => void pollItems(), IMPORT_POLL_MS)
+    pollTimer.current = window.setInterval(
+      () => void pollItems(),
+      IMPORT_POLL_MS,
+    )
     void pollItems()
   }, [pollItems])
 
@@ -407,21 +496,33 @@ export function ImportDialog({
 
   const uploadOne = useCallback(
     async (item: ImportItem) => {
-      const wave = wavesRef.current.find((candidate) => candidate.id === item.waveId)
+      const wave = wavesRef.current.find(
+        (candidate) => candidate.id === item.waveId,
+      )
       const gen = epochOf(item.id)
       updateItem(item.id, {
         status: "uploading",
         error: null,
-        uploadProgress: { loaded: 0, total: item.size, startedAt: Date.now(), updatedAt: Date.now() },
+        uploadProgress: {
+          loaded: 0,
+          total: item.size,
+          startedAt: Date.now(),
+          updatedAt: Date.now(),
+        },
       })
       try {
         const docId = await uploadFileToIngest(
           item.file as File,
           item.filePath,
           (loaded, total) => {
-            updateItem(item.id, { uploadProgress: {
-              loaded, total, startedAt: item.uploadProgress?.startedAt ?? Date.now(), updatedAt: Date.now(),
-            } })
+            updateItem(item.id, {
+              uploadProgress: {
+                loaded,
+                total,
+                startedAt: item.uploadProgress?.startedAt ?? Date.now(),
+                updatedAt: Date.now(),
+              },
+            })
           },
           {
             knowledgeBaseId: wave?.params.knowledgeBaseId,
@@ -443,7 +544,11 @@ export function ImportDialog({
             })
             return
           }
-          updateItem(item.id, { docId, status: "pending", lastProgressAt: Date.now() })
+          updateItem(item.id, {
+            docId,
+            status: "pending",
+            lastProgressAt: Date.now(),
+          })
           try {
             const result = await cancelIngest(docId)
             // UT-29: polls that started while this cancel was in flight carry
@@ -457,7 +562,9 @@ export function ImportDialog({
                 lastProgressAt: Date.now(),
               })
             } else {
-              const server = deriveIngestProgress(await fetchIngestStatus(docId))
+              const server = deriveIngestProgress(
+                await fetchIngestStatus(docId),
+              )
               bumpEpoch(item.id)
               updateItem(item.id, {
                 status: server.status,
@@ -479,8 +586,13 @@ export function ImportDialog({
           stopPollingIfDone()
           return
         }
-        if (!docId) throw new ImportUploadError("invalid_response", "上传响应缺少文档 ID")
-        updateItem(item.id, { status: "pending", docId, lastProgressAt: Date.now() })
+        if (!docId)
+          throw new ImportUploadError("invalid_response", "上传响应缺少文档 ID")
+        updateItem(item.id, {
+          status: "pending",
+          docId,
+          lastProgressAt: Date.now(),
+        })
         // The first poll fires immediately so the row shows real stage
         // progress instead of sitting on the upload-done placeholder.
         startPolling()
@@ -557,12 +669,22 @@ export function ImportDialog({
 
   /** The pre-check reads the catalog by folder NAME; a freshly typed category
    * has no documents by definition, so those waves skip the read. */
-  const precheckFolderName = useCallback((params: ImportWaveParams): string | null => {
-    if (params.folder && pendingCategoryName && params.folder === pendingCategoryName) return null
-    if (!params.folder) return ""
-    const known = documentFolders.find((folder) => folder.id === params.folder)
-    return known?.name ?? null
-  }, [pendingCategoryName, documentFolders])
+  const precheckFolderName = useCallback(
+    (params: ImportWaveParams): string | null => {
+      if (
+        params.folder &&
+        pendingCategoryName &&
+        params.folder === pendingCategoryName
+      )
+        return null
+      if (!params.folder) return ""
+      const known = documentFolders.find(
+        (folder) => folder.id === params.folder,
+      )
+      return known?.name ?? null
+    },
+    [pendingCategoryName, documentFolders],
+  )
 
   const buildRows = useCallback(
     (picked: PickedFile[], waveId: string): ImportItem[] =>
@@ -570,7 +692,9 @@ export function ImportDialog({
       // oversize files fail with an admission kind BEFORE upload, the client
       // mirrors (never relaxes) the server's limits, and the server stays the
       // authority for everything the client cannot confirm.
-      buildImportRows(picked, waveId, IMPORT_MAX_FILE_BYTES, () => createId("imp")),
+      buildImportRows(picked, waveId, IMPORT_MAX_FILE_BYTES, () =>
+        createId("imp"),
+      ),
     [],
   )
 
@@ -600,7 +724,9 @@ export function ImportDialog({
       }))
       if (skippedCount > 0) showToast(`已跳过 ${skippedCount} 个不支持的文件`)
       if (items.length > IMPORT_MAX_FILES_HINT) {
-        showToast(`共 ${items.length} 个文件，建议分批导入（单次 ≤ ${IMPORT_MAX_FILES_HINT}）`)
+        showToast(
+          `共 ${items.length} 个文件，建议分批导入（单次 ≤ ${IMPORT_MAX_FILES_HINT}）`,
+        )
       }
       appendWave(wave)
       appendQueue(items)
@@ -611,7 +737,10 @@ export function ImportDialog({
         // anyway — the server's 409 is the safety net, and rows must never be
         // stranded unclaimable by an unfinished pre-check.
         try {
-          const entries = await collectCatalogEntries(wave.params.knowledgeBaseId, folderName)
+          const entries = await collectCatalogEntries(
+            wave.params.knowledgeBaseId,
+            folderName,
+          )
           const hits = matchExistingFileNames(
             entries.map((entry) => entry.fileName ?? ""),
             items.map((item) => item.fileName),
@@ -621,15 +750,27 @@ export function ImportDialog({
             showToast(`${hits.size} 个文件在目标库中已存在，请在队列中确认`)
           }
         } catch {
-          mutateQueue((current) => settleWavePrecheck(current, wave.id, new Set()))
+          mutateQueue((current) =>
+            settleWavePrecheck(current, wave.id, new Set()),
+          )
           showToast("同名预检查不可用，导入时将由服务端确认")
         }
       }
       ensureWorkers()
     },
     [
-      bases, knowledgeBaseId, pendingCategoryName, documentFolderId, parser, tagsText,
-      buildRows, appendQueue, showToast, precheckFolderName, ensureWorkers, mutateQueue,
+      bases,
+      knowledgeBaseId,
+      pendingCategoryName,
+      documentFolderId,
+      parser,
+      tagsText,
+      buildRows,
+      appendQueue,
+      showToast,
+      precheckFolderName,
+      ensureWorkers,
+      mutateQueue,
     ],
   )
 
@@ -640,9 +781,14 @@ export function ImportDialog({
         return
       }
       if (folder.skipped > 0) {
-        showToast(`文件夹「${folder.name}」已跳过 ${folder.skipped} 个不支持的文件`)
+        showToast(
+          `文件夹「${folder.name}」已跳过 ${folder.skipped} 个不支持的文件`,
+        )
       }
-      const baseName = sanitizeKnowledgeBaseName(folder.name, fallbackBaseName())
+      const baseName = sanitizeKnowledgeBaseName(
+        folder.name,
+        fallbackBaseName(),
+      )
       const reusable = findReusableKnowledgeBase(bases, baseName)
       let waveKnowledgeBaseId: string
       let label: string
@@ -658,7 +804,9 @@ export function ImportDialog({
           await knowledgeStore.refresh()
           showToast(`已创建知识库「${created.name}」`)
         } catch (error) {
-          showToast(`知识库「${baseName}」创建失败：${errorMessageOf(error)}，未导入任何文件`)
+          showToast(
+            `知识库「${baseName}」创建失败：${errorMessageOf(error)}，未导入任何文件`,
+          )
           return
         }
       }
@@ -750,11 +898,16 @@ export function ImportDialog({
           // The server refused — the task already settled elsewhere. Sync the
           // row to the server's terminal truth instead of claiming cancelled.
           try {
-            const server = deriveIngestProgress(await fetchIngestStatus(item.docId))
+            const server = deriveIngestProgress(
+              await fetchIngestStatus(item.docId),
+            )
             updateItem(item.id, {
               status: server.status,
               progress: server,
-              error: server.status === "failed" ? server.error : `服务端拒绝取消：${result.reason ?? result.status}`,
+              error:
+                server.status === "failed"
+                  ? server.error
+                  : `服务端拒绝取消：${result.reason ?? result.status}`,
               errorKind: "resume_refused",
               lastProgressAt: Date.now(),
             })
@@ -787,11 +940,23 @@ export function ImportDialog({
    * params keep the retry on the same knowledge base and folder. */
   const resubmitUrlItem = useCallback(
     async (item: ImportItem) => {
-      const wave = wavesRef.current.find((candidate) => candidate.id === item.waveId)
+      const wave = wavesRef.current.find(
+        (candidate) => candidate.id === item.waveId,
+      )
       if (!item.sourceUrl || !wave) return
-      updateItem(item.id, { status: "pending", error: null, lastProgressAt: Date.now() })
+      updateItem(item.id, {
+        status: "pending",
+        error: null,
+        lastProgressAt: Date.now(),
+      })
       try {
-        const data = await submitUrlImport(item.sourceUrl, "single", 50, wave.params.knowledgeBaseId, wave.params.folder)
+        const data = await submitUrlImport(
+          item.sourceUrl,
+          "single",
+          50,
+          wave.params.knowledgeBaseId,
+          wave.params.folder,
+        )
         updateItem(item.id, {
           status: data.docId ? "pending" : "failed",
           docId: data.docId ?? null,
@@ -892,7 +1057,10 @@ export function ImportDialog({
       setConfirmingDeleteId(null)
       try {
         const detail = await fetchDocumentDetail(item.docId)
-        await retireSource(detail.document.sourceId, "removed from the import dialog")
+        await retireSource(
+          detail.document.sourceId,
+          "removed from the import dialog",
+        )
         removeItem(item.id)
         showToast(`已删除「${item.fileName}」，文档已退役且不可恢复`)
       } catch (error) {
@@ -906,14 +1074,19 @@ export function ImportDialog({
    * the existing document in the target catalog by name or source URL. */
   const viewConflictDocument = useCallback(
     async (item: ImportItem) => {
-      const wave = wavesRef.current.find((candidate) => candidate.id === item.waveId)
+      const wave = wavesRef.current.find(
+        (candidate) => candidate.id === item.waveId,
+      )
       const knowledgeBaseIdForWave = wave?.params.knowledgeBaseId
       if (!knowledgeBaseIdForWave) return
       try {
         const entries = await collectCatalogEntries(knowledgeBaseIdForWave, "")
         const normalized = item.sourceUrl ?? item.fileName
-        const found = entries.find((entry) =>
-          entry.source === normalized || entry.fileName === item.fileName || entry.title === item.fileName,
+        const found = entries.find(
+          (entry) =>
+            entry.source === normalized ||
+            entry.fileName === item.fileName ||
+            entry.title === item.fileName,
         )
         if (found) {
           openDocument({ documentId: found.docId })
@@ -973,7 +1146,10 @@ export function ImportDialog({
   // ---------------------------------------------------------------------------
 
   const handleUrlImport = async () => {
-    if (!knowledgeBaseId) { showToast("请先选择知识库"); return }
+    if (!knowledgeBaseId) {
+      showToast("请先选择知识库")
+      return
+    }
     const trimmed = url.trim()
     if (!trimmed) {
       showToast("请输入 URL")
@@ -990,45 +1166,59 @@ export function ImportDialog({
 
     setSubmitting(true)
     try {
-      const data = await submitUrlImport(trimmed, urlMode, pages, knowledgeBaseId, folderArgument())
+      const data = await submitUrlImport(
+        trimmed,
+        urlMode,
+        pages,
+        knowledgeBaseId,
+        folderArgument(),
+      )
       const submittedAt = Date.now()
       completionNotifiedRef.current = false
       const wave: ImportWave = {
         id: createId("wave"),
-        label: urlMode === "single" ? `网页导入「${trimmed}」` : `Sitemap 抓取（${data.submitted ?? 0} 页）`,
+        label:
+          urlMode === "single"
+            ? `网页导入「${trimmed}」`
+            : `Sitemap 抓取（${data.submitted ?? 0} 页）`,
         kind: "url",
         params: freezeWaveParams({ knowledgeBaseId, folder: folderArgument() }),
       }
-      const items: ImportItem[] = urlMode === "single"
-        ? [
-          {
-            id: createId("imp"),
-            waveId: wave.id,
-            fileName: data.docId ?? trimmed,
-            filePath: trimmed,
-            size: 0,
-            status: data.docId ? "pending" : "failed",
-            docId: data.docId ?? null,
-            error: data.docId ? null : "提交失败",
-            sourceUrl: trimmed,
-            lastProgressAt: submittedAt,
-          },
-        ]
-        : (data.items ?? []).map((entry) => ({
-            id: createId("imp"),
-            waveId: wave.id,
-            fileName: entry.url,
-            filePath: entry.url,
-            size: 0,
-            status: entry.docId ? "pending" : "failed",
-            docId: entry.docId ?? null,
-            error: entry.docId ? null : entry.status ?? "提交失败",
-            sourceUrl: entry.url,
-            lastProgressAt: submittedAt,
-          }))
+      const items: ImportItem[] =
+        urlMode === "single"
+          ? [
+              {
+                id: createId("imp"),
+                waveId: wave.id,
+                fileName: data.docId ?? trimmed,
+                filePath: trimmed,
+                size: 0,
+                status: data.docId ? "pending" : "failed",
+                docId: data.docId ?? null,
+                error: data.docId ? null : "提交失败",
+                sourceUrl: trimmed,
+                lastProgressAt: submittedAt,
+              },
+            ]
+          : (data.items ?? []).map((entry) => ({
+              id: createId("imp"),
+              waveId: wave.id,
+              fileName: entry.url,
+              filePath: entry.url,
+              size: 0,
+              status: entry.docId ? "pending" : "failed",
+              docId: entry.docId ?? null,
+              error: entry.docId ? null : (entry.status ?? "提交失败"),
+              sourceUrl: entry.url,
+              lastProgressAt: submittedAt,
+            }))
       appendWave(wave)
       appendQueue(items)
-      showToast(urlMode === "single" ? "已提交，正在处理…" : `已提交 ${data.submitted} 个页面`)
+      showToast(
+        urlMode === "single"
+          ? "已提交，正在处理…"
+          : `已提交 ${data.submitted} 个页面`,
+      )
       startPolling()
     } catch (err) {
       const message = errorMessageOf(err)
@@ -1043,18 +1233,20 @@ export function ImportDialog({
           params: freezeWaveParams({ knowledgeBaseId }),
         }
         appendWave(wave)
-        appendQueue([{
-          id: createId("imp"),
-          waveId: wave.id,
-          fileName: trimmed,
-          filePath: trimmed,
-          size: 0,
-          status: "failed",
-          docId: null,
-          error: message,
-          sourceUrl: trimmed,
-          lastProgressAt: Date.now(),
-        }])
+        appendQueue([
+          {
+            id: createId("imp"),
+            waveId: wave.id,
+            fileName: trimmed,
+            filePath: trimmed,
+            size: 0,
+            status: "failed",
+            docId: null,
+            error: message,
+            sourceUrl: trimmed,
+            lastProgressAt: Date.now(),
+          },
+        ])
         showToast("该网页已导入过")
       } else {
         showToast(`提交失败：${message}`)
@@ -1070,127 +1262,176 @@ export function ImportDialog({
 
   const baseOptions = (
     <>
-      <option value="">{baseStatus === "loading" ? "正在加载…" : "请选择知识库"}</option>
-      {folders.map((folder) => <optgroup key={folder.id} label={folder.name}>
-        {bases.filter((base) => base.folderId === folder.id).map((base) => <option key={base.id} value={base.id}>{base.name}</option>)}
-      </optgroup>)}
-      {bases.filter((base) => !base.folderId || !folders.some((folder) => folder.id === base.folderId))
-        .map((base) => <option key={base.id} value={base.id}>{base.name}</option>)}
+      <option value="">
+        {baseStatus === "loading" ? "正在加载…" : "请选择知识库"}
+      </option>
+      {folders.map((folder) => (
+        <optgroup key={folder.id} label={folder.name}>
+          {bases
+            .filter((base) => base.folderId === folder.id)
+            .map((base) => (
+              <option key={base.id} value={base.id}>
+                {base.name}
+              </option>
+            ))}
+        </optgroup>
+      ))}
+      {bases
+        .filter(
+          (base) =>
+            !base.folderId ||
+            !folders.some((folder) => folder.id === base.folderId),
+        )
+        .map((base) => (
+          <option key={base.id} value={base.id}>
+            {base.name}
+          </option>
+        ))}
     </>
   )
 
   const createBaseRow = (
     <div className="mt-2 flex gap-2">
-      <input
+      <Input
         aria-label="新知识库名称"
         value={newBaseName}
         onChange={(event) => setNewBaseName(event.target.value)}
-        onKeyDown={(event) => { if (event.key === "Enter") void createBase() }}
+        onKeyDown={(event) => {
+          if (event.key === "Enter") void createBase()
+        }}
         placeholder="新知识库名称"
         autoFocus
-        className="h-8 min-w-0 flex-1 rounded-md border border-line bg-surface px-2 text-xs text-ink outline-none placeholder:text-faint focus:border-brand"
+        className="h-8 min-w-0 flex-1 border px-2"
       />
-      <button
+      <UiButton
+        variant="outline"
+        size="sm"
         type="button"
         disabled={creating || !newBaseName.trim()}
         onClick={() => void createBase()}
-        className="rounded-md border border-line px-2 text-xs text-ink transition-colors hover:bg-surface-subtle disabled:opacity-50"
+        className="px-2 disabled:opacity-50"
       >
         {creating ? "创建中…" : "创建"}
-      </button>
+      </UiButton>
     </div>
   )
 
-  const completedCount = queue.filter((item) => item.status === "completed").length
+  const completedCount = queue.filter(
+    (item) => item.status === "completed",
+  ).length
   const failedCount = queue.filter((item) => item.status === "failed").length
-  const cancelledCount = queue.filter((item) => item.status === "cancelled").length
+  const cancelledCount = queue.filter(
+    (item) => item.status === "cancelled",
+  ).length
 
   return (
-    <dialog
-      ref={dialogRef}
+    <PanelDialog
+      open={open}
       onClose={onClose}
-      onClick={(event) => {
-        if (event.target === event.currentTarget) onClose()
-      }}
-      aria-labelledby="import-title"
-      className="m-auto max-h-[min(640px,calc(100dvh-48px))] w-[min(520px,calc(100vw-32px))] overflow-hidden rounded-dialog border border-line bg-surface text-ink shadow-dialog open:flex open:flex-col max-md:m-0 max-md:h-dvh max-md:w-screen max-md:rounded-none max-md:border-0"
+      titleId="import-title"
+      className="flex flex-col sm:max-w-[640px] h-[min(760px,calc(100dvh-64px))]"
     >
       <div className="flex h-13 flex-none items-center justify-between border-b border-line px-5 max-md:px-4">
         <div className="flex items-center gap-2">
-          <Icon icon={Database} className="size-4 text-muted" />
-          <h2 id="import-title" className="text-sm font-semibold text-ink">
+          <Icon icon={Database} className="size-4 text-muted-foreground" />
+          <DialogTitle id="import-title" className="">
             导入知识库文档
-          </h2>
+          </DialogTitle>
         </div>
-        <button
+        <UiButton
+          variant="ghost"
+          size="icon-sm"
           type="button"
           onClick={onClose}
           aria-label="关闭"
           title="关闭"
-          className="grid size-7 flex-none cursor-pointer place-items-center rounded-md text-muted/70 transition-colors hover:bg-surface-subtle hover:text-ink"
+          className="grid size-7 flex-none place-items-center"
         >
-          <Icon icon={X} className="size-3.5" />
-        </button>
+          <Icon data-icon="inline-start" icon={X} />
+        </UiButton>
       </div>
 
       <div className="flex-none border-b border-line px-5 py-3 max-md:px-4">
         {baseStatus === "ready" && bases.length === 0 ? (
           <div className="rounded-[14px] border border-dashed border-line bg-surface-subtle px-4 py-4 text-center">
             <p className="text-xs font-medium text-ink">暂无知识库</p>
-            <p className="mt-0.5 text-[11px] text-muted/70">创建一个知识库后即可导入文档</p>
+            <p className="mt-0.5 text-[11px] text-muted-foreground/70">
+              创建一个知识库后即可导入文档
+            </p>
             {canCreate ? (
-              showCreateBase ? createBaseRow : (
-                <button
+              showCreateBase ? (
+                createBaseRow
+              ) : (
+                <UiButton
+                  variant="default"
+                  size="sm"
                   type="button"
                   onClick={() => setShowCreateBase(true)}
-                  className="mt-2.5 inline-flex h-8 items-center justify-center rounded-lg bg-primary px-3.5 text-xs font-medium text-on-primary transition-colors hover:bg-primary-hover focus-visible:ring-2 focus-visible:ring-primary"
+                  className="mt-2.5 inline-flex h-8 items-center justify-center px-3.5"
                 >
                   新建知识库
-                </button>
+                </UiButton>
               )
             ) : (
-              <p className="mt-1 text-[11px] text-faint">当前账号无创建权限，请联系管理员</p>
+              <p className="mt-1 text-[11px] text-faint">
+                当前账号无创建权限，请联系管理员
+              </p>
             )}
           </div>
         ) : (
           <>
             <div className="flex items-center justify-between">
-              <label htmlFor="import-knowledge-base" className="text-xs font-medium text-ink">目标知识库</label>
+              <label
+                htmlFor="import-knowledge-base"
+                className="text-xs font-medium text-ink"
+              >
+                目标知识库
+              </label>
               {canCreate ? (
-                <button
+                <UiButton
+                  variant="ghost"
+                  size="sm"
                   type="button"
                   onClick={() => setShowCreateBase((previous) => !previous)}
-                  className="text-[11px] text-brand transition-colors hover:text-brand-hover focus-visible:ring-2 focus-visible:ring-brand focus-visible:outline-none"
+                  className=""
                 >
                   {showCreateBase ? "收起" : "＋ 新建知识库"}
-                </button>
+                </UiButton>
               ) : null}
             </div>
-            <select
+            <UiSelect
               id="import-knowledge-base"
               value={knowledgeBaseId}
               onChange={(event) => setKnowledgeBaseId(event.target.value)}
               disabled={creating}
-              className="mt-1.5 h-9 w-full rounded-md border border-line bg-surface px-2 text-xs text-ink"
+              className="mt-1.5 h-9 w-full border px-2"
             >
               {baseOptions}
-            </select>
+            </UiSelect>
             {showCreateBase ? createBaseRow : null}
             <div className="mt-2">
               {categoryCreatorOpen ? (
-                <input
+                <Input
                   aria-label="新文档分类名称"
                   autoFocus
                   value={categoryDraft}
                   onChange={(event) => setCategoryDraft(event.target.value)}
-                  onKeyDown={(event) => { if (event.key === "Enter") confirmCategoryDraft() }}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter") confirmCategoryDraft()
+                  }}
                   onBlur={confirmCategoryDraft}
-                  onKeyDownCapture={(event) => { if (event.key === "Escape") { event.preventDefault(); setCategoryCreatorOpen(false); setCategoryDraft("") } }}
+                  onKeyDownCapture={(event) => {
+                    if (event.key === "Escape") {
+                      event.preventDefault()
+                      setCategoryCreatorOpen(false)
+                      setCategoryDraft("")
+                    }
+                  }}
                   placeholder="输入新分类名，回车确认"
-                  className="h-8 w-full rounded-md border border-line bg-surface px-2 text-xs text-ink outline-none placeholder:text-faint focus:border-brand"
+                  className="h-8 w-full border px-2"
                 />
               ) : (
-                <select
+                <UiSelect
                   aria-label="文档分类"
                   value={pendingCategoryName ? "__pending__" : documentFolderId}
                   onChange={(event) => {
@@ -1203,13 +1444,17 @@ export function ImportDialog({
                     setPendingCategoryName("")
                     setDocumentFolderId(value === "__pending__" ? "" : value)
                   }}
-                  disabled={!knowledgeBaseId || documentFoldersStatus === "loading"}
-                  className="h-8 w-full rounded-md border border-line bg-surface px-2 text-xs text-ink disabled:opacity-50"
+                  disabled={
+                    !knowledgeBaseId || documentFoldersStatus === "loading"
+                  }
+                  className="h-8 w-full border px-2 disabled:opacity-50"
                 >
                   <option value="">
                     {!knowledgeBaseId
                       ? "请先选择知识库"
-                      : documentFoldersStatus === "loading" ? "正在加载分类…" : "不归类"}
+                      : documentFoldersStatus === "loading"
+                        ? "正在加载分类…"
+                        : "不归类"}
                   </option>
                   {documentFolders.map((folder) => (
                     <option key={folder.id} value={folder.id}>
@@ -1217,45 +1462,35 @@ export function ImportDialog({
                     </option>
                   ))}
                   {pendingCategoryName ? (
-                    <option value="__pending__">新分类：{pendingCategoryName}</option>
+                    <option value="__pending__">
+                      新分类：{pendingCategoryName}
+                    </option>
                   ) : null}
                   <option value="__new__">＋ 新建分类</option>
-                </select>
+                </UiSelect>
               )}
             </div>
           </>
         )}
       </div>
 
-      <div className="flex-none border-b border-line px-5 pt-1 max-md:px-4" role="tablist" aria-label="导入方式">
-        <div className="flex items-center gap-4">
-          {(
-            [
-              { id: "local", label: "本地文档" },
-              { id: "url", label: "在线网页 (URL)" },
-            ] as const
-          ).map((item) => (
-            <button
-              key={item.id}
-              type="button"
-              role="tab"
-              aria-selected={tab === item.id}
-              onClick={() => setTab(item.id)}
-              className={cn(
-                "relative h-8.5 cursor-pointer bg-transparent px-1 text-xs transition-colors hover:text-ink",
-                tab === item.id
-                  ? "font-semibold text-ink after:absolute after:inset-x-0 after:-bottom-px after:h-0.5 after:bg-primary after:content-['']"
-                  : "text-muted",
-              )}
-            >
-              {item.label}
-            </button>
-          ))}
-        </div>
+      <div className="px-5 py-3">
+        <SegmentedControl
+          label="导入方式"
+          value={tab}
+          onValueChange={(value) => setTab(value as "local" | "url")}
+          options={[
+            { value: "local", label: "本地文档" },
+            { value: "url", label: "在线网页 (URL)" },
+          ]}
+        />
       </div>
 
       {tab === "local" ? (
-        <section className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto px-5 py-4 max-md:px-4" role="tabpanel">
+        <section
+          className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto px-5 py-4 max-md:px-4"
+          role="tabpanel"
+        >
           <ImportDropzone
             filesDisabled={!knowledgeBaseId}
             onPick={handlePick}
@@ -1270,74 +1505,77 @@ export function ImportDialog({
           />
         </section>
       ) : (
-        <section className="flex min-h-0 flex-1 flex-col overflow-y-auto px-5 py-5 max-md:px-4" role="tabpanel">
-          <div className="mb-4 inline-flex items-center rounded-[14px] bg-surface-subtle p-1">
-            {(
-              [
-                { id: "single", label: "单个网页" },
-                { id: "sitemap", label: "网站抓取 (Sitemap)" },
-              ] as const
-            ).map((item) => (
-              <button
-                key={item.id}
-                type="button"
-                onClick={() => setUrlMode(item.id)}
-                className={cn(
-                  "relative flex h-8 cursor-pointer items-center justify-center rounded-[10px] px-4 text-[13px] font-medium transition-[color,background-color] duration-150 ease-out",
-                  urlMode === item.id
-                    ? "bg-surface text-ink"
-                    : "text-muted hover:bg-surface/50 hover:text-ink",
-                )}
-              >
-                {item.label}
-              </button>
-            ))}
-          </div>
-
+        <section
+          className="flex min-h-0 flex-1 flex-col overflow-y-auto px-5 py-5 max-md:px-4"
+          role="tabpanel"
+        >
+          <SegmentedControl
+            className="mb-4"
+            label="网页导入模式"
+            value={urlMode}
+            onValueChange={(value) => setUrlMode(value as "single" | "sitemap")}
+            options={[
+              { value: "single", label: "单个网页" },
+              { value: "sitemap", label: "网站抓取 (Sitemap)" },
+            ]}
+          />
           <div className="flex flex-col gap-4">
-            <div className="flex flex-col gap-1.5">
-              <label htmlFor="import-url-input" className="text-[13px] font-medium text-ink">
+            <FormField className="flex flex-col gap-1.5">
+              <FieldLabel
+                htmlFor="import-url-input"
+                className="text-[13px] font-medium text-ink"
+              >
                 {urlMode === "single" ? "网页链接" : "Sitemap 链接"}
-              </label>
-              <input
+              </FieldLabel>
+              <Input
                 id="import-url-input"
                 type="url"
                 value={url}
                 onChange={(event) => setUrl(event.target.value)}
-                placeholder={urlMode === "single" ? "https://example.com/article" : "https://example.com/sitemap.xml"}
-                className="h-10 w-full rounded-[10px] border border-line bg-surface-subtle px-3.5 text-[14px] text-ink outline-none transition-colors placeholder:text-faint focus:border-brand focus:bg-surface"
+                placeholder={
+                  urlMode === "single"
+                    ? "https://example.com/article"
+                    : "https://example.com/sitemap.xml"
+                }
+                className="h-10 w-full border px-3.5"
               />
-              <p className="text-[11px] text-muted/70">
-                不支持需要登录或依赖 JS 渲染的页面（SPA 可能抓不到正文）；Sitemap 最多抓取 200 页
+              <p className="text-[11px] text-muted-foreground/70">
+                不支持需要登录或依赖 JS 渲染的页面（SPA
+                可能抓不到正文）；Sitemap 最多抓取 200 页
               </p>
-            </div>
+            </FormField>
 
             {urlMode === "sitemap" ? (
-              <div className="flex flex-col gap-1.5">
-                <label htmlFor="import-url-max-pages" className="text-[13px] font-medium text-ink">
-                  最大抓取页数
-                </label>
-                <input
+              <FormField className="flex flex-col gap-1.5">
+                <NumberField
                   id="import-url-max-pages"
-                  type="number"
+                  label="最大抓取页数"
                   min={1}
                   max={200}
                   value={maxPages}
-                  onChange={(event) => setMaxPages(Number(event.target.value))}
-                  className="h-10 w-full rounded-[10px] border border-line bg-surface-subtle px-3.5 text-[14px] text-ink outline-none transition-colors focus:border-brand focus:bg-surface"
+                  onValueChange={setMaxPages}
+                  suffix=" 页"
+                  locale="zh-CN"
+                  limitHint={false}
                 />
-              </div>
+              </FormField>
             ) : null}
 
-            <button
+            <UiButton
+              variant="default"
+              size="sm"
               type="button"
               disabled={submitting || !knowledgeBaseId}
               title={!knowledgeBaseId ? "请先选择知识库" : undefined}
               onClick={() => void handleUrlImport()}
-              className="mt-2 inline-flex h-10 w-full cursor-pointer items-center justify-center gap-2 rounded-[10px] bg-primary px-4 text-[14px] font-medium text-on-primary transition-[color,background-color,border-color,transform,translate,scale] duration-150 ease-out hover:bg-primary-hover active:scale-[0.97] disabled:cursor-not-allowed disabled:opacity-50 disabled:active:scale-100"
+              className="mt-2 inline-flex h-10 w-full items-center justify-center gap-2 px-4 active:scale-[0.97] disabled:opacity-50 disabled:active:scale-100"
             >
-              {submitting ? "导入中…" : urlMode === "single" ? "导入该网页" : "批量导入"}
-            </button>
+              {submitting
+                ? "导入中…"
+                : urlMode === "single"
+                  ? "导入该网页"
+                  : "批量导入"}
+            </UiButton>
           </div>
         </section>
       )}
@@ -1350,9 +1588,14 @@ export function ImportDialog({
               if (waveItems.length === 0) return null
               return (
                 <li key={wave.id}>
-                  <p className="mb-1 truncate text-[11px] font-medium text-muted" title={wave.label}>
+                  <p
+                    className="mb-1 truncate text-[11px] font-medium text-muted-foreground"
+                    title={wave.label}
+                  >
                     {wave.label}
-                    <span className="ml-1.5 text-faint">{waveItems.length} 项</span>
+                    <span className="ml-1.5 text-faint">
+                      {waveItems.length} 项
+                    </span>
                   </p>
                   {/* grid-cols-1 pins the single track to minmax(0,1fr): an
                       implicit auto track sizes to the widest max-content (a
@@ -1378,19 +1621,37 @@ export function ImportDialog({
                       // the server's allowed operations include a resume
                       // command (configure/fix-input-then-retry). Auto-retry
                       // rows (wait_for_auto_retry) wait instead.
-                      const canResume = Boolean(item.docId) && item.status === "failed" && canCreate &&
-                        (item.progress?.outcome?.allowedOperations ?? []).some((operation) =>
-                          operation.endsWith("_then_retry"),
+                      const canResume =
+                        Boolean(item.docId) &&
+                        item.status === "failed" &&
+                        canCreate &&
+                        (item.progress?.outcome?.allowedOperations ?? []).some(
+                          (operation) => operation.endsWith("_then_retry"),
                         )
                       // UT-26: structured end-state details — reasons and
                       // allowed operations come from the backend's own fields.
+                      // Ticket 26: failed rows report evidence-backed reasons
+                      // keyed off the audit reason codes, grouped into plain
+                      // categories (merged pages; a service fault never asks
+                      // to replace the file) plus the password/re-export
+                      // guidance; raw codes stay in technicalDetail (tooltip).
                       const outcome = item.progress?.outcome ?? null
-                      const outcomeReasons = outcome?.state === "pending_review"
-                        ? describeActivationReasons(outcome.blockReasons)
-                        : []
-                      const outcomeOperations = outcome?.state === "capability_missing"
-                        ? describeAllowedOperations(outcome.allowedOperations)
-                        : []
+                      const failureView =
+                        outcome?.state === "failed" && outcome.reasonCode
+                          ? describeFailure(outcome as FailureRecordLike)
+                          : null
+                      const outcomeReasons =
+                        outcome?.state === "pending_review"
+                          ? describeActivationReasons(outcome.blockReasons)
+                          : failureView
+                            ? failureView.reasons
+                            : []
+                      const outcomeTechnicalDetail =
+                        failureView?.technicalDetail ?? []
+                      const outcomeOperations =
+                        outcome?.state === "capability_missing"
+                          ? describeAllowedOperations(outcome.allowedOperations)
+                          : []
                       return (
                         <li
                           key={item.id}
@@ -1399,7 +1660,10 @@ export function ImportDialog({
                           <div className="flex items-center justify-between gap-2">
                             <div className="min-w-0 flex-1">
                               <div className="flex items-center gap-1.5">
-                                <span className="truncate font-medium text-ink" title={item.filePath}>
+                                <span
+                                  className="truncate font-medium text-ink"
+                                  title={item.filePath}
+                                >
                                   {item.fileName}
                                 </span>
                                 {item.precheckHit ? (
@@ -1409,16 +1673,32 @@ export function ImportDialog({
                                 ) : null}
                               </div>
                               {errorView ? (
-                                <div className={cn("truncate text-[11px]", errorView.kind === "generic" ? "text-danger" : "text-warning")}>
+                                <div
+                                  className={cn(
+                                    "truncate text-[11px]",
+                                    errorView.kind === "generic"
+                                      ? "text-danger"
+                                      : "text-warning",
+                                  )}
+                                >
                                   {errorView.text}
                                 </div>
                               ) : item.size > 0 ? (
-                                <div className="text-[11px] text-muted/70">{formatBytes(item.size)}</div>
+                                <div className="text-[11px] text-muted-foreground/70">
+                                  {formatBytes(item.size)}
+                                </div>
                               ) : null}
                               {outcomeReasons.length > 0 ? (
                                 <div
                                   className="truncate text-[11px] text-warning"
-                                  title={outcomeReasons.join("；")}
+                                  title={[
+                                    ...outcomeReasons,
+                                    ...(outcomeTechnicalDetail.length > 0
+                                      ? [
+                                          `技术明细：${outcomeTechnicalDetail.join("；")}`,
+                                        ]
+                                      : []),
+                                  ].join("；")}
                                 >
                                   {outcomeReasons.join("；")}
                                 </div>
@@ -1431,115 +1711,160 @@ export function ImportDialog({
                                   {outcomeOperations.join("；")}
                                 </div>
                               ) : null}
+                              {outcome?.userGuidance ? (
+                                <div className="break-words text-[11px] text-warning">
+                                  {PDF_PROTECTION_GUIDANCE}
+                                </div>
+                              ) : null}
                               {outcome?.oldVersionUsable ? (
-                                <div className="truncate text-[11px] text-muted/70">现有版本仍可正常使用</div>
+                                <div className="truncate text-[11px] text-muted-foreground/70">
+                                  现有版本仍可正常使用
+                                </div>
                               ) : null}
                             </div>
                             <div className="flex flex-none items-center gap-1">
                               {item.precheckHit && item.status === "queued" ? (
                                 <>
-                                  <button
+                                  <UiButton
+                                    variant="ghost"
+                                    size="sm"
                                     type="button"
                                     onClick={() => {
-                                      updateItem(item.id, { precheckHit: false })
+                                      updateItem(item.id, {
+                                        precheckHit: false,
+                                      })
                                       ensureWorkers()
                                     }}
-                                    className="rounded-md px-1.5 py-0.5 text-[10px] font-medium text-brand transition-colors hover:bg-brand-subtle"
+                                    className="px-1.5 py-0.5"
                                   >
                                     仍要导入
-                                  </button>
-                                  <button
+                                  </UiButton>
+                                  <UiButton
+                                    variant="ghost"
+                                    size="sm"
                                     type="button"
-                                    onClick={() => updateItem(item.id, { status: "cancelled" })}
-                                    className="rounded-md px-1.5 py-0.5 text-[10px] text-muted transition-colors hover:bg-surface hover:text-ink"
+                                    onClick={() =>
+                                      updateItem(item.id, {
+                                        status: "cancelled",
+                                      })
+                                    }
+                                    className="px-1.5 py-0.5"
                                   >
                                     跳过
-                                  </button>
+                                  </UiButton>
                                 </>
                               ) : null}
                               {item.status === "queued" && !item.precheckHit ? (
-                                <button
+                                <UiButton
+                                  variant="ghost"
+                                  size="sm"
                                   type="button"
                                   onClick={() => removeItem(item.id)}
                                   aria-label={`移除 ${item.fileName}`}
-                                  className="rounded-md px-1.5 py-0.5 text-[10px] text-muted transition-colors hover:bg-surface hover:text-ink"
+                                  className="px-1.5 py-0.5"
                                 >
                                   移除
-                                </button>
+                                </UiButton>
                               ) : null}
                               {canCancel ? (
-                                <button
+                                <UiButton
+                                  variant="ghost"
+                                  size="sm"
                                   type="button"
                                   onClick={() => void cancelItem(item)}
-                                  className="rounded-md px-1.5 py-0.5 text-[10px] text-muted transition-colors hover:bg-surface hover:text-ink"
+                                  className="px-1.5 py-0.5"
                                 >
                                   取消
-                                </button>
+                                </UiButton>
                               ) : null}
                               {canRetry ? (
-                                <button
+                                <UiButton
+                                  variant="ghost"
+                                  size="sm"
                                   type="button"
                                   onClick={() => retryItem(item)}
-                                  className="rounded-md px-1.5 py-0.5 text-[10px] font-medium text-brand transition-colors hover:bg-brand-subtle"
+                                  className="px-1.5 py-0.5"
                                 >
                                   重试
-                                </button>
+                                </UiButton>
                               ) : null}
                               {canResume ? (
-                                <button
+                                <UiButton
+                                  variant="ghost"
+                                  size="sm"
                                   type="button"
                                   onClick={() => resumeItem(item)}
                                   title="用服务端保留的原件重新处理，同一文档与任务"
-                                  className="rounded-md px-1.5 py-0.5 text-[10px] font-medium text-brand transition-colors hover:bg-brand-subtle"
+                                  className="px-1.5 py-0.5"
                                 >
                                   恢复
-                                </button>
+                                </UiButton>
                               ) : null}
                               {item.status === "completed" && item.docId ? (
                                 confirmingDeleteId === item.id ? (
                                   <>
-                                    <button
+                                    <UiButton
+                                      variant="destructive"
+                                      size="sm"
                                       type="button"
                                       onClick={() => void deleteItem(item)}
-                                      className="rounded-md bg-danger-subtle px-1.5 py-0.5 text-[10px] font-medium text-danger"
+                                      className="px-1.5 py-0.5"
                                     >
                                       不可恢复，确认删除
-                                    </button>
-                                    <button
+                                    </UiButton>
+                                    <UiButton
+                                      variant="ghost"
+                                      size="sm"
                                       type="button"
-                                      onClick={() => setConfirmingDeleteId(null)}
-                                      className="rounded-md px-1.5 py-0.5 text-[10px] text-muted transition-colors hover:bg-surface hover:text-ink"
+                                      onClick={() =>
+                                        setConfirmingDeleteId(null)
+                                      }
+                                      className="px-1.5 py-0.5"
                                     >
                                       取消
-                                    </button>
+                                    </UiButton>
                                   </>
                                 ) : (
                                   <>
-                                    <button
+                                    <UiButton
+                                      variant="ghost"
+                                      size="sm"
                                       type="button"
-                                      onClick={() => openDocument({ documentId: item.docId as string })}
-                                      className="rounded-md px-1.5 py-0.5 text-[10px] text-muted transition-colors hover:bg-surface hover:text-ink"
+                                      onClick={() =>
+                                        openDocument({
+                                          documentId: item.docId as string,
+                                        })
+                                      }
+                                      className="px-1.5 py-0.5"
                                     >
                                       查看
-                                    </button>
-                                    <button
+                                    </UiButton>
+                                    <UiButton
+                                      variant="destructive"
+                                      size="sm"
                                       type="button"
-                                      onClick={() => setConfirmingDeleteId(item.id)}
-                                      className="rounded-md px-1.5 py-0.5 text-[10px] text-muted transition-colors hover:bg-surface hover:text-danger"
+                                      onClick={() =>
+                                        setConfirmingDeleteId(item.id)
+                                      }
+                                      className="px-1.5 py-0.5"
                                     >
                                       删除
-                                    </button>
+                                    </UiButton>
                                   </>
                                 )
                               ) : null}
                               {errorView?.kind === "conflict" ? (
-                                <button
+                                <UiButton
+                                  variant="ghost"
+                                  size="sm"
                                   type="button"
-                                  onClick={() => void viewConflictDocument(item)}
-                                  className="rounded-md px-1.5 py-0.5 text-[10px] text-muted transition-colors hover:bg-surface hover:text-ink"
+                                  onClick={() =>
+                                    void viewConflictDocument(item)
+                                  }
+                                  className="px-1.5 py-0.5"
                                 >
                                   查看文档
-                                </button>
+                                </UiButton>
                               ) : null}
                               <span
                                 className={cn(
@@ -1553,7 +1878,12 @@ export function ImportDialog({
                           </div>
                           <ImportProgress
                             fileName={item.fileName}
-                            progress={item.progress ?? { ...initialImportProgress(item.status), error: item.error }}
+                            progress={
+                              item.progress ?? {
+                                ...initialImportProgress(item.status),
+                                error: item.error,
+                              }
+                            }
                             checkedAt={item.checkedAt}
                             syncError={item.syncError}
                             isLocal={Boolean(item.file)}
@@ -1570,14 +1900,18 @@ export function ImportDialog({
               )
             })}
           </ol>
-          <div className="mt-2 flex items-center justify-between border-t border-line pt-2 text-[11px] text-muted" aria-live="polite">
+          <div
+            className="mt-2 flex items-center justify-between border-t border-line pt-2 text-[11px] text-muted-foreground"
+            aria-live="polite"
+          >
             <span>
-              {completedCount} 成功 · {failedCount} 失败 · {cancelledCount} 已取消
+              {completedCount} 成功 · {failedCount} 失败 · {cancelledCount}{" "}
+              已取消
             </span>
             <span>{queue.length} 项</span>
           </div>
         </div>
       ) : null}
-    </dialog>
+    </PanelDialog>
   )
 }

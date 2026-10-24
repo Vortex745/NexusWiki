@@ -24,7 +24,7 @@ test("dead-lettering the same exhausted task is idempotent", () => {
     let task = repo.claimNext()!
     for (let failure = 0; failure < 3; failure += 1) {
       assert.equal(
-        repo.recordFailure(task.id, now.toISOString(), task.claimedAt),
+        repo.recordFailure(task.id, now.toISOString(), task.executionId),
         true
       )
       task = repo.claimNext()!

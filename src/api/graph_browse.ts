@@ -1,5 +1,6 @@
 import { Router, type Request, type Response } from "express"
 import type { Client } from "@elastic/elasticsearch"
+import { resolveChunkIndexName } from "../config"
 import type { Driver } from "neo4j-driver"
 import { int as neo4jInt } from "neo4j-driver"
 import type { AccessContext } from "../access/context"
@@ -54,7 +55,6 @@ const PER_ENTITY_RELATION_SLICE = 25
 const MAX_ENTITY_NAME_CHARS = 200
 const MAX_QUERY_CHARS = 200
 const MAX_PROVENANCE_PAIRS_PER_PAGE = 100
-const CHUNK_INDEX_NAME = "kefu-rag-chunks"
 
 function accessContext(res: Response): AccessContext {
   return (res.locals.accessContext as AccessContext | undefined) ?? singleTenantAccessContext()
@@ -121,9 +121,11 @@ export function createGraphBrowseRouter(options: {
   neo4jDriver?: Driver
   /** Chunk hydration for provenance; absent → provenance reports unavailable. */
   es?: Client
+  indexName?: string
   activeVersionRepo?: ActiveVersionRepository
 }): Router {
   const { knowledgeBaseService, neo4jDriver, es, activeVersionRepo } = options
+  const indexName = resolveChunkIndexName(options.indexName)
   const router = Router()
 
   const requireKb = (req: Request, res: Response): AccessContext | null => {
@@ -169,7 +171,7 @@ export function createGraphBrowseRouter(options: {
     const activeTerms =
       activeDocIds.length > 0 ? [{ terms: { documentId: activeDocIds } }] : []
     const result = await es.search({
-      index: CHUNK_INDEX_NAME,
+      index: indexName,
       size: pairs.length,
       query: {
         bool: {

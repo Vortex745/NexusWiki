@@ -85,7 +85,14 @@ function buildClients(options: {
   }
 
   const session = {
+    async executeWrite<T>(work: (tx: { run: (query: string, params?: Record<string, unknown>) => Promise<unknown> }) => Promise<T>) {
+      return work(this)
+    },
     run: async (query: string, params: Record<string, unknown> = {}) => {
+      if (query.includes("RETURN r.provenance AS provenance")) {
+        const relation = relations.find((item) => item.rid === params.rid)
+        return { records: relation ? [{ get: () => [...relation.provenance] }] : [] }
+      }
       if (query.includes("RETURN elementId(r) AS rid")) {
         const needle = String(params.needle ?? "")
         const matched = relations.filter((relation) =>

@@ -105,7 +105,7 @@ test("Ticket 23 #1d: probe verifies block types include heading and paragraph", 
 test("Ticket 23 #1e: probe exercises production selectParser routing for image", async () => {
   const result = await mineruProbe(makeProbeContext(makeBasicFixture()))
   const outputs = result.outputs ?? {}
-  assert.equal(outputs.parserRoute, "mineru")
+  assert.equal(outputs.parserRoute, "ocr-api")
   assert.match(outputs.parserRouteReason as string, /image|OCR/i)
 })
 

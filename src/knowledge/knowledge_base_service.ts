@@ -176,6 +176,7 @@ export class KnowledgeBaseServiceImpl implements KnowledgeBaseService {
       description: DEFAULT_KNOWLEDGE_BASE_DESCRIPTION,
       status: "active",
       embeddingProfile: this.embeddingProfile,
+      folderId: null,
       createdAt: timestamp,
       updatedAt: timestamp,
     })
@@ -201,6 +202,7 @@ export class KnowledgeBaseServiceImpl implements KnowledgeBaseService {
       description: normalized.description,
       status: "active",
       embeddingProfile: this.embeddingProfile,
+      folderId: null,
       createdAt: timestamp,
       updatedAt: timestamp,
     })

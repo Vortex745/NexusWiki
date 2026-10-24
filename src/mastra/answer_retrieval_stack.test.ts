@@ -490,3 +490,22 @@ test("ARCH-01C #4: a session without attachments keeps the established knowledge
     "an empty session adds nothing rather than failing the run"
   )
 })
+
+test("configured physical index owns both ordinary and rerank-free assistant retrieval", async () => {
+  const indices: string[] = []
+  const stack = buildStack({
+    config: {...config, esChunkIndexName: "selected-v2"},
+    elasticsearch: { search: async ({index}: {index: string}) => {
+      indices.push(index)
+      return { hits: { hits: [{_score: 1, _source: chunk("selected", index === "selected-v2" ? "new content" : "old content")} ] } }
+    }} as unknown as ElasticsearchClient,
+    embeddingClient: {embeddings: {create: async () => ({data: [{embedding: [1, 0, 0]}]})}} as unknown as OpenAI,
+  })
+  for (const assistant of [ASSISTANT_WITH_RERANK, ASSISTANT_RERANK_FREE]) {
+    const output = await stack.createSearcher(assistant).search({text: "query"})
+    assert.ok(output.results.length > 0)
+    assert.equal(output.results[0].chunk.content, "new content")
+  }
+  assert.ok(indices.length >= 4)
+  assert.ok(indices.every(index => index === "selected-v2"))
+})

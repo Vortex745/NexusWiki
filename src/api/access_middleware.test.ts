@@ -29,6 +29,9 @@ async function withServer(
     handler(req, res)
   })
   const server = app.listen(0)
+  // address() is only valid once the listening event fired; reading it earlier
+  // raced under the full suite and handed fetch port 0 ("bad port").
+  await new Promise<void>((resolve) => server.once("listening", resolve))
   const port = (server.address() as { port: number }).port
   return {
     port,

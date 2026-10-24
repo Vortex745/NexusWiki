@@ -1,5 +1,7 @@
-import { MessageSquareWarning, X } from "lucide"
-import { useCallback, useEffect, useRef, useState } from "react"
+import { Alert, AlertDescription } from "@/components/primitives/alert"
+import { Button as UiButton } from "@/components/primitives/button"
+import { MessageSquareWarning } from "../ui/icons"
+import { useCallback, useState } from "react"
 
 import {
   FEEDBACK_REASON_CODES,
@@ -10,8 +12,17 @@ import {
   type FeedbackStatus,
 } from "../../lib/api"
 import { cn } from "../../lib/cn"
+import { copyText } from "../../lib/clipboard"
 import { useAppShell } from "../../runtime/AppShellContext"
-import { Icon } from "../ui/Icon"
+import { Dialog } from "../ui/Dialog"
+import {
+  Button,
+  EmptyState,
+  Field,
+  Select,
+  StatusBadge,
+  TextInput,
+} from "../ui/Controls"
 
 const STATUS_LABELS: Record<FeedbackStatus, string> = {
   open: "待审阅",
@@ -30,8 +41,13 @@ const REASON_LABELS = new Map(FEEDBACK_REASON_CODES)
  * 票 29（EVAL-02B）：答案反馈的审阅面。列表与详情都只读服务端（租户作用域）；
  * 状态流转是唯一的写操作。读者账号没有 review/admin 作用域，服务端 403。
  */
-export function FeedbackDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
-  const dialogRef = useRef<HTMLDialogElement>(null)
+export function FeedbackDialog({
+  open,
+  onClose,
+}: {
+  open: boolean
+  onClose: () => void
+}) {
   const { showToast } = useAppShell()
   const [records, setRecords] = useState<FeedbackPayload[]>([])
   const [loading, setLoading] = useState(false)
@@ -41,12 +57,8 @@ export function FeedbackDialog({ open, onClose }: { open: boolean; onClose: () =
   const [runFilter, setRunFilter] = useState("")
   const [busyId, setBusyId] = useState<string | null>(null)
 
-  useEffect(() => {
-    const dialog = dialogRef.current
-    if (!dialog) return
-    if (open && !dialog.open) dialog.showModal()
-    else if (!open && dialog.open) dialog.close()
-  }, [open])
+  const filtersActive =
+    statusFilter !== "" || ratingFilter !== "" || runFilter.trim() !== ""
 
   const refresh = useCallback(async () => {
     setLoading(true)
@@ -57,19 +69,16 @@ export function FeedbackDialog({ open, onClose }: { open: boolean; onClose: () =
           ...(statusFilter ? { status: statusFilter } : {}),
           ...(ratingFilter ? { rating: ratingFilter } : {}),
           ...(runFilter.trim() ? { runId: runFilter.trim() } : {}),
-        })
+        }),
       )
     } catch (loadError) {
-      setError(loadError instanceof Error ? loadError.message : String(loadError))
+      setError(
+        loadError instanceof Error ? loadError.message : String(loadError),
+      )
     } finally {
       setLoading(false)
     }
   }, [statusFilter, ratingFilter, runFilter])
-
-  useEffect(() => {
-    if (!open) return
-    void refresh()
-  }, [open, refresh])
 
   const review = async (record: FeedbackPayload, status: FeedbackStatus) => {
     if (busyId) return
@@ -77,171 +86,212 @@ export function FeedbackDialog({ open, onClose }: { open: boolean; onClose: () =
     try {
       const updated = await updateFeedbackStatus(record.id, status)
       setRecords((current) =>
-        current.map((item) => (item.id === updated.id ? updated : item))
+        current.map((item) => (item.id === updated.id ? updated : item)),
       )
       showToast(`已标记为${STATUS_LABELS[status]}`)
     } catch (reviewError) {
-      showToast(reviewError instanceof Error ? reviewError.message : "反馈状态更新失败")
+      showToast(
+        reviewError instanceof Error ? reviewError.message : "反馈状态更新失败",
+      )
     } finally {
       setBusyId(null)
     }
   }
 
-  return (
-    <dialog
-      ref={dialogRef}
-      onClose={onClose}
-      onClick={(event) => {
-        if (event.target === event.currentTarget) onClose()
-      }}
-      aria-labelledby="feedback-title"
-      className="m-auto h-[min(680px,calc(100dvh-48px))] w-[min(720px,calc(100vw-32px))] grid-rows-[auto_minmax(0,1fr)] overflow-hidden rounded-xl border border-line bg-surface text-ink shadow-dialog backdrop:bg-black/20 open:grid max-md:m-0 max-md:h-dvh max-md:w-screen max-md:rounded-none max-md:border-0"
-    >
-      <div className="flex h-13 flex-none items-center justify-between border-b border-line px-5 max-md:px-4">
-        <div className="flex items-center gap-2">
-          <Icon icon={MessageSquareWarning} className="size-4 text-muted" />
-          <h2 id="feedback-title" className="text-sm font-semibold text-ink">
-            答案反馈审阅
-          </h2>
-        </div>
-        <button
-          type="button"
-          onClick={onClose}
-          aria-label="关闭反馈审阅"
-          title="关闭"
-          className="grid size-7 flex-none cursor-pointer place-items-center rounded-md text-muted/70 transition-colors hover:bg-surface-subtle hover:text-ink focus-visible:outline-2 focus-visible:outline-brand"
-        >
-          <Icon icon={X} className="size-3.5" />
-        </button>
-      </div>
+  const copyProvenance = async (record: FeedbackPayload) => {
+    const text = `run ${record.runId} · message ${record.messageId} · session ${record.sessionId} · subject ${record.subjectId}`
+    try {
+      await copyText(text)
+      showToast("已复制完整溯源 id")
+    } catch {
+      showToast("复制失败，请检查浏览器权限")
+    }
+  }
 
-      <section className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto px-5 py-4 max-md:px-4">
-        <div className="flex flex-wrap items-end gap-2">
-          <label className="flex flex-col gap-1 text-[11px] text-muted/70">
-            <span>状态</span>
-            <select
+  return (
+    <Dialog
+      open={open}
+      onClose={onClose}
+      onOpen={() => void refresh()}
+      title="答案反馈审阅"
+      titleId="feedback-title"
+      icon={MessageSquareWarning}
+      tier="work"
+      toolbar={
+        <form
+          className="flex flex-wrap items-end gap-2"
+          onSubmit={(event) => {
+            event.preventDefault()
+            void refresh()
+          }}
+        >
+          <Field label="状态">
+            <Select
               value={statusFilter}
-              onChange={(event) => setStatusFilter(event.target.value as "" | FeedbackStatus)}
-              className="cursor-pointer rounded-md border border-line bg-surface px-2 py-1 text-[11px] text-ink outline-none focus:border-brand focus-visible:outline-2 focus-visible:outline-brand"
+              onChange={(event) =>
+                setStatusFilter(event.target.value as "" | FeedbackStatus)
+              }
             >
               <option value="">全部</option>
               <option value="open">待审阅</option>
               <option value="reviewed">已审阅</option>
               <option value="dismissed">已忽略</option>
-            </select>
-          </label>
-          <label className="flex flex-col gap-1 text-[11px] text-muted/70">
-            <span>评分</span>
-            <select
+            </Select>
+          </Field>
+          <Field label="评分">
+            <Select
               value={ratingFilter}
-              onChange={(event) => setRatingFilter(event.target.value as "" | FeedbackRating)}
-              className="cursor-pointer rounded-md border border-line bg-surface px-2 py-1 text-[11px] text-ink outline-none focus:border-brand focus-visible:outline-2 focus-visible:outline-brand"
+              onChange={(event) =>
+                setRatingFilter(event.target.value as "" | FeedbackRating)
+              }
             >
               <option value="">全部</option>
               <option value="up">有帮助</option>
               <option value="down">需改进</option>
-            </select>
-          </label>
-          <label className="flex flex-1 flex-col gap-1 text-[11px] text-muted/70">
-            <span>运行 id（provenance）</span>
-            <input
-              value={runFilter}
-              onChange={(event) => setRunFilter(event.target.value)}
-              placeholder="run-…"
-              className="w-full rounded-md border border-line bg-surface px-2 py-1 font-mono text-[11px] text-ink outline-none focus:border-brand focus-visible:outline-2 focus-visible:outline-brand"
-            />
-          </label>
-          <button
-            type="button"
-            onClick={() => void refresh()}
+            </Select>
+          </Field>
+          <div className="min-w-40 flex-1">
+            <Field label="运行 id（provenance）">
+              <TextInput
+                value={runFilter}
+                onChange={(event) => setRunFilter(event.target.value)}
+                placeholder="run-…"
+                className=""
+              />
+            </Field>
+          </div>
+          <Button
+            type="submit"
+            tone="primary"
             disabled={loading}
-            className="h-7 cursor-pointer rounded-md border border-line bg-surface px-2.5 text-[11px] text-muted transition-colors hover:bg-surface-subtle hover:text-ink focus-visible:outline-2 focus-visible:outline-brand disabled:cursor-not-allowed disabled:opacity-50"
+            onClick={() => void refresh()}
           >
             {loading ? "读取中…" : "应用筛选"}
-          </button>
-        </div>
+          </Button>
+          {filtersActive ? (
+            <Button
+              onClick={() => {
+                setStatusFilter("")
+                setRatingFilter("")
+                setRunFilter("")
+              }}
+            >
+              清除筛选
+            </Button>
+          ) : null}
+        </form>
+      }
+    >
+      {error ? (
+        <Alert variant="destructive" role="alert" className="border px-3 py-2">
+          <AlertDescription>{error}</AlertDescription>
+        </Alert>
+      ) : null}
 
-        {error ? (
-          <p className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-[11px] text-red-700 dark:border-red-900 dark:bg-red-950/40 dark:text-red-400" role="alert">
-            {error}
-          </p>
-        ) : null}
-        {!loading && !error && records.length === 0 ? (
-          <p className="px-1 py-6 text-center text-xs text-muted/70">没有符合条件的反馈。</p>
-        ) : null}
+      {!loading && !error && records.length === 0 ? (
+        <EmptyState
+          icon={MessageSquareWarning}
+          message={
+            filtersActive
+              ? "没有符合当前筛选条件的反馈。"
+              : "还没有收到用户反馈。"
+          }
+          action={
+            filtersActive ? (
+              <Button
+                size="sm"
+                onClick={() => {
+                  setStatusFilter("")
+                  setRatingFilter("")
+                  setRunFilter("")
+                }}
+              >
+                清除筛选
+              </Button>
+            ) : undefined
+          }
+        />
+      ) : null}
 
+      {records.length > 0 ? (
         <ul className="flex flex-col gap-2">
           {records.map((record) => (
             <li
               key={record.id}
-              className="rounded-lg border border-line bg-surface-subtle/40 px-3 py-2.5"
+              className="rounded-[14px] border border-line bg-surface-subtle px-3 py-2.5"
             >
               <div className="flex flex-wrap items-center justify-between gap-2">
-                <span className="flex items-center gap-2 text-[11px]">
-                  <span
-                    className={cn(
-                      "rounded-full px-2 py-0.5 text-[10px] font-medium",
-                      record.rating === "up"
-                        ? "bg-green-100 text-green-700 dark:bg-green-950 dark:text-green-400"
-                        : "bg-red-100 text-red-600 dark:bg-red-950 dark:text-red-400",
-                    )}
+                <span className="flex flex-wrap items-center gap-2 text-[11px]">
+                  <StatusBadge
+                    tone={record.rating === "up" ? "success" : "danger"}
                   >
                     {RATING_LABELS[record.rating]}
-                  </span>
-                  <span className="rounded-full bg-surface-subtle px-2 py-0.5 text-[10px] text-muted">
-                    {STATUS_LABELS[record.status]}
-                  </span>
+                  </StatusBadge>
+                  <StatusBadge>{STATUS_LABELS[record.status]}</StatusBadge>
                   {record.reasonCode ? (
-                    <span className="text-muted/70">
-                      原因：{REASON_LABELS.get(record.reasonCode) ?? record.reasonCode}
+                    <span className="text-muted-foreground">
+                      原因：
+                      {REASON_LABELS.get(record.reasonCode) ??
+                        record.reasonCode}
                     </span>
                   ) : null}
                 </span>
+                {/* One high-contrast object per card. All three actions used to be
+                    pixel-identical neutral buttons, so nothing read as the action. */}
                 <span className="flex items-center gap-1.5">
-                  <button
-                    type="button"
+                  <Button
+                    size="sm"
+                    tone="primary"
                     disabled={busyId !== null || record.status === "reviewed"}
                     onClick={() => void review(record, "reviewed")}
-                    className="cursor-pointer rounded-md border border-line bg-surface px-2 py-0.5 text-[10px] text-muted transition-colors hover:bg-surface-subtle hover:text-ink focus-visible:outline-2 focus-visible:outline-brand disabled:cursor-not-allowed disabled:opacity-50"
                   >
                     标记已审阅
-                  </button>
-                  <button
-                    type="button"
+                  </Button>
+                  <Button
+                    size="sm"
                     disabled={busyId !== null || record.status === "dismissed"}
                     onClick={() => void review(record, "dismissed")}
-                    className="cursor-pointer rounded-md border border-line bg-surface px-2 py-0.5 text-[10px] text-muted transition-colors hover:bg-surface-subtle hover:text-ink focus-visible:outline-2 focus-visible:outline-brand disabled:cursor-not-allowed disabled:opacity-50"
                   >
                     忽略
-                  </button>
-                  <button
-                    type="button"
+                  </Button>
+                  <Button
+                    size="sm"
                     disabled={busyId !== null || record.status === "open"}
                     onClick={() => void review(record, "open")}
-                    className="cursor-pointer rounded-md border border-line bg-surface px-2 py-0.5 text-[10px] text-muted transition-colors hover:bg-surface-subtle hover:text-ink focus-visible:outline-2 focus-visible:outline-brand disabled:cursor-not-allowed disabled:opacity-50"
                   >
                     重新打开
-                  </button>
+                  </Button>
                 </span>
               </div>
               {record.comment ? (
-                <p className="mt-1.5 text-xs leading-relaxed text-ink">{record.comment}</p>
+                <p className="mt-1.5 text-xs leading-relaxed text-ink">
+                  {record.comment}
+                </p>
               ) : null}
-              <p
-                className="mt-1 truncate font-mono text-[10px] text-muted/50"
-                title={`run ${record.runId} · message ${record.messageId} · session ${record.sessionId}`}
-              >
-                运行 {record.runId} · 消息 {record.messageId} · 会话 {record.sessionId} · 主体{" "}
-                {record.subjectId}
-              </p>
-              <p className="mt-0.5 font-mono text-[10px] text-muted/40">
-                更新于 {record.updatedAt}
-                {record.evidenceIds.length > 0 ? ` · 证据 ${record.evidenceIds.length} 条` : ""}
-              </p>
+              <div className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 font-mono text-[10px] text-faint">
+                {/* Four full UUIDs on one truncated line were the loudest thing on
+                    every card. Short id here, full set on copy. */}
+                <span title={`run ${record.runId}`}>
+                  run {record.runId.slice(0, 8)}
+                </span>
+                <UiButton
+                  variant="ghost"
+                  size="sm"
+                  type="button"
+                  onClick={() => void copyProvenance(record)}
+                  className="px-1 py-0.5"
+                >
+                  复制完整溯源
+                </UiButton>
+                <span>更新于 {record.updatedAt}</span>
+                {record.evidenceIds.length > 0 ? (
+                  <span>证据 {record.evidenceIds.length} 条</span>
+                ) : null}
+              </div>
             </li>
           ))}
         </ul>
-      </section>
-    </dialog>
+      ) : null}
+    </Dialog>
   )
 }

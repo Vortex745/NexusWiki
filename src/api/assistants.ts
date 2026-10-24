@@ -7,6 +7,8 @@
  *   PATCH  /api/assistants/:id             admin — metadata edit and/or new immutable version
  *   POST   /api/assistants/:id/archive     admin
  *   POST   /api/assistants/:id/restore     admin
+ *   DELETE /api/assistants/:id            admin — physical delete (default assistant → 409)
+ *   PUT    /api/assistants/:id/sidebar-visible  admin — sidebar curation flag (default → 409)
  *   GET    /api/assistants/:id/versions    visible member (admin sees configs)
  *   GET    /api/assistants/:id/versions/:version  visible member (admin sees config)
  *
@@ -20,6 +22,7 @@ import { Router, type Request, type Response } from "express"
 import { singleTenantAccessContext, type AccessContext } from "../access/context"
 import {
   AssistantArchivedError,
+  AssistantDefaultError,
   AssistantNotFoundError,
   InvalidAssistantCommandError,
   type Assistant,
@@ -48,6 +51,7 @@ interface AssistantBody {
   name: string
   description: string
   status: Assistant["status"]
+  sidebarVisible: boolean
   currentVersion: number
   createdAt: string
   updatedAt: string
@@ -65,6 +69,7 @@ function toBody(assistant: Assistant, admin: boolean): AssistantBody {
     name: assistant.name,
     description: assistant.description,
     status: assistant.status,
+    sidebarVisible: assistant.sidebarVisible,
     currentVersion: assistant.currentVersion,
     createdAt: assistant.createdAt,
     updatedAt: assistant.updatedAt,
@@ -172,6 +177,49 @@ export function createAssistantsRouter(deps: { service: AssistantService }): Rou
       }
     })
   }
+
+  router.delete("/assistants/:id", (req: Request, res: Response) => {
+    const ctx = resolveContext(res)
+    if (!requireAdmin(ctx, res)) return
+    try {
+      deps.service.remove(String(req.params.id), ctx.tenantId)
+      res.status(204).end()
+    } catch (error) {
+      if (error instanceof AssistantDefaultError) {
+        res.status(409).json({ error: "默认助手不可删除" })
+        return
+      }
+      if (error instanceof AssistantNotFoundError) {
+        res.status(404).json({ error: "assistant not found" })
+        return
+      }
+      throw error
+    }
+  })
+
+  router.put("/assistants/:id/sidebar-visible", (req: Request, res: Response) => {
+    const ctx = resolveContext(res)
+    if (!requireAdmin(ctx, res)) return
+    const body = (req.body ?? {}) as { visible?: unknown }
+    if (typeof body.visible !== "boolean") {
+      res.status(400).json({ error: "visible must be a boolean" })
+      return
+    }
+    try {
+      const updated = deps.service.setSidebarVisible(String(req.params.id), ctx.tenantId, body.visible)
+      res.json({ assistant: toBody(updated, true) })
+    } catch (error) {
+      if (error instanceof AssistantDefaultError) {
+        res.status(409).json({ error: "默认助手始终显示，不可取消上架" })
+        return
+      }
+      if (error instanceof AssistantNotFoundError) {
+        res.status(404).json({ error: "assistant not found" })
+        return
+      }
+      throw error
+    }
+  })
 
   router.get("/assistants/:id/versions", (req: Request, res: Response) => {
     const ctx = resolveContext(res)

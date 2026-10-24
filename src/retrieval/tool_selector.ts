@@ -28,6 +28,8 @@ export type RetrievalToolName =
   | "semantic_lexical_hybrid"
   | "graph_navigation"
   | "pageindex_hierarchy"
+  | "wiki_search"
+  | "wiki_read_page"
 
 export interface RetrievalToolArgs {
   /** The search query (always the effective message text). */
@@ -225,6 +227,9 @@ export function toolToSearchOptions(selection: RetrievalToolSelection): SearchOp
       }
     case "pageindex_hierarchy":
       return { channels: ["pageIndex"] }
+    case "wiki_search":
+    case "wiki_read_page":
+      return { channels: ["bm25"] }
   }
 }
 

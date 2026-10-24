@@ -244,8 +244,14 @@ test("P7.4 provider error path: runner throws non-AbortError → exactly one ter
   const terminal = events.find((e) => e.type === "done")
   if (!terminal || terminal.type !== "done") throw new Error("expected done event")
   assert.equal(terminal.status, "failed", "provider_error maps to failed run status")
-  // The terminal reply is empty (no answer was produced).
-  assert.equal(terminal.result.reply, "", "provider error terminal must have empty reply")
+  // PL-01 AC04: a provider failure publishes its own defined terminal copy.
+  // The original guarantee survives — that copy carries no answer content and
+  // no references, so a failed run still cannot read as a produced answer.
+  assert.equal(
+    terminal.result.reply,
+    "服务暂时不可用，请稍后重试。",
+    "provider error terminal must publish its defined copy and nothing else"
+  )
   assert.equal(terminal.result.references.length, 0, "provider error terminal must have no references")
 })
 

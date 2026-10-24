@@ -87,6 +87,7 @@ function esStub(resolvable: Array<{ documentId: string; chunkId: string; title: 
     client: {
       search: async (params: Record<string, unknown>) => {
         searches.push(params)
+        assert.equal(params.index, "selected-v2", "provenance hydration must use selected physical index")
         const query = (params.query as {
           bool: { should: Array<{ bool: { must: Array<{ term: Record<string, string> }> } }> }
         })
@@ -154,6 +155,7 @@ async function buildApp(setupOptions: {
     "/api",
     createGraphBrowseRouter({
       knowledgeBaseService: service,
+      indexName: "selected-v2",
       ...(stub.driver ? { neo4jDriver: stub.driver as never } : {}),
       ...(setupOptions.es ? { es: setupOptions.es as never } : {}),
     })

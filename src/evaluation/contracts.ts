@@ -104,6 +104,19 @@ export interface EvalCaseResult {
   candidates: EvalRankedCandidate[]
   /** How many candidates could not be mapped back to this corpus. */
   unmappedCandidates: number
+  /**
+   * PL-05 / PT-09: the generation-context stage, scored only from a real
+   * `generation-context-v1` snapshot. `availability` explains why the context
+   * metric is null (empty GT / legacy record without a snapshot / a run that
+   * never called a generator) so an old report can never be read as a 0.
+   */
+  generationContextAvailability?: import("./context_metrics").GenerationContextAvailability
+  generationContextReason?: string
+  /** The real generation round the scored context comes from. */
+  generationContextRound?: number
+  generationContextRepresentation?: import("../types/answer").GenerationContextRepresentation
+  generationContextTokenCount?: number
+  generationContextVersion?: string
 }
 
 /** Aggregate of one metric across cases (sample size is always explicit). */
@@ -121,6 +134,11 @@ export interface EvalMetricsSummary {
    * implying the scores are accuracy.
    */
   generation?: { bleuVersion: string; rougeVersion: string; textRuleVersion: string }
+  /**
+   * PL-05: the actual-context stage carries its own version so a candidate-stage
+   * average and a generation-context average can never be silently compared.
+   */
+  context?: { version: string }
   metrics: Record<string, EvalMetricSummary>
 }
 

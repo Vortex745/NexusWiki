@@ -1,7 +1,8 @@
 import { v5 as uuid } from "uuid"
 import type { Chunk, Entity, Wikilink } from "../../types"
-import OpenAI from "openai"
+import { type OpenAI } from "openai"
 import { loadConfig } from "../../config"
+import { createOpenAIClient, openaiClientOptions } from "../../clients"
 
 const ENTITY_EXTRACTION_PROMPT = `从以下文本中提取所有重要的实体（人物、组织、地点、概念、术语、产品等）。
 以 JSON 数组格式返回，每个实体包含 name、type、aliases 字段。
@@ -31,18 +32,20 @@ export class LLMWikifier {
 
   constructor() {
     const cfg = loadConfig()
-    this.client = new OpenAI({
+    this.client = createOpenAIClient({
       apiKey: cfg.openaiApiKey,
       baseURL: cfg.openaiBaseUrl || undefined,
-      timeout: cfg.openaiRequestTimeoutMs,
-      maxRetries: cfg.openaiMaxRetries,
+      ...openaiClientOptions(cfg),
     })
     this.model = cfg.openaiChatModel
   }
 
   async extractEntities(chunks: Chunk[]): Promise<Entity[]> {
     const batches: EntityCandidate[][] = []
-    for (const batch of chunkBatches(chunks, 8_000)) {
+    // Batches are kept small: single-call generation time must stay well
+// below the gateway's own response deadline (edgefn cuts long requests
+// with 504 "Request timed out." well before the client timeout fires).
+    for (const batch of chunkBatches(chunks, 2_000)) {
       const res = await this.client.chat.completions.create({
         model: this.model,
         messages: [

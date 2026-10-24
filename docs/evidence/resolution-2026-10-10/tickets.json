@@ -1,0 +1,43 @@
+{
+  "spec": "C:\\Users\\14253\\Desktop\\Agentic RAG\\.scratch\\next-work-solution-2026-10-10\\plan.md",
+  "integrationBranch": "codex/resolution-20261010",
+  "tickets": [
+    {
+      "id": "RES-01",
+      "title": "PT09 regression assertions",
+      "dependsOn": [],
+      "state": "done",
+      "evidence": "pt09/report.json"
+    },
+    {
+      "id": "RES-02",
+      "title": "ES routing and source-preserving local migration",
+      "dependsOn": [
+        "RES-01"
+      ],
+      "state": "done"
+    },
+    {
+      "id": "RES-03",
+      "title": "PDF v2 joint quality and diagnostics, independent live evaluation",
+      "dependsOn": [],
+      "state": "implemented_semantic_acceptance_failed",
+      "evidence": "pdf-live/comparison-v2.json",
+      "note": "48 runs;6 falseaccept;defaultOFF retained"
+    },
+    {
+      "id": "RES-04",
+      "title": "Review, regression, evidence and TypeSafe completion judgment",
+      "dependsOn": [
+        "RES-01",
+        "RES-02",
+        "RES-03"
+      ],
+      "state": "verified_typesafe_assessed",
+      "evidence": "docs/evidence/resolution-2026-10-10/typesafe-reassessment-20261010T021618Z/response.json",
+      "note": "TypeSafe重评HTTP200，实际jev-1.13.0；实现完成Noul=0.90、全验收完成=0.04、PDF可启用=0.06；状态implemented_with_explicit_quality_gap，Choice概率1.0/confidence1.0。Noul是肯定概率，Choice置信度是分布集中程度，均非生产正确率。"
+    }
+  ],
+  "updatedAt": "2026-10-10T10:17:38.238196+08:00",
+  "overallStatus": "implemented_with_open_acceptance"
+}

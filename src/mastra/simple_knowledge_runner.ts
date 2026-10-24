@@ -29,6 +29,10 @@
  *   - `src/answer/summarizer.ts` (Summarizer)
  *   - `src/answer/handoff_store.ts` (HandoffStore)
  *   - `src/answer/evidence.ts` (buildEvidence, citationIdsByChunk, referencesForReply)
+ *   - `src/answer/terminal_copy.ts` (public terminal copy + publishability)
+ *   - `src/answer/context_pipeline.ts` (shared material/budget/compression decision)
+ *   - `src/answer/generation_snapshot.ts` (generation-context-v1 describer)
+ *   - `src/retrieval/context/correction_selection.ts` (shared gap-first selection)
  *   - `src/access/context.ts` (AccessContext)
  *   - `src/types` (AgentMessage, AnswerRunResult, Evidence, Query, RetrievalResult, ...)
  *
@@ -63,6 +67,10 @@ import type {
 import { SYSTEM_PROMPT } from "./system_prompt"
 import { renderMemoryPromptSuffix } from "./memory_prompt"
 import type { ContextAssembler } from "../retrieval/context/interface"
+import {
+  findUncoveredGapFacts,
+  selectCorrectionCandidates,
+} from "../retrieval/context/correction_selection"
 import type {
   ToolSelector,
   RetrievalToolName,
@@ -72,10 +80,24 @@ import {
   toolToSearchOptions,
 } from "../retrieval/tool_selector"
 import type { Validator } from "../critic/validator/interface"
+import { bindAnswerBasis } from "./answer_basis"
 import type { RePlanner } from "../critic/replanner/interface"
 import type { ConversationStore, ConversationTurn } from "../answer/conversation_store"
 import type { Contextualizer } from "../answer/contextualizer"
-import type { ContextCompressor } from "../answer/context_compressor"
+import type {
+  ContextCompressor,
+  ContextCompressionResult,
+} from "../answer/context_compressor"
+// PT-06 / PT-07 — the ONE material-backed context preparation both knowledge
+// routes run, and PT-08 — the one description of what the generator actually
+// received. Importing them here is the ticket: no route may keep its own copy
+// of the material-selection or the generation-snapshot rule.
+import {
+  compressionTraceFields,
+  prepareGenerationContext,
+} from "../answer/context_pipeline"
+import { describeActualGenerationContext } from "../answer/generation_snapshot"
+import type { ContextMaterial } from "../retrieval/context/assembler"
 import type { Summarizer } from "../answer/summarizer"
 import type { HandoffStore } from "../answer/handoff_store"
 import {
@@ -90,6 +112,7 @@ import type {
   AnswerDegradation,
   AnswerDegradationReason,
   AnswerRunResult,
+  AnswerBasis,
   Evidence,
   Query,
   RetrievalResult,
@@ -229,8 +252,11 @@ export interface SimpleKnowledgeMastraRunnerDeps {
 // Helpers (mirrors of legacy generation.ts internals)
 // ---------------------------------------------------------------------------
 
-const INSUFFICIENT_RETRIEVAL_MESSAGE = "检索服务暂时不可用，无法生成可靠回答。"
-const INSUFFICIENT_EVIDENCE_MESSAGE = "未找到相关证据，无法生成可靠回答。"
+import {
+  INSUFFICIENT_EVIDENCE_MESSAGE,
+  INSUFFICIENT_RETRIEVAL_MESSAGE,
+  publicTerminalCopy,
+} from "../answer/terminal_copy"
 
 function abortError(checkpoint: string): Error {
   const error = new Error(`Answer run cancelled at ${checkpoint}`)
@@ -301,17 +327,12 @@ function diversifySelect(
   return selected
 }
 
-function uniqueResults(results: RetrievalResult[]): RetrievalResult[] {
-  const seen = new Set<string>()
-  const unique: RetrievalResult[] = []
-  for (const result of results) {
-    const key = `${result.chunk.documentId}\0${result.chunk.id}`
-    if (seen.has(key)) continue
-    seen.add(key)
-    unique.push(result)
-  }
-  return unique
-}
+// PT-04: the correction-round identity dedup + gap-first ordering used to live
+// here as a local `uniqueResults(accumulatedResults)` call, which kept the
+// OLDEST hit of a repeated identity and left the fresh 补检 material at the
+// tail of the assembler's queue. The rule now has one owner —
+// `selectCorrectionCandidates` in `../retrieval/context/correction_selection` —
+// shared by the simple and the complex runner so the two routes cannot drift.
 
 function normalizeGapQuery(text: string): string {
   return text.trim().toLowerCase().replace(/\s+/g, " ")
@@ -514,6 +535,8 @@ export function createSimpleKnowledgeMastraRunner(
       // and complex to the legacy orchestrator (until T12).
       throw new RouteNotSimpleError(decision)
     }
+    if (!preparedRoute) input.onStageProgress?.("route", { status: "completed", data: { decision } })
+    input.onStageProgress?.("retrieval", { round: 1 })
 
     // Destructive state change belongs to the selected route owner only.
     if (conversationStore && !preparedRoute) {
@@ -588,18 +611,45 @@ export function createSimpleKnowledgeMastraRunner(
     resultGroups.push(outcome.results)
     // Ticket 06: the initial context comes from this single search, so its
     // ordering label is the one that will describe the scored ranking.
-    const initialOrdering = outcome.ordering
+    let initialOrdering = outcome.ordering
+
+    // Tool-selection zero-result fallback: the tool selector deliberately
+    // narrows the search to ONE channel family (pageindex_hierarchy →
+    // ["pageIndex"], graph_navigation → ["graph"]). When that channel has no
+    // match — the pageIndex node lookup is a whole-query title/summary LIKE
+    // and graph entities exist only for wikified KBs — the narrowed search
+    // legitimately returns nothing while the unselected channels (vector,
+    // bm25) would have hits, turning one bad LLM pick into a hard
+    // insufficient_evidence terminal for ordinary questions. Retry once with
+    // the default (un-narrowed) channels and keep the fallback traceable.
+    if (resultGroups[0].length === 0 && selectedTool) {
+      toolFallbackReason = `${toolFallbackReason ? toolFallbackReason + "; " : ""}selected tool ${selectedTool} returned 0 results; retried with default channels`
+      const fallbackOutcome = await abortable(
+        searcher.search(query, {
+          accessContext,
+          ...(retrievalScope ? { retrievalScope } : {}),
+          ...(sessionId ? { attachments: { sessionId } } : {}),
+          ...(input.useWeb === true ? { webRequested: true } : {}),
+          signal,
+        }),
+        signal
+      )
+      fallbackOutcome.unavailableChannels.forEach((channel) => unavailableChannels.add(channel))
+      if (fallbackOutcome.status !== "insufficient") retrievalAvailable = true
+      resultGroups.push(fallbackOutcome.results)
+      if (fallbackOutcome.results.length > 0) initialOrdering = fallbackOutcome.ordering
+    }
 
     // Build the initial retrieval trace data (aggregated; final state).
     const channelStatuses = Object.fromEntries(
       (["vector", "bm25", "graph", "web"] as const).map((channel) => [
         channel,
-        outcome.unavailableChannels.includes(channel) ? "unavailable" : "completed",
+        unavailableChannels.has(channel) ? "unavailable" : "completed",
       ])
     )
     let retrievalTrace: RetrievalTraceData = {
       channelStatuses,
-      resultCount: outcome.results.length,
+      resultCount: resultGroups.reduce((sum, group) => sum + group.length, 0),
       selectedEvidenceIds: [],
       degradedReasons: [
         ...outcome.unavailableChannels.map((channel) => `${channel} unavailable`),
@@ -613,6 +663,7 @@ export function createSimpleKnowledgeMastraRunner(
         ? { unselectedChannels: outcome.unselectedChannels }
         : {}),
     }
+    input.onStageProgress?.("retrieval", { status: "completed", round: 1, data: { resultCount: retrievalTrace.resultCount } })
 
     // Insufficient retrieval check (T11 #5: terminal insufficient_retrieval).
     if (retrievalAttempted && !retrievalAvailable) {
@@ -640,7 +691,9 @@ export function createSimpleKnowledgeMastraRunner(
     const selectedKeys = new Set(selectedResults.map(({ chunk }) =>
       `${chunk.documentId}\0${chunk.id}`
     ))
-    const accumulatedResults = allResults.filter(({ chunk }) =>
+    // PT-04: reassigned on every correction round to the gap-first ordered
+    // list (newest 补检 material in front), never to a tail-append.
+    let accumulatedResults = allResults.filter(({ chunk }) =>
       selectedKeys.has(`${chunk.documentId}\0${chunk.id}`)
     )
     let evidence: Evidence[] = buildEvidence(accumulatedResults)
@@ -685,67 +738,95 @@ export function createSimpleKnowledgeMastraRunner(
      * produced. One contributing search keeps its own label (dedicated rerank
      * or the honest fused reason); several merged searches are reported as an
      * aggregation, never as a dedicated-rerank success.
+     *
+     * PT-04: `mergedAcrossRounds` is the correction case. That candidate list
+     * is this round's gap hits merged in front of the earlier retrievals, so NO
+     * single search ordering produced it — even when exactly one contributing
+     * gap search carried `dedicated_rerank`, the honest label is the
+     * aggregation. Selection here is an ordering rule, never a reranker.
      */
     const commitFinalContext = (
       candidates: RetrievalResult[],
       citationIds: Map<string, string>,
-      orderings: RetrievalOrdering[]
+      orderings: RetrievalOrdering[],
+      mergedAcrossRounds = false
     ): void => {
       finalContextRound += 1
       retrievalTrace = {
         ...retrievalTrace,
         finalContextCandidates: toRankedCandidateObservations(candidates, citationIds),
         finalContextRound,
-        ...(orderings.length > 0
+        ...(mergedAcrossRounds
           ? {
-              finalContextOrdering:
-                orderings.length === 1
-                  ? orderings[0]
-                  : { source: "fused" as const, reason: "multi_query_aggregation" as const },
+              finalContextOrdering: {
+                source: "fused" as const,
+                reason: "multi_query_aggregation" as const,
+              },
             }
-          : {}),
+          : orderings.length > 0
+            ? {
+                finalContextOrdering:
+                  orderings.length === 1
+                    ? orderings[0]
+                    : { source: "fused" as const, reason: "multi_query_aggregation" as const },
+              }
+            : {}),
       }
     }
     const initialCitationIds = citationIdsByChunk(evidence)
-    let context = await abortable(
-      assembler.assemble(selectedResults, initialCitationIds),
-      signal
-    )
-    let contextTrace: ContextTraceData = {
-      evidenceCount: evidence.length,
-      contextLength: context.length,
-      compressionRan: false,
-    }
-    // Optional compression (Ticket 61/04).
-    if (compressor) {
-      try {
-        const result = await abortable(
-          compressor.compress(
-            evidence,
-            effectiveMessage,
-            { maxContextTokens: 6_000 },
-            signal
-          ),
-          signal
-        )
-        if (result) {
-          context = result.context
-          contextTrace = {
-            evidenceCount: evidence.length,
-            contextLength: context.length,
-            compressionRan: true,
-            compressionInputTokens: result.inputTokens,
-            compressionOutputTokens: result.outputTokens,
-            compressionRetainedEvidenceIds: result.retainedEvidenceIds,
-            compressionDroppedEvidenceIds: result.droppedEvidenceIds,
-            ...(result.usage ? { compressionUsage: result.usage } : {}),
-          }
-        }
-      } catch (err) {
-        if (err instanceof Error && err.name === "AbortError") throw err
-        // non-Abort error: swallow, use deterministic context (criterion #5 fallback)
+    // PT-06:AC01/AC07 + PT-08:AC01 — the state of the context that is currently
+    // going to the generator: the material behind it, the compression actually
+    // adopted for it, and the trace describing both. Reassigned every round, so
+    // a refused compression can never leave the records pointing at compressed
+    // ids that were not used.
+    let context = ""
+    let material: ContextMaterial | null = null
+    let compression: ContextCompressionResult | null = null
+    let contextTrace: ContextTraceData = {}
+    // PL-05 / PT-08 — ONE `generation-context-v1` snapshot per ACTUAL generation
+    // call. It is attached only after a draft really completed, so a 补检 that
+    // never regenerated adds nothing, a cancelled or provider-failed call leaves
+    // no phantom round, and the LAST attached snapshot is the final one because
+    // the trace the adapter publishes is this aggregated object.
+    let generationRound = 0
+    const describeGenerationContext = (): void => {
+      generationRound += 1
+      contextTrace = {
+        ...contextTrace,
+        generationContext: describeActualGenerationContext({
+          generationRound,
+          context,
+          material,
+          compression,
+          evidence,
+        }),
       }
     }
+    input.onStageProgress?.("context", { round: 1, data: { phase: "assembly", evidenceCount: evidence.length } })
+    // PT-06:AC01/AC07 — the COMPLETE authorized material, assembled once and
+    // consumed by the budget decision, the compressor and the generator prompt.
+    const initial = await abortable(
+      prepareGenerationContext({
+        assembler,
+        results: selectedResults,
+        citationIds: initialCitationIds,
+        evidence,
+        query: effectiveMessage,
+        ...(compressor ? { compressor } : {}),
+        ...(signal ? { signal } : {}),
+      }),
+      signal
+    )
+    context = initial.context
+    material = initial.material
+    compression = initial.compression
+    contextTrace = {
+      evidenceCount: evidence.length,
+      contextLength: context.length,
+      ...compressionTraceFields(initial),
+    }
+    input.onStageProgress?.("context", { status: "completed", round: 1, data: { phase: "assembly", evidenceCount: evidence.length, contextLength: context.length } })
+    input.onStageProgress?.("context", { round: 1, data: { phase: "draft", evidenceCount: evidence.length } })
 
     // -------------------------------------------------------------------------
     // GATE 3: answer draft (LLM stream). Draft tokens are withheld until the
@@ -772,13 +853,19 @@ export function createSimpleKnowledgeMastraRunner(
       initialTokens.push(token)
     }
     const initialAnswer = initialTokens.join("")
+    // PT-08:AC01/AC05 — this draft really was generated: record the context it
+    // was generated from, on whichever branch produced it (deterministic full,
+    // deterministic partial, compressed, or the compression-failure fallback).
+    describeGenerationContext()
+    contextTrace.phase = "draft"
+    input.onStageProgress?.("context", { status: "completed", round: 1, data: { phase: "draft", evidenceCount: evidence.length } })
 
     // Citation check (T11 #4: unknown Citations rejected before publication).
     try {
       referencesForReply(initialAnswer, evidence)
     } catch {
       return {
-        reply: "",
+        reply: publicTerminalCopy("invalid_citation"),
         status: "invalid_citation",
         references: [],
         degradation: {
@@ -809,15 +896,25 @@ export function createSimpleKnowledgeMastraRunner(
     // -------------------------------------------------------------------------
     const seenGapQueries = new Set<string>()
     let approved = false
+    let approvedBasis: AnswerBasis | undefined
     let terminalStatus: AnswerRunResult["status"] | null = null
     let terminalReply = ""
     let terminalReferences: AnswerRunResult["references"] = []
+    // PL-01: an unapproved draft is never the published reply. The public text
+    // and the citation set follow the BUSINESS terminal, so a rejected draft
+    // cannot reappear through done.reply, JSON reply or references.
+    const setTerminal = (status: AnswerRunResult["status"]): void => {
+      terminalStatus = status
+      terminalReply = publicTerminalCopy(status)
+      terminalReferences = []
+    }
     let terminalDegradation: AnswerDegradation = {
       status: unavailableChannels.size > 0 ? "partial" : "none",
       unavailableChannels: [...unavailableChannels],
     }
 
     for (let round = 0; round < 3; round += 1) {
+      input.onStageProgress?.("validation", { round: round + 1, data: { round: round + 1 } })
       const verdict = await abortable(
         validator.validate(
           fullAnswer,
@@ -831,9 +928,11 @@ export function createSimpleKnowledgeMastraRunner(
         signal
       )
       validationTrace = { round: round + 1, passed: verdict.passed }
+      input.onStageProgress?.("validation", { status: "completed", round: round + 1, data: validationTrace })
 
       if (verdict.passed) {
         approved = true
+        approvedBasis = verdict.answerBasis
         break
       }
 
@@ -850,7 +949,7 @@ export function createSimpleKnowledgeMastraRunner(
         // Gap queries exhausted → handoff_required (if enabled) or insufficient_evidence.
         if (handoffStore && resolveTenantId) {
           checkAbort(signal, "GATE 6 (before handoff persistence)")
-          handoffStore.create({
+          const handoffCase = handoffStore.create({
             runId,
             tenantId,
             subjectId: accessContext.subjectId,
@@ -864,18 +963,16 @@ export function createSimpleKnowledgeMastraRunner(
             evidenceIds: evidence.map(({ id }) => id),
             traceReference: runId,
           })
-          terminalStatus = "handoff_required"
-          terminalReply = fullAnswer
-          terminalReferences = referencesForReply(fullAnswer, evidence)
+          // PL-01 AC04: "已转交人工" is only publishable when the case exists;
+          // a refused persistence stays honest as 证据不足.
+          setTerminal(handoffCase ? "handoff_required" : "insufficient_evidence")
           terminalDegradation = {
             status: unavailableChannels.size > 0 ? "partial" : "none",
             unavailableChannels: [...unavailableChannels],
             reason: "coverage_not_met",
           }
         } else {
-          terminalStatus = "insufficient_evidence"
-          terminalReply = fullAnswer
-          terminalReferences = referencesForReply(fullAnswer, evidence)
+          setTerminal("insufficient_evidence")
           terminalDegradation = {
             status: unavailableChannels.size > 0 ? "partial" : "none",
             unavailableChannels: [...unavailableChannels],
@@ -890,6 +987,12 @@ export function createSimpleKnowledgeMastraRunner(
       let correctionInsufficient = false
       // Ticket 06: orderings of the searches whose results were kept.
       const correctionOrderings: RetrievalOrdering[] = []
+      // PT-04: this round's 补检 hits, kept SEPARATE from the older material
+      // until the gap-first selection below. They used to be appended to the
+      // tail of `accumulatedResults`, where the assembler's insertion-order
+      // budget walk left them no tokens at all.
+      const gapResultsForRound: RetrievalResult[] = []
+      input.onStageProgress?.("retrieval", { round: round + 2, data: { correction: true } })
       for (const gapQuery of gapQueries) {
         const correctionOutcome = await abortable(
           searcher.search(gapQuery, {
@@ -899,6 +1002,9 @@ export function createSimpleKnowledgeMastraRunner(
             ...(retrievalScope ? { retrievalScope } : {}),
             // Ticket 22 (ATT-01): a retry reads the same session's attachments.
             ...(sessionId ? { attachments: { sessionId } } : {}),
+            // PL-02 / PT-03 AC06: the gap re-check carries the SAME web intent
+            // as the first retrieval — an opt-in must not lapse mid-correction.
+            ...(input.useWeb === true ? { webRequested: true } : {}),
             signal,
           }),
           signal
@@ -912,14 +1018,13 @@ export function createSimpleKnowledgeMastraRunner(
         }
         if (correctionOutcome.results.length === 0) continue
         if (correctionOutcome.ordering) correctionOrderings.push(correctionOutcome.ordering)
-        accumulatedResults.push(...correctionOutcome.results)
+        gapResultsForRound.push(...correctionOutcome.results)
         anyNewResults = true
       }
+      input.onStageProgress?.("retrieval", { status: "completed", round: round + 2, data: { correction: true, resultCount: gapResultsForRound.length } })
 
       if (correctionInsufficient) {
-        terminalStatus = "insufficient_retrieval"
-        terminalReply = fullAnswer + INSUFFICIENT_RETRIEVAL_MESSAGE
-        terminalReferences = referencesForReply(fullAnswer, evidence)
+        setTerminal("insufficient_retrieval")
         terminalDegradation = {
           status: "insufficient",
           unavailableChannels: [...unavailableChannels],
@@ -931,7 +1036,7 @@ export function createSimpleKnowledgeMastraRunner(
         // No new evidence from any gap query → exhausted.
         if (handoffStore && resolveTenantId) {
           checkAbort(signal, "GATE 6 (before handoff persistence)")
-          handoffStore.create({
+          const handoffCase = handoffStore.create({
             runId,
             tenantId,
             subjectId: accessContext.subjectId,
@@ -945,18 +1050,16 @@ export function createSimpleKnowledgeMastraRunner(
             evidenceIds: evidence.map(({ id }) => id),
             traceReference: runId,
           })
-          terminalStatus = "handoff_required"
-          terminalReply = fullAnswer
-          terminalReferences = referencesForReply(fullAnswer, evidence)
+          // PL-01 AC04: "已转交人工" is only publishable when the case exists;
+          // a refused persistence stays honest as 证据不足.
+          setTerminal(handoffCase ? "handoff_required" : "insufficient_evidence")
           terminalDegradation = {
             status: unavailableChannels.size > 0 ? "partial" : "none",
             unavailableChannels: [...unavailableChannels],
             reason: "coverage_not_met",
           }
         } else {
-          terminalStatus = "insufficient_evidence"
-          terminalReply = fullAnswer
-          terminalReferences = referencesForReply(fullAnswer, evidence)
+          setTerminal("insufficient_evidence")
           terminalDegradation = {
             status: unavailableChannels.size > 0 ? "partial" : "none",
             unavailableChannels: [...unavailableChannels],
@@ -966,56 +1069,103 @@ export function createSimpleKnowledgeMastraRunner(
         break
       }
 
-      // Rebuild Evidence + Context from accumulated results, then regenerate draft.
+      // Rebuild Evidence + Context from the accumulated results, then
+      // regenerate the draft.
+      // PT-04: this round's 补检 hits are selected BEFORE the older material
+      // (the shared gap-first rule in retrieval/context/correction_selection),
+      // so the new facts take first claim on the unchanged 6,000-token budget
+      // instead of queueing behind the old top-10 parent chunks that used to
+      // consume it all. No rerank step, no larger budget, no extra round.
+      const selection = selectCorrectionCandidates({
+        gapResults: gapResultsForRound,
+        olderResults: accumulatedResults,
+      })
+      accumulatedResults = selection.orderedResults
       evidence = buildEvidence(accumulatedResults)
-      const correctionCandidates = uniqueResults(accumulatedResults)
+      const correctionCandidates = selection.candidates
       const correctionCitationIds = citationIdsByChunk(evidence)
-      context = await abortable(
-        assembler.assemble(correctionCandidates, correctionCitationIds),
+      input.onStageProgress?.("context", { round: round + 2, data: { phase: "assembly", evidenceCount: evidence.length } })
+      // PT-04 AC06: even selected-first, a gap item longer than the whole
+      // budget cannot be admitted. Record it as an explicit omission so no
+      // layer can present the correction as covered — the existing validation
+      // rules still decide whether the run degrades.
+      //
+      // PT-06:AC07 — one material-backed preparation for the round: the
+      // deterministic context, the budget decision on the REAL candidate
+      // counts, and the compression attempt are all described by the same
+      // shared pipeline, so the fallback and the source records can never
+      // disagree about which context is going to generate.
+      const prepared = await abortable(
+        prepareGenerationContext({
+          assembler,
+          results: correctionCandidates,
+          citationIds: correctionCitationIds,
+          evidence,
+          query: effectiveMessage,
+          ...(compressor ? { compressor } : {}),
+          ...(signal ? { signal } : {}),
+          // PT-04 AC07: compression only closes the correction round when its
+          // output still carries every selected new fact. A compressed context
+          // that dropped one is not adopted — the round generates from the
+          // deterministic context instead, and the loss stays visible on the
+          // trace rather than becoming a fake "covered".
+          ...(compressor
+            ? {
+                shouldAdoptCompression: (
+                  compressionResult: ContextCompressionResult
+                ): boolean =>
+                  findUncoveredGapFacts({
+                    gapCandidates: selection.gapCandidates,
+                    citationIds: correctionCitationIds,
+                    context: compressionResult.context,
+                    mode: "citation",
+                    reason: "compression",
+                  }).length === 0,
+              }
+            : {}),
+        }),
         signal
       )
-      // Optional compression for correction round.
-      if (compressor) {
-        try {
-          const result = await abortable(
-            compressor.compress(
-              evidence,
-              effectiveMessage,
-              { maxContextTokens: 6_000 },
-              signal
-            ),
-            signal
-          )
-          if (result) {
-            context = result.context
-            contextTrace = {
-              evidenceCount: evidence.length,
-              contextLength: context.length,
-              compressionRan: true,
-              compressionInputTokens: result.inputTokens,
-              compressionOutputTokens: result.outputTokens,
-              compressionRetainedEvidenceIds: result.retainedEvidenceIds,
-              compressionDroppedEvidenceIds: result.droppedEvidenceIds,
-              ...(result.usage ? { compressionUsage: result.usage } : {}),
-            }
-          } else {
-            contextTrace = {
-              evidenceCount: evidence.length,
-              contextLength: context.length,
-              compressionRan: false,
-            }
-          }
-        } catch (err) {
-          if (err instanceof Error && err.name === "AbortError") throw err
-          // non-Abort error: swallow, use deterministic context
-        }
-      } else {
-        contextTrace = {
-          evidenceCount: evidence.length,
-          contextLength: context.length,
-          compressionRan: false,
-        }
+      context = prepared.context
+      material = prepared.material
+      compression = prepared.compression
+      const budgetOmissions = findUncoveredGapFacts({
+        gapCandidates: selection.gapCandidates,
+        citationIds: correctionCitationIds,
+        // PT-06:AC07 — the coverage question is asked against the context that
+        // really generates: the deterministic one, never a rejected compressed
+        // output. `deterministicContext` is that text either way.
+        context: prepared.deterministicContext,
+        mode: "verbatim",
+        reason: "context_budget",
+      })
+      // PT-04 AC06 + PT-06 AC07: the 补检 lands only when the adopted context
+      // carries it. A compression that was adopted kept every selected fact (the
+      // adoption rule above proved it), so the round has nothing to report;
+      // every other outcome generates from the deterministic context and the
+      // facts that did not fit stay recorded as omissions.
+      // PT-04 AC07 / PT-06 AC07: an adopted compression proved its citation
+      // lineage, not that a reworded fact survived. Ask the verbatim question
+      // against the text that really generates too, so the trajectory can never
+      // be read as "the correction is covered" when the summarizer reworded a
+      // selected fact away.
+      const gapFactOmissions = prepared.compression
+        ? findUncoveredGapFacts({
+            gapCandidates: selection.gapCandidates,
+            citationIds: correctionCitationIds,
+            context: prepared.context,
+            mode: "verbatim",
+            reason: "compression",
+          })
+        : budgetOmissions
+      contextTrace = {
+        evidenceCount: evidence.length,
+        contextLength: context.length,
+        ...compressionTraceFields(prepared),
+        ...(gapFactOmissions.length > 0 ? { gapFactOmissions } : {}),
       }
+      input.onStageProgress?.("context", { status: "completed", round: round + 2, data: { phase: "assembly", evidenceCount: evidence.length, contextLength: context.length } })
+      input.onStageProgress?.("context", { round: round + 2, data: { phase: "draft", evidenceCount: evidence.length } })
 
       // Regenerate draft from the rebuilt context.
       const regenMessages: AgentMessage[] = [
@@ -1033,13 +1183,17 @@ export function createSimpleKnowledgeMastraRunner(
         regenTokens.push(token)
       }
       const regenAnswer = regenTokens.join("")
+      // PT-08:AC04 — a second (or third) REAL generation call gets its own
+      // snapshot and overwrites the previous one: the last actual round is the
+      // final snapshot, and earlier rounds' evidence is never merged into it.
+      describeGenerationContext()
+      contextTrace.phase = "draft"
+      input.onStageProgress?.("context", { status: "completed", round: round + 2, data: { phase: "draft", evidenceCount: evidence.length } })
       // Citation check on regenerated draft (T11 #4).
       try {
         referencesForReply(regenAnswer, evidence)
       } catch {
-        terminalStatus = "invalid_citation"
-        terminalReply = fullAnswer
-        terminalReferences = referencesForReply(fullAnswer, evidence)
+        setTerminal("invalid_citation")
         terminalDegradation = {
           status: "insufficient",
           unavailableChannels: [...unavailableChannels],
@@ -1051,7 +1205,9 @@ export function createSimpleKnowledgeMastraRunner(
       draftTokens = [...regenTokens]
       // Ticket 01: the regenerated draft was accepted — commit its context as
       // the final generation context (overwrites the previous round).
-      commitFinalContext(correctionCandidates, correctionCitationIds, correctionOrderings)
+      // PT-04: this list is the gap-first merge of two retrievals, so its
+      // ordering label is the honest aggregation, never a dedicated rerank.
+      commitFinalContext(correctionCandidates, correctionCitationIds, correctionOrderings, true)
     }
 
     // -------------------------------------------------------------------------
@@ -1061,7 +1217,7 @@ export function createSimpleKnowledgeMastraRunner(
       // 3 rounds expired without approval and without gap-query exhaustion.
       if (handoffStore && resolveTenantId) {
         checkAbort(signal, "GATE 6 (before handoff persistence)")
-        handoffStore.create({
+        const handoffCase = handoffStore.create({
           runId,
           tenantId,
           subjectId: accessContext.subjectId,
@@ -1075,18 +1231,14 @@ export function createSimpleKnowledgeMastraRunner(
           evidenceIds: evidence.map(({ id }) => id),
           traceReference: runId,
         })
-        terminalStatus = "handoff_required"
-        terminalReply = fullAnswer
-        terminalReferences = referencesForReply(fullAnswer, evidence)
+        setTerminal(handoffCase ? "handoff_required" : "insufficient_evidence")
         terminalDegradation = {
           status: unavailableChannels.size > 0 ? "partial" : "none",
           unavailableChannels: [...unavailableChannels],
           reason: "coverage_not_met",
         }
       } else {
-        terminalStatus = "insufficient_evidence"
-        terminalReply = fullAnswer
-        terminalReferences = referencesForReply(fullAnswer, evidence)
+        setTerminal("insufficient_evidence")
         terminalDegradation = {
           status: unavailableChannels.size > 0 ? "partial" : "none",
           unavailableChannels: [...unavailableChannels],
@@ -1114,7 +1266,7 @@ export function createSimpleKnowledgeMastraRunner(
     const finalReferences = referencesForReply(fullAnswer, evidence)
     if (finalReferences.length === 0) {
       return {
-        reply: fullAnswer,
+        reply: publicTerminalCopy("insufficient_evidence"),
         status: "insufficient_evidence",
         references: finalReferences,
         degradation: {
@@ -1151,6 +1303,9 @@ export function createSimpleKnowledgeMastraRunner(
         signal
       )
     }
+
+    const answerBasis = bindAnswerBasis(approvedBasis, finalReferences)
+    if (answerBasis) validationTrace = { ...validationTrace, answerBasis }
 
     return {
       reply: fullAnswer,

@@ -126,7 +126,7 @@ test("Ticket 22 #1d: probe verifies block types include heading and paragraph", 
 test("Ticket 22 #1e: probe exercises production selectParser routing for .pdf", async () => {
   const result = await markerProbe(makeProbeContext(makeBasicFixture()))
   const outputs = result.outputs ?? {}
-  assert.equal(outputs.parserRoute, "marker")
+  assert.equal(outputs.parserRoute, "builtin-pdf")
   assert.match(outputs.parserRouteReason as string, /PDF/i)
 })
 

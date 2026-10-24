@@ -8,6 +8,7 @@
 // 直接激活。
 import { createHash } from "node:crypto"
 import { evaluateFullDocumentCoverage } from "./chunk_coverage"
+import { assertIndexableBlocks } from "../types/normalized_block"
 import type { ExtractionEvidenceRecord } from "./tracking/extraction_evidence_repo"
 import type { Chunk, NormalizedBlock } from "../types"
 
@@ -23,6 +24,8 @@ export interface ContentProof {
     parserConfigVersion: string | null
     expectedChunkCount: number
     expectedChunksSha256: string
+    /** Ticket 05: the page-evidence version the indexed blocks came from. */
+    pageEvidenceVersion: string | null
   }
   evaluatedAt: string
 }
@@ -57,6 +60,8 @@ export interface ProduceContentProofInput {
   indexChunks: Chunk[]
   manifestEntries: ManifestEntryLike[]
   parserConfigVersion: string | null
+  /** Ticket 05: version of the page evidence the indexed blocks came from. */
+  pageEvidenceVersion?: string | null
 }
 
 /**
@@ -65,8 +70,13 @@ export interface ProduceContentProofInput {
  * - 上游已知缺口（未提取页/提取警告/结构风险/解码待校验）→ pending_review
  *   （下游覆盖不能补证上游真值）；
  * - 两者皆无 → pass——但仍只进入索引核验，不激活。
+ *
+ * Ticket 05 前置门槛：派生页预览永远不是可索引内容——任何携带预览印记的块
+ * 在这里被拒绝，凭证不会为一份渲染图背书。
  */
 export function produceContentProof(input: ProduceContentProofInput): ContentProof {
+  assertIndexableBlocks(input.blocks)
+
   const coverage = evaluateFullDocumentCoverage({
     extractionEvidence: input.extractionEvidence,
     risks:
@@ -89,6 +99,7 @@ export function produceContentProof(input: ProduceContentProofInput): ContentPro
       parserConfigVersion: input.parserConfigVersion,
       expectedChunkCount: input.manifestEntries.length,
       expectedChunksSha256: manifestSha256,
+      pageEvidenceVersion: input.pageEvidenceVersion ?? null,
     },
     evaluatedAt: new Date().toISOString(),
   }

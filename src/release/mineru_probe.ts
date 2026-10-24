@@ -281,7 +281,7 @@ export const mineruProbe: ProbeImplementation = async (
 
   try {
     // --- Phase 1: Happy path — production parser routing + parse ---
-    // Exercise real selectParser to route the document to mineru.
+    // Historical offline CLI fixture: production image routing is now ocr-api.
     const parserDecision = selectParser({
       fileName: fixture.document.fileName,
       mimeType: fixture.document.mimeType,

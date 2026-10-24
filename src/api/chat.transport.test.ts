@@ -6,6 +6,8 @@ import { createChatRouter, type AnswerEventsSource } from "./chat"
 import { AnswerTraceRepository } from "../answer/trace_repository"
 import type { AnswerRunEvent, AnswerRunResult } from "../types"
 import { openDb } from "../ingestion/tracking/db"
+import { createMastraChatEventAdapter } from "../mastra/chat_event_adapter"
+import { ConversationImpl } from "../frontend/conversation"
 
 /**
  * T51: Transport parity tests. These tests inject a stub `eventsSource` so they
@@ -286,6 +288,82 @@ test("GET /api/chat/runs/:runId returns trace when events were persisted directl
     )
   } finally {
     server.close()
+    db.close()
+  }
+})
+
+test("approved answer basis survives real adapter, SSE, JSON, SQLite history and conversation consumption", async () => {
+  const db = openDb(":memory:")
+  const repository = new AnswerTraceRepository(db)
+  const basis = { text: "回答依据所引用的操作手册整理。", referenceIds: ["manual-1"] }
+  const source = createMastraChatEventAdapter({
+    traceObserver: repository,
+    runner: async (input) => ({
+      reply: "按手册顺序操作 [cite:manual-1]。",
+      status: "completed",
+      references: [{
+        id: "manual-1", title: "合成操作手册", source: "sample",
+        documentId: "sample-manual", documentVersionId: "sample-version", documentVersion: 1,
+        chunkId: "sample-chunk", excerpt: "按手册顺序操作。", channels: ["vector"], score: 1, wikilinks: [],
+      }],
+      degradation: { status: "none", unavailableChannels: [] },
+      tokens: ["按手册顺序操作 [cite:manual-1]。"],
+      routeTrace: { decision: "simple" },
+      retrievalTrace: { resultCount: 1 },
+      contextTrace: { evidenceCount: 1, phase: "draft" },
+      validationTrace: { round: 1, passed: true, answerBasis: basis },
+    }),
+  })
+  const app = express()
+  app.use(express.json())
+  app.use("/api", createChatRouter(repository, source))
+  const { server, port } = await listen(app)
+  const readBasis = (events: AnswerRunEvent[]) => events
+    .filter((event) => event.type === "progress" && event.stage === "validation")
+    .map((event) => event.type === "progress" && event.stage === "validation"
+      ? event.data.answerBasis : undefined)
+    .filter(Boolean)
+  try {
+    for (const stream of [true, false]) {
+      const runId = `basis-${stream ? "sse" : "json"}`
+      const response = await fetch(`http://127.0.0.1:${port}/api/chat`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ message: "如何操作？", stream, runId, sessionId: runId }),
+      })
+      assert.equal(response.status, 200)
+      const events: AnswerRunEvent[] = stream
+        ? (await response.text()).split(/\r?\n/)
+            .filter((line) => line.startsWith("data: "))
+            .map((line) => JSON.parse(line.slice(6)).event as AnswerRunEvent)
+        : ((await response.json()) as { events: AnswerRunEvent[] }).events
+      assert.deepEqual(readBasis(events), [basis])
+      const historyResponse = await fetch(`http://127.0.0.1:${port}/api/chat/runs/${runId}`)
+      const history = await historyResponse.json() as { events: AnswerRunEvent[] }
+      assert.equal(historyResponse.status, 200)
+      assert.deepEqual(history.events, events)
+      const conversation = new ConversationImpl()
+      const message = conversation.startAssistantRun(conversation.getActiveThread()!.id, { runId })
+      for (const event of events) {
+        const traceData: Record<string, unknown> | undefined = event.type === "progress" ? { ...event.data } : undefined
+        conversation.processSseEvent(message, {
+          event: {
+            ...event, durationMs: event.durationMs ?? undefined,
+            data: traceData,
+            result: event.type === "done" ? { ...event.result, references: event.result.references.map(reference => ({ ...reference })) } : undefined,
+          },
+          ...(event.type === "answer_delta" ? { token: event.token } : {}),
+          done: event.type === "done",
+        })
+      }
+      conversation.finalizeStreamRun(message)
+      assert.equal(message.traceStatus, "completed")
+      assert.equal(message.content, "按手册顺序操作 [cite:manual-1]。")
+      assert.deepEqual(message.references.map(({ id }) => id), ["manual-1"])
+      assert.deepEqual(message.traceEvents.find((event) => event.stage === "validation")?.data?.answerBasis, basis)
+    }
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()))
     db.close()
   }
 })

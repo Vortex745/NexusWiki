@@ -128,7 +128,7 @@ npm run dev:web      # Vite 监听 :3000（/api 代理到 :3001）
 
 ### 5. 状态页
 
-打开前端左侧栏底部的「服务状态」气泡，或直接访问 `GET /api/status`。
+直接访问 `GET /api/status`。
 状态覆盖 Elasticsearch、Neo4j、Chat、Embedding、Rerank、文档解析器、
 MCP、网络搜索与 Langfuse；**未配置的可选项显示「未配置」——不是失败，
 也不是成功**。诊断信息只包含主机名，永不包含凭据或完整 URL。

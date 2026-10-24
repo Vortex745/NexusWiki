@@ -20,6 +20,8 @@ import type { AccessContext } from "../access/context"
 import type { DocumentRepo } from "../ingestion/tracking/doc_repo"
 import type { PageIndexRepository } from "../ingestion/tracking/page_index_repo"
 import type { RetrievalResult } from "../types"
+import type { DB } from "../ingestion/tracking/db"
+import { registerWikiTools } from "../wiki/tools"
 import {
   boundedQuery,
   type ToolDefinition,
@@ -55,6 +57,14 @@ async function runKnowledgeSearch(
       accessContext: env.accessContext,
       ...(env.retrievalScope ? { retrievalScope: env.retrievalScope } : {}),
       ...(env.signal ? { signal: env.signal } : {}),
+      // PT-02 / PT-03: the same rule covers the run's two non-knowledge
+      // channels. The bound session and the web opt-in come from the
+      // environment, so a tool call searches exactly what the run itself may
+      // read — this session's temporary attachments and, only when the run
+      // opted in, allowed Web evidence. Neither is part of the channel
+      // selection, and an absent field opens no channel at all.
+      ...(env.attachments ? { attachments: env.attachments } : {}),
+      ...(env.webRequested === true ? { webRequested: true } : {}),
     }
   )
   return {
@@ -85,7 +95,7 @@ function groupVisible(allowedGroups: string[], context: AccessContext): boolean 
  */
 export function registerBuiltinTools(
   registry: ToolRegistry,
-  deps: { documentRepo?: DocumentRepo; pageIndexRepo?: PageIndexRepository } = {}
+  deps: { documentRepo?: DocumentRepo; pageIndexRepo?: PageIndexRepository; db?: DB } = {}
 ): ToolRegistry {
   registry.register({
     name: "knowledge_search",
@@ -160,5 +170,6 @@ export function registerBuiltinTools(
       },
     })
   }
+  if (deps.db) registerWikiTools(registry, deps.db)
   return registry
 }

@@ -1,0 +1,423 @@
+{
+  "basis": "Prior independent render/raw labels plus new independent agent rendered holdout review; model outputs excluded",
+  "pages": [
+    {
+      "fixture": "pure-text",
+      "page": 1,
+      "visibleContent": "Title 质量门语料：纯文本样本 with two lines: refund policy applies to all 2026 orders, and order A-2026-1001 amount 50 元 with check word 纯-1.",
+      "textLayerFidelity": "faithful",
+      "labels": {
+        "completeness": "pass",
+        "accuracy": "pass",
+        "order": "pass",
+        "structure": "pass"
+      },
+      "expectedLocalAudit": "pass",
+      "expectedSecondAuditAfterOcr": "not-applicable",
+      "rationale": "Page image is clean readable text fully matching the raw text layer (校验词 纯-1 present in both); no OCR fallback needed."
+    },
+    {
+      "fixture": "pure-text",
+      "page": 2,
+      "visibleContent": "Two lines of policy text (第二页：不支持过期后补办… and Order A-2026-1002: quantity 3, unit price 12.5) plus audit-deadline line with check word 纯-2.",
+      "textLayerFidelity": "faithful",
+      "labels": {
+        "completeness": "pass",
+        "accuracy": "pass",
+        "order": "pass",
+        "structure": "pass"
+      },
+      "expectedLocalAudit": "pass",
+      "expectedSecondAuditAfterOcr": "not-applicable",
+      "rationale": "Visible mixed Chinese/English text is readable and identical to the raw text layer; layout is a simple coherent paragraph block."
+    },
+    {
+      "fixture": "pure-text",
+      "page": 3,
+      "visibleContent": "Line stating appeal channel support@example.com and closing check word 终线-质量门-88.",
+      "textLayerFidelity": "faithful",
+      "labels": {
+        "completeness": "pass",
+        "accuracy": "pass",
+        "order": "pass",
+        "structure": "pass"
+      },
+      "expectedLocalAudit": "pass",
+      "expectedSecondAuditAfterOcr": "not-applicable",
+      "rationale": "Email address and closing check word render correctly and match the text layer exactly."
+    },
+    {
+      "fixture": "text-long-6p",
+      "page": 1,
+      "visibleContent": "Single line: 纯文本长样本 第1页：批次切分用页，校验词 长-1。",
+      "textLayerFidelity": "faithful",
+      "labels": {
+        "completeness": "pass",
+        "accuracy": "pass",
+        "order": "pass",
+        "structure": "pass"
+      },
+      "expectedLocalAudit": "pass",
+      "expectedSecondAuditAfterOcr": "not-applicable",
+      "rationale": "Page-1 marker line renders correctly and matches the text layer verbatim."
+    },
+    {
+      "fixture": "text-long-6p",
+      "page": 2,
+      "visibleContent": "Single line: 纯文本长样本 第2页：批次切分用页，校验词 长-2。",
+      "textLayerFidelity": "faithful",
+      "labels": {
+        "completeness": "pass",
+        "accuracy": "pass",
+        "order": "pass",
+        "structure": "pass"
+      },
+      "expectedLocalAudit": "pass",
+      "expectedSecondAuditAfterOcr": "not-applicable",
+      "rationale": "Page-2 marker line matches the text layer; correct page position."
+    },
+    {
+      "fixture": "text-long-6p",
+      "page": 3,
+      "visibleContent": "Single line: 纯文本长样本 第3页：批次切分用页，校验词 长-3。",
+      "textLayerFidelity": "faithful",
+      "labels": {
+        "completeness": "pass",
+        "accuracy": "pass",
+        "order": "pass",
+        "structure": "pass"
+      },
+      "expectedLocalAudit": "pass",
+      "expectedSecondAuditAfterOcr": "not-applicable",
+      "rationale": "Page-3 marker line matches the text layer; correct page position."
+    },
+    {
+      "fixture": "text-long-6p",
+      "page": 4,
+      "visibleContent": "Single line: 纯文本长样本 第4页：批次切分用页，校验词 长-4。",
+      "textLayerFidelity": "faithful",
+      "labels": {
+        "completeness": "pass",
+        "accuracy": "pass",
+        "order": "pass",
+        "structure": "pass"
+      },
+      "expectedLocalAudit": "pass",
+      "expectedSecondAuditAfterOcr": "not-applicable",
+      "rationale": "Page-4 marker line matches the text layer; correct page position."
+    },
+    {
+      "fixture": "text-long-6p",
+      "page": 5,
+      "visibleContent": "Single line: 纯文本长样本 第5页：批次切分用页，校验词 长-5。",
+      "textLayerFidelity": "faithful",
+      "labels": {
+        "completeness": "pass",
+        "accuracy": "pass",
+        "order": "pass",
+        "structure": "pass"
+      },
+      "expectedLocalAudit": "pass",
+      "expectedSecondAuditAfterOcr": "not-applicable",
+      "rationale": "Page-5 marker line matches the text layer; correct page position."
+    },
+    {
+      "fixture": "text-long-6p",
+      "page": 6,
+      "visibleContent": "Single line: 纯文本长样本 第6页：批次切分用页，校验词 长-6。",
+      "textLayerFidelity": "faithful",
+      "labels": {
+        "completeness": "pass",
+        "accuracy": "pass",
+        "order": "pass",
+        "structure": "pass"
+      },
+      "expectedLocalAudit": "pass",
+      "expectedSecondAuditAfterOcr": "not-applicable",
+      "rationale": "Page-6 marker line matches the text layer; correct page position."
+    },
+    {
+      "fixture": "garbled",
+      "page": 1,
+      "visibleContent": "One clean printed line: 本页肉眼看到的是正常印刷文本：退款时限七天，校验词 乱-1。 (page states its print looks normal to the eye).",
+      "textLayerFidelity": "corrupt",
+      "labels": {
+        "completeness": "pass",
+        "accuracy": "pass",
+        "order": "pass",
+        "structure": "pass"
+      },
+      "expectedLocalAudit": "fail",
+      "expectedSecondAuditAfterOcr": "pass",
+      "rationale": "The rendered print is clean and readable, but my raw text extraction returned mojibake (éè°°··é°°é¤©éè ±-1°…), i.e. the corruption is in the text layer, not on the page; labels judge the visible page (all good), local audit fails on layer fidelity, and OCR of the clean image would recover faithful text."
+    },
+    {
+      "fixture": "garbled",
+      "page": 2,
+      "visibleContent": "One control line: 对照页：文本层与页面一致，校验词 乱-2。 (control page: text layer matches the page).",
+      "textLayerFidelity": "faithful",
+      "labels": {
+        "completeness": "pass",
+        "accuracy": "pass",
+        "order": "pass",
+        "structure": "pass"
+      },
+      "expectedLocalAudit": "pass",
+      "expectedSecondAuditAfterOcr": "not-applicable",
+      "rationale": "Visible text is correct and identical to the raw text layer, as the line itself asserts."
+    },
+    {
+      "fixture": "table-grid",
+      "page": 1,
+      "visibleContent": "A bordered 3-column table (费用项目/金额/是否可退) with rows 手续费 50元 是, 运费 30元 否, 打包费 20元 是, plus caption 表格下方说明：以上费率不含税，校验词 表-1。",
+      "textLayerFidelity": "faithful",
+      "labels": {
+        "completeness": "pass",
+        "accuracy": "pass",
+        "order": "pass",
+        "structure": "pass"
+      },
+      "expectedLocalAudit": "pass",
+      "expectedSecondAuditAfterOcr": "not-applicable",
+      "rationale": "Table grid is complete (header + 3 rows, no truncation), all cells readable and present in the text layer; grid structure looks correct."
+    },
+    {
+      "fixture": "two-column",
+      "page": 1,
+      "visibleContent": "Two side-by-side columns of three lines each: left column 左栏一/二/三 (return deadline, packaging, shipping fee) and right column 右栏一/二/三 (invoice, 500 元 cap, check word 栏-1).",
+      "textLayerFidelity": "faithful",
+      "labels": {
+        "completeness": "pass",
+        "accuracy": "pass",
+        "order": "pass",
+        "structure": "pass"
+      },
+      "expectedLocalAudit": "pass",
+      "expectedSecondAuditAfterOcr": "not-applicable",
+      "rationale": "Both columns fully rendered and readable; raw text layer contains all six lines in sensible left-then-right order."
+    },
+    {
+      "fixture": "footnote",
+      "page": 1,
+      "visibleContent": "Title 脚注样本标题, three body lines about refund submission rules, and a bottom footnote after a separator: ※ 脚注：本条款不适用于 2026-01-01 之前的订单。",
+      "textLayerFidelity": "faithful",
+      "labels": {
+        "completeness": "pass",
+        "accuracy": "pass",
+        "order": "pass",
+        "structure": "pass"
+      },
+      "expectedLocalAudit": "pass",
+      "expectedSecondAuditAfterOcr": "not-applicable",
+      "rationale": "Footnote is correctly placed at the page bottom under a separator rule and is present in the text layer; body text is complete and ordered."
+    },
+    {
+      "fixture": "formula-inline",
+      "page": 1,
+      "visibleContent": "Title 公式样本标题 with inline formulas: 勾股定理 a^2 + b^2 = c^2 与圆周率 3.14159, and 级数求和 1 + 1/4 + 1/9 = 1.3611, 校验词 式-1.",
+      "textLayerFidelity": "faithful",
+      "labels": {
+        "completeness": "pass",
+        "accuracy": "pass",
+        "order": "pass",
+        "structure": "pass"
+      },
+      "expectedLocalAudit": "pass",
+      "expectedSecondAuditAfterOcr": "not-applicable",
+      "rationale": "All formula tokens render as correct readable glyphs (no wrong characters) and match the raw text layer."
+    },
+    {
+      "fixture": "image-cover",
+      "page": 1,
+      "visibleContent": "Cover page rendered as a full-page image: heading 封面（整页图像）：产品质量验收, code COVER-42, and a row of six blue-to-magenta color swatch rectangles.",
+      "textLayerFidelity": "empty",
+      "labels": {
+        "completeness": "pass",
+        "accuracy": "pass",
+        "order": "pass",
+        "structure": "pass"
+      },
+      "expectedLocalAudit": "fail",
+      "expectedSecondAuditAfterOcr": "pass",
+      "rationale": "Visible content (including readable title text) is clean and complete, but my raw extraction returned an empty text layer for this page; the image itself is crisp, so OCR would faithfully recover the visible text."
+    },
+    {
+      "fixture": "image-cover",
+      "page": 2,
+      "visibleContent": "Single line: 正文第一页：封面之后从这里开始，校验词 封-2。",
+      "textLayerFidelity": "faithful",
+      "labels": {
+        "completeness": "pass",
+        "accuracy": "pass",
+        "order": "pass",
+        "structure": "pass"
+      },
+      "expectedLocalAudit": "pass",
+      "expectedSecondAuditAfterOcr": "not-applicable",
+      "rationale": "First body page after the cover renders correctly and matches the text layer."
+    },
+    {
+      "fixture": "mixed-text-scan",
+      "page": 1,
+      "visibleContent": "Single line: 混合样本第一页：文本层存在，校验词 混-1。",
+      "textLayerFidelity": "faithful",
+      "labels": {
+        "completeness": "pass",
+        "accuracy": "pass",
+        "order": "pass",
+        "structure": "pass"
+      },
+      "expectedLocalAudit": "pass",
+      "expectedSecondAuditAfterOcr": "not-applicable",
+      "rationale": "Text-layer page renders correctly and matches the raw extraction (校验词 混-1)."
+    },
+    {
+      "fixture": "mixed-text-scan",
+      "page": 2,
+      "visibleContent": "One image-embedded line: 混合样本第二页：这一页只有图像，校验词 混-2。 (this page is image-only), clean and readable.",
+      "textLayerFidelity": "empty",
+      "labels": {
+        "completeness": "pass",
+        "accuracy": "pass",
+        "order": "pass",
+        "structure": "pass"
+      },
+      "expectedLocalAudit": "fail",
+      "expectedSecondAuditAfterOcr": "pass",
+      "rationale": "The page shows clean readable scan text but the raw text layer is empty; the image is good, so this is an empty-layer case where OCR should succeed, not a document accuracy failure."
+    },
+    {
+      "fixture": "mixed-text-scan",
+      "page": 3,
+      "visibleContent": "Single line: 混合样本第三页：文本层存在，校验词 混-3。",
+      "textLayerFidelity": "faithful",
+      "labels": {
+        "completeness": "pass",
+        "accuracy": "pass",
+        "order": "pass",
+        "structure": "pass"
+      },
+      "expectedLocalAudit": "pass",
+      "expectedSecondAuditAfterOcr": "not-applicable",
+      "rationale": "Text-layer page renders correctly and matches the raw extraction (校验词 混-3); page position preserved."
+    },
+    {
+      "fixture": "partially-rasterized",
+      "page": 1,
+      "visibleContent": "Two text lines (混排页第一行/第二行：这一行[也]在文本层里), a small rasterized image strip containing the legible line 混排页第三行：这一行只存在于图像里，校验词 缺-3 (verified by high-zoom render), and caption 图 1：上方插图在文本层里没有对应物。",
+      "textLayerFidelity": "empty",
+      "labels": {
+        "completeness": "pass",
+        "accuracy": "pass",
+        "order": "pass",
+        "structure": "pass"
+      },
+      "expectedLocalAudit": "fail",
+      "expectedSecondAuditAfterOcr": "pass",
+      "rationale": "The text layer covers lines 1-2 and the caption but the third line exists only as an image with no text counterpart (partial coverage, categorized under empty since visible text-bearing content is absent from the layer); the embedded strip is crisp and fully legible at zoom, so OCR would recover it faithfully. Visible page itself is complete, correct, ordered, and coherent."
+    },
+    {
+      "fixture": "scanned-textless",
+      "page": 1,
+      "visibleContent": "Clean scan image with two readable lines: 扫描件第一页：这是纯图像页，没有文本层。 and 发票号 INV-77881，校验词 扫-1。",
+      "textLayerFidelity": "empty",
+      "labels": {
+        "completeness": "pass",
+        "accuracy": "pass",
+        "order": "pass",
+        "structure": "pass"
+      },
+      "expectedLocalAudit": "fail",
+      "expectedSecondAuditAfterOcr": "pass",
+      "rationale": "Pure image page with crisp readable print and no text layer; the document image is good, so the local text-layer audit fails but OCR of the scan would produce faithful text."
+    },
+    {
+      "fixture": "scanned-textless",
+      "page": 2,
+      "visibleContent": "Clean scan image with two readable lines: 扫描件第二页：图像里的正文第二段。 and 本页只有像素，校验词 扫-2。",
+      "textLayerFidelity": "empty",
+      "labels": {
+        "completeness": "pass",
+        "accuracy": "pass",
+        "order": "pass",
+        "structure": "pass"
+      },
+      "expectedLocalAudit": "fail",
+      "expectedSecondAuditAfterOcr": "pass",
+      "rationale": "Second pure-image scan with clean legible print and empty text layer; OCR fallback should recover the visible text."
+    },
+    {
+      "fixture": "blank-page",
+      "page": 1,
+      "visibleContent": "Single line: 空页样本第一页：校验词 空-1。",
+      "textLayerFidelity": "faithful",
+      "labels": {
+        "completeness": "pass",
+        "accuracy": "pass",
+        "order": "pass",
+        "structure": "pass"
+      },
+      "expectedLocalAudit": "pass",
+      "expectedSecondAuditAfterOcr": "not-applicable",
+      "rationale": "Page 1 is a normal text page (only page 2 of this fixture is blank) and matches the text layer."
+    },
+    {
+      "fixture": "blank-page",
+      "page": 2,
+      "visibleContent": "Page is genuinely blank: no visible text, graphics, or marks anywhere on the page.",
+      "textLayerFidelity": "blank-page",
+      "labels": {
+        "completeness": "pass",
+        "accuracy": "pass",
+        "order": "pass",
+        "structure": "pass"
+      },
+      "expectedLocalAudit": "pass",
+      "expectedSecondAuditAfterOcr": "not-applicable",
+      "rationale": "The rendered image is entirely white and the text layer is empty, which is a faithful representation of a genuinely blank page (page 3's text confirms page positions must be preserved); no OCR fallback expected."
+    },
+    {
+      "fixture": "blank-page",
+      "page": 3,
+      "visibleContent": "Single line: 空页样本第三页：页位必须保持为第三页，校验词 空-3。",
+      "textLayerFidelity": "faithful",
+      "labels": {
+        "completeness": "pass",
+        "accuracy": "pass",
+        "order": "pass",
+        "structure": "pass"
+      },
+      "expectedLocalAudit": "pass",
+      "expectedSecondAuditAfterOcr": "not-applicable",
+      "rationale": "Page 3 renders at the correct position with text matching the layer, flanked by the intentional blank page 2."
+    },
+    {
+      "fixture": "holdout-image-digits",
+      "page": 1,
+      "expectedLocalAudit": "fail",
+      "expectedSecondAuditAfterOcr": "pass",
+      "rationale": "The rendered page visibly contains Pressure: 12.7 kPa and Flow: 48.6 L/min beneath the heading. Local extracted text contains only the heading and introductory sentence, omitting both measurements and their units. Faithful OCR must include these values."
+    },
+    {
+      "fixture": "holdout-small-raster",
+      "page": 1,
+      "expectedLocalAudit": "fail",
+      "expectedSecondAuditAfterOcr": "pass",
+      "rationale": "The rendered page visibly contains the small-text statement Maximum current: 3.8 A at 24 V. Local extraction contains only the heading and introduction, omitting this substantive current and voltage specification. Faithful OCR must preserve both values and units."
+    },
+    {
+      "fixture": "holdout-decoration",
+      "page": 1,
+      "expectedLocalAudit": "pass",
+      "expectedSecondAuditAfterOcr": "pass",
+      "rationale": "The only visible text is Equipment report and Readings and status for the current installation, both present in local extraction. The circle, rectangle and triangle contain no text or measurements. Decorative shapes introduce no missing textual content; OCR is not required by this local audit."
+    },
+    {
+      "fixture": "holdout-complete-mixed",
+      "page": 1,
+      "expectedLocalAudit": "pass",
+      "expectedSecondAuditAfterOcr": "pass",
+      "rationale": "The rendered page repeats Pressure: 12.7 kPa and Flow: 48.6 L/min in the large upper graphic and a smaller lower transcription. Local extraction includes the heading, introduction and both complete measurements with correct units. All distinct visible textual information is covered, despite omitting the redundant graphical copy; OCR is not required by this local audit."
+    }
+  ]
+}

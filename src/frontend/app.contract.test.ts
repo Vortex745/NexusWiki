@@ -33,6 +33,7 @@ const thread = read("frontend/src/components/thread/Thread.tsx")
 const app = read("frontend/src/App.tsx")
 const indexHtml = read("frontend/index.html")
 const styles = read("frontend/src/styles/index.css")
+const sharedDialog = read("frontend/src/components/ui/Dialog.tsx")
 
 // ---------------------------------------------------------------------------
 // Pipeline
@@ -136,10 +137,14 @@ test("a running evaluation can be cancelled and keeps polling to its terminal st
 test("attachments are server-owned session resources, not prompt text", () => {
   const references = read("frontend/src/components/thread/References.tsx")
   const attachmentsApi = read("frontend/src/lib/api.ts")
-  // Ticket 22 (ATT-01): the browser uploads to the conversation's attachment
-  // endpoint instead of pasting file text into the prompt, so the run can
-  // retrieve and cite the file — and only inside that conversation.
-  assert.match(app, /uploadSessionAttachment/, "the composer uploads attachments to the session")
+  // Ticket 22 (ATT-01): an attachment belongs to one conversation and is read,
+  // removed and promoted through the server — its text is never pasted into the
+  // prompt, so the run can retrieve and cite the file inside that conversation.
+  // The composer's upload button was removed as redundant (the knowledge-base
+  // import dialog is the file intake path), so the upload route stays in the
+  // client but nothing in the thread calls it any more.
+  assert.equal(app.includes("uploadSessionAttachment"), false, "the composer offers no upload")
+  assert.equal(/type="file"/.test(thread), false, "and carries no file input")
   assert.match(app, /removeSessionAttachment/, "removal is a server action")
   assert.match(app, /promoteSessionAttachment/, "promotion is an explicit action")
   assert.equal(/\[附件：/.test(app), false, "file text is no longer pasted into the prompt")
@@ -157,9 +162,8 @@ test("React components do not own chat state (no direct Conversation access)", (
   for (const file of [
     "frontend/src/components/thread/Thread.tsx",
     "frontend/src/components/Sidebar.tsx",
-    "frontend/src/components/TopBar.tsx",
+    "frontend/src/components/AppShell.tsx",
     "frontend/src/components/panels/TracePanel.tsx",
-    "frontend/src/components/panels/InsightDialog.tsx",
   ]) {
     const source = read(file)
     assert.equal(
@@ -262,7 +266,7 @@ test("the old RAGAS read entry is gone from the frontend too", () => {
     "frontend/src/App.tsx",
     "frontend/src/lib/api.ts",
     "frontend/src/lib/constants.ts",
-    "frontend/src/components/panels/InsightDialog.tsx",
+    "frontend/src/components/panels/TracePanel.tsx",
     "frontend/src/styles/index.css",
   ]
   for (const file of files) {
@@ -278,7 +282,7 @@ test("the old RAGAS read entry is gone from the frontend too", () => {
     }
   }
   assert.equal(
-    read("frontend/src/components/panels/InsightDialog.tsx").includes("质量评估"),
+    read("frontend/src/components/panels/TracePanel.tsx").includes("质量评估"),
     false,
     "the RAGAS tab is removed, not hidden behind a flag"
   )
@@ -286,10 +290,17 @@ test("the old RAGAS read entry is gone from the frontend too", () => {
 
 test("the evaluation entry and the answer-path view both survive the switch", () => {
   const sidebar = read("frontend/src/components/Sidebar.tsx")
-  const insight = read("frontend/src/components/panels/InsightDialog.tsx")
+  // The answer path has exactly one surface: the 执行链路 panel. The old
+  // InsightDialog duplicate was retired once both rendered the same TraceSteps.
+  const panel = read("frontend/src/components/panels/TracePanel.tsx")
   assert.ok(sidebar.includes("运行评测"), "evaluation is a first-class sidebar entry")
-  assert.match(insight, /<TraceSteps\b/, "the answer-path view still renders the trace steps")
-  assert.match(insight, /aria-label="回答路径"/, "the trace panel keeps its accessible name")
+  assert.match(panel, /<TraceSteps\b/, "the answer-path view still renders the trace steps")
+  assert.match(panel, /aria-label="回答来源与执行链路"/, "the trace panel keeps its accessible name")
+  assert.equal(
+    existsSync(join(root, "frontend/src/components/panels/InsightDialog.tsx")),
+    false,
+    "the duplicate answer-path dialog stays deleted"
+  )
   assert.match(app, /<EvaluationDialog\b/, "the app mounts the evaluation dialog")
 })
 
@@ -310,31 +321,32 @@ test("the evaluation dialog covers every state and stays usable on small screens
   }
   assert.match(dialog, /重启后不可查询/, "the restart-empty state is explained")
   assert.match(dialog, /aria-label="评测进度"/, "progress is announced")
-  assert.match(dialog, /aria-label="关闭评测"/, "the close control has an accessible name")
+  assert.match(dialog, /<Dialog\b/, "the panel uses the shared dialog primitive")
+  assert.match(sharedDialog, /closeLabel=\{`关闭\$\{title\}`\}/, "the Arc close control has an accessible name")
   assert.ok(dialog.includes("max-md:"), "the dialog reflows on narrow screens")
   assert.match(
-    dialog,
-    /<dialog\b/,
-    "it is a native dialog: Escape, focus and modality come from the platform"
+    sharedDialog,
+    /<DialogContent\b/,
+    "Arc DialogContent owns Escape, focus and modality"
   )
 })
 
 test("the evaluation dialog is operable by keyboard and collapses on a narrow layout", () => {
   const dialog = read("frontend/src/components/panels/EvaluationDialog.tsx")
-  // Native dialog owns Escape, modality and the focus trap; every action below
-  // is a real <button>/<input>/<textarea>/<label>, so Tab/Enter/Space/arrow keys
-  // come from the platform instead of a hand-rolled keyboard model.
-  assert.match(dialog, /dialog\.showModal\(\)/, "opening uses the platform modal path")
-  assert.match(dialog, /type="radio"/, "the dataset choice is a native radio group")
+  // Radix owns Escape, modality and focus; its controls retain keyboard behavior.
+  assert.match(sharedDialog, /<DialogRoot\s+open=\{open\}/, "the shared surface uses a controlled Arc dialog")
+  assert.match(dialog, /<RadioGroup\b/, "the dataset choices use the keyboard-accessible radio group")
+  assert.match(dialog, /onValueChange=\{setSelectedId\}/, "radio selection keeps its business state owner")
   assert.match(dialog, /aria-label="选择数据集 JSON 文件"/, "the file picker is keyboard reachable")
-  assert.match(dialog, /focus-visible:outline-2/, "focus stays visible for keyboard users")
+  assert.match(read("frontend/src/components/primitives/button.tsx"), /<ArcButton\b/, "buttons render through Arc")
+  assert.match(read("frontend/src/components/arc/foundation.css"), /:focus-visible/, "Arc keeps keyboard focus visible")
   assert.equal(/onKeyDown=/.test(dialog), false, "no keyboard model is layered over the platform's")
   assert.equal(/tabIndex=\{-1\}/.test(dialog), false, "nothing is removed from the tab order")
   // Narrow layout: full-screen under md, metric grids collapse, padding follows.
-  assert.match(dialog, /max-md:h-dvh/, "the dialog fills the narrow viewport")
+  assert.match(sharedDialog, /max-md:h-dvh/, "the dialog fills the narrow viewport")
   assert.match(dialog, /max-md:grid-cols-2/, "per-case metrics collapse to two columns")
   assert.match(dialog, /max-md:grid-cols-1/, "summary metrics collapse to one column")
-  assert.match(dialog, /max-md:px-4/, "content padding follows the narrow screen")
+  assert.match(sharedDialog, /max-md:px-4/, "content padding follows the narrow screen")
 })
 
 test("the FAQ workspace manages versioned entries and row-precise imports", () => {
@@ -350,7 +362,7 @@ test("the FAQ workspace manages versioned entries and row-precise imports", () =
   assert.match(dialog, /归一化问题/, "the normalized question (the conflict axis) is shown")
   assert.match(dialog, /逐行校验/, "the copy states that rejected rows are reported")
   assert.match(dialog, /importResult\.issues\.map/, "every rejected row is displayed")
-  assert.match(dialog, /max-md:h-dvh/, "the panel reflows on a narrow screen")
+  assert.match(dialog, /<Dialog\b/, "the panel uses the shared narrow-screen dialog")
   assert.match(sidebar, /标准问答/, "the FAQ workspace has a first-class entry")
   assert.match(read("frontend/src/App.tsx"), /<FaqDialog\b/, "the app mounts the FAQ panel")
 })
@@ -374,7 +386,7 @@ test("an answer carries a feedback submission and reviewers can filter the store
   assert.match(feedbackDialog, /runFilter/, "the run (provenance) is filterable")
   assert.match(feedbackDialog, /STATUS_LABELS/, "the supported statuses are labelled")
   assert.match(feedbackDialog, /record\.messageId/, "the detail shows the message/run provenance")
-  assert.match(feedbackDialog, /max-md:h-dvh/, "the panel reflows on a narrow screen")
+  assert.match(feedbackDialog, /<Dialog\b/, "the panel uses the shared narrow-screen dialog")
   assert.match(sidebar, /反馈审阅/, "the review surface has a first-class entry")
   assert.match(read("frontend/src/App.tsx"), /<FeedbackDialog\b/, "the app mounts the review panel")
 })
@@ -478,7 +490,7 @@ test("the evaluation dialog reports how the batch ended and keeps every case rea
   const dialog = read("frontend/src/components/panels/EvaluationDialog.tsx")
   assert.match(
     dialog,
-    /成功 \{task\.counts\.answered\} · 失败 \{task\.counts\.failed\} · 降级/,
+    /成功\s+\{task\.counts\.answered\}\s+·\s+失败\s+\{task\.counts\.failed\}\s+·\s+降级/,
     "answered/failed/degraded counts are shown next to the progress"
   )
   assert.match(
@@ -521,15 +533,18 @@ test("the evaluation dialog presents BLEU and ROUGE as text similarity with thei
 // Product surface kept across the migration
 // ---------------------------------------------------------------------------
 
-test("mem0-style composer and suggestion surface are preserved", () => {
+test("shadcn composer and evidence surface preserve product capabilities", () => {
   const references = read("frontend/src/components/thread/References.tsx")
   const memoryDialog = read("frontend/src/components/panels/MemoryDialog.tsx")
-  assert.match(thread, /--thread-max-width/, "thread keeps the 42rem mem0 column")
-  assert.match(thread, /输入消息，向 NexusRAG 提问/, "composer placeholder is preserved")
+  assert.match(thread, /--thread-max-width/, "thread keeps a bounded reading column")
+  // The brand name is not the invariant — the placeholder sentence is — so the
+  // product name is matched loosely and a rename cannot redden this.
+  assert.match(thread, /输入消息，向 Nexus\w+ 提问/, "composer placeholder is preserved")
   // Ticket 33 (MEM-01B): memory is recalled SERVER-side (owner-scoped,
   // traceable, disableable) — the client no longer pastes it into prompts.
   assert.doesNotMatch(app, /getMemoriesPromptContext/, "memory is not injected into prompts client-side")
   assert.match(memoryDialog, /记忆/, "memory management surface is preserved")
   assert.match(memoryDialog, /建议/, "the suggestion review surface lives in the memory dialog")
-  assert.match(references, /参考来源/, "references disclosure is preserved")
+  assert.match(thread, /参考来源/, "the answer still offers its sources")
+  assert.match(references, /data-reference-item/, "each source remains addressable by citation id")
 })

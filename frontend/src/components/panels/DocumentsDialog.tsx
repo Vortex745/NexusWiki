@@ -1,21 +1,41 @@
-import { BookOpen, FileText, NotebookPen, RefreshCw, X } from "lucide"
-import { useEffect, useRef, useState } from "react"
+import { Button as UiButton } from "@/components/primitives/button"
+import { Alert, AlertDescription } from "@/components/primitives/alert"
+import { Input } from "@/components/primitives/input"
+import { PanelDialog } from "../ui/Dialog"
+import { DialogTitle } from "../primitives/dialog"
+import {
+  BookOpen,
+  FileText,
+  NotebookPen,
+  RefreshCw,
+  Trash2,
+  X,
+} from "../ui/icons"
+import { useEffect, useState } from "react"
 
 import { Icon } from "../ui/Icon"
+import { Dialog } from "../ui/Dialog"
+import { Button, Select, StatusBadge } from "../ui/Controls"
+import { cn } from "../../lib/cn"
 import { useSignedInSession } from "../../runtime/SessionContext"
 import { useAppShell } from "../../runtime/AppShellContext"
 import { SyncDialog } from "./SyncDialog"
 import { WikiDialog } from "./WikiDialog"
 import {
   cancelDocument,
+  createDocumentFolder,
+  deleteDocumentFolder,
+  fetchDocumentFolders,
   fetchDocumentStatus,
   fetchKnowledgeBaseDocuments,
+  renameDocumentFolder,
   reprocessDocument,
   retireSource,
   retryDocument,
   type DocumentCatalogEntryPayload,
   type DocumentCatalogPayload,
   type DocumentCatalogView,
+  type DocumentFolderPayload,
 } from "../../lib/api"
 
 /**
@@ -31,6 +51,9 @@ import {
 
 const VIEW_STORAGE_KEY = "nexusrag.documents.view"
 
+/** The delete action asks for no reason, but the tombstone requires one. */
+const DELETION_REASON = "文档目录删除"
+
 const STATUS_LABELS: Record<string, string> = {
   pending: "处理中",
   completed: "已完成",
@@ -38,15 +61,34 @@ const STATUS_LABELS: Record<string, string> = {
   cancelled: "已取消",
 }
 
+/**
+ * The processing state carries the colour, because it is the one fact per row
+ * the user acts on. It used to be a grey pill identical to the retired marker and
+ * the version number, so a row of four looked like a row of four pills.
+ */
+const STATUS_TONES: Record<
+  string,
+  "neutral" | "success" | "warning" | "danger"
+> = {
+  pending: "neutral",
+  completed: "success",
+  failed: "danger",
+  cancelled: "warning",
+}
+
 const PAGE_SIZE = 20
 
 function readStoredView(kbId: string): DocumentCatalogView {
   try {
     const raw = window.localStorage.getItem(VIEW_STORAGE_KEY)
-    const parsed = raw === null ? null : (JSON.parse(raw) as Partial<DocumentCatalogView> & { kbId?: string })
+    const parsed =
+      raw === null
+        ? null
+        : (JSON.parse(raw) as Partial<DocumentCatalogView> & { kbId?: string })
     if (parsed && parsed.kbId === kbId) {
       return {
-        page: typeof parsed.page === "number" && parsed.page >= 1 ? parsed.page : 1,
+        page:
+          typeof parsed.page === "number" && parsed.page >= 1 ? parsed.page : 1,
         status: typeof parsed.status === "string" ? parsed.status : "",
         tag: typeof parsed.tag === "string" ? parsed.tag : "",
         folder: typeof parsed.folder === "string" ? parsed.folder : "",
@@ -60,22 +102,22 @@ function readStoredView(kbId: string): DocumentCatalogView {
 
 function persistView(kbId: string, view: DocumentCatalogView): void {
   try {
-    window.localStorage.setItem(VIEW_STORAGE_KEY, JSON.stringify({ kbId, ...view }))
+    window.localStorage.setItem(
+      VIEW_STORAGE_KEY,
+      JSON.stringify({ kbId, ...view }),
+    )
   } catch {
     // ignore
   }
 }
 
-const selectClass =
-  "h-8 min-w-0 rounded-md border border-line bg-surface px-2 text-xs text-ink outline-none focus:border-brand disabled:opacity-50"
-
 const rowButtonClass =
-  "inline-flex h-7 cursor-pointer items-center gap-1 rounded-lg border border-line px-2 text-[11px] text-muted transition-colors hover:bg-surface-subtle hover:text-ink disabled:cursor-not-allowed disabled:opacity-50"
+  "inline-flex h-7 cursor-pointer items-center gap-1 rounded-lg border border-line px-2 text-[11px] text-muted-foreground transition-colors hover:bg-surface-subtle hover:text-ink disabled:cursor-not-allowed disabled:opacity-50"
 
 /**
  * Ticket 12 (DOC-01B): administrator actions reuse the server's lifecycle —
  * cancel (pending), retry (failed/cancelled), reprocess (completed) and
- * retire (whole source, requires a reason). Durable errors are read from the
+ * delete (whole source, every version). Durable errors are read from the
  * ingest status endpoint on demand.
  */
 function DocumentRow({
@@ -84,16 +126,16 @@ function DocumentRow({
   busy,
   onAction,
   onView,
+  onDelete,
 }: {
   doc: DocumentCatalogEntryPayload
   canAdmin: boolean
   busy: boolean
   onAction: (action: () => Promise<void>, successText: string) => void
   onView: (doc: DocumentCatalogEntryPayload) => void
+  onDelete: (doc: DocumentCatalogEntryPayload) => void
 }) {
   const [errorDetail, setErrorDetail] = useState<string | null>(null)
-  const [retiring, setRetiring] = useState(false)
-  const [reason, setReason] = useState("")
 
   const showError = () => {
     if (errorDetail !== null) {
@@ -105,117 +147,225 @@ function DocumentRow({
         const failed = collectErrors(payload)
         setErrorDetail(failed.length > 0 ? failed : "没有记录到错误信息")
       })
-      .catch((err: unknown) => setErrorDetail(err instanceof Error ? err.message : String(err)))
+      .catch((err: unknown) =>
+        setErrorDetail(err instanceof Error ? err.message : String(err)),
+      )
   }
 
+  const statusTone = STATUS_TONES[doc.status] ?? "neutral"
+  // The subtitle only earns its line when it says something the title does not:
+  // the catalog echoes the file name back as the title, so rendering both made
+  // every row repeat itself.
+  const distinctFileName =
+    doc.fileName && doc.fileName !== doc.title ? doc.fileName : null
+  const subtitle = [
+    doc.folder,
+    distinctFileName,
+    doc.tags.length > 0 ? doc.tags.join("、") : null,
+  ]
+    .filter(Boolean)
+    .join(" · ")
+
   return (
-    <li className="rounded-lg border border-line px-3 py-2.5">
+    <li
+      className={cn(
+        "rounded-[10px] border px-3 py-2.5 transition-colors",
+        // "Which version answers now" is a property of the row, so the row says
+        // it. It used to be one more grey pill in a pile of identical grey pills.
+        doc.active ? "border-brand-line bg-brand-subtle/25" : "border-line",
+      )}
+    >
       <div className="flex items-center gap-3 max-md:flex-wrap">
-        <Icon icon={FileText} className="size-4 flex-none text-muted" />
+        <Icon
+          icon={FileText}
+          className="size-4 flex-none text-muted-foreground"
+        />
         <div className="min-w-0 flex-1">
-          <div className="flex flex-wrap items-center gap-1.5">
-            <span className="truncate text-xs font-medium text-ink">{doc.title}</span>
-            {doc.retired ? (
-              <span className="flex-none rounded-full border border-line bg-surface-subtle px-1.5 py-0.5 font-mono text-[10px] text-muted">
-                已退役
-              </span>
-            ) : null}
-            {doc.active ? (
-              <span className="flex-none rounded-full border border-brand-line bg-brand-subtle px-1.5 py-0.5 font-mono text-[10px] text-brand">
-                活动版本
-              </span>
-            ) : null}
-            <span className="flex-none rounded-full border border-line bg-surface-subtle px-1.5 py-0.5 font-mono text-[10px] text-muted">
-              {STATUS_LABELS[doc.status] ?? doc.status}
+          <div className="flex min-w-0 items-center gap-2">
+            <span className="truncate text-xs font-medium text-ink">
+              {doc.title}
             </span>
-            <span className="flex-none rounded-full border border-line bg-surface-subtle px-1.5 py-0.5 font-mono text-[10px] text-muted">
+            <StatusBadge tone={statusTone}>
+              {STATUS_LABELS[doc.status] ?? doc.status}
+            </StatusBadge>
+            {/* Metadata, not status: no border, no fill. */}
+            <span className="flex-none font-mono text-[10px] text-muted-foreground/60">
               v{doc.version}
             </span>
+            {doc.active ? (
+              <span className="flex-none text-[10px] text-brand">活动版本</span>
+            ) : null}
           </div>
-          <p className="mt-0.5 truncate text-[11px] text-muted/80">
-            {doc.folder ? `${doc.folder} · ` : ""}
-            {doc.fileName ?? doc.source}
-            {doc.tags.length > 0 ? ` · ${doc.tags.join("、")}` : ""}
-          </p>
+          {subtitle ? (
+            <p className="mt-0.5 truncate text-[11px] text-muted-foreground/80">
+              {subtitle}
+            </p>
+          ) : null}
         </div>
-        <button
-          type="button"
-          onClick={() => onView(doc)}
-          title="查看该版本"
-          className="flex-none cursor-pointer rounded-lg border border-line px-2 py-1 text-[11px] text-muted transition-colors hover:bg-surface-subtle hover:text-ink"
-        >
-          查看
-        </button>
-        {canAdmin && !doc.retired ? (
-          <div className="flex flex-none flex-wrap items-center justify-end gap-1.5">
-            {doc.status === "pending" ? (
-              <button type="button" disabled={busy} className={rowButtonClass}
-                onClick={() => onAction(() => cancelDocument(doc.docId), "已请求取消")}>
-                取消
-              </button>
-            ) : null}
-            {doc.status === "failed" || doc.status === "cancelled" ? (
-              <>
-                <button type="button" disabled={busy} className={rowButtonClass} onClick={showError}>
-                  {errorDetail !== null ? "收起错误" : "查看错误"}
-                </button>
-                <button type="button" disabled={busy} className={rowButtonClass}
-                  onClick={() => onAction(() => retryDocument(doc.docId), "已重新排队")}>
-                  重试
-                </button>
-              </>
-            ) : null}
-            {doc.status === "completed" ? (
-              <button type="button" disabled={busy} className={rowButtonClass}
-                onClick={() => onAction(() => reprocessDocument(doc.docId), "已重新处理")}>
-                重新处理
-              </button>
-            ) : null}
-            {retiring ? (
-              <span className="flex items-center gap-1">
-                <input
-                  value={reason}
-                  onChange={(event) => setReason(event.target.value)}
-                  placeholder="退役原因"
-                  maxLength={200}
-                  className="h-7 w-32 rounded-md border border-line bg-surface px-2 text-[11px] outline-none focus:border-brand"
-                />
-                <button
+        {/* One right-aligned group, fixed order, one shared button style — the
+            ragged right edge came from 查看 sitting outside the admin group. */}
+        <div className="flex flex-none flex-wrap items-center justify-end gap-1.5">
+          <UiButton
+            variant="ghost"
+            size="sm"
+            type="button"
+            onClick={() => onView(doc)}
+            title="查看该版本"
+            className={rowButtonClass}
+          >
+            查看
+          </UiButton>
+          {canAdmin ? (
+            <>
+              {doc.status === "pending" ? (
+                <UiButton
+                  variant="ghost"
+                  size="sm"
                   type="button"
-                  disabled={busy || !reason.trim()}
+                  disabled={busy}
                   className={rowButtonClass}
-                  onClick={() => {
-                    const finalReason = reason.trim()
-                    setRetiring(false)
-                    setReason("")
-                    onAction(() => retireSource(doc.sourceId, finalReason), "已退役该文档的全部版本")
-                  }}
+                  onClick={() =>
+                    onAction(() => cancelDocument(doc.docId), "已请求取消")
+                  }
                 >
-                  确认退役
-                </button>
-              </span>
-            ) : (
-              <button type="button" disabled={busy} className={rowButtonClass}
-                title="退役该文档的全部版本，历史引用保持可追溯"
-                onClick={() => setRetiring(true)}>
-                退役
-              </button>
-            )}
-          </div>
-        ) : null}
+                  取消
+                </UiButton>
+              ) : null}
+              {doc.status === "failed" || doc.status === "cancelled" ? (
+                <>
+                  <UiButton
+                    variant="ghost"
+                    size="sm"
+                    type="button"
+                    disabled={busy}
+                    className={rowButtonClass}
+                    onClick={showError}
+                  >
+                    {errorDetail !== null ? "收起错误" : "查看错误"}
+                  </UiButton>
+                  <UiButton
+                    variant="ghost"
+                    size="sm"
+                    type="button"
+                    disabled={busy}
+                    className={rowButtonClass}
+                    onClick={() =>
+                      onAction(() => retryDocument(doc.docId), "已重新排队")
+                    }
+                  >
+                    重试
+                  </UiButton>
+                </>
+              ) : null}
+              {doc.status === "completed" ? (
+                <UiButton
+                  variant="ghost"
+                  size="sm"
+                  type="button"
+                  disabled={busy}
+                  className={rowButtonClass}
+                  onClick={() =>
+                    onAction(() => reprocessDocument(doc.docId), "已重新处理")
+                  }
+                >
+                  重新处理
+                </UiButton>
+              ) : null}
+              <UiButton
+                variant="ghost"
+                size="sm"
+                type="button"
+                disabled={busy}
+                className={rowButtonClass}
+                title="删除该文档的全部版本"
+                onClick={() => onDelete(doc)}
+              >
+                删除
+              </UiButton>
+            </>
+          ) : null}
+        </div>
       </div>
+
       {errorDetail !== null ? (
-        <p role="alert" className="mt-2 rounded-md border border-red-200 bg-red-50 px-2 py-1.5 text-[11px] text-red-700 dark:border-red-900 dark:bg-red-950/40 dark:text-red-300">
-          {errorDetail}
-        </p>
+        <Alert
+          variant="destructive"
+          role="alert"
+          className="mt-2 border px-2 py-1.5"
+        >
+          <AlertDescription>{errorDetail}</AlertDescription>
+        </Alert>
       ) : null}
     </li>
   )
 }
 
-function collectErrors(payload: Awaited<ReturnType<typeof fetchDocumentStatus>>): string {
+/**
+ * The catalog's delete. It runs the server's one destructive document command
+ * — source retirement — so it destroys the retrieval content and keeps the
+ * version rows, which is what makes a citation from a past answer still open.
+ * The catalog no longer lists retired sources, so from here it reads as deleted.
+ *
+ * No reason field: the tombstone requires a non-empty one, so the command
+ * supplies a fixed string and the actor comes from the session, not the form.
+ */
+function DeleteSourceDialog({
+  target,
+  busy,
+  onClose,
+  onConfirm,
+}: {
+  target: DocumentCatalogEntryPayload | null
+  busy: boolean
+  onClose: () => void
+  onConfirm: (target: DocumentCatalogEntryPayload) => void
+}) {
+  return (
+    <Dialog
+      open={target !== null}
+      onClose={onClose}
+      title={target ? `删除「${target.title}」` : "删除文档"}
+      titleId="documents-delete-title"
+      icon={Trash2}
+      tier="confirm"
+    >
+      <div className="flex flex-col gap-2 text-xs leading-relaxed text-muted-foreground">
+        <p>将删除这个文档的全部版本，它将不再参与检索。</p>
+        <p
+          className="rounded-[10px] border border-danger-line bg-danger-subtle px-3 py-2 text-danger"
+          title="分块、图谱关系、页索引节点与图片资产交给后台队列清理，命令返回只代表已排队。文档的版本记录和删除墓碑保留，历史回答里的引用仍可追溯。"
+        >
+          此操作不可恢复。
+        </p>
+      </div>
+
+      <div className="flex justify-end gap-2">
+        <Button size="sm" onClick={onClose} disabled={busy}>
+          取消
+        </Button>
+        <Button
+          size="sm"
+          tone="danger"
+          disabled={busy || target === null}
+          onClick={() => target && onConfirm(target)}
+        >
+          确认删除
+        </Button>
+      </div>
+    </Dialog>
+  )
+}
+
+function collectErrors(
+  payload: Awaited<ReturnType<typeof fetchDocumentStatus>>,
+): string {
   const messages: string[] = []
-  const walk = (nodes: Array<{ span: { name: string; status: string; errorMessage: string | null }; children: unknown[] }>) => {
+  const walk = (
+    nodes: Array<{
+      span: { name: string; status: string; errorMessage: string | null }
+      children: unknown[]
+    }>,
+  ) => {
     for (const node of nodes) {
       if (
         (node.span.status === "failed" || node.span.status === "cancelled") &&
@@ -239,14 +389,18 @@ export function DocumentsDialog({
   knowledgeBase: { id: string; name: string } | null
   onClose: () => void
 }) {
-  const dialogRef = useRef<HTMLDialogElement>(null)
   const kbId = knowledgeBase?.id ?? null
   // The browse session: (kbId, view) is restored from storage exactly once
   // per open/switch, so opening the dialog never fetches twice.
-  const [session, setSession] = useState<{ kbId: string; view: DocumentCatalogView } | null>(null)
+  const [session, setSession] = useState<{
+    kbId: string
+    view: DocumentCatalogView
+  } | null>(null)
   const view = session?.kbId === kbId ? session.view : null
   const [catalog, setCatalog] = useState<DocumentCatalogPayload | null>(null)
-  const [status, setStatus] = useState<"idle" | "loading" | "ready" | "error">("idle")
+  const [status, setStatus] = useState<"idle" | "loading" | "ready" | "error">(
+    "idle",
+  )
   const [error, setError] = useState<string | null>(null)
   // Ticket 12 (DOC-01B): bumped after an admin action so the list refetches.
   const [refreshTick, setRefreshTick] = useState(0)
@@ -258,12 +412,108 @@ export function DocumentsDialog({
   const [wikiOpen, setWikiOpen] = useState(false)
   // Ticket 39 (SYNC-01A): the administrator sync data-source surface.
   const [syncOpen, setSyncOpen] = useState(false)
+  // The row awaiting its confirmation. Owned here, not per row, so one dialog
+  // serves the whole list.
+  const [deleteTarget, setDeleteTarget] =
+    useState<DocumentCatalogEntryPayload | null>(null)
+
+  // The directories of this knowledge base, read from the REGISTRY rather than
+  // the catalog facets: an empty folder is still a folder someone can name,
+  // file into, or delete.
+  const [folders, setFolders] = useState<DocumentFolderPayload[]>([])
+  const [creatingFolder, setCreatingFolder] = useState(false)
+  /** The folder whose name is being edited, or null while nothing is renaming. */
+  const [renamingFolder, setRenamingFolder] = useState<string | null>(null)
+  const [folderDraft, setFolderDraft] = useState("")
+  const [folderToDelete, setFolderToDelete] =
+    useState<DocumentFolderPayload | null>(null)
+
+  useEffect(() => {
+    if (!open || !kbId) {
+      setFolders([])
+      return
+    }
+    let discarded = false
+    void fetchDocumentFolders(kbId)
+      .then((list) => {
+        if (!discarded) setFolders(list)
+      })
+      .catch(() => {
+        // A failed directory list must not hide the documents: the filter simply
+        // falls back to the names the catalog itself reports.
+        if (!discarded) setFolders([])
+      })
+    return () => {
+      discarded = true
+    }
+  }, [open, kbId, refreshTick])
+
+  const selectedFolderName = view?.folder ?? ""
+  const selectedFolder =
+    folders.find((folder) => folder.name === selectedFolderName) ?? null
+  const editingFolder = creatingFolder || renamingFolder !== null
+  /**
+   * Registry names first, plus any name the catalog still reports as a facet —
+   * a document can carry a label whose directory was created before the registry
+   * existed, and a filter that could not reach it would hide real content.
+   */
+  const folderOptions = [
+    ...new Set([
+      ...folders.map((folder) => folder.name),
+      ...(catalog?.folders ?? []),
+    ]),
+  ].sort((left, right) => left.localeCompare(right, "zh-Hans-CN"))
+
+  const stopFolderEditing = () => {
+    setCreatingFolder(false)
+    setRenamingFolder(null)
+    setFolderDraft("")
+  }
+
+  const saveFolderDraft = () => {
+    if (!kbId) return
+    const name = folderDraft.trim()
+    if (!name) return
+    if (renamingFolder !== null) {
+      const previous = renamingFolder
+      runAction(async () => {
+        await renameDocumentFolder(
+          folders.find((folder) => folder.name === previous)?.id ?? "",
+          name,
+        )
+        // Follow the rename: staying filtered on the old name would read as the
+        // folder losing every document it had.
+        if (view?.folder === previous) setFilter({ folder: name })
+        showToast(`已重命名分类「${name}」`)
+      }, "")
+    } else {
+      runAction(async () => {
+        await createDocumentFolder(kbId, name)
+        showToast(`已创建分类「${name}」`)
+      }, "")
+    }
+    stopFolderEditing()
+  }
+
+  const confirmFolderDelete = () => {
+    const target = folderToDelete
+    if (!target) return
+    setFolderToDelete(null)
+    if (view?.folder === target.name) setFilter({ folder: "" })
+    runAction(
+      () =>
+        deleteDocumentFolder(target.id, DELETION_REASON).then(() => undefined),
+      `已删除分类「${target.name}」和其中的 ${target.documents} 篇文档`,
+    )
+  }
 
   const runAction = (action: () => Promise<void>, successText: string) => {
     setBusy(true)
     action()
       .then(() => {
-        showToast(successText)
+        // An empty text means the action announced itself (a rename needs the
+        // new name, which is only known inside the callback).
+        if (successText) showToast(successText)
         setRefreshTick((tick) => tick + 1)
       })
       .catch((err: unknown) => {
@@ -273,15 +523,13 @@ export function DocumentsDialog({
       .finally(() => setBusy(false))
   }
 
-  useEffect(() => {
-    const dialog = dialogRef.current
-    if (!dialog) return
-    if (open && kbId && !dialog.open) {
-      dialog.showModal()
-    } else if (!open && dialog.open) {
-      dialog.close()
-    }
-  }, [open, kbId])
+  const deleteDocument = (doc: DocumentCatalogEntryPayload) => {
+    setDeleteTarget(null)
+    runAction(
+      () => retireSource(doc.sourceId, DELETION_REASON),
+      `已删除「${doc.title}」`,
+    )
+  }
 
   useEffect(() => {
     if (!open || !kbId) return
@@ -300,8 +548,18 @@ export function DocumentsDialog({
         setStatus("ready")
         // A persisted page can fall off the end after deletions — snap back
         // to the true last page instead of rendering a misleading empty state.
-        if (payload.documents.length === 0 && payload.total > 0 && view.page > 1) {
-          setSession({ kbId, view: { ...view, page: Math.max(1, Math.ceil(payload.total / PAGE_SIZE)) } })
+        if (
+          payload.documents.length === 0 &&
+          payload.total > 0 &&
+          view.page > 1
+        ) {
+          setSession({
+            kbId,
+            view: {
+              ...view,
+              page: Math.max(1, Math.ceil(payload.total / PAGE_SIZE)),
+            },
+          })
         }
       })
       .catch((err: unknown) => {
@@ -315,67 +573,79 @@ export function DocumentsDialog({
     }
   }, [open, kbId, view, refreshTick])
 
-  const totalPages = catalog ? Math.max(1, Math.ceil(catalog.total / PAGE_SIZE)) : 1
+  const totalPages = catalog
+    ? Math.max(1, Math.ceil(catalog.total / PAGE_SIZE))
+    : 1
   const setViewPage = (page: number) =>
-    view && setSession({ kbId: kbId ?? "", view: { ...view, page: Math.min(Math.max(1, page), totalPages) } })
+    view &&
+    setSession({
+      kbId: kbId ?? "",
+      view: { ...view, page: Math.min(Math.max(1, page), totalPages) },
+    })
   const setFilter = (patch: Partial<DocumentCatalogView>) =>
-    view && setSession({ kbId: kbId ?? "", view: { ...view, ...patch, page: 1 } })
+    view &&
+    setSession({ kbId: kbId ?? "", view: { ...view, ...patch, page: 1 } })
 
   return (
-    <dialog
-      ref={dialogRef}
+    <PanelDialog
+      open={open && Boolean(kbId)}
       onClose={onClose}
-      onClick={(event) => {
-        if (event.target === event.currentTarget) onClose()
-      }}
-      aria-labelledby="documents-title"
-      className="m-auto h-[min(640px,calc(100dvh-48px))] w-[min(680px,calc(100vw-32px))] grid-rows-[auto_auto_minmax(0,1fr)] overflow-hidden rounded-xl border border-line bg-surface text-ink shadow-dialog backdrop:bg-black/20 open:grid max-md:m-0 max-md:h-dvh max-md:w-screen max-md:rounded-none max-md:border-0"
+      titleId="documents-title"
+      className="grid grid-rows-[auto_auto_minmax(0,1fr)] sm:max-w-3xl"
     >
       <div className="flex h-13 flex-none items-center justify-between border-b border-line px-5 max-md:px-4">
         <div className="flex min-w-0 items-center gap-2">
-          <Icon icon={BookOpen} className="size-4 flex-none text-muted" />
-          <h2 id="documents-title" className="truncate text-sm font-semibold text-ink">
+          <Icon
+            icon={BookOpen}
+            className="size-4 flex-none text-muted-foreground"
+          />
+          <DialogTitle id="documents-title" className="truncate">
             文档目录{knowledgeBase ? ` · ${knowledgeBase.name}` : ""}
-          </h2>
+          </DialogTitle>
         </div>
         <div className="flex flex-none items-center gap-1.5">
+          <UiButton
+            variant="outline"
+            size="sm"
+            type="button"
+            onClick={() => setWikiOpen(true)}
+            title="浏览 Wiki 页面"
+            className="inline-flex h-7 items-center gap-1 px-2"
+          >
+            <Icon data-icon="inline-start" icon={NotebookPen} />
+            Wiki
+          </UiButton>
           {canAdmin ? (
-            <button
-              type="button"
-              onClick={() => setWikiOpen(true)}
-              title="生成与管理 Wiki 页面"
-              className="inline-flex h-7 cursor-pointer items-center gap-1 rounded-md border border-line px-2 text-xs text-muted transition-colors hover:bg-surface-subtle hover:text-ink"
-            >
-              <Icon icon={NotebookPen} className="size-3.5" />
-              Wiki
-            </button>
-          ) : null}
-          {canAdmin ? (
-            <button
+            <UiButton
+              variant="outline"
+              size="sm"
               type="button"
               onClick={() => setSyncOpen(true)}
               title="管理同步数据源"
-              className="inline-flex h-7 cursor-pointer items-center gap-1 rounded-md border border-line px-2 text-xs text-muted transition-colors hover:bg-surface-subtle hover:text-ink"
+              className="inline-flex h-7 items-center gap-1 px-2"
             >
-              <Icon icon={RefreshCw} className="size-3.5" />
+              <Icon data-icon="inline-start" icon={RefreshCw} />
               同步
-            </button>
+            </UiButton>
           ) : null}
-          <button
+          <UiButton
+            variant="ghost"
+            size="icon-sm"
             type="button"
             onClick={onClose}
             aria-label="关闭文档目录"
             title="关闭"
-            className="grid size-7 flex-none cursor-pointer place-items-center rounded-md text-muted/70 transition-colors hover:bg-surface-subtle hover:text-ink"
+            className="grid size-7 flex-none place-items-center"
           >
-            <Icon icon={X} className="size-4" />
-          </button>
+            <Icon data-icon="inline-start" icon={X} />
+          </UiButton>
         </div>
       </div>
       {/* Ticket 38 (WIKI-01): the per-knowledge-base Wiki workshop. */}
       <WikiDialog
         open={wikiOpen}
         knowledgeBase={knowledgeBase}
+        canAdmin={canAdmin}
         onClose={() => setWikiOpen(false)}
       />
       {/* Ticket 39 (SYNC-01A): the per-knowledge-base sync data-source panel. */}
@@ -384,48 +654,187 @@ export function DocumentsDialog({
         knowledgeBase={knowledgeBase}
         onClose={() => setSyncOpen(false)}
       />
+      <DeleteSourceDialog
+        target={deleteTarget}
+        busy={busy}
+        onClose={() => setDeleteTarget(null)}
+        onConfirm={deleteDocument}
+      />
 
-      {/* Filters */}
+      {/* Deleting a directory deletes what is inside it — the one place in this
+          panel where a single click retires many documents at once, so the
+          count is in the sentence rather than in a tooltip. */}
+      <Dialog
+        open={folderToDelete !== null}
+        onClose={() => setFolderToDelete(null)}
+        title={
+          folderToDelete ? `删除分类「${folderToDelete.name}」` : "删除文档分类"
+        }
+        titleId="documents-folder-delete-title"
+        icon={Trash2}
+        tier="confirm"
+      >
+        <div className="flex flex-col gap-2 text-xs leading-relaxed text-muted-foreground">
+          <p>
+            这个分类下有
+            {folderToDelete ? ` ${folderToDelete.documents} ` : " 0 "}
+            篇文档。删除分类会同时删除这些文档，它们不再参与检索。
+          </p>
+          <p
+            className="rounded-[10px] border border-danger-line bg-danger-subtle px-3 py-2 text-danger"
+            title="每篇文档各自记录一次删除并交给后台队列清理分块、图谱关系与页索引节点，命令返回只代表已排队。版本记录和删除墓碑保留，历史回答里的引用仍可追溯。"
+          >
+            此操作不可恢复。要留下这些文档的话请点取消。
+          </p>
+        </div>
+
+        <div className="flex justify-end gap-2">
+          <Button
+            size="sm"
+            onClick={() => setFolderToDelete(null)}
+            disabled={busy}
+          >
+            取消
+          </Button>
+          <Button
+            size="sm"
+            tone="danger"
+            disabled={busy}
+            onClick={confirmFolderDelete}
+          >
+            确认删除
+          </Button>
+        </div>
+      </Dialog>
+
+      {/* Filters. Each Select is sized by its own wrapper rather than by a
+          `wrapperClassName="flex-none"`: the component's base `flex-1` would
+          otherwise fight it at equal specificity (cn is a plain join). */}
       <div className="flex flex-none flex-wrap items-center gap-2 border-b border-line px-5 py-3 max-md:px-4">
-        <select
-          aria-label="按处理状态筛选"
-          value={view?.status ?? ""}
-          onChange={(event) => setFilter({ status: event.target.value })}
-          className={selectClass}
-        >
-          <option value="">全部状态</option>
-          <option value="pending">处理中</option>
-          <option value="completed">已完成</option>
-          <option value="failed">失败</option>
-          <option value="cancelled">已取消</option>
-        </select>
-        <select
-          aria-label="按标签筛选"
-          value={view?.tag ?? ""}
-          onChange={(event) => setFilter({ tag: event.target.value })}
-          className={selectClass}
-        >
-          <option value="">全部标签</option>
-          {(catalog?.tags ?? []).map((tag) => (
-            <option key={tag} value={tag}>
-              {tag}
-            </option>
-          ))}
-        </select>
-        <select
-          aria-label="按文件夹筛选"
-          value={view?.folder ?? ""}
-          onChange={(event) => setFilter({ folder: event.target.value })}
-          className={selectClass}
-        >
-          <option value="">全部文件夹</option>
-          {(catalog?.folders ?? []).map((folder) => (
-            <option key={folder} value={folder}>
-              {folder}
-            </option>
-          ))}
-        </select>
-        <span className="ml-auto font-mono text-[11px] text-muted/70">
+        <div className="w-32 flex-none">
+          <Select
+            size="sm"
+            aria-label="按处理状态筛选"
+            value={view?.status ?? ""}
+            onChange={(event) => setFilter({ status: event.target.value })}
+          >
+            <option value="">全部状态</option>
+            <option value="pending">处理中</option>
+            <option value="completed">已完成</option>
+            <option value="failed">失败</option>
+            <option value="cancelled">已取消</option>
+          </Select>
+        </div>
+        <div className="w-32 flex-none">
+          <Select
+            size="sm"
+            aria-label="按标签筛选"
+            value={view?.tag ?? ""}
+            onChange={(event) => setFilter({ tag: event.target.value })}
+          >
+            <option value="">全部标签</option>
+            {(catalog?.tags ?? []).map((tag) => (
+              <option key={tag} value={tag}>
+                {tag}
+              </option>
+            ))}
+          </Select>
+        </div>
+        <div className="w-32 flex-none">
+          {editingFolder ? (
+            <Input
+              autoFocus
+              aria-label={
+                renamingFolder
+                  ? `重命名分类「${renamingFolder}」`
+                  : "新分类名称"
+              }
+              value={folderDraft}
+              disabled={busy}
+              onChange={(event) => setFolderDraft(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") {
+                  event.preventDefault()
+                  saveFolderDraft()
+                } else if (event.key === "Escape") {
+                  stopFolderEditing()
+                }
+              }}
+              placeholder={renamingFolder ? "新名称" : "输入分类名"}
+              className="h-8 w-full border px-2"
+            />
+          ) : (
+            <Select
+              size="sm"
+              aria-label="按文件夹筛选"
+              value={view?.folder ?? ""}
+              onChange={(event) => setFilter({ folder: event.target.value })}
+            >
+              <option value="">全部文件夹</option>
+              {folderOptions.map((folder) => (
+                <option key={folder} value={folder}>
+                  {folder}
+                </option>
+              ))}
+            </Select>
+          )}
+        </div>
+        {canAdmin ? (
+          <div className="flex flex-none items-center gap-1">
+            {editingFolder ? (
+              <>
+                <Button
+                  size="sm"
+                  onClick={saveFolderDraft}
+                  disabled={busy || !folderDraft.trim()}
+                >
+                  保存
+                </Button>
+                <Button size="sm" onClick={stopFolderEditing} disabled={busy}>
+                  取消
+                </Button>
+              </>
+            ) : (
+              <>
+                <Button
+                  size="sm"
+                  disabled={busy}
+                  onClick={() => {
+                    setRenamingFolder(null)
+                    setCreatingFolder(true)
+                    setFolderDraft("")
+                  }}
+                >
+                  新建分类
+                </Button>
+                {selectedFolder ? (
+                  <Button
+                    size="sm"
+                    disabled={busy}
+                    onClick={() => {
+                      setCreatingFolder(false)
+                      setRenamingFolder(selectedFolder.name)
+                      setFolderDraft(selectedFolder.name)
+                    }}
+                  >
+                    改名
+                  </Button>
+                ) : null}
+                {selectedFolder ? (
+                  <Button
+                    size="sm"
+                    tone="danger"
+                    disabled={busy}
+                    onClick={() => setFolderToDelete(selectedFolder)}
+                  >
+                    删除分类
+                  </Button>
+                ) : null}
+              </>
+            )}
+          </div>
+        ) : null}
+        <span className="ml-auto font-mono text-[11px] text-muted-foreground/70">
           {catalog ? `${catalog.total} 篇` : ""}
         </span>
       </div>
@@ -433,20 +842,28 @@ export function DocumentsDialog({
       {/* List: loading / error / empty / rows */}
       <div className="flex min-h-0 flex-col overflow-y-auto px-5 py-4 max-md:px-4">
         {status === "loading" || status === "idle" ? (
-          <p className="px-1 py-6 text-center text-xs text-muted">正在加载文档目录…</p>
+          <p className="px-1 py-6 text-center text-xs text-muted-foreground">
+            正在加载文档目录…
+          </p>
         ) : status === "error" ? (
-          <div role="alert" className="rounded-lg border border-red-200 bg-red-50 p-3 dark:border-red-900 dark:bg-red-950/40">
-            <p className="text-xs text-red-700 dark:text-red-300">文档目录读取失败：{error}</p>
-            <button
-              type="button"
-              onClick={() => view && setSession({ kbId: kbId ?? "", view: { ...view } })}
-              className="mt-2 cursor-pointer text-xs font-medium text-brand hover:underline"
-            >
-              重试
-            </button>
-          </div>
+          <Alert variant="destructive" role="alert" className="border p-3">
+            <AlertDescription>
+              <p className="text-xs text-danger">文档目录读取失败：{error}</p>
+              <UiButton
+                variant="ghost"
+                size="sm"
+                type="button"
+                onClick={() =>
+                  view && setSession({ kbId: kbId ?? "", view: { ...view } })
+                }
+                className="mt-2 hover:underline"
+              >
+                重试
+              </UiButton>
+            </AlertDescription>
+          </Alert>
         ) : (catalog?.documents.length ?? 0) === 0 ? (
-          <p className="px-1 py-6 text-center text-xs text-muted">
+          <p className="px-1 py-6 text-center text-xs text-muted-foreground">
             {view?.status || view?.tag || view?.folder
               ? "没有符合筛选条件的文档。"
               : "这个知识库还没有文档，先去导入一些吧。"}
@@ -461,36 +878,43 @@ export function DocumentsDialog({
                   canAdmin={canAdmin}
                   busy={busy}
                   onAction={runAction}
-                  onView={(target) => openDocument({ documentId: target.docId })}
+                  onView={(target) =>
+                    openDocument({ documentId: target.docId })
+                  }
+                  onDelete={setDeleteTarget}
                 />
               ))}
             </ul>
             {totalPages > 1 ? (
               <div className="mt-4 flex flex-none items-center justify-center gap-3">
-                <button
+                <UiButton
+                  variant="outline"
+                  size="sm"
                   type="button"
                   onClick={() => setViewPage((view?.page ?? 1) - 1)}
                   disabled={(view?.page ?? 1) <= 1}
-                  className="inline-flex h-8 cursor-pointer items-center rounded-lg border border-line px-3 text-xs text-muted transition-colors hover:bg-surface-subtle hover:text-ink disabled:cursor-not-allowed disabled:opacity-50"
+                  className="inline-flex h-8 items-center px-3 disabled:opacity-50"
                 >
                   上一页
-                </button>
-                <span className="font-mono text-[11px] text-muted">
+                </UiButton>
+                <span className="font-mono text-[11px] text-muted-foreground">
                   {view?.page ?? 1} / {totalPages}
                 </span>
-                <button
+                <UiButton
+                  variant="outline"
+                  size="sm"
                   type="button"
                   onClick={() => setViewPage((view?.page ?? 1) + 1)}
                   disabled={(view?.page ?? 1) >= totalPages}
-                  className="inline-flex h-8 cursor-pointer items-center rounded-lg border border-line px-3 text-xs text-muted transition-colors hover:bg-surface-subtle hover:text-ink disabled:cursor-not-allowed disabled:opacity-50"
+                  className="inline-flex h-8 items-center px-3 disabled:opacity-50"
                 >
                   下一页
-                </button>
+                </UiButton>
               </div>
             ) : null}
           </>
         )}
       </div>
-    </dialog>
+    </PanelDialog>
   )
 }

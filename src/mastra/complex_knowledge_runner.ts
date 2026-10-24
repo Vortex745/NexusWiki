@@ -50,6 +50,14 @@
  *   - `src/answer/conversation_store.ts` (ConversationStore)
  *   - `src/answer/contextualizer.ts` (Contextualizer)
  *   - `src/answer/context_compressor.ts` (ContextCompressor)
+ *   - `src/answer/context_pipeline.ts` (prepareGenerationContext,
+ *     compressionTraceFields — PT-06/PT-07's ONE material-backed context
+ *     decision, shared with the simple route)
+ *   - `src/answer/generation_snapshot.ts` (describeActualGenerationContext —
+ *     the one description of the context a generation call actually received)
+ *   - `src/retrieval/complex_loop.ts` (runComplexLoop, ComplexLoopController,
+ *     ComplexLoopResult, COMPLEX_LOOP_MAX_ITERATIONS, COMPLEX_LOOP_MAX_TOOL_CALLS,
+ *     NormalizedToolCall, createComplexLoopObservationCompressor)
  *   - `src/answer/summarizer.ts` (Summarizer)
  *   - `src/answer/handoff_store.ts` (HandoffStore)
  *   - `src/answer/evidence.ts` (buildEvidence, citationIdsByChunk, referencesForReply)
@@ -74,7 +82,7 @@
  * retrieval events.
  *
  * Helper duplication note: the helpers below (abortError, abortable,
- * abortableStream, diversifySelect, uniqueResults, normalizeGapQuery,
+ * abortableStream, diversifySelect, normalizeGapQuery,
  * summarizeConversationForHandoff, saveValidatedTurnPair, triggerSummarization)
  * are duplicated from `src/mastra/simple_knowledge_runner.ts`. This is
  * intentional: T11 and T12 are sibling runners, and keeping them
@@ -82,6 +90,12 @@
  * stable utility code (no expected changes); if duplication becomes a
  * maintenance burden, T13+ may extract them to a shared `_runner_helpers.ts`
  * module. See Karpathy guideline #3 (Surgical Changes).
+ *
+ * PT-05 exception: the correction-round selection is NOT duplicated. The
+ * gap-first (补检优先) rule lives once in
+ * `src/retrieval/context/correction_selection.ts` and both runners call it —
+ * two divergent copies is exactly how the simple and complex routes each
+ * starved the new facts.
  */
 
 import type {
@@ -98,11 +112,16 @@ import type {
 import { SYSTEM_PROMPT } from "./system_prompt"
 import { renderMemoryPromptSuffix } from "./memory_prompt"
 import type { ContextAssembler } from "../retrieval/context/interface"
+import {
+  findUncoveredGapFacts,
+  selectCorrectionCandidates,
+} from "../retrieval/context/correction_selection"
 import { formatToolInputSummary } from "../retrieval/tool_selector"
 import type { Planner, DecomposeResult } from "../retrieval/planner/interface"
 import { PlannerError } from "../retrieval/planner/planner"
 import {
   runComplexLoop,
+  createComplexLoopObservationCompressor,
   COMPLEX_LOOP_MAX_ITERATIONS,
   COMPLEX_LOOP_MAX_TOOL_CALLS,
   type ComplexLoopController,
@@ -111,10 +130,27 @@ import {
 } from "../retrieval/complex_loop"
 import { createComplexLoopToolInvoker, READ_ONLY_TOOL_ALLOWLIST } from "../tools/complex_loop_adapter"
 import type { Validator } from "../critic/validator/interface"
+import { bindAnswerBasis } from "./answer_basis"
 import type { RePlanner } from "../critic/replanner/interface"
 import type { ConversationStore, ConversationTurn } from "../answer/conversation_store"
 import type { Contextualizer } from "../answer/contextualizer"
-import type { ContextCompressor } from "../answer/context_compressor"
+import type {
+  ContextCompressor,
+  ContextCompressionResult,
+} from "../answer/context_compressor"
+// PT-06 / PT-07 — the ONE material-backed context preparation both knowledge
+// routes run, and PT-08 — the ONE description of what the generator actually
+// received. The complex route importing them IS this ticket: AC09 forbids a
+// second material-selection or body-selection implementation, so the initial
+// assembly, the correction rebuild and the loop's observation compression all
+// go through these two entry points and nothing else.
+import {
+  DEFAULT_MAX_CONTEXT_TOKENS,
+  compressionTraceFields,
+  prepareGenerationContext,
+} from "../answer/context_pipeline"
+import { describeActualGenerationContext } from "../answer/generation_snapshot"
+import type { ContextMaterial } from "../retrieval/context/assembler"
 import type { Summarizer } from "../answer/summarizer"
 import type { HandoffStore } from "../answer/handoff_store"
 import {
@@ -129,6 +165,7 @@ import type {
   AnswerDegradation,
   AnswerDegradationReason,
   AnswerRunResult,
+  AnswerBasis,
   Evidence,
   Query,
   RetrievalResult,
@@ -280,8 +317,12 @@ export interface ComplexKnowledgeMastraRunnerDeps {
 // Helpers (mirrors of T11 + legacy generation.ts internals)
 // ---------------------------------------------------------------------------
 
-const INSUFFICIENT_RETRIEVAL_MESSAGE = "检索服务暂时不可用，无法生成可靠回答。"
-const INSUFFICIENT_EVIDENCE_MESSAGE = "未找到相关证据，无法生成可靠回答。"
+import {
+  INSUFFICIENT_EVIDENCE_MESSAGE,
+  INSUFFICIENT_RETRIEVAL_MESSAGE,
+  PROVIDER_ERROR_MESSAGE,
+  publicTerminalCopy,
+} from "../answer/terminal_copy"
 
 function abortError(checkpoint: string): Error {
   const error = new Error(`Answer run cancelled at ${checkpoint}`)
@@ -352,17 +393,13 @@ function diversifySelect(
   return selected
 }
 
-function uniqueResults(results: RetrievalResult[]): RetrievalResult[] {
-  const seen = new Set<string>()
-  const unique: RetrievalResult[] = []
-  for (const result of results) {
-    const key = `${result.chunk.documentId}\0${result.chunk.id}`
-    if (seen.has(key)) continue
-    seen.add(key)
-    unique.push(result)
-  }
-  return unique
-}
+// PT-05: the correction-round identity dedup + gap-first ordering used to live
+// here as a local `uniqueResults(accumulatedResults)` call, which kept the
+// OLDEST hit of a repeated identity and left the fresh 补检 material at the
+// tail of the assembler's queue. The rule now has one owner shared with the
+// simple route — `selectCorrectionCandidates` in
+// `../retrieval/context/correction_selection` — so the two runners cannot
+// drift apart.
 
 function normalizeGapQuery(text: string): string {
   return text.trim().toLowerCase().replace(/\s+/g, " ")
@@ -571,6 +608,8 @@ export function createComplexKnowledgeMastraRunner(
       // and simple to the T11 runner.
       throw new RouteNotComplexError(decision)
     }
+    if (!preparedRoute) input.onStageProgress?.("route", { status: "completed", data: { decision } })
+    input.onStageProgress?.("retrieval", { round: 1 })
 
     // Destructive state change belongs to the selected route owner only.
     if (conversationStore && !preparedRoute) {
@@ -602,6 +641,15 @@ export function createComplexKnowledgeMastraRunner(
             ...(accessContext ? { accessContext } : {}),
             ...(retrievalScope ? { retrievalScope } : {}),
             signal,
+            // Ticket 22 (ATT-01) / PT-02: the tool environment binds the
+            // run's OWN session, so a loop tool call reads this session's
+            // temporary attachments — and never another session's. The
+            // server-bound id is the only carrier; tool args cannot set one.
+            ...(sessionId ? { sessionId } : {}),
+            // Ticket 36 (WEB-01) / PT-03: the run's explicit web opt-in
+            // travels the same way. A URL in a query still follows the
+            // existing read/reject policy with or without this flag.
+            ...(input.useWeb === true ? { webRequested: true } : {}),
             searcher,
           })
         : undefined
@@ -650,21 +698,15 @@ export function createComplexKnowledgeMastraRunner(
       // Path A: bounded LLM-driven complex retrieval loop (T08 spec §13).
       // ---------------------------------------------------------------------
       const loopStartedAt = Date.now()
-      // Adapter: bridge the loop's compressor interface (which expects
-      // RetrievalResult[]) to the legacy ContextCompressor (which expects
-      // Evidence[]) by building Evidence on-the-fly. Mirrors legacy L743-L756.
+      // PT-07 AC09 — the loop's observation compressor is the shared
+      // material-backed adapter (see `createComplexLoopObservationCompressor`):
+      // the same assembler material, the same budget, the same refusals. It
+      // replaces the old inline bridge that forwarded to
+      // `compressor.compress(evidence, …)`, which decided on the 600-character
+      // preview sum (finding F4) and therefore never compressed an oversized
+      // parent whose preview looked cheap.
       const loopCompressor = compressor
-        ? {
-            compress: async (
-              results: RetrievalResult[],
-              query: string,
-              budget: { maxContextTokens: number },
-              sig?: AbortSignal
-            ) => {
-              const ev = buildEvidence(results)
-              return compressor.compress(ev, query, budget, sig)
-            },
-          }
+        ? createComplexLoopObservationCompressor({ assembler, compressor })
         : undefined
       try {
         complexLoopResult = await abortable(
@@ -682,6 +724,11 @@ export function createComplexKnowledgeMastraRunner(
               // Ticket 05 (KB-03A): the initial complex retrieval stays inside
               // the run's server-computed knowledge scope.
               ...(retrievalScope ? { retrievalScope } : {}),
+              // Ticket 22 (ATT-01) / PT-02: the loop's first retrieval and
+              // every tool iteration read the run's OWN session attachments.
+              ...(sessionId ? { attachments: { sessionId } } : {}),
+              // Ticket 36 (WEB-01) / PT-03: and carry the run's web intent.
+              ...(input.useWeb === true ? { webRequested: true } : {}),
               signal,
             }
           ),
@@ -690,8 +737,16 @@ export function createComplexKnowledgeMastraRunner(
       } catch (err) {
         if (err instanceof Error && err.name === "AbortError") throw err
         // Non-Abort loop error → terminal provider_error (mirrors legacy L773-780).
+        input.onStageProgress?.("retrieval", { status: "failed", round: 1 })
+        // PL-04 review fix: the exception TEXT is never a public field. It can
+        // carry a backend URL, an index name or a document id, and until now
+        // only the event adapter's guard stopped it from being published — the
+        // runner itself returned it as `reply`, which every non-SSE consumer
+        // (JSON callers, replayed traces) read directly. The terminal copy is
+        // the shared, route-independent text; the failure stays fully reported
+        // through `status`, `degradation` and the unavailable-channel list.
         return {
-          reply: `Complex loop failed: ${err instanceof Error ? err.message : String(err)}`,
+          reply: PROVIDER_ERROR_MESSAGE,
           status: "provider_error",
           references: [],
           degradation: {
@@ -700,7 +755,12 @@ export function createComplexKnowledgeMastraRunner(
           },
           tokens: [],
           routeTrace: buildRouteTrace(),
-          retrievalTrace: {},
+          retrievalTrace: {
+            complexLoop: true,
+            resultCount: 0,
+            selectedEvidenceIds: [],
+            degradedReasons: ["complex loop unavailable"],
+          },
           contextTrace: {},
           validationTrace: {},
         }
@@ -719,8 +779,9 @@ export function createComplexKnowledgeMastraRunner(
       // T08: provider-failure means the searcher backend threw a non-Abort
       // error mid-loop. Terminate with provider_error (mirrors legacy L865).
       if (complexLoopResult.stopReason === "provider-failure") {
+        input.onStageProgress?.("retrieval", { status: "failed", round: 1 })
         return {
-          reply: "检索服务暂时出现故障，请您稍后重试。",
+          reply: PROVIDER_ERROR_MESSAGE,
           status: "provider_error",
           references: [],
           degradation: {
@@ -754,8 +815,12 @@ export function createComplexKnowledgeMastraRunner(
         )
       } catch (err) {
         if (err instanceof PlannerError) {
+          input.onStageProgress?.("retrieval", { status: "failed", round: 1 })
+          // PL-04 review fix (same rule as the loop failure above): a
+          // `provider_error` terminal publishes the shared terminal copy, never
+          // the planner's exception text.
           return {
-            reply: `Planning failed: ${err.message}`,
+            reply: PROVIDER_ERROR_MESSAGE,
             status: "provider_error",
             references: [],
             degradation: {
@@ -819,6 +884,7 @@ export function createComplexKnowledgeMastraRunner(
         complexOptions.push(options)
       }
       plannerQueryCount = rewrittenQueries.length
+      input.onStageProgress?.("route", { status: "completed", data: { decision: "complex", queryCount: plannerQueryCount } })
 
       // Execute retrieval per rewritten sub-query.
       for (let i = 0; i < rewrittenQueries.length; i += 1) {
@@ -905,6 +971,7 @@ export function createComplexKnowledgeMastraRunner(
           }
         : {}),
     }
+    input.onStageProgress?.("retrieval", { status: "completed", round: 1, data: { resultCount: retrievalTrace.resultCount } })
 
     // Insufficient retrieval check (T12 #7: terminal insufficient_retrieval).
     if (retrievalAttempted && !retrievalAvailable) {
@@ -932,7 +999,9 @@ export function createComplexKnowledgeMastraRunner(
     const selectedKeys = new Set(selectedResults.map(({ chunk }) =>
       `${chunk.documentId}\0${chunk.id}`
     ))
-    const accumulatedResults = allResults.filter(({ chunk }) =>
+    // PT-05: reassigned on every correction round to the gap-first ordered
+    // list (newest 补检 material in front), never to a tail-append.
+    let accumulatedResults = allResults.filter(({ chunk }) =>
       selectedKeys.has(`${chunk.documentId}\0${chunk.id}`)
     )
     let evidence: Evidence[] = buildEvidence(accumulatedResults)
@@ -978,63 +1047,112 @@ export function createComplexKnowledgeMastraRunner(
      * loop tool calls, correction retrievals), so a single contributing search
      * keeps its own label and anything merged is reported as an aggregation —
      * never as a dedicated-rerank success.
+     *
+     * PT-05: `mergedAcrossRounds` is the correction case. That candidate list
+     * is this round's gap hits (from the tool loop, the deterministic searcher
+     * fallback or the legacy path) merged in front of the earlier retrievals,
+     * so no single search ordering produced it — even when exactly one
+     * contributing retrieval carried `dedicated_rerank`.
      */
     const commitFinalContext = (
       candidates: RetrievalResult[],
       citationIds: Map<string, string>,
-      orderings: RetrievalOrdering[]
+      orderings: RetrievalOrdering[],
+      mergedAcrossRounds = false
     ): void => {
       finalContextRound += 1
       retrievalTrace = {
         ...retrievalTrace,
         finalContextCandidates: toRankedCandidateObservations(candidates, citationIds),
         finalContextRound,
-        finalContextOrdering:
-          orderings.length === 1
-            ? orderings[0]
-            : { source: "fused" as const, reason: "multi_query_aggregation" as const },
+        // PL-04 review fix — the ONE rule, byte-identical to the simple route:
+        //   merged rounds report an aggregation;
+        //   exactly one contributing search keeps its own label;
+        //   several merged searches report an aggregation;
+        //   NO recorded ordering makes NO ordering claim.
+        // The old code fabricated `fused / multi_query_aggregation` whenever
+        // there was no ordering, which labelled a single dedicated-rerank tool
+        // call as an aggregation and — worse — asserted an aggregation the loop
+        // never performed, because Path A collects no ordering at all.
+        ...(mergedAcrossRounds
+          ? {
+              finalContextOrdering: {
+                source: "fused" as const,
+                reason: "multi_query_aggregation" as const,
+              },
+            }
+          : orderings.length > 0
+            ? {
+                finalContextOrdering:
+                  orderings.length === 1
+                    ? orderings[0]
+                    : {
+                        source: "fused" as const,
+                        reason: "multi_query_aggregation" as const,
+                      },
+              }
+            : {}),
       }
     }
     const initialCitationIds = citationIdsByChunk(evidence)
-    let context = await abortable(
-      assembler.assemble(selectedResults, initialCitationIds),
-      signal
-    )
-    let contextTrace: ContextTraceData = {
-      evidenceCount: evidence.length,
-      contextLength: context.length,
-      compressionRan: false,
-    }
-    // Optional compression (Ticket 61/04). Mirrors T11.
-    if (compressor) {
-      try {
-        const result = await abortable(
-          compressor.compress(
-            evidence,
-            effectiveMessage,
-            { maxContextTokens: 6_000 },
-            signal
-          ),
-          signal
-        )
-        if (result) {
-          context = result.context
-          contextTrace = {
-            evidenceCount: evidence.length,
-            contextLength: context.length,
-            compressionRan: true,
-            compressionInputTokens: result.inputTokens,
-            compressionOutputTokens: result.outputTokens,
-            compressionRetainedEvidenceIds: result.retainedEvidenceIds,
-            compressionDroppedEvidenceIds: result.droppedEvidenceIds,
-            ...(result.usage ? { compressionUsage: result.usage } : {}),
-          }
-        }
-      } catch (err) {
-        if (err instanceof Error && err.name === "AbortError") throw err
-        // non-Abort error: swallow, use deterministic context (criterion #5 fallback)
+    // PT-07:AC01/AC02/AC07 — the state of the context that is currently going
+    // to the generator: the COMPLETE authorized material behind it, the
+    // compression actually adopted for it, and the trace describing both.
+    // Reassigned every round, so a refused compression can never leave the
+    // source records pointing at compressed ids that were not used.
+    let context = ""
+    let material: ContextMaterial | null = null
+    let compression: ContextCompressionResult | null = null
+    let contextTrace: ContextTraceData = {}
+    // PT-08:AC01/AC04 — ONE `generation-context-v1` snapshot per ACTUAL
+    // generation call, recorded through the same shared builder the simple
+    // route uses. Attached only after a draft really completed.
+    let generationRound = 0
+    const describeGenerationContext = (): void => {
+      generationRound += 1
+      contextTrace = {
+        ...contextTrace,
+        generationContext: describeActualGenerationContext({
+          generationRound,
+          context,
+          material,
+          compression,
+          evidence,
+        }),
       }
     }
+    // Assembly and generation are separate real boundaries within context.
+    input.onStageProgress?.("context", { round: 1, data: { phase: "assembly", evidenceCount: evidence.length } })
+    // PT-07:AC01-AC04 — the same single shared entry point as the simple route
+    // (PT-06): assemble the complete authorized material from this round's
+    // ordered candidates, decide compression from its REAL counts against the
+    // unchanged 6,000-token budget, and fall back to the in-budget
+    // deterministic text on every refusal. This replaces the old inline pair
+    // (`assembler.assemble` + an unconditional `compressor.compress`, which
+    // bypassed on the 600-character preview sum — finding F4).
+    const initial = await abortable(
+      prepareGenerationContext({
+        assembler,
+        results: selectedResults,
+        citationIds: initialCitationIds,
+        evidence,
+        query: effectiveMessage,
+        ...(compressor ? { compressor } : {}),
+        maxContextTokens: DEFAULT_MAX_CONTEXT_TOKENS,
+        ...(signal ? { signal } : {}),
+      }),
+      signal
+    )
+    context = initial.context
+    material = initial.material
+    compression = initial.compression
+    contextTrace = {
+      evidenceCount: evidence.length,
+      contextLength: context.length,
+      ...compressionTraceFields(initial),
+    }
+    input.onStageProgress?.("context", { status: "completed", round: 1, data: { phase: "assembly", evidenceCount: evidence.length, contextLength: context.length } })
+    input.onStageProgress?.("context", { round: 1, data: { phase: "draft", evidenceCount: evidence.length } })
 
     // -------------------------------------------------------------------------
     // GATE 3: answer draft (LLM stream). Mirrors T11.
@@ -1060,13 +1178,20 @@ export function createComplexKnowledgeMastraRunner(
       initialTokens.push(token)
     }
     const initialAnswer = initialTokens.join("")
+    // PT-08:AC01/AC05 (mirrors the simple route): this draft really was
+    // generated, so the round is described from the context that was handed
+    // over — deterministic full, deterministic partial, compressed, or the
+    // compression-failure fallback.
+    describeGenerationContext()
+    contextTrace.phase = "draft"
+    input.onStageProgress?.("context", { status: "completed", round: 1, data: { phase: "draft", evidenceCount: evidence.length } })
 
     // Citation check (T12 #5: unknown Citations rejected before publication).
     try {
       referencesForReply(initialAnswer, evidence)
     } catch {
       return {
-        reply: "",
+        reply: publicTerminalCopy("invalid_citation"),
         status: "invalid_citation",
         references: [],
         degradation: {
@@ -1098,9 +1223,18 @@ export function createComplexKnowledgeMastraRunner(
     // -------------------------------------------------------------------------
     const seenGapQueries = new Set<string>()
     let approved = false
+    let approvedBasis: AnswerBasis | undefined
     let terminalStatus: AnswerRunResult["status"] | null = null
     let terminalReply = ""
     let terminalReferences: AnswerRunResult["references"] = []
+    // PL-01: an unapproved draft is never the published reply. The public text
+    // and the citation set follow the BUSINESS terminal, so a rejected draft
+    // cannot reappear through done.reply, JSON reply or references.
+    const setTerminal = (status: AnswerRunResult["status"]): void => {
+      terminalStatus = status
+      terminalReply = publicTerminalCopy(status)
+      terminalReferences = []
+    }
     let terminalDegradation: AnswerDegradation = {
       status: unavailableChannels.size > 0 ? "partial" : "none",
       unavailableChannels: [...unavailableChannels],
@@ -1128,6 +1262,7 @@ export function createComplexKnowledgeMastraRunner(
     }
 
     for (let round = 0; round < 3; round += 1) {
+      input.onStageProgress?.("validation", { round: round + 1, data: { round: round + 1 } })
       const verdict = await abortable(
         validator.validate(
           fullAnswer,
@@ -1141,9 +1276,11 @@ export function createComplexKnowledgeMastraRunner(
         signal
       )
       validationTrace = { round: round + 1, passed: verdict.passed }
+      input.onStageProgress?.("validation", { status: "completed", round: round + 1, data: validationTrace })
 
       if (verdict.passed) {
         approved = true
+        approvedBasis = verdict.answerBasis
         break
       }
 
@@ -1161,7 +1298,7 @@ export function createComplexKnowledgeMastraRunner(
         // insufficient_evidence. Mirrors T11 + legacy L1313-L1346.
         if (handoffStore && resolveTenantId) {
           checkAbort(signal, "GATE 6 (before handoff persistence)")
-          handoffStore.create({
+          const handoffCase = handoffStore.create({
             runId,
             tenantId,
             subjectId: accessContext.subjectId,
@@ -1175,18 +1312,16 @@ export function createComplexKnowledgeMastraRunner(
             evidenceIds: evidence.map(({ id }) => id),
             traceReference: runId,
           })
-          terminalStatus = "handoff_required"
-          terminalReply = fullAnswer
-          terminalReferences = referencesForReply(fullAnswer, evidence)
+          // PL-01 AC04: "已转交人工" is only publishable when the case exists;
+          // a refused persistence stays honest as 证据不足.
+          setTerminal(handoffCase ? "handoff_required" : "insufficient_evidence")
           terminalDegradation = {
             status: unavailableChannels.size > 0 ? "partial" : "none",
             unavailableChannels: [...unavailableChannels],
             reason: "coverage_not_met",
           }
         } else {
-          terminalStatus = "insufficient_evidence"
-          terminalReply = fullAnswer
-          terminalReferences = referencesForReply(fullAnswer, evidence)
+          setTerminal("insufficient_evidence")
           terminalDegradation = {
             status: unavailableChannels.size > 0 ? "partial" : "none",
             unavailableChannels: [...unavailableChannels],
@@ -1201,6 +1336,13 @@ export function createComplexKnowledgeMastraRunner(
       let correctionInsufficient = false
       // Ticket 06: ordering labels of the correction searches that were kept.
       const correctionOrderings: RetrievalOrdering[] = []
+      // PT-05: this round's 补检 hits — from the loop, the deterministic
+      // searcher fallback or the legacy path — kept SEPARATE from the older
+      // material until the shared gap-first selection below. They used to be
+      // appended to the tail of `accumulatedResults`, where the assembler's
+      // insertion-order budget walk left them no tokens at all.
+      const gapResultsForRound: RetrievalResult[] = []
+      input.onStageProgress?.("retrieval", { round: round + 2, data: { correction: true } })
       for (const gapQuery of gapQueries) {
         if (
           complexLoopController &&
@@ -1213,18 +1355,11 @@ export function createComplexKnowledgeMastraRunner(
           // calls (T09 §13 correction-round reuse). Mirrors legacy
           // L1358-L1579.
           // ---------------------------------------------------------------
+          // PT-07 AC09 — the SAME material-backed observation adapter as the
+          // initial run, so a correction round's observations are measured
+          // against the same material and the same budget.
           const loopCompressor = compressor
-            ? {
-                compress: async (
-                  results: RetrievalResult[],
-                  q: string,
-                  budget: { maxContextTokens: number },
-                  sig?: AbortSignal
-                ) => {
-                  const ev = buildEvidence(results)
-                  return compressor.compress(ev, q, budget, sig)
-                },
-              }
+            ? createComplexLoopObservationCompressor({ assembler, compressor })
             : undefined
           let correctionLoopResult: ComplexLoopResult
           try {
@@ -1243,6 +1378,11 @@ export function createComplexKnowledgeMastraRunner(
                   // stay inside the run's server-computed knowledge scope —
                   // same contract as the initial loop above.
                   ...(retrievalScope ? { retrievalScope } : {}),
+                  // PT-02 AC04 / PT-03 AC06: the gap re-check uses the SAME
+                  // bound session and web intent as the initial retrieval —
+                  // the identity is never rebuilt wider for a correction.
+                  ...(sessionId ? { attachments: { sessionId } } : {}),
+                  ...(input.useWeb === true ? { webRequested: true } : {}),
                   signal,
                   remainingIterations: sharedRemainingIterations,
                   remainingToolCalls: sharedRemainingToolCalls,
@@ -1304,6 +1444,8 @@ export function createComplexKnowledgeMastraRunner(
                 ...(retrievalScope ? { retrievalScope } : {}),
                 // Ticket 22 (ATT-01): the fallback reads the same session.
                 ...(sessionId ? { attachments: { sessionId } } : {}),
+                // Ticket 36 (WEB-01) / PT-03 AC06: same web intent, too.
+                ...(input.useWeb === true ? { webRequested: true } : {}),
                 signal,
               }),
               signal
@@ -1317,13 +1459,13 @@ export function createComplexKnowledgeMastraRunner(
             }
             if (fallbackOutcome.results.length === 0) continue
             if (fallbackOutcome.ordering) correctionOrderings.push(fallbackOutcome.ordering)
-            accumulatedResults.push(...fallbackOutcome.results)
+            gapResultsForRound.push(...fallbackOutcome.results)
             anyNewResults = true
           } else {
             // Loop produced results (or declared evidence-sufficient with 0
             // new results — treat as no new evidence for this gap query).
             if (correctionLoopResult.results.length === 0) continue
-            accumulatedResults.push(...correctionLoopResult.results)
+            gapResultsForRound.push(...correctionLoopResult.results)
             anyNewResults = true
           }
         } else {
@@ -1339,6 +1481,8 @@ export function createComplexKnowledgeMastraRunner(
               ...(retrievalScope ? { retrievalScope } : {}),
               // Ticket 22 (ATT-01): a legacy correction reads the same session.
               ...(sessionId ? { attachments: { sessionId } } : {}),
+              // Ticket 36 (WEB-01) / PT-03 AC06: and the same web intent.
+              ...(input.useWeb === true ? { webRequested: true } : {}),
               signal,
             }),
             signal
@@ -1352,15 +1496,15 @@ export function createComplexKnowledgeMastraRunner(
           }
           if (correctionOutcome.results.length === 0) continue
           if (correctionOutcome.ordering) correctionOrderings.push(correctionOutcome.ordering)
-          accumulatedResults.push(...correctionOutcome.results)
+          gapResultsForRound.push(...correctionOutcome.results)
           anyNewResults = true
         }
       }
 
+      input.onStageProgress?.("retrieval", { status: "completed", round: round + 2, data: { correction: true, resultCount: gapResultsForRound.length } })
+
       if (correctionInsufficient) {
-        terminalStatus = "insufficient_retrieval"
-        terminalReply = fullAnswer + INSUFFICIENT_RETRIEVAL_MESSAGE
-        terminalReferences = referencesForReply(fullAnswer, evidence)
+        setTerminal("insufficient_retrieval")
         terminalDegradation = {
           status: "insufficient",
           unavailableChannels: [...unavailableChannels],
@@ -1372,7 +1516,7 @@ export function createComplexKnowledgeMastraRunner(
         // No new evidence from any gap query → exhausted. Mirrors T11.
         if (handoffStore && resolveTenantId) {
           checkAbort(signal, "GATE 6 (before handoff persistence)")
-          handoffStore.create({
+          const handoffCase = handoffStore.create({
             runId,
             tenantId,
             subjectId: accessContext.subjectId,
@@ -1386,18 +1530,16 @@ export function createComplexKnowledgeMastraRunner(
             evidenceIds: evidence.map(({ id }) => id),
             traceReference: runId,
           })
-          terminalStatus = "handoff_required"
-          terminalReply = fullAnswer
-          terminalReferences = referencesForReply(fullAnswer, evidence)
+          // PL-01 AC04: "已转交人工" is only publishable when the case exists;
+          // a refused persistence stays honest as 证据不足.
+          setTerminal(handoffCase ? "handoff_required" : "insufficient_evidence")
           terminalDegradation = {
             status: unavailableChannels.size > 0 ? "partial" : "none",
             unavailableChannels: [...unavailableChannels],
             reason: "coverage_not_met",
           }
         } else {
-          terminalStatus = "insufficient_evidence"
-          terminalReply = fullAnswer
-          terminalReferences = referencesForReply(fullAnswer, evidence)
+          setTerminal("insufficient_evidence")
           terminalDegradation = {
             status: unavailableChannels.size > 0 ? "partial" : "none",
             unavailableChannels: [...unavailableChannels],
@@ -1407,57 +1549,102 @@ export function createComplexKnowledgeMastraRunner(
         break
       }
 
-      // Rebuild Evidence + Context from accumulated results, then
-      // regenerate draft. Mirrors T11.
+      // Rebuild Evidence + Context from the accumulated results, then
+      // regenerate the draft. Mirrors T11.
+      // PT-05: whatever produced the new hits this round — the bounded tool
+      // loop, the deterministic searcher fallback or the legacy per-gap-query
+      // search — they are selected BEFORE the older material through the same
+      // shared gap-first rule the simple route uses
+      // (`../retrieval/context/correction_selection`), so the fresh facts take
+      // first claim on the unchanged 6,000-token budget instead of queueing
+      // behind the old top-10 parent chunks. No rerank step, no larger budget,
+      // no extra round.
+      const selection = selectCorrectionCandidates({
+        gapResults: gapResultsForRound,
+        olderResults: accumulatedResults,
+      })
+      accumulatedResults = selection.orderedResults
       evidence = buildEvidence(accumulatedResults)
-      const correctionCandidates = uniqueResults(accumulatedResults)
+      const correctionCandidates = selection.candidates
       const correctionCitationIds = citationIdsByChunk(evidence)
-      context = await abortable(
-        assembler.assemble(correctionCandidates, correctionCitationIds),
+      input.onStageProgress?.("context", { round: round + 2, data: { phase: "assembly", evidenceCount: evidence.length } })
+      // PT-07:AC07/AC09 — one material-backed preparation for this round, the
+      // SAME shared entry point the initial round and the simple route use: the
+      // deterministic context, the budget decision on the real candidate
+      // counts and the compression attempt all come from one place, so the
+      // fallback and the source records can never disagree about which context
+      // is going to generate.
+      const prepared = await abortable(
+        prepareGenerationContext({
+          assembler,
+          results: correctionCandidates,
+          citationIds: correctionCitationIds,
+          evidence,
+          query: effectiveMessage,
+          ...(compressor ? { compressor } : {}),
+          maxContextTokens: DEFAULT_MAX_CONTEXT_TOKENS,
+          ...(signal ? { signal } : {}),
+          // PT-05 AC07: compression only closes the correction round when its
+          // output still carries every selected new fact. A compressed context
+          // that dropped one is not adopted — the round generates from the
+          // deterministic context instead, and the loss stays visible on the
+          // trace rather than becoming a fake "covered".
+          ...(compressor
+            ? {
+                shouldAdoptCompression: (
+                  compressionResult: ContextCompressionResult
+                ): boolean =>
+                  findUncoveredGapFacts({
+                    gapCandidates: selection.gapCandidates,
+                    citationIds: correctionCitationIds,
+                    context: compressionResult.context,
+                    mode: "citation",
+                    reason: "compression",
+                  }).length === 0,
+              }
+            : {}),
+        }),
         signal
       )
-      // Optional compression for correction round.
-      if (compressor) {
-        try {
-          const result = await abortable(
-            compressor.compress(
-              evidence,
-              effectiveMessage,
-              { maxContextTokens: 6_000 },
-              signal
-            ),
-            signal
-          )
-          if (result) {
-            context = result.context
-            contextTrace = {
-              evidenceCount: evidence.length,
-              contextLength: context.length,
-              compressionRan: true,
-              compressionInputTokens: result.inputTokens,
-              compressionOutputTokens: result.outputTokens,
-              compressionRetainedEvidenceIds: result.retainedEvidenceIds,
-              compressionDroppedEvidenceIds: result.droppedEvidenceIds,
-              ...(result.usage ? { compressionUsage: result.usage } : {}),
-            }
-          } else {
-            contextTrace = {
-              evidenceCount: evidence.length,
-              contextLength: context.length,
-              compressionRan: false,
-            }
-          }
-        } catch (err) {
-          if (err instanceof Error && err.name === "AbortError") throw err
-          // non-Abort error: swallow, use deterministic context
-        }
-      } else {
-        contextTrace = {
-          evidenceCount: evidence.length,
-          contextLength: context.length,
-          compressionRan: false,
-        }
+      context = prepared.context
+      material = prepared.material
+      compression = prepared.compression
+      // PT-05 AC06: even selected-first, a gap item longer than the whole
+      // budget cannot be admitted. Record it as an explicit omission so no
+      // layer can present the correction as covered — the existing validation
+      // rules still decide whether the run degrades.
+      const budgetOmissions = findUncoveredGapFacts({
+        gapCandidates: selection.gapCandidates,
+        citationIds: correctionCitationIds,
+        // PT-06:AC07 — the coverage question is asked against the context that
+        // really generates: the deterministic one, never a rejected compressed
+        // output.
+        context: prepared.deterministicContext,
+        mode: "verbatim",
+        reason: "context_budget",
+      })
+      // PT-05 AC07 / PT-06 AC07: an adopted compression proved its citation
+      // lineage, not that a reworded fact survived. Ask the verbatim question
+      // against the text that really generates too, so the trajectory can never
+      // be read as "the correction is covered" when the summarizer reworded a
+      // selected fact away.
+      const gapFactOmissions = prepared.compression
+        ? findUncoveredGapFacts({
+            gapCandidates: selection.gapCandidates,
+            citationIds: correctionCitationIds,
+            context: prepared.context,
+            mode: "verbatim",
+            reason: "compression",
+          })
+        : budgetOmissions
+      contextTrace = {
+        evidenceCount: evidence.length,
+        contextLength: context.length,
+        ...compressionTraceFields(prepared),
+        ...(gapFactOmissions.length > 0 ? { gapFactOmissions } : {}),
       }
+      input.onStageProgress?.("context", { status: "completed", round: round + 2, data: { phase: "assembly", evidenceCount: evidence.length, contextLength: context.length } })
+      input.onStageProgress?.("context", { round: round + 2, data: { phase: "draft", evidenceCount: evidence.length } })
 
       // Regenerate draft from the rebuilt context.
       const regenMessages: AgentMessage[] = [
@@ -1475,13 +1662,18 @@ export function createComplexKnowledgeMastraRunner(
         regenTokens.push(token)
       }
       const regenAnswer = regenTokens.join("")
+      // PT-08:AC04 — a second (or third) REAL generation call gets its own
+      // snapshot and overwrites the previous one, described from the context
+      // this round actually handed over (deterministic fallback or adopted
+      // compression).
+      describeGenerationContext()
+      contextTrace.phase = "draft"
+      input.onStageProgress?.("context", { status: "completed", round: round + 2, data: { phase: "draft", evidenceCount: evidence.length } })
       // Citation check on regenerated draft (T12 #5).
       try {
         referencesForReply(regenAnswer, evidence)
       } catch {
-        terminalStatus = "invalid_citation"
-        terminalReply = fullAnswer
-        terminalReferences = referencesForReply(fullAnswer, evidence)
+        setTerminal("invalid_citation")
         terminalDegradation = {
           status: "insufficient",
           unavailableChannels: [...unavailableChannels],
@@ -1493,7 +1685,10 @@ export function createComplexKnowledgeMastraRunner(
       draftTokens = [...regenTokens]
       // Ticket 01: the regenerated draft was accepted — commit its context as
       // the final generation context (overwrites the previous round).
-      commitFinalContext(correctionCandidates, correctionCitationIds, correctionOrderings)
+      // PT-05: this list is the gap-first merge of this round's 补检 hits with
+      // the earlier retrievals, so its ordering label is the honest
+      // aggregation, never a dedicated rerank.
+      commitFinalContext(correctionCandidates, correctionCitationIds, correctionOrderings, true)
     }
 
     // -------------------------------------------------------------------------
@@ -1503,7 +1698,7 @@ export function createComplexKnowledgeMastraRunner(
       // 3 rounds expired without approval and without gap-query exhaustion.
       if (handoffStore && resolveTenantId) {
         checkAbort(signal, "GATE 6 (before handoff persistence)")
-        handoffStore.create({
+        const handoffCase = handoffStore.create({
           runId,
           tenantId,
           subjectId: accessContext.subjectId,
@@ -1517,18 +1712,14 @@ export function createComplexKnowledgeMastraRunner(
           evidenceIds: evidence.map(({ id }) => id),
           traceReference: runId,
         })
-        terminalStatus = "handoff_required"
-        terminalReply = fullAnswer
-        terminalReferences = referencesForReply(fullAnswer, evidence)
+        setTerminal(handoffCase ? "handoff_required" : "insufficient_evidence")
         terminalDegradation = {
           status: unavailableChannels.size > 0 ? "partial" : "none",
           unavailableChannels: [...unavailableChannels],
           reason: "coverage_not_met",
         }
       } else {
-        terminalStatus = "insufficient_evidence"
-        terminalReply = fullAnswer
-        terminalReferences = referencesForReply(fullAnswer, evidence)
+        setTerminal("insufficient_evidence")
         terminalDegradation = {
           status: unavailableChannels.size > 0 ? "partial" : "none",
           unavailableChannels: [...unavailableChannels],
@@ -1556,7 +1747,7 @@ export function createComplexKnowledgeMastraRunner(
     const finalReferences = referencesForReply(fullAnswer, evidence)
     if (finalReferences.length === 0) {
       return {
-        reply: fullAnswer,
+        reply: publicTerminalCopy("insufficient_evidence"),
         status: "insufficient_evidence",
         references: finalReferences,
         degradation: {
@@ -1593,6 +1784,9 @@ export function createComplexKnowledgeMastraRunner(
         signal
       )
     }
+
+    const answerBasis = bindAnswerBasis(approvedBasis, finalReferences)
+    if (answerBasis) validationTrace = { ...validationTrace, answerBasis }
 
     return {
       reply: fullAnswer,

@@ -1,0 +1,47 @@
+{
+  "task": "PT-09 acceptance assertions",
+  "status": "completed",
+  "branch": "codex/resolution-pt09-20261010",
+  "commit": "5a58e33e3f8578116387b799270e7d8a72274cae",
+  "base": "36b8faad",
+  "files": [
+    "src/evaluation/isolated_resources.test.ts"
+  ],
+  "productionChanged": false,
+  "checks": [
+    {
+      "command": "node --import tsx --test --test-name-pattern 'PT-09:' src/evaluation/isolated_resources.test.ts",
+      "red": "3 fail: recall mismatch, digest misidentified as body, post-dispose provenance",
+      "green": "3 passed, 0 failed",
+      "logs": [
+        "red.log",
+        "green.log"
+      ]
+    },
+    {
+      "command": "node --import tsx --test src/evaluation/isolated_resources.test.ts src/evaluation/generation_context_recall.test.ts src/evaluation/context_metrics.test.ts src/api/evaluations.test.ts",
+      "result": "90 passed, 0 failed, 0 skipped",
+      "logs": [
+        "adjacent.log",
+        "adjacent-rerun.log"
+      ],
+      "note": "Initial 89/90 due to randomly allocated WHATWG blocked port in unchanged API test; exact rerun passed 90/90."
+    },
+    {
+      "command": "git diff --check",
+      "result": "passed"
+    },
+    {
+      "command": "git merge --no-edit codex/resolution-20261010",
+      "result": "Already up to date."
+    }
+  ],
+  "safeguards": [
+    "Full corpus-body check plus a rejected bad trace per passage",
+    "Citation identity/document identity/non-empty spans/digest retained",
+    "Actual eval provenance recorded immediately before real dispose",
+    "Seeded non-empty business provenance retained and full business document snapshot unchanged",
+    "Eval provenance and index absent after cleanup",
+    "Real budget exclusion counterexample retained in generation_context_recall.test.ts"
+  ]
+}

@@ -205,3 +205,101 @@ test("a fresh session has nothing to retrieve until a file is attached", async (
   assert.deepEqual(outcome.results, [], "an empty session contributes no evidence")
   assert.equal(outcome.unavailableChannels.length, 0, "and no channel is blamed for it")
 })
+
+// ---------------------------------------------------------------------------
+// PT-02 AC05 — the three attachment degradations stay distinguishable:
+// missing capability, a failing source, and a session that simply is empty.
+// ---------------------------------------------------------------------------
+
+test("PT-02 AC05: a failing attachment source degrades the search and names the channel", async () => {
+  const searcher = new SearcherImpl(
+    operations({ bm25Search: async () => [knowledge("kb-fail")] }),
+    {
+      search: async () => {
+        throw new Error("attachment store unavailable")
+      },
+    }
+  )
+  const outcome = await searcher.search(
+    { text: "退款" },
+    { accessContext: context, attachments: { sessionId: "sess-failing" } }
+  )
+  assert.equal(outcome.status, "degraded", "a failed source is a degradation, not an empty session")
+  assert.deepEqual(outcome.unavailableChannels, ["attachment"])
+  assert.deepEqual(outcome.results.map((result) => result.source), ["bm25"])
+})
+
+test("PT-02 AC05: an empty knowledge scope with a failing attachment source stays insufficient and says why", async () => {
+  const searcher = new SearcherImpl(operations(), {
+    search: async () => {
+      throw new Error("attachment store unavailable")
+    },
+  })
+  const failed = await searcher.search(
+    { text: "预算" },
+    {
+      accessContext: context,
+      retrievalScope: { knowledgeBaseIds: [] },
+      attachments: { sessionId: "sess-failing" },
+    }
+  )
+  assert.equal(failed.status, "insufficient")
+  assert.deepEqual(failed.unavailableChannels, ["attachment"], "the failed source is named")
+
+  // The same scope with a healthy but EMPTY session is the other honest
+  // answer: nothing to read, and no channel blamed for it.
+  const { service } = buildAttachments()
+  const empty = await new SearcherImpl(operations(), service).search(
+    { text: "预算" },
+    {
+      accessContext: context,
+      retrievalScope: { knowledgeBaseIds: [] },
+      attachments: { sessionId: "sess-with-no-files" },
+    }
+  )
+  assert.equal(empty.status, "insufficient")
+  assert.deepEqual(empty.unavailableChannels, [], "an empty session blames no channel")
+})
+
+test("PT-02 AC05: a composition without attachment capability keeps the fail-closed empty scope", async () => {
+  const searcher = new SearcherImpl(operations(), undefined, undefined, undefined)
+  const outcome = await searcher.search(
+    { text: "预算" },
+    {
+      accessContext: context,
+      retrievalScope: { knowledgeBaseIds: [] },
+      attachments: { sessionId: "sess-1" },
+    }
+  )
+  assert.equal(outcome.status, "insufficient", "missing capability is not a silent pass")
+  assert.deepEqual(outcome.results, [])
+  assert.deepEqual(outcome.unavailableChannels, [], "and no channel is blamed for absent capability")
+})
+
+test("PT-02 AC04: every search of one run reads the same bound session triple", async () => {
+  const { service } = buildAttachments()
+  await service.submit("sess-same", "t1", "alice", [file("policy.md", "退款将在三个工作日内到账")])
+  const seen: Array<{ sessionId: string; tenantId: string; subjectId: string }> = []
+  const searcher = new SearcherImpl(operations(), {
+    search: async (request) => {
+      seen.push({
+        sessionId: request.sessionId,
+        tenantId: request.tenantId,
+        subjectId: request.subjectId,
+      })
+      return service.search(request)
+    },
+  })
+
+  for (const text of ["退款 到账", "退款 例外", "三个工作日"]) {
+    await searcher.search(
+      { text },
+      { accessContext: context, retrievalScope: { knowledgeBaseIds: [] }, attachments: { sessionId: "sess-same" } }
+    )
+  }
+  assert.deepEqual(
+    seen,
+    [1, 2, 3].map(() => ({ sessionId: "sess-same", tenantId: "t1", subjectId: "alice" })),
+    "the bound identity is never rebuilt wider between searches"
+  )
+})

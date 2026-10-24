@@ -27,6 +27,7 @@
  * alone.
  */
 
+import { resolveChunkIndexName, DEFAULT_ES_CHUNK_INDEX } from "../config"
 import type { Client } from "@elastic/elasticsearch"
 import type { DB } from "../ingestion/tracking/db"
 import { EVAL_TENANT_PREFIX } from "../evaluation/isolated_resources"
@@ -62,6 +63,7 @@ export interface DemoNamespaceClients {
   db: DB
   es: DemoNamespaceEsClient
   graph: DemoNamespaceGraph
+  indexName?: string
 }
 
 export interface DemoNamespaceInventory {
@@ -89,7 +91,7 @@ export interface DemoNamespaceReport {
   cleanup?: DemoNamespaceCleanup
 }
 
-export const DEMO_NAMESPACE_ES_INDEX = "kefu-rag-chunks"
+export const DEMO_NAMESPACE_ES_INDEX = DEFAULT_ES_CHUNK_INDEX
 
 /**
  * The namespace-scoped SQLite targets, in DEPENDENCY ORDER. Each entry is
@@ -114,6 +116,10 @@ const DEMO_NAMESPACE_SQLITE_TARGETS: ReadonlyArray<{
     table: "processing_spans",
     scopeSql: `doc_id IN (SELECT doc_id FROM documents WHERE tenant_id = @tenant)`,
   },
+  {
+    table: "cleanup_image_assets",
+    scopeSql: `document_id IN (SELECT doc_id FROM documents WHERE tenant_id = @tenant)`,
+  },
   // Answer events and clarifications are scoped by session — run BEFORE
   // session_bindings loses the (tenant, session) mapping.
   {
@@ -133,6 +139,18 @@ const DEMO_NAMESPACE_SQLITE_TARGETS: ReadonlyArray<{
     table: "assistant_versions",
     scopeSql: `assistant_id IN (SELECT id FROM assistants WHERE tenant_id = @tenant)`,
   },
+  {
+    table: "wiki_revisions",
+    scopeSql: `page_id IN (SELECT id FROM wiki_pages WHERE tenant_id = @tenant)`,
+  },
+  {
+    table: "wiki_contributions",
+    scopeSql: `page_id IN (SELECT id FROM wiki_pages WHERE tenant_id = @tenant)`,
+  },
+  {
+    table: "wiki_proposals",
+    scopeSql: `page_id IN (SELECT id FROM wiki_pages WHERE tenant_id = @tenant)`,
+  },
   // Sync run pages scope through the tenant's runs — before sync_runs.
   {
     table: "sync_run_pages",
@@ -140,6 +158,11 @@ const DEMO_NAMESPACE_SQLITE_TARGETS: ReadonlyArray<{
   },
   // Direct tenant rows.
   { table: "page_index_nodes", scopeSql: `tenant_id = @tenant` },
+  { table: "wiki_settings", scopeSql: `tenant_id = @tenant` },
+  { table: "wiki_pages", scopeSql: `tenant_id = @tenant` },
+  { table: "wiki_folders", scopeSql: `tenant_id = @tenant` },
+  { table: "wiki_issues", scopeSql: `tenant_id = @tenant` },
+  { table: "wiki_jobs", scopeSql: `tenant_id = @tenant` },
   { table: "documents", scopeSql: `tenant_id = @tenant` },
   { table: "sources", scopeSql: `tenant_id = @tenant` },
   { table: "source_tombstones", scopeSql: `tenant_id = @tenant` },
@@ -209,14 +232,14 @@ export async function inventoryDemoNamespace(
     // The shared index is created lazily by the first ingestion — a missing
     // index means the namespace owns ZERO chunk documents, not an error.
     const indexExists = await clients.es.exists(
-      { index: DEMO_NAMESPACE_ES_INDEX },
+      { index: resolveChunkIndexName(clients.indexName) },
       { requestTimeout: NAMESPACE_REQUEST_TIMEOUT_MS, maxRetries: 0 }
     )
     if (!indexExists) {
       esDocuments = 0
     } else {
       const counted = await clients.es.count(
-        { index: DEMO_NAMESPACE_ES_INDEX, query: { term: { tenantId } } },
+        { index: resolveChunkIndexName(clients.indexName), query: { term: { tenantId } } },
         { requestTimeout: NAMESPACE_REQUEST_TIMEOUT_MS, maxRetries: 0 }
       )
       esDocuments = typeof counted.count === "number" ? counted.count : null
@@ -240,7 +263,7 @@ export async function inventoryDemoNamespace(
   return {
     tenantId,
     sqliteTables,
-    esIndex: { index: DEMO_NAMESPACE_ES_INDEX, documents: esDocuments },
+    esIndex: { index: resolveChunkIndexName(clients.indexName), documents: esDocuments },
     neo4jProvenanceOwned,
     errors,
   }
@@ -289,15 +312,15 @@ export async function resetDemoNamespace(
   let esIndex: DemoNamespaceCleanup["esIndex"]
   try {
     const indexExists = await clients.es.exists(
-      { index: DEMO_NAMESPACE_ES_INDEX },
+      { index: resolveChunkIndexName(clients.indexName) },
       { requestTimeout: NAMESPACE_REQUEST_TIMEOUT_MS, maxRetries: 0 }
     )
     if (!indexExists) {
-      esIndex = { index: DEMO_NAMESPACE_ES_INDEX, deleted: 0 }
+      esIndex = { index: resolveChunkIndexName(clients.indexName), deleted: 0 }
     } else {
       const result = await clients.es.deleteByQuery(
         {
-          index: DEMO_NAMESPACE_ES_INDEX,
+          index: resolveChunkIndexName(clients.indexName),
           // The tenant term IS the namespace boundary — other tenants'
           // documents in the same index are untouched.
           query: { term: { tenantId } },
@@ -306,10 +329,10 @@ export async function resetDemoNamespace(
         },
         { requestTimeout: NAMESPACE_REQUEST_TIMEOUT_MS, maxRetries: 0 }
       )
-      esIndex = { index: DEMO_NAMESPACE_ES_INDEX, deleted: result.deleted ?? 0 }
+      esIndex = { index: resolveChunkIndexName(clients.indexName), deleted: result.deleted ?? 0 }
     }
   } catch (error) {
-    esIndex = { index: DEMO_NAMESPACE_ES_INDEX, deleted: 0, error: messageOf(error) }
+    esIndex = { index: resolveChunkIndexName(clients.indexName), deleted: 0, error: messageOf(error) }
   }
 
   let neo4jProvenance: DemoNamespaceCleanup["neo4jProvenance"]

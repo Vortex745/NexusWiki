@@ -7,9 +7,9 @@
  *  1. Schema: arguments are parsed by a STRICT zod schema — extra fields
  *     (including any attempt to smuggle identity or scope) are rejected, and
  *     only validated data reaches `execute`.
- *  2. Server identity: the environment carries the run's AccessContext and
- *     RetrievalScope; tools read identity/scope from it, never from args.
- *     A request cannot widen what a tool reads.
+ *  2. Server identity: the environment carries the run's AccessContext,
+ *     RetrievalScope, bound session and web intent; tools read identity and
+ *     scope from it, never from args. A request cannot widen what a tool reads.
  *  3. Policy: only tools on the run's explicit allowlist execute; everything
  *     else is refused BEFORE validation touches the tool.
  *  4. Timeout + cancellation: each invocation runs under a linked
@@ -41,6 +41,20 @@ export interface ToolEnvironment {
   retrievalScope?: RetrievalScope
   /** The run's signal — aborting it cancels in-flight tool work. */
   signal?: AbortSignal
+  /**
+   * PT-02 (ATT on the complex route): the run's OWN session, in exactly the
+   * `SearchOptions.attachments` shape the searcher's attachment channel
+   * consumes. Server-bound like `accessContext`: a tool reads it from the
+   * environment, never from args, so a tool call can never name another
+   * session. Absent → the attachment channel is not opened at all.
+   */
+  attachments?: { sessionId: string }
+  /**
+   * PT-03 (WEB on the complex route): the run's explicit web-search opt-in
+   * (the transport's `useWeb`). Like the identity fields it comes from the
+   * environment only — a tool call cannot opt itself into the Web channel.
+   */
+  webRequested?: boolean
   /** Per-run resources tools bind to (e.g. the run's own Searcher). */
   searcher?: unknown
   documentRepo?: unknown

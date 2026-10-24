@@ -16,13 +16,20 @@
 import type { EvalCaseResult, EvalExportFormat, EvalTaskDetail } from "./contracts"
 import { EVAL_RETRIEVAL_METRIC_KEYS } from "./metrics"
 import { EVAL_BLEU_KEYS, EVAL_ROUGE_KEYS } from "./text_metrics"
+import { EVAL_GENERATION_CONTEXT_METRIC_KEYS } from "./context_metrics"
 
 /** Bumped when the export shape changes in a way a reader must notice. */
-export const EVAL_EXPORT_FORMAT_VERSION = 2
+export const EVAL_EXPORT_FORMAT_VERSION = 3
 
-/** The twelve metric columns, in the page's display order. */
+/**
+ * The metric columns, in the page's display order. Ticket 09 appends the
+ * generation-context stage as its own column: the candidate-stage columns keep
+ * their `eval-metrics-v2` meaning and a `""` cell still means "not applicable",
+ * never a fabricated zero.
+ */
 export const EVAL_EXPORT_METRIC_KEYS: readonly string[] = [
   ...EVAL_RETRIEVAL_METRIC_KEYS,
+  ...EVAL_GENERATION_CONTEXT_METRIC_KEYS,
   ...EVAL_BLEU_KEYS,
   ...EVAL_ROUGE_KEYS,
 ]
@@ -86,6 +93,14 @@ const CASE_COLUMNS = [
   "retrieved_passage_ids",
   "candidate_count",
   "unmapped_candidates",
+  /**
+   * PL-05 / PT-09: the generation-context stage travels with its own
+   * availability, so a `""` metric cell in CSV says "not measured, here is why"
+   * instead of looking like a zero.
+   */
+  "generation_context_availability",
+  "generation_context_round",
+  "generation_context_reason",
 ] as const
 
 const TASK_COLUMNS = [
@@ -157,5 +172,8 @@ function caseValues(item: EvalCaseResult): unknown[] {
     item.retrievedPassageIds.join(" "),
     item.candidates.length,
     item.unmappedCandidates,
+    item.generationContextAvailability ?? "",
+    item.generationContextRound ?? "",
+    item.generationContextReason ?? "",
   ]
 }

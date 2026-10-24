@@ -26,9 +26,11 @@ import type {
   MastraRunner,
   MastraRunnerInput,
   MastraRunnerOutput,
+  ProgressStage,
+  StageProgressDetails,
 } from "./chat_event_adapter"
 import type { AccessContext } from "../access/context"
-import type { Query, RouterDecision } from "../types"
+import type { Query, RouterCallOptions, RouterDecision, RoutingModelDetails } from "../types"
 
 // ---------------------------------------------------------------------------
 // Test fakes — record calls + return scripted outputs/errors.
@@ -98,6 +100,45 @@ function makeRouter(decision: RouterDecision): {
   }
 }
 
+test("Clef dispatch passes cancellation and isolates decision metadata across concurrent runs", async () => {
+  const details = (model: string): RoutingModelDetails => ({
+    provider: "clef",
+    modelId: "@cf/cloudflare/clef",
+    actualModel: model,
+    probabilities: { direct: 0.1, simple: 0.7, ambiguous: 0.1, complex: 0.1 },
+    confidence: 0.4,
+    usage: { promptTokens: 20, completionTokens: 0, totalTokens: 20 },
+    durationMs: 1,
+  })
+  const inputs: MastraRunnerInput[] = []
+  let calls = 0
+  const router = {
+    async decide(query: Query, options?: RouterCallOptions): Promise<RouterDecision> {
+      calls++
+      assert.ok(options?.signal, "the provider must receive caller cancellation")
+      await new Promise<void>((resolve) => setImmediate(resolve))
+      options.onDecision?.(details(query.text))
+      return "simple"
+    },
+  }
+  const owner: MastraRunner = async (input) => {
+    inputs.push(input)
+    return {
+      ...await makeFakeRunner({ kind: "resolve", output: {} })(input),
+      routeTrace: input.preparedRoute!.routeTrace,
+    }
+  }
+  const runner = createRouteDispatchRunner({
+    router, simpleRunner: owner, directAmbiguousRunner: owner,
+  })
+  const first = makeRunnerInput({ message: "first", runId: "first" })
+  const second = makeRunnerInput({ message: "second", runId: "second" })
+  const outputs = await Promise.all([runner(first), runner(second)])
+  assert.equal(calls, 2, "one authoritative decision per run")
+  assert.deepEqual(outputs.map((output) => output.routeTrace.routingModel?.actualModel), ["first", "second"])
+  assert.deepEqual(inputs.map((input) => input.preparedRoute?.decision), ["simple", "simple"])
+})
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -152,6 +193,31 @@ test("T11 dispatch #2 direct route → directAmbiguousRunner handles without pro
   assert.equal(directAmbiguousRunner.calls[0].message, input.message, "input passed through to owner")
   assert.equal(directAmbiguousRunner.calls[0].preparedRoute?.decision, "direct")
   assert.equal(router.calls.length, 1)
+})
+
+test("MEM-02 regression: an explicit long-term-memory query bypasses knowledge retrieval", async () => {
+  const router = makeRouter("simple")
+  const simpleRunner = makeFakeRunner({
+    kind: "resolve",
+    output: { status: "handoff_required", reply: "should not retrieve memory as knowledge" },
+  })
+  const directAmbiguousRunner = makeFakeRunner({
+    kind: "resolve",
+    output: { status: "completed", reply: "memory answer", routeTrace: { decision: "direct" } },
+  })
+  const runner = createRouteDispatchRunner({ router, simpleRunner, directAmbiguousRunner })
+
+  const output = await runner(makeRunnerInput({
+    message: "提醒我一下我们的长期记忆里记录了什么。",
+  }))
+
+  assert.equal(output.status, "completed")
+  assert.equal(output.reply, "memory answer")
+  assert.equal(simpleRunner.calls.length, 0, "memory intent must not enter knowledge retrieval")
+  assert.equal(directAmbiguousRunner.calls.length, 1)
+  assert.equal(directAmbiguousRunner.calls[0].preparedRoute?.decision, "direct")
+  assert.equal(directAmbiguousRunner.calls[0].memoryIntent, true)
+  assert.equal(router.calls.length, 0, "deterministic memory intent must avoid an LLM route call")
 })
 
 test("T11 dispatch #2 ambiguous route → directAmbiguousRunner handles without probing simpleRunner", async () => {
@@ -461,4 +527,16 @@ test("P1 regression: concurrent dispatches cannot both claim the same pending cl
   assert.equal(seenQueries.filter((query) => query.includes("Which return policy?")).length, 2)
   assert.equal(claimCount, 1, "exactly one claim must succeed (destructive ack)")
   assert.equal(directRunner.calls.length, 2)
+})
+
+test("AP-02: dispatch announces the real route completion before its owner starts", async () => {
+  for (const decision of ["simple", "complex", "direct", "ambiguous"] as const) {
+    const progress: Array<{ stage: string; details?: StageProgressDetails<ProgressStage> }> = []
+    const owner: MastraRunner = async () => {
+      assert.deepEqual(progress, [{ stage: "route", details: { status: "completed", data: { decision, contextualizationOutcome: "skipped" } } }])
+      return { reply: "ok", status: "completed", references: [], degradation: { status: "none", unavailableChannels: [] }, tokens: [], routeTrace: { decision }, retrievalTrace: {}, contextTrace: {}, validationTrace: {} }
+    }
+    const runner = createRouteDispatchRunner({ router: { async decide() { return decision } }, simpleRunner: owner, complexRunner: owner, directAmbiguousRunner: owner })
+    await runner(makeRunnerInput({ onStageProgress: (stage, details) => progress.push({ stage, details }) }))
+  }
 })

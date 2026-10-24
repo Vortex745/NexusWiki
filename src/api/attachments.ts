@@ -16,6 +16,8 @@
 
 import express, { Router, type Request, type Response } from "express"
 
+import { decodeUtf8HeaderValue } from "./header_encoding"
+
 import {
   AttachmentNotPromotableError,
   MAX_ATTACHMENTS_PER_SESSION,
@@ -101,7 +103,7 @@ export function createAttachmentsRouter(
     async (req: Request, res: Response) => {
       const context = accessContextOf(res)
       if (!bindSession(req, res, context)) return
-      const name = req.header("x-file-name")?.trim()
+      const name = decodeUtf8HeaderValue(req.header("x-file-name")).trim()
       if (!name) {
         res.status(400).json({ error: "x-file-name header is required" })
         return

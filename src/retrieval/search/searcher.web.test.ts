@@ -14,6 +14,7 @@ import assert from "node:assert/strict"
 import test from "node:test"
 
 import { buildEvidence } from "../../answer/evidence"
+import { ContextAssemblerImpl } from "../context/assembler"
 import { createWebEvidenceOperations } from "../../web/web_evidence"
 import type { AccessContext } from "../../access/context"
 import type { RetrievalResult } from "../../types"
@@ -187,4 +188,134 @@ test("an empty knowledge scope with only web evidence still answers; with no web
   )
   assert.equal(withoutWeb.status, "insufficient")
   assert.deepEqual(withoutWeb.results, [])
+})
+
+// ---------------------------------------------------------------------------
+// PT-03 — the opt-in alone (no URL anywhere in the query) is what the complex
+// route must be able to carry. These pin the searcher side of that contract.
+// ---------------------------------------------------------------------------
+
+function tavilyOps(
+  rows: Array<{ title?: string; url?: string; content?: string }>,
+  behavior: { fail?: boolean } = {}
+) {
+  const calls: Array<{ body: string }> = []
+  const ops = createWebEvidenceOperations({
+    tavilyApiKey: "server-side-key",
+    tavilyEndpoint: "https://tavily.test/search",
+    tavilyFetchImpl: async (_input, init) => {
+      calls.push({ body: String(init?.body ?? "") })
+      if (behavior.fail) throw new Error("tavily 503")
+      return new Response(JSON.stringify({ results: rows }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      })
+    },
+    now: () => new Date("2026-10-08T08:00:00Z"),
+  })
+  return { ops, calls }
+}
+
+test("PT-03 AC01: an explicit opt-in with no URL still asks the configured provider", async () => {
+  const { ops, calls } = tavilyOps([
+    { title: "官网退款政策", url: "https://example.com/refund", content: "最新退款规则：30 天。" },
+  ])
+  const searcher = new SearcherImpl(
+    operations({ bm25Search: async () => [knowledge("kb-web-1")] }),
+    undefined,
+    undefined,
+    ops
+  )
+  const outcome = await searcher.search(
+    { text: "最新退款规则是什么" },
+    { accessContext: context, webRequested: true }
+  )
+  assert.equal(calls.length, 1, "webRequested alone opens the web channel")
+  assert.match(calls[0].body, /最新退款规则是什么/, "the provider request carries the run's query")
+  const webHits = outcome.results.filter((result) => result.source === "web")
+  assert.equal(webHits.length, 1)
+  assert.equal(webHits[0].chunk.metadata.origin, "web")
+  assert.equal(webHits[0].chunk.metadata.webUrl, "https://example.com/refund")
+  assert.equal(webHits[0].chunk.metadata.fetchedAt, "2026-10-08T08:00:00.000Z")
+})
+
+test("PT-03 AC02: opt-in web evidence is labelled web, never a knowledge-base document or an attachment", async () => {
+  const { ops } = tavilyOps([
+    { title: "官网退款政策", url: "https://example.com/refund", content: "最新退款规则：30 天。" },
+  ])
+  const searcher = new SearcherImpl(
+    operations({
+      bm25Search: async () => [knowledge("kb-web-2")],
+      vectorSearch: async () => [],
+    }),
+    undefined,
+    undefined,
+    ops
+  )
+  const outcome = await searcher.search(
+    { text: "最新退款规则" },
+    { accessContext: context, webRequested: true }
+  )
+  const evidence = buildEvidence(outcome.results)
+  const webCitation = evidence.find((item) => item.origin === "web")
+  assert.ok(webCitation, "web evidence keeps its origin")
+  assert.equal(webCitation?.webUrl, "https://example.com/refund")
+  assert.equal(webCitation?.webFetchedAt, "2026-10-08T08:00:00.000Z")
+  assert.equal(webCitation?.attachmentId, undefined, "it is not a session attachment")
+  assert.equal(webCitation?.source, "https://example.com/refund")
+
+  const assembled = await new ContextAssemblerImpl().assemble(outcome.results)
+  assert.match(assembled, /\[来源: https:\/\/example\.com\/refund\]/)
+  assert.doesNotMatch(assembled, /临时引用/, "web evidence is never presented as a temporary attachment")
+})
+
+test("PT-03 AC05: zero web results, a failed provider and a missing capability degrade distinctly", async () => {
+  const emptyScope = { knowledgeBaseIds: [] }
+
+  // 1. Provider answered with nothing → the channel is empty, nothing is faked.
+  const zeroOps = tavilyOps([])
+  const zeroSearcher = new SearcherImpl(operations(), undefined, undefined, zeroOps.ops)
+  const zero = await zeroSearcher.search(
+    { text: "外面的最新消息" },
+    { accessContext: context, retrievalScope: emptyScope, webRequested: true }
+  )
+  assert.equal(zero.status, "insufficient")
+  assert.deepEqual(zero.results, [])
+  assert.deepEqual(zero.unavailableChannels, ["web"], "an attempted provider call that yielded nothing is named")
+
+  // 2. Provider failed → the same honest insufficient, with the failure named.
+  const failedOps = tavilyOps([], { fail: true })
+  const failed = await new SearcherImpl(operations(), undefined, undefined, failedOps.ops).search(
+    { text: "外面的最新消息" },
+    { accessContext: context, retrievalScope: emptyScope, webRequested: true }
+  )
+  assert.equal(failed.status, "insufficient")
+  assert.deepEqual(failed.unavailableChannels, ["web"])
+
+  // 3. No web capability wired at all → the opt-in changes nothing and no
+  //    channel is blamed for an absent capability.
+  const capabilityLess = await new SearcherImpl(operations()).search(
+    { text: "外面的最新消息" },
+    { accessContext: context, retrievalScope: emptyScope, webRequested: true }
+  )
+  assert.equal(capabilityLess.status, "insufficient")
+  assert.deepEqual(capabilityLess.unavailableChannels, [])
+})
+
+test("PT-03 AC03: an opt-out search never asks the provider, and a URL still follows the read policy", async () => {
+  const { ops, calls } = tavilyOps([
+    { title: "官网", url: "https://example.com/refund", content: "正文" },
+  ])
+  const searcher = new SearcherImpl(
+    operations({ bm25Search: async () => [knowledge("kb-web-3")] }),
+    undefined,
+    undefined,
+    ops
+  )
+  await searcher.search({ text: "纯知识库问题" }, { accessContext: context })
+  await searcher.search(
+    { text: "带 useWeb=false 的问题" },
+    { accessContext: context, webRequested: false }
+  )
+  assert.deepEqual(calls, [], "useWeb=false and no URL → no opt-in Web call")
 })

@@ -246,7 +246,14 @@ test("T17 #2: Citations carry Evidence IDs — compression cannot drop citation 
   assert.match(runnerSource, /citationIdsByChunk/, "Mastra runners track citation IDs per chunk")
   assert.match(runnerSource, /evidenceIds:\s*evidence\.map/, "handoff provenance carries Evidence IDs")
   assert.match(runnerSource, /referencesForReply/, "published references are derived from Evidence")
-  assert.match(adapterSource, /references:\s*runnerOutput\.references/, "terminal event publishes validated references")
+  // PT-01: the terminal event publishes the runner's validated references and
+  // drops them for any terminal that did not approve its draft — asserted as the
+  // current shape so a silent regression back to "always publish" fails here.
+  assert.match(
+    adapterSource,
+    /references:\s*isDraftPublishable\(runnerOutput\.status\)\s*\?\s*runnerOutput\.references\s*:\s*\[\]/,
+    "terminal event publishes validated references, and nothing for unapproved terminals"
+  )
   // Compression retained/dropped tracking is separate from citation provenance
   const compressorSource = readFileSync(join(here, "..", "answer", "context_compressor.ts"), "utf8")
   assert.match(compressorSource, /retainedEvidenceIds/, "compressor tracks retained IDs")

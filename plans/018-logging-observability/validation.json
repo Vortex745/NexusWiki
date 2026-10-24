@@ -1,0 +1,48 @@
+{
+  "timestamp": "2026-10-20T10:45:35.132Z",
+  "status": "passed",
+  "tracker": "local",
+  "label": "ready-for-agent",
+  "implementation": "not_started",
+  "templates": {
+    "master": 7,
+    "childSpecifications": 9,
+    "requiredSectionsPerSpecification": 7,
+    "implementationPathsAndCode": "none"
+  },
+  "coverage": {
+    "userStories": 90,
+    "acceptanceCriteria": 95,
+    "decisions": 18,
+    "allAcceptanceUnchecked": true
+  },
+  "dependencies": {
+    "acyclic": true,
+    "noRedundantDirectEdges": true,
+    "initialFrontier": [
+      "LG-01",
+      "LG-02"
+    ],
+    "finalAcceptanceCoversAllAncestors": true,
+    "compatibilityGate": "not_run",
+    "gateInherited": true
+  },
+  "testSeams": {
+    "status": "confirmed",
+    "answer": "沿用这些验收边界（推荐）",
+    "existingPriorArtFiles": 21
+  },
+  "relativeLinksChecked": 14,
+  "missingNavigationDocuments": [
+    "docs/architecture.md",
+    "docs/coding-standards.md"
+  ],
+  "checksNotRun": [
+    "业务测试与构建",
+    "stdout背压/容量实测",
+    "OTel SDK与Langfuse实际兼容探针",
+    "真实后端读回",
+    "新版TypeSafe评审"
+  ],
+  "scope": "只验证本地规格出版物，不验证新增实现或后端兼容性"
+}

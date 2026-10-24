@@ -8,9 +8,36 @@
 // or tampered rows can never serve as a verification cache (UT-19 consumes
 // this judgement).
 import { createHash } from "node:crypto"
+import { PDF_PAGE_PREVIEW_ORIGIN } from "../../types/normalized_block"
+import type { PdfExtractionEvidenceBundle } from "../page_evidence/page_evidence"
 import type { DB } from "./db"
 
 export const EXTRACTION_EVIDENCE_SCHEMA_VERSION = 1
+
+/**
+ * Ticket 05: the durable binding between a page of the original and the preview
+ * derived from it. Only the identity of the render is stored here — the image
+ * bytes belong to the evidence envelope (ticket 06) and are never indexable
+ * content, which is why the record keeps its `derived_preview` origin.
+ */
+export interface ExtractionPagePreviewBinding {
+  page: number
+  mediaType: string
+  sha256: string
+  byteLength: number
+  width: number
+  height: number
+  origin: typeof PDF_PAGE_PREVIEW_ORIGIN
+  /** sha256 of the ORIGINAL document the page was rendered from. */
+  sourceFileSha256: string
+}
+
+export interface ExtractionPageEvidenceException {
+  page?: number | null
+  code: string
+  message: string
+  stage: string
+}
 
 export interface ExtractionPageEvidence {
   /** 1-based page number; null for parsers without page structure. */
@@ -21,6 +48,12 @@ export interface ExtractionPageEvidence {
   status: "extracted" | "unextracted_no_text_layer_or_empty"
   /** 区分真实空白、未提取、异常与缺非文本能力的说明（未知如实写未知）。 */
   note?: string
+  /** Ticket 05: declared from what the extractor actually saw on this page. */
+  textLayerAbsent?: boolean
+  /** Ticket 05: the preview derived from this page of the original file. */
+  preview?: ExtractionPagePreviewBinding
+  /** Ticket 05: per-page extraction/render exceptions kept as evidence. */
+  exceptions?: ExtractionPageEvidenceException[]
 }
 
 export interface ExtractionEvidenceRecord {
@@ -194,4 +227,114 @@ export function buildPageEvidence(
     pages.push({ page, blockCount: extracted.blockCount, textChars: extracted.textChars, status: "extracted" })
   }
   return pages
+}
+
+export class PageEvidenceBindingError extends Error {
+  constructor(readonly code: string, message: string) {
+    super(message)
+    this.name = "PageEvidenceBindingError"
+  }
+}
+
+export interface BindPreviewEvidenceOptions {
+  /** Rejects a bundle produced by a different evidence version than the caller expects. */
+  evidenceVersion?: string
+}
+
+/**
+ * Ticket 05: bind each page's derived preview into that page's durable evidence
+ * row — one per page, matched by page number, with the exception records the
+ * bundle carried. A page whose preview has no text record (or the reverse) is a
+ * failure here; nothing is bound to the neighbouring page and nothing is
+ * dropped quietly.
+ */
+export function bindPreviewEvidence(
+  pages: readonly ExtractionPageEvidence[],
+  bundle: PdfExtractionEvidenceBundle,
+  options: BindPreviewEvidenceOptions = {}
+): ExtractionPageEvidence[] {
+  if (
+    options.evidenceVersion !== undefined &&
+    options.evidenceVersion !== bundle.evidenceVersion
+  ) {
+    throw new PageEvidenceBindingError(
+      "evidence_version_mismatch",
+      `the page evidence is ${bundle.evidenceVersion} but the caller bound evidence version ${options.evidenceVersion}`
+    )
+  }
+  if (pages.some((page) => page.preview)) {
+    throw new PageEvidenceBindingError(
+      "page_preview_already_bound",
+      "these page records already carry a preview binding"
+    )
+  }
+
+  const rowsByPage = new Map<number, ExtractionPageEvidence>()
+  for (const row of pages) {
+    if (typeof row.page !== "number") {
+      throw new PageEvidenceBindingError(
+        "page_preview_binding_unpaired",
+        "previews can only bind to page-structured evidence rows"
+      )
+    }
+    if (rowsByPage.has(row.page)) {
+      throw new PageEvidenceBindingError(
+        "page_preview_binding_unpaired",
+        `page ${row.page} appears twice in the evidence rows`
+      )
+    }
+    rowsByPage.set(row.page, row)
+  }
+
+  const bound: ExtractionPageEvidence[] = []
+  for (const record of bundle.pages) {
+    const row = rowsByPage.get(record.page)
+    if (!row) {
+      throw new PageEvidenceBindingError(
+        "page_preview_binding_unpaired",
+        `page ${record.page} has preview evidence but no durable page row`
+      )
+    }
+    if (record.preview.page !== record.page || record.text.page !== record.page) {
+      throw new PageEvidenceBindingError(
+        "page_preview_binding_unpaired",
+        `page ${record.page}'s evidence carries a preview numbered ${record.preview.page}`
+      )
+    }
+    if (record.preview.sourceFileSha256 !== bundle.identity.originalFile.sha256) {
+      throw new PageEvidenceBindingError(
+        "preview_source_binding_mismatch",
+        `page ${record.page}'s preview is not bound to this candidate's original file`
+      )
+    }
+    bound.push({
+      ...row,
+      textLayerAbsent: record.text.textLayerAbsent,
+      exceptions: record.text.exceptions.map((exception) => ({
+        page: record.page,
+        code: exception.code,
+        message: exception.message,
+        stage: exception.stage,
+      })),
+      preview: Object.freeze({
+        page: record.page,
+        mediaType: record.preview.mediaType,
+        sha256: record.preview.sha256,
+        byteLength: record.preview.byteLength,
+        width: record.preview.width,
+        height: record.preview.height,
+        origin: record.preview.origin,
+        sourceFileSha256: record.preview.sourceFileSha256,
+      }),
+    })
+    rowsByPage.delete(record.page)
+  }
+  const orphaned = [...rowsByPage.keys()].sort((left, right) => left - right)
+  if (orphaned.length > 0) {
+    throw new PageEvidenceBindingError(
+      "page_preview_binding_unpaired",
+      `page ${orphaned.join(", ")} has a durable row but no page evidence`
+    )
+  }
+  return bound.sort((left, right) => (left.page ?? 0) - (right.page ?? 0))
 }

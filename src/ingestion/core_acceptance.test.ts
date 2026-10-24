@@ -12,7 +12,7 @@ import { dirname, join, resolve } from "node:path"
 import test from "node:test"
 import { config as dotenvConfig } from "dotenv"
 import { createApp } from "../api/server"
-import { loadConfig } from "../config"
+import { loadConfig, resolveChunkIndexName } from "../config"
 import { closeDb, openDb } from "./tracking"
 import { DocumentRepo } from "./tracking/doc_repo"
 import { ExpectedChunkRepository } from "./tracking/expected_chunk_repo"
@@ -25,7 +25,7 @@ import { createElasticsearchClient } from "../clients"
 const HERE = dirname(__filename)
 process.env.OPENAI_API_KEY = process.env.OPENAI_API_KEY || "test-key"
 // 真实 ES/嵌入配置来自生产 .env（override:false）。
-dotenvConfig({ override: false })
+dotenvConfig({ path: process.env.DOTENV_CONFIG_PATH, override: false })
 // loadConfig() 是进程级 memoize：必须在任何 loadConfig 调用之前固定隔离库。
 process.env.SQLITE_PATH = join(mkdtempSync(join(tmpdir(), "kefu-rag-ut21-")), "ingestion.db")
 
@@ -34,6 +34,7 @@ const PDF_TRUTH_DIR = resolve(HERE, "../../golden/upload-truth/pdf")
 const REPORT_DIR = resolve(HERE, "../../.scratch/upload-truth")
 
 const config = loadConfig()
+const CHUNK_INDEX = resolveChunkIndexName(undefined, config)
 const es = createElasticsearchClient({ node: config.esNode, apiKey: config.esApiKey || undefined })
 
 const REPORT: {
@@ -96,12 +97,12 @@ async function runPendingDocuments(): Promise<void> {
 
 async function searchInIndex(documentId: string, text: string): Promise<boolean> {
   const result = await es.search({
-    index: "kefu-rag-chunks",
+    index: CHUNK_INDEX,
     size: 5,
     query: {
       bool: {
         must: [{ match: { content: text } }],
-        filter: [{ term: { documentId } }],
+        filter: [{ term: { documentId } }, { term: { tenantId: "ut21" } }],
       },
     },
   })
@@ -215,7 +216,7 @@ test("UT-21 联合验收：真实上传→门槛→激活→检索（TXT/PDF）�
         // 既有设计——正文在切块与索引中；rawExtraction 是 JSON 也不能用）。
         const chunkManifest = new ExpectedChunkRepository(openDb()).list(docId)
         const mget = await es.mget({
-          index: "kefu-rag-chunks",
+          index: CHUNK_INDEX,
           ids: chunkManifest.map((entry) => `${docId}:${entry.chunkId}`),
           _source: ["content"],
         })
@@ -265,8 +266,8 @@ test("UT-21 联合验收：真实上传→门槛→激活→检索（TXT/PDF）�
     const recoveryDocId = documentIds["utf8-baseline.txt"]
     const manifestBefore = new ExpectedChunkRepository(openDb()).list(recoveryDocId)
     const victim = manifestBefore[0].chunkId
-    await es.delete({ index: "kefu-rag-chunks", id: `${recoveryDocId}:${victim}` }, { ignore: [404] })
-    await es.indices.refresh({ index: "kefu-rag-chunks" })
+    await es.delete({ index: CHUNK_INDEX, id: `${recoveryDocId}:${victim}` }, { ignore: [404] })
+    await es.indices.refresh({ index: CHUNK_INDEX })
 
     const recoveryStart = Date.now()
     const reprocess = new IngestionLifecycle(
@@ -297,8 +298,8 @@ test("UT-21 联合验收：真实上传→门槛→激活→检索（TXT/PDF）�
       // 清理隔离验收数据（真实 ES 中的测试文档）。
       await es
         .deleteByQuery({
-          index: "kefu-rag-chunks",
-          query: { terms: { documentId: Object.values(documentIds) } },
+          index: CHUNK_INDEX,
+          query: { bool: { filter: [{ terms: { documentId: Object.values(documentIds) } }, { term: { tenantId: "ut21" } }] } },
           conflicts: "proceed",
           refresh: true,
         })

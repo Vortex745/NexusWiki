@@ -240,7 +240,11 @@ export function createDirectAmbiguousMastraRunner(
     // `Router.decide` takes a `Query` ({ text: string, ... }); wrap the chat
     // message into a minimal Query object. Legacy generation.ts does the same
     // wrapping before calling the Router.
-    const decision = input.preparedRoute?.decision ?? await router.decide({ text: effectiveMessage })
+    const decision = input.preparedRoute?.decision ?? (
+      input.memoryIntent
+        ? "direct"
+        : await router.decide({ text: effectiveMessage })
+    )
 
     // Ownership guard (T09 #5): simple/complex routes are not owned here.
     if (decision === "simple" || decision === "complex") {
@@ -313,7 +317,10 @@ export function createDirectAmbiguousMastraRunner(
     // Ticket 33 (MEM-01B): recalled long-term memories ride the system prompt
     // as clearly-labeled background — never evidence, never citations.
     const memorySuffix = renderMemoryPromptSuffix(input.longTermMemories)
-    const systemPrompt = [input.assistant?.systemPrompt, memorySuffix]
+    const memoryQueryPrompt = input.memoryIntent
+      ? "\n\n[长期记忆查询约束] 用户正在询问已保存的长期记忆。只能根据下方长期记忆区块回答；如果区块为空，明确说明当前没有可用的长期记忆。不得根据常识猜测，也不得生成或展示任何引用。"
+      : ""
+    const systemPrompt = [input.assistant?.systemPrompt, memoryQueryPrompt, memorySuffix]
       .filter((part): part is string => Boolean(part))
       .join("")
     const tokens: string[] = []

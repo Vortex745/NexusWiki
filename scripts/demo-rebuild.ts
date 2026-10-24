@@ -131,6 +131,7 @@ async function main(): Promise<number> {
   )
   const clients: DemoRebuildClients = {
     db,
+    indexName: config.esChunkIndexName,
     es,
     graph: createNeo4jDemoRebuildGraph(graphDriver),
   }

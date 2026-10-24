@@ -243,6 +243,44 @@ test("Conversation persistence drops prompt field from user messages", () => {
   assert.equal(persisted.threads[0].messages[0].prompt, undefined)
 })
 
+test("Conversation load normalizes legacy messages without trace arrays", () => {
+  const storage = new InMemoryConversationStorage()
+  // Shape written before traceEvents/references existed on Message.
+  const legacy = {
+    threads: [
+      {
+        id: "thread-legacy",
+        title: "旧会话",
+        createdAt: "2026-01-01T00:00:00.000Z",
+        updatedAt: "2026-01-01T00:00:00.000Z",
+        messages: [
+          {
+            id: "message-legacy",
+            role: "user",
+            content: "hi",
+            status: "complete",
+            createdAt: "2026-01-01T00:00:00.000Z",
+          },
+        ],
+      },
+    ],
+    activeThreadId: "thread-legacy",
+    streamEnabled: true,
+    sidebarCollapsed: false,
+  }
+  storage.save(legacy as unknown as PersistedState)
+
+  const conv = new ConversationImpl({ storage, now: fixedNow })
+  const message = conv.getActiveThread()!.messages[0]
+  assert.deepEqual(message.traceEvents, [])
+  assert.deepEqual(message.references, [])
+
+  // Construction persists the repaired shape, so a reload never sees the crash again.
+  const repaired = storage.load() as PersistedState
+  assert.deepEqual(repaired.threads[0].messages[0].traceEvents, [])
+  assert.deepEqual(repaired.threads[0].messages[0].references, [])
+})
+
 test("Conversation load with corrupted storage returns fallback state", () => {
   const storage = new InMemoryConversationStorage()
   storage.save({
@@ -551,6 +589,35 @@ test("finalizeAbortedRun falls back to stopped message when no content", () => {
   conv.finalizeAbortedRun(message)
   assert.equal(message.status, "complete")
   assert.equal(message.content, "已停止生成。")
+})
+
+test("client cancellation records a cancelled business status when no terminal has arrived", () => {
+  const conv = new ConversationImpl({ storage: new InMemoryConversationStorage(), now: fixedNow })
+  const message = makeRunningAssistantMessage()
+  conv.mergeTraceEvent(message, makeEvent(1, "retrieval-start", "progress", { stage: "retrieval", status: "running" }))
+
+  conv.finalizeAbortedRun(message)
+
+  assert.equal(message.traceStatus, "cancelled")
+  assert.equal(message.traceEvents.length, 1, "client cancellation must not fabricate a server done event")
+  assert.equal(message.content, "已停止生成。")
+})
+
+test("a late client abort preserves the server's authoritative terminal outcome", () => {
+  const conv = new ConversationImpl({ storage: new InMemoryConversationStorage(), now: fixedNow })
+  for (const status of ["completed", "provider_error", "insufficient_evidence", "cancelled"]) {
+    const message = makeRunningAssistantMessage()
+    message.content = "服务端已发布的回复"
+    conv.mergeTraceEvent(message, makeEvent(1, `done-${status}`, "done", {
+      stage: "done", status: status === "cancelled" ? "cancelled" : "completed", result: { status },
+    }))
+
+    conv.finalizeAbortedRun(message)
+
+    assert.equal(message.traceStatus, status)
+    assert.equal(message.status, status === "completed" ? "complete" : "error")
+    assert.equal(message.content, "服务端已发布的回复")
+  }
 })
 
 test("finalizeConnectionError marks error with friendly message", () => {

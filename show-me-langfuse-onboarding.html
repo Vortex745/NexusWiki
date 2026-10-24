@@ -1,0 +1,399 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Langfuse 上手 & Agent 接入速览</title>
+<style>
+  :root{
+    color-scheme: light;
+    --bg:#FFFFFF; --surface:#F7F7F8; --surface-2:#EFEFF2;
+    --text:#171717; --muted:#52525B; --border:rgba(23,23,23,.12);
+    --accent:#02743B; --accent-soft:#E5FFF2; --accent-line:#0FDC78; --accent-text:#004D26;
+    --code-bg:#F1F3F5;
+    --warn:#EFAA17;
+    --radius:10px; --radius-lg:16px;
+    --sans:"SF Pro Text","PingFang SC",system-ui,-apple-system,"Segoe UI",Roboto,"Helvetica Neue",sans-serif;
+    --mono:"JetBrains Mono",ui-monospace,"SF Mono",Menlo,Consolas,"Liberation Mono",monospace;
+  }
+  @media (prefers-color-scheme: dark){
+    :root{
+      color-scheme: dark;
+      --bg:#0E0E10; --surface:#171717; --surface-2:#262626;
+      --text:#E5E5E5; --muted:#A1A1AA; --border:rgba(229,229,229,.12);
+      --accent:#32F08C; --accent-soft:#004D26; --accent-line:#02743B; --accent-text:#E5FFF2;
+      --code-bg:#1C1C1F;
+    }
+  }
+  *{box-sizing:border-box}
+  body{
+    margin:0; background:var(--bg); color:var(--text);
+    font:400 15px/1.65 var(--sans);
+    -webkit-font-smoothing:antialiased;
+  }
+  .wrap{max-width:1080px;margin:0 auto;padding:40px 24px 72px}
+  header{border-bottom:1px solid var(--border);padding-bottom:24px;margin-bottom:32px}
+  h1{font-size:30px;line-height:1.25;margin:0 0 8px;font-weight:600;letter-spacing:-.01em}
+  .sub{color:var(--muted);margin:0;font-size:15px}
+  .tags{margin-top:16px;display:flex;flex-wrap:wrap;gap:8px}
+  .tag{font:500 12px/1 var(--sans);padding:6px 10px;border-radius:999px;border:1px solid var(--border);color:var(--muted);background:var(--surface)}
+  h2{font-size:19px;font-weight:600;margin:44px 0 6px;letter-spacing:-.01em}
+  h2 .num{color:var(--accent);margin-right:8px;font-variant-numeric:tabular-nums}
+  .lead{color:var(--muted);margin:0 0 18px;font-size:14px}
+  h3{font-size:15px;font-weight:600;margin:0 0 6px}
+  .grid3{display:grid;grid-template-columns:repeat(3,1fr);gap:16px}
+  .grid2{display:grid;grid-template-columns:repeat(2,1fr);gap:16px}
+  @media (max-width:860px){.grid3,.grid2{grid-template-columns:1fr}}
+  .card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-lg);padding:20px}
+  .card.hi{border-color:var(--accent-line);border-width:1.5px}
+  .card .step{font:600 12px/1 var(--mono);color:var(--accent-text);background:var(--accent-soft);display:inline-block;padding:5px 9px;border-radius:999px;margin-bottom:12px}
+  ol,ul{margin:8px 0 0;padding-left:20px}
+  li{margin:5px 0}
+  li::marker{color:var(--muted)}
+  .kv{font:500 12px/1.6 var(--mono);color:var(--muted);word-break:break-all}
+  pre{
+    background:var(--code-bg);border:1px solid var(--border);border-radius:var(--radius);
+    padding:14px 16px;overflow:auto;margin:10px 0 0;
+    font:400 13px/1.6 var(--mono);color:var(--text);
+  }
+  code{font:500 13px var(--mono);background:var(--code-bg);padding:2px 5px;border-radius:5px}
+  pre code{background:none;padding:0}
+  table{width:100%;border-collapse:collapse;margin-top:10px;font-size:14px}
+  th,td{text-align:left;padding:9px 12px;border-bottom:1px solid var(--border);vertical-align:top}
+  th{font-weight:600;color:var(--muted);font-size:12px;letter-spacing:.04em;text-transform:uppercase}
+  td code{font-size:12px}
+  .panel{border:1px solid var(--border);border-radius:var(--radius-lg);padding:20px;margin:16px 0;background:var(--surface)}
+  .panel.brand{border-color:var(--accent-line);border-width:1.5px;background:var(--surface)}
+  .flag{display:flex;gap:10px;align-items:flex-start;padding:12px 0;border-bottom:1px dashed var(--border)}
+  .flag:last-child{border-bottom:0}
+  .flag .n{font:600 12px/1.5 var(--mono);color:var(--muted);min-width:20px}
+  .flag .b{font-weight:600}
+  .flag .d{color:var(--muted);font-size:14px}
+  .svgbox{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-lg);padding:18px;margin-top:14px;overflow-x:auto}
+  .svgbox svg{display:block;min-width:820px;width:100%;height:auto}
+  .two{display:grid;grid-template-columns:1fr 1fr;gap:20px}
+  @media (max-width:900px){.two{grid-template-columns:1fr}}
+  .legend{display:flex;gap:18px;flex-wrap:wrap;margin-top:12px;font-size:12px;color:var(--muted)}
+  .legend i{display:inline-block;width:10px;height:10px;border-radius:3px;margin-right:6px;vertical-align:middle}
+  .foot{margin-top:56px;padding-top:20px;border-top:1px solid var(--border);color:var(--muted);font-size:13px}
+  .path{font:400 13px/1.75 var(--mono);color:var(--muted);white-space:pre;overflow-x:auto;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:14px 16px}
+  .path b{color:var(--text);font-weight:600}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <h1>Langfuse：上手路径 &amp; Agent 接入</h1>
+  <p class="sub">基于 <code>langfuse/langfuse</code> 仓库源码 + 官方文档的实操速览</p>
+  <div class="tags">
+    <span class="tag">Observability</span>
+    <span class="tag">Prompt Management</span>
+    <span class="tag">Evals &amp; Datasets</span>
+    <span class="tag">Skill / CLI / MCP</span>
+    <span class="tag">ClickHouse OLAP</span>
+  </div>
+</header>
+
+<h2><span class="num">01</span>三档上手路径</h2>
+<p class="lead">按「要不要改源码 / 要不要自己部署」选一档，不要跳级。</p>
+
+<div class="grid3">
+  <div class="card hi">
+    <span class="step">档位 1 · 只用</span>
+    <h3>Langfuse Cloud</h3>
+    <ul>
+      <li>注册建 Org → Project</li>
+      <li>Project Settings → API Keys</li>
+      <li>复制 <code>pk-lf-…</code> / <code>sk-lf-…</code></li>
+      <li>三行环境变量 + 装 SDK</li>
+      <li>UI → Traces 看到链路</li>
+    </ul>
+    <pre><code>pip install langfuse openai
+
+LANGFUSE_PUBLIC_KEY="pk-lf-…"
+LANGFUSE_SECRET_KEY="sk-lf-…"
+LANGFUSE_BASE_URL="https://cloud.langfuse.com"</code></pre>
+  </div>
+
+  <div class="card">
+    <span class="step">档位 2 · 自托管</span>
+    <h3>docker compose</h3>
+    <p style="margin:0;color:var(--muted);font-size:14px">6 个服务起来即用；<b style="color:var(--text)">必须换掉全部 CHANGEME 密钥</b>。</p>
+    <table>
+      <tr><td><code>DATABASE_URL</code></td><td>Postgres</td></tr>
+      <tr><td><code>SALT</code></td><td>加密盐</td></tr>
+      <tr><td><code>ENCRYPTION_KEY</code></td><td><code>openssl rand -hex 32</code>，上线后不可改</td></tr>
+      <tr><td><code>NEXTAUTH_SECRET</code></td><td>登录会话</td></tr>
+      <tr><td><code>CLICKHOUSE_PASSWORD</code></td><td>OLAP</td></tr>
+      <tr><td><code>REDIS_AUTH</code></td><td>队列 / 缓存</td></tr>
+      <tr><td><code>MINIO_ROOT_PASSWORD</code></td><td>S3 兼容对象存储</td></tr>
+    </table>
+  </div>
+
+  <div class="card">
+    <span class="step">档位 3 · 改源码</span>
+    <h3>pnpm monorepo</h3>
+    <ul>
+      <li>Next.js 16 (Pages Router) · NextAuth · tRPC · Prisma · Zod v4</li>
+      <li>Node.js <b>24</b>（.nvmrc）· pnpm（<code>preinstall</code> 拒绝 npm）</li>
+      <li>Rust via rustup（ai-gateway + worker native addon）</li>
+      <li>Docker + ClickHouse client</li>
+    </ul>
+    <pre><code>pnpm run dx
+# install → infra up → db/ch reset → seed → turbo watch dev</code></pre>
+    <p style="margin:10px 0 0;color:var(--muted);font-size:13px">CI 四道门：<code>lint</code> / <code>tc</code> / <code>knip</code> / <code>test</code></p>
+  </div>
+</div>
+
+<h2><span class="num">02</span>配置到 Agent 应用：两种语义</h2>
+<p class="lead">「Agent 应用」有两种方向，配置清单完全不同，先对号入座。</p>
+
+<div class="two">
+  <div class="panel brand">
+    <h3>A · 把 Langfuse 接进「你自己的 Agent 应用」</h3>
+    <p style="margin:0 0 4px;color:var(--muted);font-size:14px">目标：可观测 + 评估 + prompt 管理。需要 4 样东西。</p>
+
+    <p style="margin:16px 0 0"><b>① 凭据三件套（唯一必填）</b></p>
+    <pre><code>LANGFUSE_PUBLIC_KEY="pk-lf-…"
+LANGFUSE_SECRET_KEY="sk-lf-…"
+LANGFUSE_BASE_URL="https://cloud.langfuse.com"</code></pre>
+    <table>
+      <tr><th>区域</th><th>BASE_URL</th></tr>
+      <tr><td>EU（默认）</td><td><code>cloud.langfuse.com</code></td></tr>
+      <tr><td>US</td><td><code>us.cloud.langfuse.com</code></td></tr>
+      <tr><td>JP</td><td><code>jp.cloud.langfuse.com</code></td></tr>
+      <tr><td>HIPAA</td><td><code>hipaa.cloud.langfuse.com</code></td></tr>
+      <tr><td>自托管</td><td><code>http://localhost:3000</code></td></tr>
+    </table>
+
+    <p style="margin:16px 0 0"><b>② SDK</b></p>
+    <pre><code># Python
+pip install langfuse
+
+# JS / TS
+npm i @langfuse/openai @langfuse/tracing @langfuse/otel</code></pre>
+
+    <p style="margin:16px 0 0"><b>③ 埋点代码（三选一）</b></p>
+    <pre><code>from langfuse import observe
+from langfuse.openai import openai
+
+@observe()
+def main():
+    openai.chat.completions.create(
+        model="gpt-4o",
+        messages=[{"role": "user", "content": "Hello"}],
+    )
+
+main()</code></pre>
+    <p style="margin:8px 0 0;color:var(--muted);font-size:14px">
+      JS/TS：<code>observeOpenAI(…)</code> · <code>startActiveObservation</code> ·
+      已有 OTel 链路则接 <code>LangfuseSpanProcessor</code>（<b>必须显式初始化，不会自动生效</b>）。
+    </p>
+
+    <p style="margin:16px 0 0"><b>④ 框架适配</b></p>
+    <p style="margin:4px 0 0;color:var(--muted);font-size:14px">
+      OpenAI Agents SDK · LangChain / LangGraph · LlamaIndex · Vercel AI SDK · Mastra ·
+      LiteLLM · Haystack · CrewAI · AutoGen · smolagents · DSPy · Instructor
+    </p>
+  </div>
+
+  <div class="panel">
+    <h3>B · 把 Langfuse 接给「Coding Agent」</h3>
+    <p style="margin:0 0 4px;color:var(--muted);font-size:14px">
+      目标：让 agent 自己查 trace、管 prompt、跑评估。三条<b>等价</b>通道，按 agent 能力选一条。
+    </p>
+
+    <table style="margin-top:14px">
+      <tr><th>通道</th><th>适用</th><th>装法</th></tr>
+      <tr>
+        <td><b>Agent Skill</b></td>
+        <td>要 agent 掌握完整最佳实践</td>
+        <td><code>npx skills add langfuse/skills --skill "langfuse"</code></td>
+      </tr>
+      <tr>
+        <td><b>CLI</b></td>
+        <td>agent 能跑 bash，可先预过滤再进上下文</td>
+        <td><code>npx @langfuse/cli api &lt;resource&gt; &lt;action&gt;</code></td>
+      </tr>
+      <tr>
+        <td><b>MCP server</b></td>
+        <td>agent <b>不能</b>执行 shell 命令</td>
+        <td><code>POST /api/public/mcp</code></td>
+      </tr>
+    </table>
+
+    <p style="margin:18px 0 0"><b>MCP 客户端配置</b></p>
+    <pre><code>{
+  "mcpServers": {
+    "langfuse": {
+      "url": "https://cloud.langfuse.com/api/public/mcp",
+      "transport": "streamableHttp",
+      "headers": {
+        "Authorization": "Basic &lt;base64(pk:sk)&gt;"
+      }
+    }
+  }
+}</code></pre>
+    <pre><code>echo -n "pk-lf-xxx:sk-lf-xxx" | base64
+
+claude mcp add --transport http langfuse \
+  http://localhost:3000/api/public/mcp \
+  --header "Authorization: Basic {base64}"</code></pre>
+
+    <p style="margin:18px 0 0"><b>CLI 环境变量（注意命名不同）</b></p>
+    <pre><code>LANGFUSE_PUBLIC_KEY=…
+LANGFUSE_SECRET_KEY=…
+LANGFUSE_HOST=…   # CLI 用 HOST，SDK 用 BASE_URL</code></pre>
+
+    <p style="margin:18px 0 0"><b>只读 agent</b></p>
+    <p style="margin:4px 0 0;color:var(--muted);font-size:14px">
+      MCP 工具注解带 <code>readOnlyHint</code> / <code>destructiveHint</code>，
+      只放行查询类工具即可禁写。
+    </p>
+  </div>
+</div>
+
+<h2><span class="num">03</span>自托管运行时拓扑</h2>
+<p class="lead">一条 trace 从 SDK 到 OLAP 的完整链路，以及四个存储各管什么。</p>
+
+<div class="svgbox">
+<svg viewBox="0 0 920 300" role="img" aria-label="Langfuse 自托管拓扑：Agent 应用经 SDK 埋点进入 langfuse-web，再由 worker 写入 Postgres、ClickHouse、Redis 与 MinIO">
+  <defs>
+    <marker id="ah" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto" markerUnits="userSpaceOnUse">
+      <path d="M0,0 L8,4 L0,8 Z" fill="#52525B"></path>
+    </marker>
+  </defs>
+
+  <!-- top row -->
+  <g class="n">
+    <rect x="30" y="32" width="160" height="64" rx="8"/>
+    <text x="110" y="58" class="tt" text-anchor="middle">Agent 应用</text>
+    <text x="110" y="78" class="ts" text-anchor="middle">你的框架 / 任意 LLM 调用</text>
+  </g>
+  <g class="n">
+    <rect x="240" y="32" width="160" height="64" rx="8"/>
+    <text x="320" y="58" class="tt" text-anchor="middle">SDK 埋点</text>
+    <text x="320" y="78" class="ts" text-anchor="middle">@observe() / OTel</text>
+  </g>
+  <g class="b">
+    <rect x="450" y="32" width="180" height="64" rx="8"/>
+    <text x="540" y="58" class="bt" text-anchor="middle">langfuse-web :3000</text>
+    <text x="540" y="78" class="bts" text-anchor="middle">REST · Public API · MCP</text>
+  </g>
+  <g class="n">
+    <rect x="690" y="32" width="180" height="64" rx="8"/>
+    <text x="780" y="58" class="tt" text-anchor="middle">langfuse-worker :3030</text>
+    <text x="780" y="78" class="ts" text-anchor="middle">ingest · eval · export</text>
+  </g>
+
+  <g class="n">
+    <rect x="240" y="196" width="150" height="60" rx="8"/>
+    <text x="315" y="222" class="tt" text-anchor="middle">Postgres</text>
+    <text x="315" y="242" class="ts" text-anchor="middle">账户 / 项目 / 配置</text>
+  </g>
+  <g class="n">
+    <rect x="400" y="196" width="150" height="60" rx="8"/>
+    <text x="475" y="222" class="tt" text-anchor="middle">ClickHouse</text>
+    <text x="475" y="242" class="ts" text-anchor="middle">trace OLAP 存储</text>
+  </g>
+  <g class="n">
+    <rect x="560" y="196" width="150" height="60" rx="8"/>
+    <text x="635" y="222" class="tt" text-anchor="middle">Redis</text>
+    <text x="635" y="242" class="ts" text-anchor="middle">队列 / 缓存</text>
+  </g>
+  <g class="n">
+    <rect x="720" y="196" width="150" height="60" rx="8"/>
+    <text x="795" y="222" class="tt" text-anchor="middle">MinIO / S3</text>
+    <text x="795" y="242" class="ts" text-anchor="middle">媒体 / 导出产物</text>
+  </g>
+
+  <!-- connectors -->
+  <g class="ln">
+    <path d="M190,64 L234,64"/>
+    <path d="M400,64 L444,64"/>
+    <path d="M630,64 L684,64"/>
+  </g>
+  <g class="lnb">
+    <path d="M540,96 L540,142"/>
+    <path d="M780,96 L780,142"/>
+    <path d="M315,142 L795,142"/>
+  </g>
+  <g class="ln">
+    <path d="M315,142 L315,190"/>
+    <path d="M475,142 L475,190"/>
+    <path d="M635,142 L635,190"/>
+    <path d="M795,142 L795,190"/>
+  </g>
+
+  <style>
+    .n rect{fill:var(--surface);stroke:var(--border);stroke-width:1}
+    .b rect{fill:var(--accent-soft);stroke:var(--accent);stroke-width:1.5}
+    .tt{fill:var(--text);font:500 14px var(--sans)}
+    .ts{fill:var(--muted);font:400 12px var(--sans)}
+    .bt{fill:var(--accent-text);font:500 14px var(--sans)}
+    .bts{fill:var(--accent-text);font:400 12px var(--sans)}
+    .ln path{stroke:var(--text-muted);stroke-width:1.5;fill:none;marker-end:url(#ah);color:var(--text-muted)}
+    .lnb path{stroke:var(--accent);stroke-width:1.5;fill:none;stroke-linecap:round;stroke-linejoin:round;color:var(--accent)}
+  </style>
+</svg>
+<div class="legend">
+  <span><i style="background:var(--accent)"></i>主链路：埋点上报 → web → worker → 存储</span>
+  <span><i style="background:var(--text-muted)"></i>请求 / 调用关系</span>
+  <span><i style="background:var(--surface-2);border:1px solid var(--border)"></i>普通服务</span>
+</div>
+</div>
+
+<h2><span class="num">04</span>运行时调用链</h2>
+<p class="lead">一条 trace 在系统内部的流转顺序，对应排查「数据没上来」时的定位路径。</p>
+<div class="path"><b>agent.app</b>
+  └─ <b>SDK</b> @observe()  →  batch queue
+        └─ <b>POST /api/public/ingestion</b>  (Basic auth: pk/sk)
+              └─ <b>langfuse-web</b>
+                    ├─ 校验 key → 解析 project
+                    ├─ 写 <b>Redis</b>（ingestion queue）
+                    └─ <b>langfuse-worker</b> 消费
+                          ├─ 写 <b>ClickHouse</b>（observations / traces / scores）
+                          ├─ 写 <b>Postgres</b>（数据集 / prompt / 配置）
+                          └─ 写 <b>S3</b>（媒体、批量导出）
+                                └─ UI：Traces / Observations / Scores</div>
+
+<h2><span class="num">05</span>坑位清单</h2>
+<p class="lead">照着抄最容易翻车的 8 个点。</p>
+
+<div class="panel">
+  <div class="flag"><span class="n">01</span><span><span class="b">MCP 只支持 project-scoped key</span><br><span class="d">组织级（org-level）key 会被直接拒绝 —— 换 key 不是换 URL。</span></span></div>
+  <div class="flag"><span class="n">02</span><span><span class="b">CLI 用 LANGFUSE_HOST，SDK 用 LANGFUSE_BASE_URL</span><br><span class="d">两个名字不同，混用会静默失败、不报错。</span></span></div>
+  <div class="flag"><span class="n">03</span><span><span class="b">反代场景要配 LANGFUSE_MCP_ALLOWED_HOSTS</span><br><span class="d">MCP 会校验请求 Host，不一致即拒；填 <code>*</code> 能过但不推荐。</span></span></div>
+  <div class="flag"><span class="n">04</span><span><span class="b">自托管必须换掉所有 CHANGEME 密钥</span><br><span class="d">尤其 ENCRYPTION_KEY —— 上线后不能改，改了历史数据解不开。</span></span></div>
+  <div class="flag"><span class="n">05</span><span><span class="b">JS/TS 的 OTel 要显式初始化</span><br><span class="d">不注册 <code>LangfuseSpanProcessor</code> 就不会上报，span 静默丢失。</span></span></div>
+  <div class="flag"><span class="n">06</span><span><span class="b">BASE_URL 必须与账号区域一致</span><br><span class="d">填错表现为「key 无效」而不是明确报错，最难查的一类。</span></span></div>
+  <div class="flag"><span class="n">07</span><span><span class="b">MinIO / S3 兼容要 FORCE_PATH_STYLE=true</span><br><span class="d">否则路径式访问失败，报 404 类错误。</span></span></div>
+  <div class="flag"><span class="n">08</span><span><span class="b">本地开发的 ingestion 队列有延迟</span><br><span class="d">SDK 集成测试要调小 <code>LANGFUSE_INGESTION_QUEUE_DELAY_MS</code>，否则断言时数据还没落库。</span></span></div>
+</div>
+
+<h2><span class="num">06</span>仓库结构速览</h2>
+<div class="path"><b>langfuse/langfuse</b>
+├── <b>web/</b>          Next.js 主应用（UI + tRPC + Public API + <b>MCP server</b>）
+│   └── src/features/mcp/      19 个 feature module（prompts / skills / observations …）
+├── <b>worker/</b>       队列消费者（ingestion / evals / batch export）
+├── <b>packages/</b>    shared · config-typescript · icons · langfuse-skills · native · sandbox-runtime
+├── <b>ee/</b>           企业版模块
+├── <b>ai-gateway/</b>   Rust AI 网关
+├── <b>fern/</b>         OpenAPI 定义 → 生成 SDK 与 CLI
+├── <b>scripts/</b>      in-app-agent · sync-prompt.sh
+└── .agents/ .cursor/   仓库自带的 agent skill（dogfooding）</div>
+
+<div class="foot">
+  取证来源：仓库 <code>README.md</code> · <code>docker-compose.yml</code> · <code>.env.dev.example</code> ·
+  <code>CONTRIBUTING.md</code> · <code>package.json</code> ·
+  <code>web/src/features/mcp/{README.md,server/bootstrap.ts,server/registry.ts}</code> ·
+  <code>web/src/features/skills/README.md</code> ·
+  <code>web/src/features/public-api/hooks/useLangfuseEnvCode.ts</code> ·
+  <code>web/src/features/skills/components/CliSkillImportInstructions.tsx</code> ·
+  <code>scripts/in-app-agent/README.md</code> ·官方文档 <code>langfuse.com/agents.md</code>
+</div>
+
+</div>
+</body>
+</html>

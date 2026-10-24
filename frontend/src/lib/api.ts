@@ -133,6 +133,8 @@ export interface IngestSpanNode {
     name: string
     kind: "root" | "stage"
     status: "pending" | "running" | "done" | "failed" | "skipped" | "cancelled"
+    /** Ticket 26: stage inputs carry gating facts (e.g. pdfOcrFallbackEnabled). */
+    input: Record<string, unknown> | null
     errorMessage: string | null
     durationMs: number | null
     output: Record<string, unknown> | null
@@ -166,6 +168,10 @@ export interface IngestStatus {
     allowedOperations: string[]
     message: string
     failedAt: string
+    /** Ticket 17: protection-related fix guidance (password / re-export). */
+    userGuidance?: string
+    /** Ticket 26: the page-quality audit's own detailed reason codes. */
+    reasonCodes?: string[]
   } | null
 }
 
@@ -270,6 +276,17 @@ export interface EvaluationCaseResult {
   finalContextRound?: number
   candidates: EvaluationRankedCandidate[]
   unmappedCandidates: number
+  /**
+   * PL-05 / PT-09: the generation-context stage, scored only from a real
+   * generation-context-v1 snapshot. `null` + an availability reason means the
+   * record cannot be judged, which is deliberately not a 0.
+   */
+  generationContextAvailability?: "measured" | "empty_ground_truth" | "missing_snapshot" | "not_generated"
+  generationContextReason?: string
+  generationContextRound?: number
+  generationContextRepresentation?: "deterministic_full" | "deterministic_partial" | "compressed"
+  generationContextTokenCount?: number
+  generationContextVersion?: string
 }
 
 export interface EvaluationTaskSummary {
@@ -305,6 +322,8 @@ export interface EvaluationTaskDetail extends EvaluationTaskSummary {
     version: string
     /** Ticket 07/08: the answer-similarity metrics and the text rules they share. */
     generation?: { bleuVersion: string; rougeVersion: string; textRuleVersion: string }
+    /** PL-05: the actual-generation-context stage keeps its own version stamp. */
+    context?: { version: string }
     metrics: Record<string, { value: number | null; sampleSize: number; notApplicable: number }>
   }
   cleanup: { esIndex: string; esError?: string; graphProvenance: string; graphError?: string; dbClosed: boolean } | null
@@ -884,7 +903,7 @@ export function uploadFileToIngest(
     knowledgeBaseId?: string
     /** Document folder name or registered id — unknown names self-register. */
     folder?: string
-    /** PDF parser override: markitdown | marker | mineru | builtin-pdf.
+    /** PDF parser override: markitdown | ocr-api | builtin-pdf.
      * Sent ONLY for files the client confirms are PDFs — TXT never carries
      * PDF settings, and an unconfirmed type rides without it (the server
      * decides; UT-23). */

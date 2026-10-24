@@ -93,10 +93,10 @@ function makePrereqChecker(satisfied: string[]) {
 }
 
 // ============================================================
-// 1. Registry covers all 15 spec-listed capabilities (14 original + whole_run_budget from Ticket 04)
+// 1. Registry covers current capabilities, with one OCR provider
 // ============================================================
 
-test("Ticket 06 #1: PROBE_REGISTRY covers all 15 spec-listed capabilities", () => {
+test("PROBE_REGISTRY covers current capabilities with one OCR provider", () => {
   const expectedNames = [
     "oidc",
     "elasticsearch_vector",
@@ -106,8 +106,7 @@ test("Ticket 06 #1: PROBE_REGISTRY covers all 15 spec-listed capabilities", () =
     "review_ingestion",
     "chat_embedding_providers",
     "markitdown",
-    "marker",
-    "mineru",
+    "ocr-api",
     "cancellation",
     "graceful_shutdown",
     "citation_integrity",
@@ -118,15 +117,15 @@ test("Ticket 06 #1: PROBE_REGISTRY covers all 15 spec-listed capabilities", () =
   assert.deepEqual(
     actualNames.sort(),
     expectedNames.sort(),
-    "PROBE_REGISTRY must cover all 15 spec-listed capabilities",
+    "PROBE_REGISTRY must cover current capabilities",
   )
 })
 
-test("Ticket 06 #1: PROBE_REGISTRY has exactly 15 probe declarations (no duplicates)", () => {
+test("PROBE_REGISTRY has exactly 14 probe declarations (no duplicates)", () => {
   const names = PROBE_REGISTRY.map((p) => p.name)
   const unique = new Set(names)
-  assert.equal(names.length, 15, "registry must have exactly 15 entries")
-  assert.equal(unique.size, 15, "registry must have no duplicate probe names")
+  assert.equal(names.length, 14, "registry must have exactly 14 entries")
+  assert.equal(unique.size, 14, "registry must have no duplicate probe names")
 })
 
 // ============================================================
@@ -238,8 +237,7 @@ test("Ticket 06 #2: external-env probes are optional on local, required on produ
     "review_ingestion",
     "chat_embedding_providers",
     "markitdown",
-    "marker",
-    "mineru",
+    "ocr-api",
   ] as const
   for (const name of externalEnvProbes) {
     const decl = PROBE_REGISTRY.find((p) => p.name === name)
@@ -1008,7 +1006,7 @@ test("Ticket 06 #8: full runAllProbes produces evidence that validates", async (
     validation.valid,
     `full runAllProbes evidence must validate: ${validation.errors.join(", ")}`,
   )
-  assert.equal(evidence.results.length, 15, "all 15 probes must have results")
+  assert.equal(evidence.results.length, 14, "all current probes must have results")
 })
 
 // ============================================================

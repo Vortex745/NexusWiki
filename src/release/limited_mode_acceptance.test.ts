@@ -183,8 +183,7 @@ test("Ticket 29 #2c: non-critical probes are NOT run (chat_embedding, parsers, l
     const nonCritical: ProbeName[] = [
       "chat_embedding_providers",
       "markitdown",
-      "marker",
-      "mineru",
+      "ocr-api",
       "langfuse",
     ]
     for (const name of nonCritical) {

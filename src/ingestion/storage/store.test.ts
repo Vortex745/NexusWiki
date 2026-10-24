@@ -13,6 +13,8 @@ test("stores parents without embedding them and preserves composite chunk identi
     embeddingModel: "embedding-model",
     // Ticket 02: index name is now an instance field (dedicated-index seam)
     indexName: "kefu-rag-chunks",
+    chunkBatchSize: 64,
+    embeddingBatchMaxBytes: 150 * 1024,
     embeddingClient: {
       embeddings: {
         create: async ({ input }: { input: string[] }) => {
@@ -109,6 +111,354 @@ test("stores parents without embedding them and preserves composite chunk identi
   )
 })
 
+test("stores large documents in bounded embedding and bulk requests", async () => {
+  const embeddingRequests: string[][] = []
+  const bulkRequests: Array<{ body: unknown[]; refresh: string | boolean }> = []
+  const store = new ESStore({
+    client: {
+      bulk: async ({ body, refresh }: { body: unknown[]; refresh: string | boolean }) => {
+        if (body.length > 32) throw new Error("Elasticsearch request too large")
+        bulkRequests.push({ body, refresh })
+        return { errors: false, items: [] }
+      },
+    } as unknown as Client,
+    embeddingClient: {
+      embeddings: {
+        create: async ({ input }: { input: string[] }) => {
+          if (input.length > 16) throw new Error("413 status code (no body)")
+          embeddingRequests.push(input)
+          return { data: input.map((_, index) => ({ embedding: [index, 0.2] })) }
+        },
+      },
+    } as unknown as OpenAI,
+    embeddingModel: "embedding-model",
+    embeddingDimensions: 2,
+    batchMaxChunks: 16,
+    batchMaxBytes: 6 * 1024,
+  })
+  const chunks: Chunk[] = Array.from({ length: 129 }, (_, index) => ({
+    id: `child-${index}`,
+    documentId: "large-doc",
+    content: `evidence ${index}`,
+    childrenIds: [],
+    metadata: { kind: "child" },
+  }))
+  chunks.push({
+    id: "parent",
+    documentId: "large-doc",
+    content: "parent context",
+    childrenIds: chunks.map((chunk) => chunk.id),
+    metadata: { kind: "parent" },
+  })
+
+  await store.storeChunks(chunks, {
+    tenantId: "tenant-a",
+    allowedGroups: [],
+    knowledgeBaseId: "kb-a",
+  })
+
+  assert.deepEqual(embeddingRequests.map((request) => request.length), [16, 16, 16, 16, 16, 16, 16, 16, 1])
+  assert.deepEqual(bulkRequests.map((request) => request.body.length / 2), [16, 16, 16, 16, 16, 16, 16, 16, 2])
+  assert.equal(bulkRequests.at(-1)?.refresh, "wait_for")
+  const indexed = bulkRequests.flatMap((request) => request.body)
+  assert.deepEqual(indexed.at(-2), {
+    index: { _index: "kefu-rag-chunks", _id: "large-doc:parent" },
+  })
+  assert.equal(Object.hasOwn(indexed.at(-1) as object, "embedding"), false)
+})
+
+test("defaults to 64-chunk embedding batches without injected overrides", async () => {
+  const embeddingRequests: string[][] = []
+  const store = new ESStore({
+    client: {
+      bulk: async () => ({ errors: false, items: [] }),
+    } as unknown as Client,
+    embeddingClient: {
+      embeddings: {
+        create: async ({ input }: { input: string[] }) => {
+          if (input.length > 64) throw new Error("413 status code (no body)")
+          embeddingRequests.push(input)
+          return { data: input.map(() => ({ embedding: [0.1, 0.2] })) }
+        },
+      },
+    } as unknown as OpenAI,
+    embeddingModel: "embedding-model",
+    embeddingDimensions: 2,
+  })
+  const chunks: Chunk[] = Array.from({ length: 129 }, (_, index) => ({
+    id: `child-${index}`,
+    documentId: "default-batch-doc",
+    content: `evidence ${index}`,
+    childrenIds: [],
+    metadata: { kind: "child" },
+  }))
+
+  await store.storeChunks(chunks, {
+    tenantId: "tenant-a",
+    allowedGroups: [],
+    knowledgeBaseId: "kb-a",
+  })
+
+  assert.deepEqual(embeddingRequests.map((request) => request.length), [64, 64, 1])
+})
+
+test("splits embedding requests when UTF-8 content exceeds the byte budget", async () => {
+  const embeddingRequests: string[][] = []
+  const store = new ESStore({
+    client: {
+      bulk: async () => ({ errors: false, items: [] }),
+    } as unknown as Client,
+    embeddingClient: {
+      embeddings: {
+        create: async ({ input }: { input: string[] }) => {
+          if (Buffer.byteLength(JSON.stringify(input)) > 6 * 1024) {
+            throw new Error("413 status code (no body)")
+          }
+          embeddingRequests.push(input)
+          return { data: input.map(() => ({ embedding: [0.1, 0.2] })) }
+        },
+      },
+    } as unknown as OpenAI,
+    embeddingModel: "embedding-model",
+    embeddingDimensions: 2,
+    batchMaxBytes: 6 * 1024,
+  })
+  const chunks: Chunk[] = Array.from({ length: 16 }, (_, index) => ({
+    id: `child-${index}`,
+    documentId: "utf8-doc",
+    content: "中文内容".repeat(100),
+    childrenIds: [],
+    metadata: { kind: "child" },
+  }))
+
+  await store.storeChunks(chunks, {
+    tenantId: "tenant-a",
+    allowedGroups: [],
+    knowledgeBaseId: "kb-a",
+  })
+
+  assert.ok(embeddingRequests.length > 1)
+  assert.equal(embeddingRequests.flat().length, chunks.length)
+  assert.ok(embeddingRequests.every((input) => Buffer.byteLength(JSON.stringify(input)) <= 6 * 1024))
+})
+
+test("retries a rate-limited embedding batch without restarting indexing", async () => {
+  let attempts = 0
+  let writes = 0
+  const store = new ESStore({
+    client: {
+      bulk: async () => {
+        writes += 1
+        return { errors: false, items: [] }
+      },
+    } as unknown as Client,
+    embeddingClient: {
+      embeddings: {
+        create: async (_request: unknown, options: { timeout: number; maxRetries: number }) => {
+          assert.equal(options.timeout, 60_000)
+          assert.equal(options.maxRetries, 0)
+          attempts += 1
+          if (attempts === 1) {
+            throw Object.assign(new Error("rate limited"), {
+              status: 429,
+              headers: new Headers({ "retry-after": "0" }),
+            })
+          }
+          return { data: [{ embedding: [0.1, 0.2] }] }
+        },
+      },
+    } as unknown as OpenAI,
+    embeddingModel: "embedding-model",
+    embeddingDimensions: 2,
+  })
+
+  const metrics = await store.storeChunks([{
+    id: "child",
+    documentId: "doc",
+    content: "evidence",
+    childrenIds: [],
+    metadata: { kind: "child" },
+  }], {
+    tenantId: "tenant-a",
+    allowedGroups: [],
+    knowledgeBaseId: "kb-a",
+  })
+
+  assert.equal(attempts, 2)
+  assert.equal(writes, 1)
+  assert.equal(metrics.embeddingRequestCount, 2)
+  assert.equal(metrics.embeddingRetryCount, 1)
+  assert.equal(metrics.embeddingRateLimitCount, 1)
+  assert.equal(metrics.rateLimitWaitMs, 0)
+})
+
+test("does not impose a sticky pause on later batches after rate limiting", async () => {
+  let attempts = 0
+  const store = new ESStore({
+    client: {
+      bulk: async () => ({ errors: false, items: [] }),
+    } as unknown as Client,
+    embeddingClient: {
+      embeddings: {
+        create: async ({ input }: { input: string[] }) => {
+          attempts += 1
+          if (attempts === 1) {
+            throw Object.assign(new Error("rate limited"), {
+              status: 429,
+              headers: new Headers({ "retry-after": "0" }),
+            })
+          }
+          return { data: input.map(() => ({ embedding: [0.1, 0.2] })) }
+        },
+      },
+    } as unknown as OpenAI,
+    embeddingModel: "embedding-model",
+    embeddingDimensions: 2,
+    batchMaxChunks: 1,
+  })
+
+  const started = Date.now()
+  const metrics = await store.storeChunks([
+    { id: "child-1", documentId: "doc", content: "one", childrenIds: [], metadata: { kind: "child" } },
+    { id: "child-2", documentId: "doc", content: "two", childrenIds: [], metadata: { kind: "child" } },
+  ], {
+    tenantId: "tenant-a",
+    allowedGroups: [],
+    knowledgeBaseId: "kb-a",
+  })
+
+  assert.ok(Date.now() - started < 1_000)
+  assert.equal(metrics.batchCount, 2)
+  assert.equal(metrics.embeddingRateLimitCount, 1)
+  assert.equal(metrics.embeddingRequestCount, 3)
+})
+
+test("serializes embedding requests across concurrent storeChunks calls", async () => {
+  let active = 0
+  let maxActive = 0
+  const store = new ESStore({
+    client: {
+      bulk: async () => ({ errors: false, items: [] }),
+    } as unknown as Client,
+    embeddingClient: {
+      embeddings: {
+        create: async ({ input }: { input: string[] }) => {
+          active += 1
+          maxActive = Math.max(maxActive, active)
+          await new Promise((resolve) => setTimeout(resolve, 15))
+          active -= 1
+          return { data: input.map(() => ({ embedding: [0.1, 0.2] })) }
+        },
+      },
+    } as unknown as OpenAI,
+    embeddingModel: "embedding-model",
+    embeddingDimensions: 2,
+  })
+  const accessMetadata = { tenantId: "tenant-a", allowedGroups: [], knowledgeBaseId: "kb-a" }
+  await Promise.all([
+    store.storeChunks([{ id: "child-1", documentId: "doc-1", content: "one", childrenIds: [], metadata: { kind: "child" } }], accessMetadata),
+    store.storeChunks([{ id: "child-2", documentId: "doc-2", content: "two", childrenIds: [], metadata: { kind: "child" } }], accessMetadata),
+  ])
+
+  assert.equal(maxActive, 1)
+})
+
+test("keeps rate-limit retries inside the shared embedding gate", async () => {
+  const sequence: string[] = []
+  const store = new ESStore({
+    client: {
+      bulk: async () => ({ errors: false, items: [] }),
+    } as unknown as Client,
+    embeddingClient: {
+      embeddings: {
+        create: async ({ input }: { input: string[] }) => {
+          sequence.push(input[0])
+          if (input[0] === "first" && sequence.filter((value) => value === "first").length === 1) {
+            throw Object.assign(new Error("rate limited"), {
+              status: 429,
+              headers: new Headers({ "retry-after": "0" }),
+            })
+          }
+          return { data: input.map(() => ({ embedding: [0.1, 0.2] })) }
+        },
+      },
+    } as unknown as OpenAI,
+    embeddingModel: "embedding-model",
+    embeddingDimensions: 2,
+  })
+  const accessMetadata = { tenantId: "tenant-a", allowedGroups: [], knowledgeBaseId: "kb-a" }
+
+  await Promise.all([
+    store.storeChunks([{ id: "first", documentId: "doc-1", content: "first", childrenIds: [], metadata: { kind: "child" } }], accessMetadata),
+    store.storeChunks([{ id: "second", documentId: "doc-2", content: "second", childrenIds: [], metadata: { kind: "child" } }], accessMetadata),
+  ])
+
+  assert.deepEqual(sequence, ["first", "first", "second"])
+})
+
+test("cancelling a rate-limited batch stops its retry and index writes", async () => {
+  const controller = new AbortController()
+  let attempts = 0
+  let writes = 0
+  const store = new ESStore({
+    client: {
+      bulk: async () => {
+        writes += 1
+        return { errors: false, items: [] }
+      },
+    } as unknown as Client,
+    embeddingClient: {
+      embeddings: {
+        create: async (_request: unknown, options: { signal?: AbortSignal }) => {
+          assert.equal(options.signal, controller.signal)
+          attempts += 1
+          controller.abort()
+          throw Object.assign(new Error("rate limited"), { status: 429 })
+        },
+      },
+    } as unknown as OpenAI,
+    embeddingModel: "embedding-model",
+    embeddingDimensions: 2,
+  })
+
+  await assert.rejects(store.storeChunks([{
+    id: "child", documentId: "doc", content: "evidence",
+    childrenIds: [], metadata: { kind: "child" },
+  }], {
+    tenantId: "tenant-a", allowedGroups: [], knowledgeBaseId: "kb-a",
+  }, controller.signal), { name: "AbortError" })
+
+  assert.equal(attempts, 1)
+  assert.equal(writes, 0)
+})
+
+test("persistent rate limiting fails after bounded retries with batch context", async () => {
+  let attempts = 0
+  const store = new ESStore({
+    client: { bulk: async () => assert.fail("failed embeddings must not be indexed") } as unknown as Client,
+    embeddingClient: {
+      embeddings: {
+        create: async () => {
+          attempts += 1
+          throw Object.assign(new Error("rate limited"), {
+            status: 429, headers: new Headers({ "retry-after": "0" }),
+          })
+        },
+      },
+    } as unknown as OpenAI,
+    embeddingModel: "embedding-model",
+    embeddingDimensions: 2,
+  })
+
+  await assert.rejects(store.storeChunks([{
+    id: "child", documentId: "doc", content: "evidence",
+    childrenIds: [], metadata: { kind: "child" },
+  }], {
+    tenantId: "tenant-a", allowedGroups: [], knowledgeBaseId: "kb-a",
+  }), /Embedding batch at chunk 0 .*failed: rate limited/)
+  assert.equal(attempts, 4)
+})
+
 test("creates a new chunk index with access metadata mappings", async () => {
   let properties: Record<string, unknown> | undefined
   const store = Object.create(ESStore.prototype) as ESStore
@@ -133,10 +483,37 @@ test("creates a new chunk index with access metadata mappings", async () => {
   assert.deepEqual(properties?.tenantId, { type: "keyword" })
   assert.deepEqual(properties?.allowedGroups, { type: "keyword" })
   assert.deepEqual(properties?.knowledgeBaseId, { type: "keyword" })
+
+  // pdf-sourced numeric leaves are declared `float` up front so dynamic
+  // mapping can never pin them `long` on an all-integer first document and
+  // silently truncate fractional values from later documents.
+  assert.deepEqual(properties?.metadata, {
+    type: "object",
+    properties: {
+      normalizedBlocks: {
+        type: "object",
+        properties: {
+          boundingBox: { type: "float" },
+          metadata: {
+            type: "object",
+            properties: {
+              fontSize: { type: "float" },
+              overlapsTable: {
+                type: "object",
+                properties: {
+                  bbox: { type: "float" },
+                },
+              },
+            },
+          },
+        },
+      },
+    },
+  })
 })
 
 test("adds access metadata mappings to an existing chunk index", async () => {
-  let properties: Record<string, unknown> | undefined
+  const putMappings: Array<Record<string, unknown>> = []
   const store = Object.create(ESStore.prototype) as ESStore
   Object.assign(store, {
     embeddingDimensions: 2,
@@ -155,7 +532,7 @@ test("adds access metadata mappings to an existing chunk index", async () => {
           },
         }),
         putMapping: async (request: { properties: Record<string, unknown> }) => {
-          properties = request.properties
+          putMappings.push(request.properties)
           return { acknowledged: true }
         },
       },
@@ -164,7 +541,7 @@ test("adds access metadata mappings to an existing chunk index", async () => {
 
   await store.ensureIndex()
 
-  assert.deepEqual(properties, {
+  assert.deepEqual(putMappings[0], {
     kind: { type: "keyword" },
     parentId: { type: "keyword" },
     childrenIds: { type: "keyword" },
@@ -172,6 +549,179 @@ test("adds access metadata mappings to an existing chunk index", async () => {
     allowedGroups: { type: "keyword" },
     knowledgeBaseId: { type: "keyword" },
   })
+})
+
+test("adds explicit float leaves to an existing chunk index that never mapped them", async () => {
+  const putMappings: Array<Record<string, unknown>> = []
+  const store = Object.create(ESStore.prototype) as ESStore
+  Object.assign(store, {
+    embeddingDimensions: 2,
+    indexName: "kefu-rag-chunks",
+    client: {
+      indices: {
+        exists: async () => true,
+        getMapping: async () => ({
+          "kefu-rag-chunks": {
+            mappings: {
+              properties: {
+                embedding: { dims: 2 },
+                kind: { type: "keyword" },
+                parentId: { type: "keyword" },
+                childrenIds: { type: "keyword" },
+                tenantId: { type: "keyword" },
+                allowedGroups: { type: "keyword" },
+                knowledgeBaseId: { type: "keyword" },
+                metadata: { type: "object" },
+              },
+            },
+          },
+        }),
+        putMapping: async (request: { properties: Record<string, unknown> }) => {
+          putMappings.push(request.properties)
+          return { acknowledged: true }
+        },
+      },
+    } as unknown as Client,
+  })
+
+  await store.ensureIndex()
+
+  assert.equal(putMappings.length, 1)
+  assert.deepEqual(putMappings[0], {
+    metadata: {
+      type: "object",
+      properties: {
+        normalizedBlocks: {
+          type: "object",
+          properties: {
+            boundingBox: { type: "float" },
+            metadata: {
+              type: "object",
+              properties: {
+                fontSize: { type: "float" },
+                overlapsTable: {
+                  type: "object",
+                  properties: {
+                    bbox: { type: "float" },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    },
+  })
+})
+
+test("leaves an existing chunk index untouched when float leaves are already mapped", async () => {
+  let putMappingCalls = 0
+  const store = Object.create(ESStore.prototype) as ESStore
+  Object.assign(store, {
+    embeddingDimensions: 2,
+    indexName: "kefu-rag-chunks",
+    client: {
+      indices: {
+        exists: async () => true,
+        getMapping: async () => ({
+          "kefu-rag-chunks": {
+            mappings: {
+              properties: {
+                embedding: { dims: 2 },
+                kind: { type: "keyword" },
+                parentId: { type: "keyword" },
+                childrenIds: { type: "keyword" },
+                tenantId: { type: "keyword" },
+                allowedGroups: { type: "keyword" },
+                knowledgeBaseId: { type: "keyword" },
+                // Dynamically expanded object nodes carry no explicit type;
+                // both leaves are already pinned `float` by earlier documents.
+                metadata: {
+                  properties: {
+                    normalizedBlocks: {
+                      properties: {
+                        boundingBox: { type: "float" },
+                        metadata: {
+                          properties: {
+                            fontSize: { type: "float" },
+                            overlapsTable: {
+                              properties: {
+                                bbox: { type: "float" },
+                              },
+                            },
+                          },
+                        },
+                      },
+                    },
+                  },
+                },
+              },
+            },
+          },
+        }),
+        putMapping: async () => {
+          putMappingCalls += 1
+          return { acknowledged: true }
+        },
+      },
+    } as unknown as Client,
+  })
+
+  await store.ensureIndex()
+
+  assert.equal(putMappingCalls, 0)
+})
+
+test("rejects a long-pinned index before any mapping update and explains migration", async () => {
+  const putMappings: Array<Record<string, unknown>> = []
+  const store = Object.create(ESStore.prototype) as ESStore
+  Object.assign(store, {
+    embeddingDimensions: 2,
+    indexName: "kefu-rag-chunks",
+    client: {
+      indices: {
+        exists: async () => true,
+        getMapping: async () => ({
+          "kefu-rag-chunks": {
+            mappings: {
+              properties: {
+                embedding: { dims: 2 },
+                kind: { type: "keyword" },
+                parentId: { type: "keyword" },
+                childrenIds: { type: "keyword" },
+                tenantId: { type: "keyword" },
+                allowedGroups: { type: "keyword" },
+                knowledgeBaseId: { type: "keyword" },
+                // An all-integer first document pinned fontSize `long`.
+                // Fail before mutation; preserve this source for migration.
+                metadata: {
+                  properties: {
+                    normalizedBlocks: {
+                      properties: {
+                        boundingBox: { type: "float" },
+                        metadata: {
+                          properties: {
+                            fontSize: { type: "long" },
+                          },
+                        },
+                      },
+                    },
+                  },
+                },
+              },
+            },
+          },
+        }),
+        putMapping: async (request: { properties: Record<string, unknown> }) => {
+          putMappings.push(request.properties)
+          return { acknowledged: true }
+        },
+      },
+    } as unknown as Client,
+  })
+
+  await assert.rejects(store.ensureIndex(), /migration required.*metadata.normalizedBlocks.metadata.fontSize/i)
+  assert.equal(putMappings.length, 0)
 })
 
 test("Ticket 02: an injected index name owns both the chunk index and its writes", async () => {
@@ -339,4 +889,26 @@ test("stores separate facts for different relationships between the same entitie
       ],
     },
   ])
+})
+
+test("integer block coordinates in a legacy index require migration before any mapping writes", async () => {
+  let writes = 0
+  const store = new ESStore({
+    indexName: "legacy-coordinates", embeddingModel: "test", embeddingDimensions: 2,
+    embeddingClient: {} as OpenAI,
+    client: {indices: {
+      exists: async () => true,
+      getMapping: async () => ({"legacy-coordinates": {mappings: {properties: {
+        embedding: {dims: 2},
+        metadata: {properties: {normalizedBlocks: {properties: {
+          boundingBox: {type: "long"}, metadata: {properties: {
+            fontSize: {type: "float"}, overlapsTable: {properties: {bbox: {type: "float"}}},
+          }},
+        }}}},
+      }}}}),
+      putMapping: async () => {writes++; return {acknowledged: true}},
+    }} as unknown as Client,
+  })
+  await assert.rejects(store.ensureIndex(), /migration required.*metadata.normalizedBlocks.boundingBox/)
+  assert.equal(writes, 0, "even missing ACL mappings must wait until conflict validation")
 })

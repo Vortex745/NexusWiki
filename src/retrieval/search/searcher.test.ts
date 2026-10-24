@@ -3,7 +3,7 @@ import test from "node:test"
 import type { Client } from "@elastic/elasticsearch"
 import type OpenAI from "openai"
 import { int as neo4jInt } from "neo4j-driver"
-import type { PageIndexRepository } from "../../ingestion/tracking/page_index_repo"
+import type { PageIndexNodeEligibility, PageIndexRepository } from "../../ingestion/tracking/page_index_repo"
 import type { ActiveVersionRepository } from "../../ingestion/tracking/active_version_repo"
 import type { AccessContext } from "../../access/context"
 import type { Query, RetrievalResult } from "../../types"
@@ -2734,6 +2734,725 @@ test("Ticket 07: SearcherImpl forwards the run's scope object identity into pare
     seen[0],
     retrievalScope,
     "parent expansion must reuse the same locked scope object, never a recomputed copy"
+  )
+})
+
+/**
+ * Ticket PT-10 (audit finding F1) — PageIndex eligibility is resolved BEFORE the
+ * bounded selection.
+ *
+ * `.scratch/pipeline-structure-audit-2026-10-08/reproduce.cjs` case
+ * `F1_pageindex_scope_after_limit` asserted the DEFECT as its evidence: one
+ * eligible target hit, then five higher-sorted foreign nodes, then zero hits.
+ * The fixtures below keep exactly that shape (five foreign documents sorting
+ * ahead of `z-target`) and pin the corrected behavior: the target keeps its hit
+ * while the ceiling (5), the stable order, the linked-chunk dedup and the topK
+ * slice stay exactly as they were.
+ */
+
+const PT10_TENANT = "tenant-pt10"
+const PT10_QUERY_TEXT = "退款规则"
+const PT10_NODE_LIMIT = 5
+
+interface Pt10NodeFixture {
+  documentId: string
+  nodeId: string
+  linkedChunkIds: string[]
+  tenantId?: string
+  allowedGroups?: string[]
+  knowledgeBaseId?: string
+}
+
+function pt10Node(input: {
+  documentId: string
+  nodeId?: string
+  chunk?: string
+  tenantId?: string
+  allowedGroups?: string[]
+  knowledgeBaseId?: string
+}): Pt10NodeFixture {
+  return {
+    documentId: input.documentId,
+    nodeId: input.nodeId ?? "node-1",
+    linkedChunkIds: [input.chunk ?? `chunk-${input.documentId}`],
+    ...(input.tenantId !== undefined ? { tenantId: input.tenantId } : {}),
+    ...(input.allowedGroups !== undefined ? { allowedGroups: input.allowedGroups } : {}),
+    ...(input.knowledgeBaseId !== undefined ? { knowledgeBaseId: input.knowledgeBaseId } : {}),
+  }
+}
+
+/** The audit fixture's five documents — every one sorts ahead of `z-target`. */
+function pt10Foreign<T>(make: (documentId: string) => T): T[] {
+  return [0, 1, 2, 3, 4].map((index) => make(`a-foreign-${index}`))
+}
+
+const pt10Target = (): Pt10NodeFixture =>
+  pt10Node({ documentId: "z-target", tenantId: PT10_TENANT, knowledgeBaseId: "kb-a" })
+
+/**
+ * A PageIndex repository that honors the PT-10 contract the way SQLite does:
+ * every eligibility axis is applied first, `ORDER BY document_id, node_id`
+ * decides the sequence, and only then does `LIMIT` cut. The recorded calls make
+ * the ceiling and the axes observable.
+ */
+function makeEligiblePageIndexRepo(
+  nodes: Pt10NodeFixture[],
+  options: { activeDocIds?: readonly string[] } = {}
+) {
+  const calls: Array<{
+    query: string
+    limit: number
+    eligibility?: PageIndexNodeEligibility
+  }> = []
+  const repo = {
+    searchNodes: (query: string, limit: number, eligibility?: PageIndexNodeEligibility) => {
+      calls.push({ query, limit, eligibility })
+      const order = (node: Pt10NodeFixture) => `${node.documentId}\0${node.nodeId}`
+      let selected = [...nodes].sort((left, right) =>
+        order(left) < order(right) ? -1 : order(left) > order(right) ? 1 : 0
+      )
+      if (eligibility?.tenantId !== undefined) {
+        selected = selected.filter((node) => node.tenantId === eligibility.tenantId)
+      }
+      const callerGroups = eligibility?.callerGroups ?? []
+      if (callerGroups.length > 0) {
+        selected = selected.filter((node) => {
+          const nodeGroups = node.allowedGroups ?? []
+          return (
+            nodeGroups.length === 0 ||
+            nodeGroups.some((group) => callerGroups.includes(group))
+          )
+        })
+      }
+      if (eligibility?.knowledgeBaseIds !== undefined) {
+        const allowed = new Set(eligibility.knowledgeBaseIds)
+        selected = selected.filter(
+          (node) => node.knowledgeBaseId !== undefined && allowed.has(node.knowledgeBaseId)
+        )
+      }
+      if (eligibility?.restrictToActiveDocumentVersions) {
+        const active = new Set(options.activeDocIds ?? [])
+        selected = selected.filter((node) => active.has(node.documentId))
+      }
+      return selected.slice(0, limit)
+    },
+  } as unknown as PageIndexRepository
+  return { repo, calls }
+}
+
+function pt10TermValue(clauses: Array<Record<string, unknown>>, field: string): unknown {
+  for (const clause of clauses) {
+    const term = clause.term as Record<string, unknown> | undefined
+    if (term && field in term) return term[field]
+  }
+  return undefined
+}
+
+function pt10MatchesClause(doc: Record<string, unknown>, clause: unknown): boolean {
+  if (!clause || typeof clause !== "object") {
+    throw new Error("PT-10 fake: missing or malformed ES clause")
+  }
+  const node = clause as Record<string, unknown>
+  if ("term" in node) {
+    const [field, value] = Object.entries(node.term as Record<string, unknown>)[0]
+    return doc[field] === value
+  }
+  if ("terms" in node) {
+    const [field, values] = Object.entries(node.terms as Record<string, unknown>)[0] as [
+      string,
+      unknown[],
+    ]
+    const actual = doc[field]
+    if (Array.isArray(actual)) return values.some((value) => actual.includes(value))
+    return values.includes(actual)
+  }
+  if ("exists" in node) {
+    const field = (node.exists as { field: string }).field
+    return doc[field] !== undefined && doc[field] !== null
+  }
+  if ("bool" in node) {
+    const bool = node.bool as {
+      must?: unknown[]
+      should?: unknown[]
+      filter?: unknown[]
+      must_not?: unknown[]
+      minimum_should_match?: number
+    }
+    if (bool.must && !bool.must.every((inner) => pt10MatchesClause(doc, inner))) return false
+    if (bool.filter && !bool.filter.every((inner) => pt10MatchesClause(doc, inner))) return false
+    if (bool.must_not && bool.must_not.some((inner) => pt10MatchesClause(doc, inner))) return false
+    if (bool.should) {
+      const needed = bool.minimum_should_match ?? (bool.must || bool.filter ? 0 : 1)
+      if (needed === 0) return true
+      return bool.should.filter((inner) => pt10MatchesClause(doc, inner)).length >= needed
+    }
+    return true
+  }
+  throw new Error(
+    `PT-10 fake: unsupported ES clause ${JSON.stringify(node).slice(0, 160)}`
+  )
+}
+
+interface Pt10HydrationChunk {
+  documentId: string
+  id: string
+  tenantId?: string
+  knowledgeBaseId?: string
+}
+
+/**
+ * A chunk index that answers the identity lookup only for passages that exist
+ * AND still satisfy the emitted filter clauses — so the hydration re-check is
+ * executed by the fake instead of being asserted away.
+ */
+function hydrationEs(chunks: Pt10HydrationChunk[]) {
+  const requests: Array<{ request: Record<string, unknown>; options?: Record<string, unknown> }> = []
+  const byIdentity = new Map(chunks.map((chunk) => [`${chunk.documentId}\0${chunk.id}`, chunk]))
+  const es = {
+    async search(request: Record<string, unknown>, options?: Record<string, unknown>) {
+      requests.push({ request, options })
+      const signal = options?.signal as AbortSignal | undefined
+      if (signal?.aborted) {
+        // The real client rejects an aborted request; the fake must too, so
+        // cancellation propagation is behavior, not a source-code claim.
+        const error = new Error("PT-10 fake: request aborted")
+        error.name = "AbortError"
+        throw error
+      }
+      const bool = (request.query as { bool?: { should?: unknown[]; filter?: unknown[] } }).bool
+      const filters = bool?.filter ?? []
+      const size = typeof request.size === "number" ? request.size : 10
+      const hits: Array<{ _source: Record<string, unknown>; _score: number }> = []
+      for (const clause of bool?.should ?? []) {
+        const must =
+          (clause as { bool?: { must?: Array<Record<string, unknown>> } }).bool?.must ?? []
+        const documentId = pt10TermValue(must, "documentId")
+        const id = pt10TermValue(must, "id")
+        if (typeof documentId !== "string" || typeof id !== "string") {
+          throw new Error("PT-10 fake: hydration clause lost its chunk identity")
+        }
+        const chunk = byIdentity.get(`${documentId}\0${id}`)
+        if (!chunk) continue
+        const doc: Record<string, unknown> = {
+          id: chunk.id,
+          documentId: chunk.documentId,
+          kind: "child",
+          content: `content-${chunk.id}`,
+          childrenIds: [],
+          metadata: { kind: "child", source: `pt10-${chunk.documentId}` },
+          ...(chunk.tenantId !== undefined ? { tenantId: chunk.tenantId } : {}),
+          ...(chunk.knowledgeBaseId !== undefined ? { knowledgeBaseId: chunk.knowledgeBaseId } : {}),
+        }
+        if (!filters.every((filter) => pt10MatchesClause(doc, filter))) continue
+        hits.push({ _source: doc, _score: 1 })
+        if (hits.length >= size) break
+      }
+      return { hits: { hits } }
+    },
+  } as unknown as Client
+  return { requests, es }
+}
+
+function makePt10Runtime(
+  es: Client,
+  pageIndexRepo: PageIndexRepository,
+  activeVersionRepo?: ActiveVersionRepository
+) {
+  return new RuntimeSearchOperations({
+    es,
+    embeddingClient: mockEmbedding(),
+    embeddingModel: "embedding",
+    pageIndexRepo,
+    ...(activeVersionRepo ? { activeVersionRepo } : {}),
+  })
+}
+
+const pt10Reader: AccessContext = {
+  tenantId: PT10_TENANT,
+  subjectId: "user-pt10",
+  groups: [],
+  scopes: ["chat"],
+}
+
+test("PT-10 AC01: five higher-sorted foreign-knowledge-base nodes no longer push the target out of the PageIndex quota", async () => {
+  const nodes: Pt10NodeFixture[] = [pt10Target()]
+  const { repo, calls } = makeEligiblePageIndexRepo(nodes)
+  const { requests, es } = hydrationEs([
+    { documentId: "z-target", id: "chunk-z-target", tenantId: PT10_TENANT, knowledgeBaseId: "kb-a" },
+    ...pt10Foreign((documentId) => ({
+      documentId,
+      id: `chunk-${documentId}`,
+      tenantId: PT10_TENANT,
+      knowledgeBaseId: "kb-b",
+    })),
+  ])
+  const runtime = makePt10Runtime(es, repo)
+  const scope = { knowledgeBaseIds: ["kb-a"] }
+
+  const baseline = await runtime.pageIndexSearch({ text: PT10_QUERY_TEXT }, 5, pt10Reader, scope)
+  assert.deepEqual(baseline.map(({ chunk }) => chunk.id), ["chunk-z-target"])
+
+  nodes.push(...pt10Foreign((documentId) => pt10Node({
+    documentId,
+    tenantId: PT10_TENANT,
+    knowledgeBaseId: "kb-b",
+  })))
+
+  const after = await runtime.pageIndexSearch({ text: PT10_QUERY_TEXT }, 5, pt10Reader, scope)
+  assert.deepEqual(
+    after.map(({ chunk }) => chunk.id),
+    ["chunk-z-target"],
+    "audit F1 inverted: the target keeps its hit after five foreign nodes arrive"
+  )
+  assert.deepEqual(after.map(({ source }) => source), ["pageIndex"])
+  assert.equal(calls.at(-1)!.limit, PT10_NODE_LIMIT, "the ceiling stays five — no extra fetching")
+  assert.deepEqual(calls.at(-1)!.eligibility?.knowledgeBaseIds, ["kb-a"])
+  assert.deepEqual(calls.at(-1)!.eligibility?.tenantId, PT10_TENANT)
+  const lastQuery = JSON.stringify(requests.at(-1)!.request.query)
+  assert.ok(
+    !lastQuery.includes("a-foreign-"),
+    `an ineligible document must never reach hydration: ${lastQuery}`
+  )
+
+  // The same fixture with NO identity and NO scope is the legacy unscoped read:
+  // the five slots still go to whatever sorts first, which is what the audited
+  // callers relied on and what PT-10 deliberately left alone.
+  const unscoped = await runtime.pageIndexSearch({ text: PT10_QUERY_TEXT }, 5)
+  const unscopedQuery = JSON.stringify(requests.at(-1)!.request.query)
+  assert.equal(unscoped.length, 5, "the unscoped legacy read still fills all five slots")
+  assert.ok(
+    !unscopedQuery.includes('"documentId":"z-target"'),
+    `the unscoped legacy shape is unchanged (five ahead-of-target rows fill it): ${unscopedQuery}`
+  )
+})
+
+test("PT-10 AC02: cross-tenant matches sorting ahead of the target never consume its slot", async () => {
+  const nodes: Pt10NodeFixture[] = [
+    pt10Target(),
+    ...pt10Foreign((documentId) => pt10Node({
+      documentId,
+      tenantId: "tenant-other",
+      knowledgeBaseId: "kb-a",
+    })),
+  ]
+  const { repo, calls } = makeEligiblePageIndexRepo(nodes)
+  const { requests, es } = hydrationEs([
+    { documentId: "z-target", id: "chunk-z-target", tenantId: PT10_TENANT, knowledgeBaseId: "kb-a" },
+  ])
+  const runtime = makePt10Runtime(es, repo)
+
+  const results = await runtime.pageIndexSearch(
+    { text: PT10_QUERY_TEXT },
+    5,
+    pt10Reader,
+    { knowledgeBaseIds: ["kb-a"] }
+  )
+  assert.deepEqual(results.map(({ chunk }) => chunk.id), ["chunk-z-target"])
+  assert.deepEqual(calls.at(-1)!.eligibility?.tenantId, PT10_TENANT)
+  assert.equal(requests.length, 1)
+  assert.ok(
+    JSON.stringify(requests[0].request.query).includes('"tenantId":"tenant-pt10"'),
+    "hydration still re-checks the tenant"
+  )
+})
+
+test("PT-10 AC02: an invisible group's nodes never consume a group-restricted caller's slot", async () => {
+  const nodes: Pt10NodeFixture[] = [
+    pt10Target(),
+    ...pt10Foreign((documentId) => pt10Node({
+      documentId,
+      tenantId: PT10_TENANT,
+      knowledgeBaseId: "kb-a",
+      allowedGroups: ["secret-team"],
+    })),
+  ]
+  const { repo, calls } = makeEligiblePageIndexRepo(nodes)
+  const { requests, es } = hydrationEs([
+    { documentId: "z-target", id: "chunk-z-target", tenantId: PT10_TENANT, knowledgeBaseId: "kb-a" },
+    ...pt10Foreign((documentId) => ({
+      documentId,
+      id: `chunk-${documentId}`,
+      tenantId: PT10_TENANT,
+      knowledgeBaseId: "kb-a",
+    })),
+  ])
+  const runtime = makePt10Runtime(es, repo)
+  const restricted: AccessContext = {
+    tenantId: PT10_TENANT,
+    subjectId: "user-ops",
+    groups: ["ops"],
+    scopes: ["chat"],
+  }
+
+  const results = await runtime.pageIndexSearch(
+    { text: PT10_QUERY_TEXT },
+    5,
+    restricted,
+    { knowledgeBaseIds: ["kb-a"] }
+  )
+  assert.deepEqual(results.map(({ chunk }) => chunk.id), ["chunk-z-target"])
+  assert.deepEqual(calls.at(-1)!.eligibility?.callerGroups, ["ops"])
+  assert.equal(requests.length, 1)
+
+  // A tenant-wide (zero-group) reader keeps seeing those same rows — the axis is
+  // caller-derived, never a blanket rule.
+  const tenantWide = await runtime.pageIndexSearch(
+    { text: PT10_QUERY_TEXT },
+    5,
+    pt10Reader,
+    { knowledgeBaseIds: ["kb-a"] }
+  )
+  assert.deepEqual(
+    tenantWide.map(({ chunk }) => chunk.id).sort(),
+    ["chunk-a-foreign-0", "chunk-a-foreign-1", "chunk-a-foreign-2", "chunk-a-foreign-3", "chunk-a-foreign-4"],
+    "the five-slot ceiling is unchanged for a caller entitled to all of them"
+  )
+  assert.deepEqual(calls.at(-1)!.eligibility?.callerGroups, [])
+})
+
+test("PT-10 AC02: a non-active document version never consumes the active caller's slot", async () => {
+  const nodes: Pt10NodeFixture[] = [
+    pt10Target(),
+    ...pt10Foreign((documentId) => pt10Node({
+      documentId,
+      tenantId: PT10_TENANT,
+      knowledgeBaseId: "kb-a",
+    })),
+  ]
+  const activeVersionRepo = {
+    getActiveDocIds: () => ["z-target"],
+  } as unknown as ActiveVersionRepository
+  const { repo, calls } = makeEligiblePageIndexRepo(nodes, { activeDocIds: ["z-target"] })
+  const { requests, es } = hydrationEs([
+    { documentId: "z-target", id: "chunk-z-target", tenantId: PT10_TENANT, knowledgeBaseId: "kb-a" },
+    ...pt10Foreign((documentId) => ({
+      documentId,
+      id: `chunk-${documentId}`,
+      tenantId: PT10_TENANT,
+      knowledgeBaseId: "kb-a",
+    })),
+  ])
+  const runtime = makePt10Runtime(es, repo, activeVersionRepo)
+
+  const results = await runtime.pageIndexSearch(
+    { text: PT10_QUERY_TEXT },
+    5,
+    pt10Reader,
+    { knowledgeBaseIds: ["kb-a"] }
+  )
+  assert.deepEqual(
+    results.map(({ chunk }) => chunk.id),
+    ["chunk-z-target"],
+    "only the active version may occupy a slot"
+  )
+  assert.equal(calls.at(-1)!.eligibility?.restrictToActiveDocumentVersions, true)
+  const hydration = JSON.stringify(requests[0].request.query)
+  assert.ok(hydration.includes('"documentId":["z-target"]'), `hydration keeps its active-version clause: ${hydration}`)
+  assert.ok(!hydration.includes("a-foreign-"), `ineligible ids never reach hydration: ${hydration}`)
+})
+
+test("PT-10 AC03: a configured-but-empty active set hides everything while an unconfigured repository keeps the default read", async () => {
+  const nodes: Pt10NodeFixture[] = [pt10Target()]
+  const emptyActive = { getActiveDocIds: () => [] } as unknown as ActiveVersionRepository
+
+  // Configured, active set EMPTY → nothing is eligible → no hydration at all.
+  const gatedRepo = makeEligiblePageIndexRepo(nodes, { activeDocIds: [] })
+  const gatedEs = hydrationEs([
+    { documentId: "z-target", id: "chunk-z-target", tenantId: PT10_TENANT, knowledgeBaseId: "kb-a" },
+  ])
+  const gated = makePt10Runtime(gatedEs.es, gatedRepo.repo, emptyActive)
+  const gatedResults = await gated.pageIndexSearch({ text: PT10_QUERY_TEXT }, 5)
+  assert.deepEqual(gatedResults, [], "a configured-empty active set must hide everything")
+  assert.equal(gatedRepo.calls.at(-1)!.eligibility?.restrictToActiveDocumentVersions, true)
+  assert.equal(gatedEs.requests.length, 0, "nothing eligible must not reach hydration")
+
+  // NOT configured → the pre-existing default read, on the same data.
+  const openRepo = makeEligiblePageIndexRepo(nodes, { activeDocIds: [] })
+  const openEs = hydrationEs([
+    { documentId: "z-target", id: "chunk-z-target", tenantId: PT10_TENANT, knowledgeBaseId: "kb-a" },
+  ])
+  const open = makePt10Runtime(openEs.es, openRepo.repo)
+  const openResults = await open.pageIndexSearch({ text: PT10_QUERY_TEXT }, 5)
+  assert.deepEqual(
+    openResults.map(({ chunk }) => chunk.id),
+    ["chunk-z-target"],
+    "an unconfigured active-version repository keeps the existing default behavior"
+  )
+  assert.equal(
+    openRepo.calls.at(-1)!.eligibility?.restrictToActiveDocumentVersions,
+    undefined,
+    "the two states never collapse into the same axis"
+  )
+
+  // And the ES-side fail-closed sentinel is untouched where hydration does run.
+  const starvedRepo = makeEligiblePageIndexRepo([pt10Target()], { activeDocIds: ["z-target"] })
+  const starvedEs = hydrationEs([
+    { documentId: "z-target", id: "chunk-z-target", tenantId: PT10_TENANT, knowledgeBaseId: "kb-a" },
+  ])
+  const starved = makePt10Runtime(starvedEs.es, starvedRepo.repo, {
+    getActiveDocIds: () => ["some-other-document"],
+  } as unknown as ActiveVersionRepository)
+  const starvedResults = await starved.pageIndexSearch({ text: PT10_QUERY_TEXT }, 5)
+  assert.deepEqual(starvedResults, [], "hydration refuses a node whose version is not active")
+  assert.equal(starvedEs.requests.length, 1)
+  assert.ok(
+    JSON.stringify(starvedEs.requests[0].request.query).includes("some-other-document"),
+    "the active terms clause is still emitted verbatim"
+  )
+})
+
+test("PT-10 AC04: an explicit empty knowledge scope queries neither PageIndex nor Elasticsearch", async () => {
+  const { repo, calls } = makeEligiblePageIndexRepo([pt10Target()])
+  const { requests, es } = hydrationEs([
+    { documentId: "z-target", id: "chunk-z-target", tenantId: PT10_TENANT, knowledgeBaseId: "kb-a" },
+  ])
+  const runtime = makePt10Runtime(es, repo)
+
+  const results = await runtime.pageIndexSearch(
+    { text: PT10_QUERY_TEXT },
+    5,
+    pt10Reader,
+    { knowledgeBaseIds: [] }
+  )
+
+  assert.deepEqual(results, [])
+  assert.equal(calls.length, 0, "an empty scope must not even read the node table")
+  assert.equal(requests.length, 0, "an empty scope must not reach Elasticsearch")
+})
+
+test("PT-10 AC04: an admin caller gains no cross-tenant or cross-knowledge-base reach from the node quota", async () => {
+  const nodes: Pt10NodeFixture[] = [
+    pt10Target(),
+    pt10Node({ documentId: "b-other-kb", tenantId: PT10_TENANT, knowledgeBaseId: "kb-b" }),
+    pt10Node({ documentId: "c-other-tenant", tenantId: "tenant-other", knowledgeBaseId: "kb-a" }),
+  ]
+  const { repo, calls } = makeEligiblePageIndexRepo(nodes)
+  const { requests, es } = hydrationEs([
+    { documentId: "z-target", id: "chunk-z-target", tenantId: PT10_TENANT, knowledgeBaseId: "kb-a" },
+    { documentId: "b-other-kb", id: "chunk-b-other-kb", tenantId: PT10_TENANT, knowledgeBaseId: "kb-b" },
+    { documentId: "c-other-tenant", id: "chunk-c-other-tenant", tenantId: "tenant-other", knowledgeBaseId: "kb-a" },
+  ])
+  const runtime = makePt10Runtime(es, repo)
+  const admin: AccessContext = {
+    tenantId: PT10_TENANT,
+    subjectId: "admin-1",
+    groups: [],
+    scopes: ["admin"],
+  }
+
+  const adminResults = await runtime.pageIndexSearch(
+    { text: PT10_QUERY_TEXT },
+    5,
+    admin,
+    { knowledgeBaseIds: ["kb-a"] }
+  )
+  assert.deepEqual(adminResults.map(({ chunk }) => chunk.id), ["chunk-z-target"])
+  const adminEligibility = calls.at(-1)!.eligibility
+
+  const readerResults = await runtime.pageIndexSearch(
+    { text: PT10_QUERY_TEXT },
+    5,
+    pt10Reader,
+    { knowledgeBaseIds: ["kb-a"] }
+  )
+  assert.deepEqual(
+    calls.at(-1)!.eligibility,
+    adminEligibility,
+    "the node axes are the caller's tenant and scope — an admin scope widens neither"
+  )
+  assert.deepEqual(readerResults.map(({ chunk }) => chunk.id), ["chunk-z-target"])
+  assert.equal(requests.length, 2)
+  const adminHydration = JSON.stringify(requests[0].request.query)
+  assert.ok(!adminHydration.includes("b-other-kb"), `another knowledge base leaked: ${adminHydration}`)
+  assert.ok(!adminHydration.includes("c-other-tenant"), `another tenant leaked: ${adminHydration}`)
+})
+
+test("PT-10 AC05: eight eligible nodes yield the first five, deduped by linked chunk and cut to topK", async () => {
+  const nodes: Pt10NodeFixture[] = [
+    pt10Node({ documentId: "d0", chunk: "c0" }),
+    pt10Node({ documentId: "d1", chunk: "c1" }),
+    pt10Node({ documentId: "d2", chunk: "c2" }),
+    pt10Node({ documentId: "d3", chunk: "shared" }),
+    // d4 links the SAME chunk as d3 — the dedup below must collapse it.
+    pt10Node({ documentId: "d4", chunk: "shared" }),
+    pt10Node({ documentId: "d5", chunk: "c5" }),
+    pt10Node({ documentId: "d6", chunk: "c6" }),
+    pt10Node({ documentId: "d7", chunk: "c7" }),
+  ].map((node) => ({ ...node, tenantId: PT10_TENANT, knowledgeBaseId: "kb-a" }))
+  const { repo, calls } = makeEligiblePageIndexRepo(nodes)
+  const { requests, es } = hydrationEs([
+    { documentId: "d0", id: "c0", tenantId: PT10_TENANT, knowledgeBaseId: "kb-a" },
+    { documentId: "d1", id: "c1", tenantId: PT10_TENANT, knowledgeBaseId: "kb-a" },
+    { documentId: "d2", id: "c2", tenantId: PT10_TENANT, knowledgeBaseId: "kb-a" },
+    { documentId: "d3", id: "shared", tenantId: PT10_TENANT, knowledgeBaseId: "kb-a" },
+    { documentId: "d4", id: "shared", tenantId: PT10_TENANT, knowledgeBaseId: "kb-a" },
+  ])
+  const runtime = makePt10Runtime(es, repo)
+
+  const identities = (index: number): Array<{ documentId: string; id: string }> => {
+    const bool = (requests[index].request.query as { bool: { should: unknown[] } }).bool
+    return bool.should.map((clause) => {
+      const must =
+        (clause as { bool: { must: Array<Record<string, unknown>> } }).bool.must
+      return {
+        documentId: pt10TermValue(must, "documentId") as string,
+        id: pt10TermValue(must, "id") as string,
+      }
+    })
+  }
+
+  const results = await runtime.pageIndexSearch({ text: PT10_QUERY_TEXT }, 4, pt10Reader, {
+    knowledgeBaseIds: ["kb-a"],
+  })
+  assert.equal(calls.at(-1)!.limit, PT10_NODE_LIMIT)
+  assert.deepEqual(identities(0), [
+    { documentId: "d0", id: "c0" },
+    { documentId: "d1", id: "c1" },
+    { documentId: "d2", id: "c2" },
+    { documentId: "d3", id: "shared" },
+  ], "the five eligible nodes are deduped on documentId+chunkId and cut to topK, in stable order")
+  assert.deepEqual(results.map(({ chunk }) => chunk.id), ["c0", "c1", "c2", "shared"])
+
+  // A smaller topK still cuts the same stable list — nothing is re-fetched.
+  await runtime.pageIndexSearch({ text: PT10_QUERY_TEXT }, 2, pt10Reader, {
+    knowledgeBaseIds: ["kb-a"],
+  })
+  assert.equal(calls.length, 2)
+  assert.equal(calls.at(-1)!.limit, PT10_NODE_LIMIT, "topK never raises the node ceiling")
+  assert.deepEqual(identities(1), [
+    { documentId: "d0", id: "c0" },
+    { documentId: "d1", id: "c1" },
+  ])
+})
+
+test("PT-10 AC06: material that lost eligibility between selection and hydration is refused", async () => {
+  const { repo } = makeEligiblePageIndexRepo([pt10Target()])
+  const { requests, es } = hydrationEs([
+    {
+      documentId: "z-target",
+      id: "chunk-z-target",
+      tenantId: "tenant-revoked",
+      knowledgeBaseId: "kb-a",
+    },
+  ])
+  const runtime = makePt10Runtime(es, repo)
+
+  // The node was selected as eligible; by hydration time its document belongs to
+  // another tenant (and is no longer in the active set). Both re-checks fire.
+  const results = await runtime.pageIndexSearch(
+    { text: PT10_QUERY_TEXT },
+    5,
+    pt10Reader,
+    { knowledgeBaseIds: ["kb-a"] }
+  )
+  assert.deepEqual(results, [], "a stale identity must not be hydrated")
+  assert.equal(requests.length, 1, "hydration is where the change is caught, not skipped")
+  const query = JSON.stringify(requests[0].request.query)
+  assert.ok(query.includes('"tenantId":"tenant-pt10"'), `ACL re-check present: ${query}`)
+  assert.ok(query.includes('"knowledgeBaseId":["kb-a"]'), `scope re-check present: ${query}`)
+  assert.ok(!query.includes("tenant-revoked"), "no content from the revoked owner is returned")
+})
+
+test("PT-10 AC06: a repository that ignores the eligibility argument is still filtered before hydration", async () => {
+  // A legacy/stub repository that hands back every match regardless of the
+  // scope it was given: the application-layer filters stay, so an ineligible
+  // node cannot occupy the hydration set.
+  const legacyRepo = {
+    searchNodes: () => [
+      { ...pt10Target(), linkedChunkIds: ["chunk-target"] },
+      pt10Node({ documentId: "a-foreign-0", chunk: "chunk-foreign", knowledgeBaseId: "kb-b" }),
+      pt10Node({ documentId: "a-other-tenant", chunk: "chunk-other", tenantId: "tenant-x" }),
+    ],
+  } as unknown as PageIndexRepository
+  const { requests, es } = hydrationEs([])
+  const runtime = makePt10Runtime(es, legacyRepo)
+
+  await runtime.pageIndexSearch({ text: PT10_QUERY_TEXT }, 5, pt10Reader, {
+    knowledgeBaseIds: ["kb-a"],
+  })
+  const query = JSON.stringify(requests[0].request.query)
+  assert.ok(query.includes('"documentId":"z-target"'))
+  assert.ok(!query.includes("a-foreign-0"), "another knowledge base is dropped before hydration")
+  assert.ok(!query.includes("a-other-tenant"), "another tenant is dropped before hydration")
+})
+
+test("PT-10 AC07: a failing repository stays an explainable channel outage and the abort signal still reaches hydration", async () => {
+  const failing = {
+    searchNodes: () => {
+      throw new Error("page index table unavailable")
+    },
+  } as unknown as PageIndexRepository
+  const { es } = hydrationEs([])
+  const runtime = makePt10Runtime(es, failing)
+  await assert.rejects(
+    () => runtime.pageIndexSearch({ text: PT10_QUERY_TEXT }, 5, pt10Reader, { knowledgeBaseIds: ["kb-a"] }),
+    /page index table unavailable/
+  )
+
+  const searcher = new SearcherImpl(runtime)
+  const outcome = await searcher.search(
+    { text: PT10_QUERY_TEXT },
+    {
+      accessContext: pt10Reader,
+      retrievalScope: { knowledgeBaseIds: ["kb-a"] },
+      channels: ["pageIndex"],
+    }
+  )
+  assert.equal(outcome.status, "insufficient")
+  assert.deepEqual(outcome.unavailableChannels, ["pageIndex"])
+
+  // Zero hits stay an empty result, not an error.
+  const emptyRepo = makeEligiblePageIndexRepo([])
+  const emptyEs = hydrationEs([])
+  const emptyRuntime = makePt10Runtime(emptyEs.es, emptyRepo.repo)
+  assert.deepEqual(
+    await emptyRuntime.pageIndexSearch({ text: PT10_QUERY_TEXT }, 5, pt10Reader, {
+      knowledgeBaseIds: ["kb-a"],
+    }),
+    []
+  )
+  assert.equal(emptyEs.requests.length, 0, "zero eligible nodes need no hydration query")
+
+  // Cancellation still converges on the run's signal at the hydration call.
+  const controller = new AbortController()
+  const signalRepo = makeEligiblePageIndexRepo([pt10Target()])
+  const signalEs = hydrationEs([
+    { documentId: "z-target", id: "chunk-z-target", tenantId: PT10_TENANT, knowledgeBaseId: "kb-a" },
+  ])
+  const signalRuntime = makePt10Runtime(signalEs.es, signalRepo.repo)
+  const hydrated = await signalRuntime.pageIndexSearch(
+    { text: PT10_QUERY_TEXT },
+    5,
+    pt10Reader,
+    { knowledgeBaseIds: ["kb-a"] },
+    controller.signal
+  )
+  assert.deepEqual(hydrated.map(({ chunk }) => chunk.id), ["chunk-z-target"])
+  assert.equal(signalEs.requests[0].options?.signal, controller.signal)
+
+  const aborted = new AbortController()
+  aborted.abort()
+  await assert.rejects(
+    () =>
+      signalRuntime.pageIndexSearch(
+        { text: PT10_QUERY_TEXT },
+        5,
+        pt10Reader,
+        { knowledgeBaseIds: ["kb-a"] },
+        aborted.signal
+      ),
+    (error: Error) => error.name === "AbortError"
+  )
+
+  // A composition without a PageIndex repository keeps its own explainable error.
+  const noRepo = new RuntimeSearchOperations({
+    es,
+    embeddingClient: mockEmbedding(),
+    embeddingModel: "embedding",
+  })
+  await assert.rejects(
+    () => noRepo.pageIndexSearch({ text: PT10_QUERY_TEXT }, 5),
+    /pageIndex repository unavailable/
   )
 })
 

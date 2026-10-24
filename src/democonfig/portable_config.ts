@@ -535,6 +535,9 @@ export function importDemoConfig(
           description: incoming.description,
           status: "active",
           embeddingProfile: deps.embeddingProfile,
+          // A portable bundle describes knowledge bases, not the tenant's
+          // folder taxonomy, so an imported base arrives ungrouped.
+          folderId: null,
           createdAt: timestamp,
           updatedAt: timestamp,
         })

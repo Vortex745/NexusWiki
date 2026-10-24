@@ -239,11 +239,15 @@ export class SessionAttachmentService implements AttachmentSearchOperations {
     if (!attachment) throw new SessionAttachmentNotFoundError()
     if (attachment.status !== "ready") throw new AttachmentNotPromotableError(attachment.status)
     const content = this.store.getContent(attachmentId, sessionId, tenantId, subjectId) ?? ""
+    // Ticket 21: the knowledge-base candidate is the UPLOADED file, byte for
+    // byte — not a re-encoded decode of it. Only a legacy row (uploaded before
+    // the original bytes were retained) falls back to the decoded text.
+    const rawBytes = this.store.getRawContent(attachmentId, sessionId, tenantId, subjectId)
 
     const submission = this.lifecycle.submit({
       title: attachment.name,
       content,
-      rawContent: Buffer.from(content, "utf8"),
+      rawContent: rawBytes ?? Buffer.from(content, "utf8"),
       fileName: attachment.name,
       ...(attachment.mimeType ? { mimeType: attachment.mimeType } : {}),
       knowledgeBaseId: target.knowledgeBaseId,
@@ -359,6 +363,9 @@ export class SessionAttachmentService implements AttachmentSearchOperations {
       mimeType: file.mimeType ?? null,
       bytes: file.content.length,
       content,
+      // Ticket 21: keep the uploaded bytes so a promotion re-submits the
+      // original file, not a re-encode of the decoded text.
+      rawContent: file.content,
       now: this.now().toISOString(),
     })
     try {
@@ -407,7 +414,8 @@ async function chunkText(
     createdAt: new Date(0),
   }
   const chunks = await new RecursiveChunker().chunk(document)
-  return chunks.map((chunk, position) => ({ position, content: chunk.content }))
+  return chunks.filter((chunk) => chunk.metadata.kind !== "parent")
+    .map((chunk, position) => ({ position, content: chunk.content }))
 }
 
 function tokenize(text: string): string[] {

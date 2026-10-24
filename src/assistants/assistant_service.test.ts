@@ -18,6 +18,7 @@ import {
   AssistantArchivedError,
   AssistantService,
   InvalidAssistantCommandError,
+  defaultAssistantId,
 } from "./assistant_service"
 import { KnowledgeBaseServiceImpl } from "../knowledge/knowledge_base_service"
 import { SqliteKnowledgeBaseRepo } from "../knowledge/knowledge_base_repo"
@@ -352,5 +353,151 @@ test("HTTP: admin commands, reader payload omits config, visibility is a 404", a
   } finally {
     await admin.close()
     await reader.close()
+  }
+})
+
+test("DELETE physically removes a custom assistant and refuses the tenant default", async () => {
+  const db = openDb(":memory:")
+  const service = buildService(db)
+  const created = service.create("t1", "admin-1", { name: "可删助手", config: VALID_CONFIG })
+  // A second version exists so the test can prove version rows go with it.
+  service.edit(created.id, "t1", "admin-1", { config: VALID_CONFIG })
+
+  const app = express()
+  app.use(express.json())
+  app.use(identity({ scopes: ["admin"] }))
+  app.use("/api", createAssistantsRouter({ service }))
+  const admin = await listen(app)
+  try {
+    // The tenant default is refuse-to-delete even though it exists (409, not 404).
+    // It seeds lazily on first list, so seed it explicitly to prove the row survives.
+    service.ensureDefault("t1")
+    const refused = await fetch(`${admin.base}/api/assistants/${defaultAssistantId("t1")}`, {
+      method: "DELETE",
+    })
+    assert.equal(refused.status, 409)
+    assert.ok(service.get(defaultAssistantId("t1"), "t1"), "default assistant survives")
+
+    const deleted = await fetch(`${admin.base}/api/assistants/${created.id}`, { method: "DELETE" })
+    assert.equal(deleted.status, 204)
+    assert.equal(service.get(created.id, "t1"), null, "row is gone")
+    assert.equal(service.listVersions(created.id, "t1").length, 0, "version rows are gone")
+    assert.equal(
+      service.listForViewer("t1", {
+        tenantId: "t1",
+        subjectId: "u1",
+        scopes: ["admin"],
+        groups: [],
+      }).some((a) => a.id === created.id),
+      false,
+      "list no longer carries the deleted assistant"
+    )
+
+    // Repeating the delete is the same 404 as an unknown id.
+    const repeat = await fetch(`${admin.base}/api/assistants/${created.id}`, { method: "DELETE" })
+    assert.equal(repeat.status, 404)
+
+    // Readers cannot delete at all.
+    const readerApp = express()
+    readerApp.use(express.json())
+    readerApp.use(identity({ scopes: ["chat"] }))
+    readerApp.use("/api", createAssistantsRouter({ service }))
+    const reader = await listen(readerApp)
+    try {
+      const stillThere = service.create("t1", "admin-1", { name: "另一助手", config: VALID_CONFIG })
+      const denied = await fetch(`${reader.base}/api/assistants/${stillThere.id}`, {
+        method: "DELETE",
+      })
+      assert.equal(denied.status, 403)
+      assert.ok(service.get(stillThere.id, "t1"))
+    } finally {
+      await reader.close()
+    }
+  } finally {
+    await admin.close()
+  }
+})
+
+test("sidebar-visible toggling hides and reshows an assistant without minting versions", async () => {
+  const db = openDb(":memory:")
+  const service = buildService(db)
+  const created = service.create("t1", "admin-1", { name: "侧栏助手", config: VALID_CONFIG })
+  const versionsBefore = service.listVersions(created.id, "t1").length
+
+  const app = express()
+  app.use(express.json())
+  app.use(identity({ scopes: ["admin"] }))
+  app.use("/api", createAssistantsRouter({ service }))
+  const admin = await listen(app)
+  try {
+    // The tenant default is always on the sidebar; the flag is refused (409).
+    // It seeds lazily on first list, so seed it explicitly here.
+    service.ensureDefault("t1")
+    const refused = await fetch(`${admin.base}/api/assistants/${defaultAssistantId("t1")}/sidebar-visible`, {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ visible: false }),
+    })
+    assert.equal(refused.status, 409)
+    assert.equal(service.get(defaultAssistantId("t1"), "t1")?.sidebarVisible, true)
+
+    // A non-boolean body is a 400, not a silent cast.
+    const malformed = await fetch(`${admin.base}/api/assistants/${created.id}/sidebar-visible`, {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ visible: "yes" }),
+    })
+    assert.equal(malformed.status, 400)
+
+    // Hide: the payload flips and no new version is minted.
+    const hidden = await fetch(`${admin.base}/api/assistants/${created.id}/sidebar-visible`, {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ visible: false }),
+    })
+    assert.equal(hidden.status, 200)
+    const hiddenBody = (await hidden.json()) as {
+      assistant: { sidebarVisible: boolean; currentVersion: number }
+    }
+    assert.equal(hiddenBody.assistant.sidebarVisible, false)
+    assert.equal(service.get(created.id, "t1")?.sidebarVisible, false)
+    assert.equal(service.listVersions(created.id, "t1").length, versionsBefore, "no version minted")
+
+    // Reshow: the flag flips back.
+    const shown = await fetch(`${admin.base}/api/assistants/${created.id}/sidebar-visible`, {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ visible: true }),
+    })
+    assert.equal(shown.status, 200)
+    assert.equal(service.get(created.id, "t1")?.sidebarVisible, true)
+
+    // An unknown id is the same 404 as anywhere else.
+    const unknown = await fetch(`${admin.base}/api/assistants/assistant-none/sidebar-visible`, {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ visible: true }),
+    })
+    assert.equal(unknown.status, 404)
+
+    // Readers cannot curate the sidebar.
+    const readerApp = express()
+    readerApp.use(express.json())
+    readerApp.use(identity({ scopes: ["chat"] }))
+    readerApp.use("/api", createAssistantsRouter({ service }))
+    const reader = await listen(readerApp)
+    try {
+      const denied = await fetch(`${reader.base}/api/assistants/${created.id}/sidebar-visible`, {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ visible: false }),
+      })
+      assert.equal(denied.status, 403)
+      assert.equal(service.get(created.id, "t1")?.sidebarVisible, true)
+    } finally {
+      await reader.close()
+    }
+  } finally {
+    await admin.close()
   }
 })

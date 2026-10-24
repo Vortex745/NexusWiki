@@ -14,7 +14,7 @@ import { mkdtempSync, readFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join, resolve } from "node:path"
 import { Client } from "@elastic/elasticsearch"
-import { loadConfig } from "../src/config"
+import { loadConfig, resolveChunkIndexName } from "../src/config"
 import { createApp } from "../src/api/server"
 import { startWorker } from "../src/api/worker"
 import { closeDb, openDb } from "../src/ingestion/tracking"
@@ -300,7 +300,7 @@ async function esVisibility(client: Client, docId: string) {
   const started = Date.now()
   try {
     const result = await client.search({
-      index: "kefu-rag-chunks",
+      index: resolveChunkIndexName(undefined, config),
       query: { term: { documentId: docId } },
       size: 0,
     })
@@ -397,7 +397,7 @@ async function main(): Promise<void> {
         pythonCommand: config.pythonCommand || "python",
         markerCommand: config.markerCommand ?? "marker_single",
       },
-      esIsolation: `tenant=${TENANT} namespace=ut03（ES 索引 kefu-rag-chunks 为共享索引，运行结束按租户清理）`,
+      esIsolation: `tenant=${TENANT} namespace=ut03（ES 索引 ${resolveChunkIndexName(undefined, config)} 为共享索引，运行结束按租户清理）`,
       sqliteIsolation: process.env.SQLITE_PATH,
     },
     parserAvailability: await probeParserAvailability(),
@@ -623,12 +623,12 @@ async function main(): Promise<void> {
 
     // —— ES 清理（按租户）——
     const deleteResult = await es.deleteByQuery({
-      index: "kefu-rag-chunks",
+      index: resolveChunkIndexName(undefined, config),
       query: { term: { tenantId: TENANT } },
       conflicts: "proceed",
       refresh: true,
     })
-    const remaining = await es.count({ index: "kefu-rag-chunks", query: { term: { tenantId: TENANT } } })
+    const remaining = await es.count({ index: resolveChunkIndexName(undefined, config), query: { term: { tenantId: TENANT } } })
     report.cleanup = {
       esDeleted: deleteResult.deleted ?? null,
       esRemainingForTenant: remaining.count,

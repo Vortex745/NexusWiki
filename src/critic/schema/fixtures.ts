@@ -50,6 +50,36 @@ export interface CriticVerdictFixture {
  */
 export const VALID_FIXTURES: readonly CriticVerdictFixture[] = [
   {
+    name: "valid: v2 with public answer basis",
+    raw: JSON.stringify({
+      schemaVersion: 2,
+      passed: true,
+      hallucination: false,
+      completeness: true,
+      answerBasis: { text: "依据退款手册组织期限说明。", referenceIds: ["evidence-1"] },
+    }),
+    kind: "valid",
+    note: "Current write version includes an optional public evidence summary.",
+  },
+  {
+    name: "valid: v2 without optional answer basis",
+    raw: JSON.stringify({ schemaVersion: 2, passed: true, hallucination: false, completeness: true }),
+    kind: "valid",
+    note: "Missing optional summary never changes the base verdict.",
+  },
+  {
+    name: "valid: v2 malformed basis discarded",
+    raw: JSON.stringify({
+      schemaVersion: 2,
+      passed: true,
+      hallucination: false,
+      completeness: true,
+      answerBasis: { text: "依据材料。", referenceIds: [], reasoning: "injected" },
+    }),
+    kind: "valid",
+    note: "Bad optional summary is discarded, while a valid base verdict remains usable.",
+  },
+  {
     name: "valid: passed=true, no missingGap",
     raw: JSON.stringify({
       schemaVersion: 1,
@@ -129,6 +159,45 @@ export const VALID_FIXTURES: readonly CriticVerdictFixture[] = [
  */
 export const INVALID_FIXTURES: readonly CriticVerdictFixture[] = [
   {
+    name: "invalid: v2 string-form approval with valid basis",
+    raw: JSON.stringify({
+      schemaVersion: 2,
+      passed: "true",
+      hallucination: false,
+      completeness: true,
+      answerBasis: { text: "依据退款手册。", referenceIds: ["evidence-1"] },
+    }),
+    kind: "invalid",
+    reason: "wrong_type",
+    note: "A valid optional basis cannot rescue an invalid base approval.",
+  },
+  {
+    name: "invalid: v2 unknown top-level reasoning field",
+    raw: JSON.stringify({
+      schemaVersion: 2,
+      passed: true,
+      hallucination: false,
+      completeness: true,
+      reasoning: "private content",
+    }),
+    kind: "invalid",
+    reason: "extra_dangerous_field",
+    note: "Only the bounded answerBasis field is allowed; top-level extras still reject the verdict.",
+  },
+  {
+    name: "invalid: v1 answerBasis is an unknown field",
+    raw: JSON.stringify({
+      schemaVersion: 1,
+      passed: true,
+      hallucination: false,
+      completeness: true,
+      answerBasis: { text: "依据退款手册。", referenceIds: ["evidence-1"] },
+    }),
+    kind: "invalid",
+    reason: "extra_dangerous_field",
+    note: "The pinned v1 shape must not silently accept the v2 summary field.",
+  },
+  {
     name: "invalid: current unversioned ValidatorImpl output (no schemaVersion)",
     raw: JSON.stringify({
       passed: true,
@@ -141,9 +210,9 @@ export const INVALID_FIXTURES: readonly CriticVerdictFixture[] = [
     note: "This is the current production ValidatorImpl output shape. P3.2 closes the gap by emitting schemaVersion.",
   },
   {
-    name: "invalid: schemaVersion=2 (unknown future version)",
+    name: "invalid: schemaVersion=3 (unknown future version)",
     raw: JSON.stringify({
-      schemaVersion: 2,
+      schemaVersion: 3,
       passed: true,
       hallucination: false,
       completeness: true,
