@@ -81,19 +81,20 @@ function isTableStart(lines: Line[], index: number): boolean {
 function parseTableRow(line: string): string[] {
   let value = line.trim()
   if (value.startsWith("|")) value = value.slice(1)
-  if (value.endsWith("|")) value = value.slice(0, -1)
   const cells: string[] = []
   let cell = ""
+  let backslashes = 0
   for (let index = 0; index < value.length; index += 1) {
-    if (value[index] === "\\" && value[index + 1] === "|") {
-      cell += "|"
-      index += 1
+    if (value[index] === "|" && backslashes % 2 === 1) {
+      cell = cell.slice(0, -1) + "|"
     } else if (value[index] === "|") {
       cells.push(cell.trim())
       cell = ""
+      if (index === value.length - 1) return cells
     } else {
       cell += value[index]
     }
+    backslashes = value[index] === "\\" ? backslashes + 1 : 0
   }
   cells.push(cell.trim())
   return cells
