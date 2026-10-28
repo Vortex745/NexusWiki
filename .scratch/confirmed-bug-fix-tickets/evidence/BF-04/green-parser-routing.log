@@ -1,0 +1,13 @@
+(node:35760) ExperimentalWarning: localStorage is not available because --localstorage-file was not provided.
+(Use `node --trace-warnings ...` to show where the warning was created)
+✔ UT-06 路由：TXT 携带 PDF 专用 override 归一到文本路径且记录原意图 (7.9053ms)
+✔ UT-06 路由：类型兼容的 override 保持权威单候选，既有格式不受影响 (1.4614ms)
+✔ UT-06 真实上传到解析选择：TXT + 历史 PDF override 实际用 markitdown 解析成功 (149.0547ms)
+ℹ tests 3
+ℹ suites 0
+ℹ pass 3
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 6061.2565

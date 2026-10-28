@@ -1,0 +1,46 @@
+✔ four-backtick PDF code fences retain code and surrounding prose (10.6904ms)
+✖ PDF code fences with attributes retain the info string, code and surrounding prose (8.0442ms)
+ℹ tests 2
+ℹ suites 0
+ℹ pass 1
+ℹ fail 1
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 1096.7855
+
+✖ failing tests:
+
+test at src\ingestion\parser\docreader_pdf_fences.test.ts:2:2194
+✖ PDF code fences with attributes retain the info string, code and surrounding prose (8.0442ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly deep-equal:
+  + actual - expected
+
+    [
+      [
+        'paragraph',
+        'Before'
+      ],
+      [
+  +     'paragraph',
+  +     '```python title="demo"\nprint("demo")'
+  -     'code',
+  -     'print("demo")'
+      ],
+      [
+        'paragraph',
+  +     '```\n\nAfter'
+  -     'After'
+      ]
+    ]
+
+      at TestContext.<anonymous> (C:\Users\14253\.codex\bf-20261028\worktrees\bf-04\src\ingestion\parser\docreader_pdf_fences.test.ts:58:10)
+      at async Test.run (node:internal/test_runner/test:1409:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: [ [ 'paragraph', 'Before' ], [ 'paragraph', '```python title="demo"\nprint("demo")' ], [ 'paragraph', '```\n\nAfter' ] ],
+    expected: [ [ 'paragraph', 'Before' ], [ 'code', 'print("demo")' ], [ 'paragraph', 'After' ] ],
+    operator: 'deepStrictEqual',
+    diff: 'simple'
+  }

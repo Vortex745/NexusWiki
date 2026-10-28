@@ -1,0 +1,46 @@
+TAP version 13
+# Subtest: four-backtick PDF code fences retain code and surrounding prose
+not ok 1 - four-backtick PDF code fences retain code and surrounding prose
+  ---
+  duration_ms: 14.7654
+  type: 'test'
+  location: 'C:\\Users\\14253\\.codex\\bf-20261028\\worktrees\\bf-04\\src\\ingestion\\parser\\docreader_pdf_fences.test.ts:2:1716'
+  failureType: 'testCodeFailure'
+  error: "Cannot read properties of undefined (reading 'end')"
+  code: 'ERR_TEST_FAILURE'
+  name: 'TypeError'
+  stack: |-
+    normalizeDocReaderEnvelope (C:\Users\14253\.codex\bf-20261028\worktrees\bf-04\src\ingestion\parser\docreader_pdf_normalize.ts:410:40)
+    DocReaderPdfParser.normalizeRaw (C:\Users\14253\.codex\bf-20261028\worktrees\bf-04\src\ingestion\parser\docreader_pdf.ts:271:20)
+    DocReaderPdfParser.parse (C:\Users\14253\.codex\bf-20261028\worktrees\bf-04\src\ingestion\parser\docreader_pdf.ts:119:17)
+    async TestContext.<anonymous> (C:\Users\14253\.codex\bf-20261028\worktrees\bf-04\src\ingestion\parser\docreader_pdf_fences.test.ts:49:18)
+    async Test.run (node:internal/test_runner/test:1409:7)
+    async startSubtestAfterBootstrap (node:internal/test_runner/harness:387:3)
+  ...
+# Subtest: PDF code fences with attributes retain the info string, code and surrounding prose
+not ok 2 - PDF code fences with attributes retain the info string, code and surrounding prose
+  ---
+  duration_ms: 1.7061
+  type: 'test'
+  location: 'C:\\Users\\14253\\.codex\\bf-20261028\\worktrees\\bf-04\\src\\ingestion\\parser\\docreader_pdf_fences.test.ts:2:2350'
+  failureType: 'testCodeFailure'
+  error: "Cannot read properties of undefined (reading 'end')"
+  code: 'ERR_TEST_FAILURE'
+  name: 'TypeError'
+  stack: |-
+    normalizeDocReaderEnvelope (C:\Users\14253\.codex\bf-20261028\worktrees\bf-04\src\ingestion\parser\docreader_pdf_normalize.ts:410:40)
+    DocReaderPdfParser.normalizeRaw (C:\Users\14253\.codex\bf-20261028\worktrees\bf-04\src\ingestion\parser\docreader_pdf.ts:271:20)
+    DocReaderPdfParser.parse (C:\Users\14253\.codex\bf-20261028\worktrees\bf-04\src\ingestion\parser\docreader_pdf.ts:119:17)
+    async TestContext.<anonymous> (C:\Users\14253\.codex\bf-20261028\worktrees\bf-04\src\ingestion\parser\docreader_pdf_fences.test.ts:64:18)
+    async Test.run (node:internal/test_runner/test:1409:7)
+    async Test.processPendingSubtests (node:internal/test_runner/test:974:7)
+  ...
+1..2
+# tests 2
+# suites 0
+# pass 0
+# fail 2
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 1669.8551

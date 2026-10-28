@@ -1,0 +1,52 @@
+npm notice run kefu-rag-main@1.0.0 test:docreader
+npm notice run node --import tsx --import ./scripts/test-env.ts --test --test-concurrency=1 src/ingestion/parser/docreader*.test.ts
+(node:32732) DeprecationWarning: Calling start() is no longer necessary. It can be safely omitted.
+(Use `node --trace-deprecation ...` to show where the warning was created)
+✔ ListEngines returns engine metadata and the builtin PDF helper recognizes it (378.6914ms)
+✔ ReadStream yields the metadata frame before images and preserves order (87.4094ms)
+✔ ListEngines reports a deadline as a transient DocReaderError (164.2477ms)
+✔ ReadStream cancellation rejects with docreader_cancelled and stops the stream (112.9814ms)
+✔ a broken stream rejects instead of ending silently (2.2146ms)
+✔ an oversized frame maps to docreader_message_too_large (76.9145ms)
+✔ the client rejects empty addresses and non-positive timeouts (0.7832ms)
+✔ an early consumer exit cancels the stream without an unhandled error (131.4969ms)
+✔ native markdown becomes page-aware blocks with ratio locators and no boundingBox (8.9299ms)
+✔ Unicode code point offsets map correctly across an emoji (1.5921ms)
+✔ a table spanning two source blocks stays one table with a locator list (0.8157ms)
+✔ a missing or invalid locator degrades to a warning and keeps the text (0.6756ms)
+✔ meta.error is a terminal parse failure (1.6911ms)
+✔ an image before metadata is an invalid stream (0.7394ms)
+✔ a declared image that never arrives is an image-missing failure (0.4925ms)
+✔ scanned pages without an OCR stage fail explicitly, not as empty success (1.3324ms)
+✔ force-scanned uses the DocReader override and a stable SHA filename (1.1009ms)
+✔ the extraction fingerprint changes with force mode and stays stable otherwise (0.7828ms)
+✔ an envelope larger than the output limit fails instead of being persisted (0.6665ms)
+✔ scanned pages are OCR'd and merged into page order even when images arrive reversed (1.202ms)
+✔ a legal empty OCR page is skipped, while an all-empty document fails (1.2657ms)
+✔ a mixed native/scan PDF keeps native and OCR blocks in page order (0.6175ms)
+✔ an OCR failure aborts the whole parse (0.4508ms)
+✔ image-only markdown is never indexed as paragraph text (0.3928ms)
+✔ aligned DocReader text is reconstructed as a table while the caption stays a paragraph (1.3077ms)
+✔ wrapped whitespace table rows are assembled without inventing cells (0.6369ms)
+✔ ordinary prose with numbers stays a paragraph, not a table (0.3202ms)
+(node:37904) ExperimentalWarning: localStorage is not available because --localstorage-file was not provided.
+(Use `node --trace-warnings ...` to show where the warning was created)
+✔ four-backtick PDF code fences retain code and surrounding prose (10.1846ms)
+✔ PDF code fences with attributes retain the info string, code and surrounding prose (1.5818ms)
+✔ ordinary triple-backtick PDF code fences keep their language and block contract (1.6133ms)
+✔ an unfinished PDF fence (```typescript) keeps the original rest and warning (1.0057ms)
+✔ an unfinished PDF fence (````python title="demo") keeps the original rest and warning (1.0388ms)
+✔ a four-backtick PDF fence contains shorter fences and closes at a longer fence (1.4772ms)
+✔ continuous and unrecognized PDF fences make progress without dropping raw text (7.3334ms)
+✔ empty consecutive PDF fences consume their delimiters and keep adjacent prose (1.1766ms)
+✔ PDF fences retain raw extraction and Unicode page locators through both parser entry points (2.6222ms)
+✔ the knowledge import pipeline indexes PDF fence content and keeps its raw extraction (4771.5759ms)
+✔ a PDF attachment becomes ready and searchable through the same fence parser (52.1404ms)
+ℹ tests 38
+ℹ suites 0
+ℹ pass 38
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 9355.2484
