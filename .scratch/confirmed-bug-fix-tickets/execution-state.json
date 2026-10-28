@@ -1,5 +1,5 @@
 {
-  "updatedAt": "2026-10-28T15:58:09.754Z",
+  "updatedAt": "2026-10-28T16:07:57.654Z",
   "integrationBranch": "codex/confirmed-bug-fixes",
   "baseline": "57dbc29459adac5ef737556a1542c9be5e707f0c",
   "status": "in_progress",
@@ -44,11 +44,13 @@
     },
     {
       "id": "BF-05",
-      "status": "in_progress",
-      "implementationStatus": "in_progress",
-      "verificationStatus": "not_run",
+      "status": "implemented",
+      "implementationStatus": "completed",
+      "verificationStatus": "passed_ticket_gates",
       "blockedBy": [],
-      "resolution": null
+      "resolution": null,
+      "mergeCommit": "6acd0e41fdc4696e6b43e8b4398e4c1f15569f0c",
+      "evidence": "evidence/BF-05/README.md"
     }
   ],
   "aggregateGate": {
