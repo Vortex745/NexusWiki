@@ -2,6 +2,7 @@ import assert from "node:assert/strict"
 import type { AddressInfo } from "node:net"
 import test from "node:test"
 import { AnswerTraceRepository } from "../answer/trace_repository"
+import { SqliteConversationHistoryStore } from "../answer/conversation_history_store"
 import type { AnswerReference, AnswerRunEvent } from "../types"
 import { openDb } from "../ingestion/tracking/db"
 import { createApp } from "./server"
@@ -90,7 +91,7 @@ test("complete chat JSON and SSE preserve the Answer event contract", async (t) 
       yield event
     }
   }
-  const server = createApp({ db, eventsSource }).listen(0)
+  const server = createApp({ db, eventsSource, conversationHistory: new SqliteConversationHistoryStore(db) }).listen(0)
   t.after(() => server.close())
   t.after(() => db.close())
   await new Promise<void>((resolve) => server.once("listening", resolve))
@@ -212,18 +213,22 @@ async function startChatHarness(options: {
       return { ok: true as const }
     },
   }
+  const directories = new SqliteConversationHistoryStore(db)
   const conversationHistory = {
-    ensureDirectory: () => {
+    ensureDirectory: (...args: Parameters<SqliteConversationHistoryStore["ensureDirectory"]>) => {
       calls.ensureDirectory += 1
+      directories.ensureDirectory(...args)
     },
-    lockSession: () => {
+    lockSession: (...args: Parameters<SqliteConversationHistoryStore["lockSession"]>) => {
       calls.lockSession += 1
-      return { assistantId: null, assistantVersion: null, knowledgeBaseIds: [] }
+      return directories.lockSession(...args)
     },
-    truncateFromRun: () => {
+    truncateFromRun: (...args: Parameters<SqliteConversationHistoryStore["truncateFromRun"]>) => {
       calls.truncate += 1
+      return directories.truncateFromRun(...args)
     },
-    recordUnvalidatedRun: () => {},
+    recordUnvalidatedRun: directories.recordUnvalidatedRun.bind(directories),
+    ownsSession: directories.ownsSession.bind(directories),
   }
   const server = createApp({
     db,

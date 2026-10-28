@@ -1,0 +1,121 @@
+{
+  "updatedAt": "2026-10-28T16:48:19.633Z",
+  "integrationBranch": "codex/confirmed-bug-fixes",
+  "integrationWorktree": "C:/Users/14253/.codex/worktrees/confirmed-bug-fixes/Agentic RAG",
+  "baseline": "57dbc29459adac5ef737556a1542c9be5e707f0c",
+  "status": "completed",
+  "tickets": [
+    {
+      "id": "BF-01",
+      "status": "resolved",
+      "implementationStatus": "completed",
+      "verificationStatus": "passed",
+      "blockedBy": [],
+      "resolution": "fixed",
+      "implementationCommit": "f6a43499181e348b9debed0bfda90af6a6185d8e",
+      "mergeCommit": "3a0dc345035a5575cbe89a1e4cf029d6caf1bc7c",
+      "acceptanceCriteriaPassed": 7,
+      "newRegressionTests": 5,
+      "evidence": "evidence/BF-01/README.md"
+    },
+    {
+      "id": "BF-02",
+      "status": "resolved",
+      "implementationStatus": "completed",
+      "verificationStatus": "passed",
+      "blockedBy": [],
+      "resolution": "fixed",
+      "implementationCommit": "bb4947d391bd4c51f8a1a1013a357783c38cd7b3",
+      "mergeCommit": "607006a29da79d1b4d1a539c9d322d9d2a374356",
+      "acceptanceCriteriaPassed": 7,
+      "newRegressionTests": 9,
+      "evidence": "evidence/BF-02/README.md"
+    },
+    {
+      "id": "BF-03",
+      "status": "resolved",
+      "implementationStatus": "completed",
+      "verificationStatus": "passed",
+      "blockedBy": [],
+      "resolution": "fixed",
+      "implementationCommit": "237f4afe0188f551fdb8afb890ef6d83b94d8d25",
+      "mergeCommit": "d3cf4b8949cd2ca98581dba198ff2c426e8c4094",
+      "acceptanceCriteriaPassed": 7,
+      "newRegressionTests": 11,
+      "evidence": "evidence/BF-03/README.md"
+    },
+    {
+      "id": "BF-04",
+      "status": "resolved",
+      "implementationStatus": "completed",
+      "verificationStatus": "passed",
+      "blockedBy": [],
+      "resolution": "fixed",
+      "implementationCommit": "38535e8f884957743c9dfb97b79b0d855d98ea16",
+      "mergeCommit": "33a21bde9e11ea6b9e363385182c1ae12a03ad81",
+      "acceptanceCriteriaPassed": 7,
+      "newRegressionTests": 11,
+      "evidence": "evidence/BF-04/README.md"
+    },
+    {
+      "id": "BF-05",
+      "status": "resolved",
+      "implementationStatus": "completed",
+      "verificationStatus": "passed",
+      "blockedBy": [],
+      "resolution": "fixed",
+      "implementationCommit": "70503abe2f2e6c66c7eaee7207b51a441e66dd86",
+      "mergeCommit": "6acd0e41fdc4696e6b43e8b4398e4c1f15569f0c",
+      "acceptanceCriteriaPassed": 7,
+      "newRegressionTests": 9,
+      "evidence": "evidence/BF-05/README.md"
+    }
+  ],
+  "aggregateGate": {
+    "id": "G-BF",
+    "status": "passed",
+    "acceptanceCriteriaPassed": 35,
+    "acceptanceCriteriaTotal": 35,
+    "newRegressionTests": 45,
+    "affectedTestFiles": 32,
+    "affectedTests": 408,
+    "affectedPassed": 408,
+    "affectedFailed": 0,
+    "affectedSkipped": 0,
+    "build": "passed",
+    "verifiedHead": "65c84c2e6192b4915243977dab40fa9b6d890d04",
+    "evidence": "evidence/final/README.md"
+  },
+  "fullRegression": {
+    "status": "failed_pre_existing",
+    "head": "d3cf4b8949cd2ca98581dba198ff2c426e8c4094",
+    "tests": 3205,
+    "passed": 3195,
+    "failed": 8,
+    "skipped": 2,
+    "evidence": "evidence/final/full-test-result.json",
+    "baselineReproduction": "evidence/final/baseline-eight-failures.log",
+    "configuredMcpBaseline": {
+      "tests": 5,
+      "passed": 3,
+      "failed": 2,
+      "evidence": "evidence/final/baseline-mcp-configured.log"
+    },
+    "explanation": "All eight full-suite failures reproduced at the pre-fix snapshot: five byte-sensitive fixture assertions changed by CRLF checkout and three configuration-dependent persistence/MCP failures. Synthetic offline configuration exposes two further existing MCP failures at both fixed and baseline revisions."
+  },
+  "review": {
+    "hardViolations": 0,
+    "specFindings": 0,
+    "heuristicFindings": 1,
+    "resolvedHeuristicFindings": 1,
+    "reviewFixCommit": "4c994b4ea4047f12976833f3f3194ef63b1608b2",
+    "reviewFixMerge": "65c84c2e6192b4915243977dab40fa9b6d890d04",
+    "evidence": "evidence/review/closure.md"
+  },
+  "cleanup": {
+    "status": "completed",
+    "removedTemporaryWorktrees": 7,
+    "retainedIntegration": "C:/Users/14253/.codex/worktrees/confirmed-bug-fixes/Agentic RAG",
+    "evidence": "evidence/final/worktree-cleanup.json"
+  }
+}

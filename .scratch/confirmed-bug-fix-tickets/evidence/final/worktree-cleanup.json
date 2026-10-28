@@ -1,0 +1,57 @@
+{
+  "checkedAt": "2026-10-28T16:47:35.603Z",
+  "removed": [
+    {
+      "name": "bf-01",
+      "path": "C:\\Users\\14253\\.codex\\bf-20261028\\worktrees\\bf-01",
+      "head": "60fc2ada4c48a3a6f467c42b0e53de22c5b2e218",
+      "status": "removed",
+      "dependencyJunctionOnlyUnlinked": true
+    },
+    {
+      "name": "bf-02",
+      "path": "C:\\Users\\14253\\.codex\\bf-20261028\\worktrees\\bf-02",
+      "head": "262a059f73366bf04e117172ad48b78113d1abc2",
+      "status": "removed",
+      "dependencyJunctionOnlyUnlinked": true
+    },
+    {
+      "name": "bf-03",
+      "path": "C:\\Users\\14253\\.codex\\bf-20261028\\worktrees\\bf-03",
+      "head": "3ec3d07ac34563478094b9f070dd87040ccfffbd",
+      "status": "removed",
+      "dependencyJunctionOnlyUnlinked": true
+    },
+    {
+      "name": "bf-04",
+      "path": "C:\\Users\\14253\\.codex\\bf-20261028\\worktrees\\bf-04",
+      "head": "efee96e1e3e652364cd854460382790a01ffe850",
+      "status": "removed",
+      "dependencyJunctionOnlyUnlinked": true
+    },
+    {
+      "name": "bf-05",
+      "path": "C:\\Users\\14253\\.codex\\bf-20261028\\worktrees\\bf-05",
+      "head": "5b2dd8532651376a0af53b3114938db2b876ea84",
+      "status": "removed",
+      "dependencyJunctionOnlyUnlinked": true
+    },
+    {
+      "name": "review-fixes",
+      "path": "C:\\Users\\14253\\.codex\\bf-20261028\\worktrees\\review-fixes",
+      "head": "4c994b4ea4047f12976833f3f3194ef63b1608b2",
+      "status": "removed",
+      "dependencyJunctionOnlyUnlinked": true
+    },
+    {
+      "name": "baseline-verification",
+      "path": "C:\\Users\\14253\\.codex\\bf-20261028\\worktrees\\baseline-verification",
+      "head": "57dbc29459adac5ef737556a1542c9be5e707f0c",
+      "status": "removed",
+      "dependencyJunctionOnlyUnlinked": true
+    }
+  ],
+  "retainedIntegration": "C:/Users/14253/.codex/worktrees/confirmed-bug-fixes/Agentic RAG",
+  "originalDependenciesExist": true,
+  "otherWorktreesUntouched": true
+}

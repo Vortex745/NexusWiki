@@ -1,0 +1,15 @@
+(node:55404) ExperimentalWarning: localStorage is not available because --localstorage-file was not provided.
+(Use `node --trace-warnings ...` to show where the warning was created)
+✔ BF-01: BM25 and assembled parents exclude a retired source before cleanup (106.1261ms)
+✔ BF-01: PageIndex navigation and hydrated context exclude retirement while nodes remain stored (101.1183ms)
+✔ BF-01: vector results and parents stay hidden with an empty active set (25.5312ms)
+✔ BF-01: delayed and failed cleanup cannot restore BM25, vector or PageIndex visibility (74.0045ms)
+✔ BF-01: lifecycle filtering preserves version, tenant, group and knowledge-base exclusions (73.3756ms)
+ℹ tests 5
+ℹ suites 0
+ℹ pass 5
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 8625.9915

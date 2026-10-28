@@ -1,0 +1,27 @@
+npm notice run kefu-rag-main@1.0.0 build
+npm notice run tsc
+src/retrieval/search/searcher.retirement.test.ts(49,24): error TS2345: Argument of type 'QueryDslQueryContainer | QueryDslQueryContainer[]' is not assignable to parameter of type 'Clause | Clause[] | undefined'.
+  Type 'QueryDslQueryContainer[]' is not assignable to type 'Clause | Clause[] | undefined'.
+    Type 'QueryDslQueryContainer[]' is not assignable to type 'Clause[]'.
+      Type 'QueryDslQueryContainer' is not assignable to type 'Clause'.
+        Type 'undefined' is not assignable to type 'Clause'.
+src/retrieval/search/searcher.retirement.test.ts(49,42): error TS2345: Argument of type 'QueryDslQueryContainer | QueryDslQueryContainer[]' is not assignable to parameter of type 'Clause | Clause[] | undefined'.
+  Type 'QueryDslQueryContainer[]' is not assignable to type 'Clause | Clause[] | undefined'.
+    Type 'QueryDslQueryContainer[]' is not assignable to type 'Clause[]'.
+      Type 'QueryDslQueryContainer' is not assignable to type 'Clause'.
+        Type 'undefined' is not assignable to type 'Clause'.
+src/retrieval/search/searcher.retirement.test.ts(50,15): error TS2345: Argument of type 'QueryDslQueryContainer | QueryDslQueryContainer[]' is not assignable to parameter of type 'Clause | Clause[] | undefined'.
+  Type 'QueryDslQueryContainer[]' is not assignable to type 'Clause | Clause[] | undefined'.
+    Type 'QueryDslQueryContainer[]' is not assignable to type 'Clause[]'.
+      Type 'QueryDslQueryContainer' is not assignable to type 'Clause'.
+        Type 'undefined' is not assignable to type 'Clause'.
+src/retrieval/search/searcher.retirement.test.ts(51,15): error TS2345: Argument of type 'QueryDslQueryContainer | QueryDslQueryContainer[]' is not assignable to parameter of type 'Clause | Clause[] | undefined'.
+  Type 'QueryDslQueryContainer[]' is not assignable to type 'Clause | Clause[] | undefined'.
+    Type 'QueryDslQueryContainer[]' is not assignable to type 'Clause[]'.
+      Type 'QueryDslQueryContainer' is not assignable to type 'Clause'.
+        Type 'undefined' is not assignable to type 'Clause'.
+src/retrieval/search/searcher.retirement.test.ts(106,70): error TS2345: Argument of type '({ script?: QueryDslScriptQuery | undefined; } & { match?: undefined; type?: undefined; range?: undefined; parent_id?: undefined; bool?: undefined; boosting?: undefined; ... 53 more ...; wrapper?: undefined; }) | ... 60 more ... | QueryDslQueryContainer[]' is not assignable to parameter of type 'Clause | Clause[] | undefined'.
+  Type 'QueryDslQueryContainer[]' is not assignable to type 'Clause | Clause[] | undefined'.
+    Type 'QueryDslQueryContainer[]' is not assignable to type 'Clause[]'.
+      Type 'QueryDslQueryContainer' is not assignable to type 'Clause'.
+        Type 'undefined' is not assignable to type 'Clause'.

@@ -1,0 +1,552 @@
+TAP version 13
+# Subtest: truncate from clears current pending while preserving anchor inclusion, counts and summary rules
+ok 1 - truncate from clears current pending while preserving anchor inclusion, counts and summary rules
+  ---
+  duration_ms: 96.104
+  type: 'test'
+  ...
+# Subtest: an unknown truncate-from anchor leaves validated, displayed, pending and summary state unchanged
+ok 2 - an unknown truncate-from anchor leaves validated, displayed, pending and summary state unchanged
+  ---
+  duration_ms: 18.9166
+  type: 'test'
+  ...
+# Subtest: truncate after clears current pending while preserving anchor inclusion, counts and summary rules
+ok 3 - truncate after clears current pending while preserving anchor inclusion, counts and summary rules
+  ---
+  duration_ms: 27.6787
+  type: 'test'
+  ...
+# Subtest: an unknown truncate-after anchor leaves validated, displayed, pending and summary state unchanged
+ok 4 - an unknown truncate-after anchor leaves validated, displayed, pending and summary state unchanged
+  ---
+  duration_ms: 26.0591
+  type: 'test'
+  ...
+# Subtest: branch pending cleanup is restricted to the selected session and tenant
+ok 5 - branch pending cleanup is restricted to the selected session and tenant
+  ---
+  duration_ms: 38.2252
+  type: 'test'
+  ...
+# Subtest: pending cleanup failure rolls back the same branch transaction
+ok 6 - pending cleanup failure rolls back the same branch transaction
+  ---
+  duration_ms: 61.3127
+  type: 'test'
+  ...
+# (node:17952) ExperimentalWarning: localStorage is not available because --localstorage-file was not provided.
+# (Use `node --trace-warnings ...` to show where the warning was created)
+# Subtest: history is user-isolated and terminal statuses stay distinguishable
+ok 7 - history is user-isolated and terminal statuses stay distinguishable
+  ---
+  duration_ms: 34.0094
+  type: 'test'
+  ...
+# Subtest: the one-time browser import is idempotent, user-isolated and never touches memory
+ok 8 - the one-time browser import is idempotent, user-isolated and never touches memory
+  ---
+  duration_ms: 14.4787
+  type: 'test'
+  ...
+# Subtest: the chat transport records only non-completed terminals; completed runs are not duplicated
+ok 9 - the chat transport records only non-completed terminals; completed runs are not duplicated
+  ---
+  duration_ms: 143.7213
+  type: 'test'
+  ...
+# [chat] Error: Error: stream exploded before terminal
+#     at eventsSource (C:\\Users\\14253\\.codex\\bf-20261028\\worktrees\\bf-03\\src\\answer\\conversation_history.test.ts:300:13)
+#     at eventsSource.next (<anonymous>)
+#     at <anonymous> (C:\\Users\\14253\\.codex\\bf-20261028\\worktrees\\bf-03\\src\\api\\chat.ts:612:26)
+#     at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+# Subtest: a stream that dies without a terminal event records a provider_error turn
+ok 10 - a stream that dies without a terminal event records a provider_error turn
+  ---
+  duration_ms: 63.241
+  type: 'test'
+  ...
+# Subtest: the first message locks the assistant version and knowledge subset
+ok 11 - the first message locks the assistant version and knowledge subset
+  ---
+  duration_ms: 20.7605
+  type: 'test'
+  ...
+# Subtest: editing an earlier question truncates later validated memory
+ok 12 - editing an earlier question truncates later validated memory
+  ---
+  duration_ms: 30.7479
+  type: 'test'
+  ...
+# Subtest: Ticket 08 P1: saveValidatedTurn + loadRecentTurns round-trip
+ok 13 - Ticket 08 P1: saveValidatedTurn + loadRecentTurns round-trip
+  ---
+  duration_ms: 50.7262
+  type: 'test'
+  ...
+# Subtest: Ticket 08 P1: tenant-bound isolation — tenant-b cannot read tenant-a turns
+ok 14 - Ticket 08 P1: tenant-bound isolation — tenant-b cannot read tenant-a turns
+  ---
+  duration_ms: 12.1543
+  type: 'test'
+  ...
+# Subtest: Ticket 08 P1: session-bound isolation — session-2 cannot read session-1 turns
+ok 15 - Ticket 08 P1: session-bound isolation — session-2 cannot read session-1 turns
+  ---
+  duration_ms: 37.0108
+  type: 'test'
+  ...
+# Subtest: Ticket 08 P1: bounded limit — loadRecentTurns returns at most `limit` most-recent turns in chronological order
+ok 16 - Ticket 08 P1: bounded limit — loadRecentTurns returns at most `limit` most-recent turns in chronological order
+  ---
+  duration_ms: 24.3092
+  type: 'test'
+  ...
+# Subtest: Ticket 08 P6: deleteInactiveBefore purges sessions whose most recent activity predates the cutoff (session-level TTL)
+ok 17 - Ticket 08 P6: deleteInactiveBefore purges sessions whose most recent activity predates the cutoff (session-level TTL)
+  ---
+  duration_ms: 11.1357
+  type: 'test'
+  ...
+# Subtest: Ticket 08 P6: deleteInactiveBefore also purges pending clarifications for inactive sessions
+ok 18 - Ticket 08 P6: deleteInactiveBefore also purges pending clarifications for inactive sessions
+  ---
+  duration_ms: 36.4732
+  type: 'test'
+  ...
+# Subtest: Ticket 01: saveRollingSummary + getRollingSummary round-trip
+ok 19 - Ticket 01: saveRollingSummary + getRollingSummary round-trip
+  ---
+  duration_ms: 11.8565
+  type: 'test'
+  ...
+# Subtest: Ticket 01: getRollingSummary returns null for non-existent session
+ok 20 - Ticket 01: getRollingSummary returns null for non-existent session
+  ---
+  duration_ms: 35.4029
+  type: 'test'
+  ...
+# Subtest: Ticket 01: getRollingSummary enforces tenant-bound isolation
+ok 21 - Ticket 01: getRollingSummary enforces tenant-bound isolation
+  ---
+  duration_ms: 60.2289
+  type: 'test'
+  ...
+# Subtest: Ticket 01: getRollingSummary enforces session-bound isolation
+ok 22 - Ticket 01: getRollingSummary enforces session-bound isolation
+  ---
+  duration_ms: 14.7013
+  type: 'test'
+  ...
+# Subtest: Ticket 01: saveRollingSummary is idempotent when re-saving the same checkpoint
+ok 23 - Ticket 01: saveRollingSummary is idempotent when re-saving the same checkpoint
+  ---
+  duration_ms: 15.4228
+  type: 'test'
+  ...
+# Subtest: Ticket 01: saveRollingSummary advances checkpoint when summarizedThroughTurnId is strictly greater
+ok 24 - Ticket 01: saveRollingSummary advances checkpoint when summarizedThroughTurnId is strictly greater
+  ---
+  duration_ms: 26.2738
+  type: 'test'
+  ...
+# Subtest: Ticket 01: saveRollingSummary rejects strictly smaller summarizedThroughTurnId (regression)
+ok 25 - Ticket 01: saveRollingSummary rejects strictly smaller summarizedThroughTurnId (regression)
+  ---
+  duration_ms: 48.1247
+  type: 'test'
+  ...
+# Subtest: Ticket 01: loadConversationMemory on empty session returns null summary + empty turns
+ok 26 - Ticket 01: loadConversationMemory on empty session returns null summary + empty turns
+  ---
+  duration_ms: 46.008
+  type: 'test'
+  ...
+# Subtest: Ticket 01: loadConversationMemory returns summary when no validated turns exist
+ok 27 - Ticket 01: loadConversationMemory returns summary when no validated turns exist
+  ---
+  duration_ms: 14.8181
+  type: 'test'
+  ...
+# Subtest: Ticket 01: loadConversationMemory returns turns when no summary exists
+ok 28 - Ticket 01: loadConversationMemory returns turns when no summary exists
+  ---
+  duration_ms: 15.2864
+  type: 'test'
+  ...
+# Subtest: Ticket 01: loadConversationMemory returns summary + recent turns together
+ok 29 - Ticket 01: loadConversationMemory returns summary + recent turns together
+  ---
+  duration_ms: 20.2737
+  type: 'test'
+  ...
+# Subtest: Ticket 01: loadConversationMemory caps at six completed pairs (≤12 turns)
+ok 30 - Ticket 01: loadConversationMemory caps at six completed pairs (≤12 turns)
+  ---
+  duration_ms: 18.7636
+  type: 'test'
+  ...
+# Subtest: Ticket 01: loadConversationMemory drops trailing unpaired user turn
+ok 31 - Ticket 01: loadConversationMemory drops trailing unpaired user turn
+  ---
+  duration_ms: 15.3498
+  type: 'test'
+  ...
+# Subtest: Ticket 01: loadConversationMemory returns recentTurns in chronological (oldest-first) order
+ok 32 - Ticket 01: loadConversationMemory returns recentTurns in chronological (oldest-first) order
+  ---
+  duration_ms: 14.5939
+  type: 'test'
+  ...
+# Subtest: Ticket 01: loadConversationMemory enforces tenant-bound isolation
+ok 33 - Ticket 01: loadConversationMemory enforces tenant-bound isolation
+  ---
+  duration_ms: 16.6376
+  type: 'test'
+  ...
+# Subtest: Ticket 01: loadConversationMemory enforces session-bound isolation
+ok 34 - Ticket 01: loadConversationMemory enforces session-bound isolation
+  ---
+  duration_ms: 17.0087
+  type: 'test'
+  ...
+# Subtest: Ticket 01: loadConversationMemory excludes pending clarifications from recentTurns
+ok 35 - Ticket 01: loadConversationMemory excludes pending clarifications from recentTurns
+  ---
+  duration_ms: 33.0888
+  type: 'test'
+  ...
+# Subtest: Ticket 01: deleteInactiveBefore also deletes rolling summaries for inactive sessions
+ok 36 - Ticket 01: deleteInactiveBefore also deletes rolling summaries for inactive sessions
+  ---
+  duration_ms: 19.956
+  type: 'test'
+  ...
+# Subtest: Ticket 01: deleteInactiveBefore preserves rolling summaries for active sessions
+ok 37 - Ticket 01: deleteInactiveBefore preserves rolling summaries for active sessions
+  ---
+  duration_ms: 25.4908
+  type: 'test'
+  ...
+# Subtest: Ticket 01: deleteInactiveBefore preserves summaries for mixed-age sessions (session-level TTL)
+ok 38 - Ticket 01: deleteInactiveBefore preserves summaries for mixed-age sessions (session-level TTL)
+  ---
+  duration_ms: 23.5902
+  type: 'test'
+  ...
+# Subtest: Ticket 02 P1: loadConversationMemory reports totalValidatedTurnCount=0 for empty session
+ok 39 - Ticket 02 P1: loadConversationMemory reports totalValidatedTurnCount=0 for empty session
+  ---
+  duration_ms: 38.9109
+  type: 'test'
+  ...
+# Subtest: Ticket 02 P1: loadConversationMemory reports totalValidatedTurnCount + oldestRecentTurnId for 1 pair
+ok 40 - Ticket 02 P1: loadConversationMemory reports totalValidatedTurnCount + oldestRecentTurnId for 1 pair
+  ---
+  duration_ms: 10.4221
+  type: 'test'
+  ...
+# Subtest: Ticket 02 P1: totalValidatedTurnCount counts ALL validated turns, not just the recent window
+ok 41 - Ticket 02 P1: totalValidatedTurnCount counts ALL validated turns, not just the recent window
+  ---
+  duration_ms: 14.4323
+  type: 'test'
+  ...
+# Subtest: Ticket 02 P1: totalValidatedTurnCount excludes pending clarifications
+ok 42 - Ticket 02 P1: totalValidatedTurnCount excludes pending clarifications
+  ---
+  duration_ms: 21.7054
+  type: 'test'
+  ...
+# Subtest: Ticket 02 P1: loadOlderTurnsForSummarization round-trip loads turns in id-ascending order
+ok 43 - Ticket 02 P1: loadOlderTurnsForSummarization round-trip loads turns in id-ascending order
+  ---
+  duration_ms: 24.6884
+  type: 'test'
+  ...
+# Subtest: Ticket 02 P1: loadOlderTurnsForSummarization returns empty when toIdInclusive <= fromIdExclusive
+ok 44 - Ticket 02 P1: loadOlderTurnsForSummarization returns empty when toIdInclusive <= fromIdExclusive
+  ---
+  duration_ms: 10.4685
+  type: 'test'
+  ...
+# Subtest: Ticket 02 P1: loadOlderTurnsForSummarization enforces tenant-bound isolation
+ok 45 - Ticket 02 P1: loadOlderTurnsForSummarization enforces tenant-bound isolation
+  ---
+  duration_ms: 19.9809
+  type: 'test'
+  ...
+# Subtest: Ticket 02 P1: loadOlderTurnsForSummarization excludes pending clarifications
+ok 46 - Ticket 02 P1: loadOlderTurnsForSummarization excludes pending clarifications
+  ---
+  duration_ms: 24.043
+  type: 'test'
+  ...
+# Subtest: Ticket 02 P1: loadOlderTurnsForSummarization returns empty for unknown session
+ok 47 - Ticket 02 P1: loadOlderTurnsForSummarization returns empty for unknown session
+  ---
+  duration_ms: 18.9987
+  type: 'test'
+  ...
+# Subtest: Ticket 03: deleteInactiveBefore removes validated turns, pending clarification and rolling summary together
+ok 48 - Ticket 03: deleteInactiveBefore removes validated turns, pending clarification and rolling summary together
+  ---
+  duration_ms: 36.464
+  type: 'test'
+  ...
+# Subtest: Ticket 03: deleteInactiveBefore does not touch immutable answer_run_events trace history
+ok 49 - Ticket 03: deleteInactiveBefore does not touch immutable answer_run_events trace history
+  ---
+  duration_ms: 19.818
+  type: 'test'
+  ...
+# Subtest: Ticket 03: deleteInactiveBefore is idempotent — second call returns 0 and does not error
+ok 50 - Ticket 03: deleteInactiveBefore is idempotent — second call returns 0 and does not error
+  ---
+  duration_ms: 31.3257
+  type: 'test'
+  ...
+# Subtest: P1 regression: peekPendingClarification is tenant-bound and non-destructive
+ok 51 - P1 regression: peekPendingClarification is tenant-bound and non-destructive
+  ---
+  duration_ms: 18.5089
+  type: 'test'
+  ...
+# Subtest: P1 regression: claimPendingClarification atomically returns a pending message once
+ok 52 - P1 regression: claimPendingClarification atomically returns a pending message once
+  ---
+  duration_ms: 16.8815
+  type: 'test'
+  ...
+# (node:52448) ExperimentalWarning: localStorage is not available because --localstorage-file was not provided.
+# (Use `node --trace-warnings ...` to show where the warning was created)
+# Subtest: editing a clarification branch sends only the replacement question to real dispatch
+ok 53 - editing a clarification branch sends only the replacement question to real dispatch
+  ---
+  duration_ms: 187.3037
+  type: 'test'
+  ...
+# Subtest: regenerating a clarification replaces display history without doubling the pending question
+ok 54 - regenerating a clarification replaces display history without doubling the pending question
+  ---
+  duration_ms: 65.7622
+  type: 'test'
+  ...
+# Subtest: an ordinary clarification answer still combines the pending question with its supplement
+ok 55 - an ordinary clarification answer still combines the pending question with its supplement
+  ---
+  duration_ms: 53.026
+  type: 'test'
+  ...
+# Subtest: Bearer other-subject cannot truncate another owner's pending branch
+ok 56 - Bearer other-subject cannot truncate another owner's pending branch
+  ---
+  duration_ms: 44.5135
+  type: 'test'
+  ...
+# Subtest: Bearer other-tenant cannot truncate another owner's pending branch
+ok 57 - Bearer other-tenant cannot truncate another owner's pending branch
+  ---
+  duration_ms: 45.6528
+  type: 'test'
+  ...
+# (node:58056) ExperimentalWarning: localStorage is not available because --localstorage-file was not provided.
+# (Use `node --trace-warnings ...` to show where the warning was created)
+# Subtest: the first message locks the assistant version and knowledge subset against later requests
+ok 58 - the first message locks the assistant version and knowledge subset against later requests
+  ---
+  duration_ms: 167.6705
+  type: 'test'
+  ...
+# Subtest: a locked knowledge subset that cannot be resolved fails closed instead of widening
+ok 59 - a locked knowledge subset that cannot be resolved fails closed instead of widening
+  ---
+  duration_ms: 72.1996
+  type: 'test'
+  ...
+# Subtest: an overlapping run for the same session is refused before any answer work
+ok 60 - an overlapping run for the same session is refused before any answer work
+  ---
+  duration_ms: 81.4107
+  type: 'test'
+  ...
+# [chat] terminal event runId does not match the request; not recorded
+# Subtest: a terminal event carrying another run's id is not recorded
+ok 61 - a terminal event carrying another run's id is not recorded
+  ---
+  duration_ms: 29.5535
+  type: 'test'
+  ...
+# Subtest: edit and regenerate drop the replaced run, later memory and the derived summary
+ok 62 - edit and regenerate drop the replaced run, later memory and the derived summary
+  ---
+  duration_ms: 47.9745
+  type: 'test'
+  ...
+# Subtest: the shared entry receives frozen identity, knowledge and assistant snapshots
+ok 63 - the shared entry receives frozen identity, knowledge and assistant snapshots
+  ---
+  duration_ms: 45.3172
+  type: 'test'
+  ...
+# Subtest: a legacy request locks the default assistant without scanning the workspace
+ok 64 - a legacy request locks the default assistant without scanning the workspace
+  ---
+  duration_ms: 29.6951
+  type: 'test'
+  ...
+# (node:54264) ExperimentalWarning: localStorage is not available because --localstorage-file was not provided.
+# (Use `node --trace-warnings ...` to show where the warning was created)
+# Subtest: an authenticated user in another tenant cannot restore a private run
+ok 65 - an authenticated user in another tenant cannot restore a private run
+  ---
+  duration_ms: 168.3986
+  type: 'test'
+  ...
+# Subtest: the owner restores the complete ordered events of a locked session
+ok 66 - the owner restores the complete ordered events of a locked session
+  ---
+  duration_ms: 35.0565
+  type: 'test'
+  ...
+# Subtest: the owner can restore a session before any assistant or knowledge lock exists
+ok 67 - the owner can restore a session before any assistant or knowledge lock exists
+  ---
+  duration_ms: 31.2305
+  type: 'test'
+  ...
+# Subtest: another subject in the same tenant receives the same not-found response
+ok 68 - another subject in the same tenant receives the same not-found response
+  ---
+  duration_ms: 27.9937
+  type: 'test'
+  ...
+# Subtest: the same subject identifier in another tenant receives the same not-found response
+ok 69 - the same subject identifier in another tenant receives the same not-found response
+  ---
+  duration_ms: 24.8932
+  type: 'test'
+  ...
+# Subtest: a foreign user supplying the owner's identity in query parameters receives the same not-found response
+ok 70 - a foreign user supplying the owner's identity in query parameters receives the same not-found response
+  ---
+  duration_ms: 20.1985
+  type: 'test'
+  ...
+# Subtest: unknown runs and persisted traces without a directory are indistinguishable
+ok 71 - unknown runs and persisted traces without a directory are indistinguishable
+  ---
+  duration_ms: 27.9517
+  type: 'test'
+  ...
+# Subtest: missing identity is rejected by the existing authentication gate
+ok 72 - missing identity is rejected by the existing authentication gate
+  ---
+  duration_ms: 21.2068
+  type: 'test'
+  ...
+# Subtest: an authenticated owner without chat scope is rejected before history is returned
+ok 73 - an authenticated owner without chat scope is rejected before history is returned
+  ---
+  duration_ms: 24.5805
+  type: 'test'
+  ...
+# Subtest: Clef dispatch passes cancellation and isolates decision metadata across concurrent runs
+ok 74 - Clef dispatch passes cancellation and isolates decision metadata across concurrent runs
+  ---
+  duration_ms: 36.6435
+  type: 'test'
+  ...
+# Subtest: T11 dispatch \#1 simple route → simpleRunner handles, directAmbiguousRunner NOT called
+ok 75 - T11 dispatch \#1 simple route → simpleRunner handles, directAmbiguousRunner NOT called
+  ---
+  duration_ms: 1.506
+  type: 'test'
+  ...
+# Subtest: T11 dispatch \#2 direct route → directAmbiguousRunner handles without probing simpleRunner
+ok 76 - T11 dispatch \#2 direct route → directAmbiguousRunner handles without probing simpleRunner
+  ---
+  duration_ms: 0.5684
+  type: 'test'
+  ...
+# Subtest: MEM-02 regression: an explicit long-term-memory query bypasses knowledge retrieval
+ok 77 - MEM-02 regression: an explicit long-term-memory query bypasses knowledge retrieval
+  ---
+  duration_ms: 0.8582
+  type: 'test'
+  ...
+# Subtest: T11 dispatch \#2 ambiguous route → directAmbiguousRunner handles without probing simpleRunner
+ok 78 - T11 dispatch \#2 ambiguous route → directAmbiguousRunner handles without probing simpleRunner
+  ---
+  duration_ms: 0.6313
+  type: 'test'
+  ...
+# Subtest: T11 dispatch \#3 complex route without complexRunner → RouteNotSupportedError
+ok 79 - T11 dispatch \#3 complex route without complexRunner → RouteNotSupportedError
+  ---
+  duration_ms: 1.0117
+  type: 'test'
+  ...
+# Subtest: T11 dispatch \#4 selected owner AbortError propagates unchanged
+ok 80 - T11 dispatch \#4 selected owner AbortError propagates unchanged
+  ---
+  duration_ms: 0.5457
+  type: 'test'
+  ...
+# Subtest: T11 dispatch \#5 provider_error from simpleRunner → propagates (no fallback)
+ok 81 - T11 dispatch \#5 provider_error from simpleRunner → propagates (no fallback)
+  ---
+  duration_ms: 0.5381
+  type: 'test'
+  ...
+# Subtest: T11 dispatch \#6 identity preservation: runId/sessionId/accessContext passed through
+ok 82 - T11 dispatch \#6 identity preservation: runId/sessionId/accessContext passed through
+  ---
+  duration_ms: 0.4486
+  type: 'test'
+  ...
+# Subtest: T12 dispatch \#1 complex route WITH complexRunner wired → complexRunner handles (no legacy fallback)
+ok 83 - T12 dispatch \#1 complex route WITH complexRunner wired → complexRunner handles (no legacy fallback)
+  ---
+  duration_ms: 0.5741
+  type: 'test'
+  ...
+# Subtest: T12 dispatch \#2 complexRunner throws RouteNotComplexError → propagates (router disagreement)
+ok 84 - T12 dispatch \#2 complexRunner throws RouteNotComplexError → propagates (router disagreement)
+  ---
+  duration_ms: 0.5438
+  type: 'test'
+  ...
+# Subtest: T12 dispatch \#3 complexRunner throws non-route error → propagates (no further fallback)
+ok 85 - T12 dispatch \#3 complexRunner throws non-route error → propagates (no further fallback)
+  ---
+  duration_ms: 0.3369
+  type: 'test'
+  ...
+# Subtest: P1 regression: dispatch makes one authoritative route decision and invokes only its owner
+ok 86 - P1 regression: dispatch makes one authoritative route decision and invokes only its owner
+  ---
+  duration_ms: 0.3201
+  type: 'test'
+  ...
+# Subtest: P1 regression: concurrent dispatches cannot both claim the same pending clarification
+ok 87 - P1 regression: concurrent dispatches cannot both claim the same pending clarification
+  ---
+  duration_ms: 0.4843
+  type: 'test'
+  ...
+# Subtest: AP-02: dispatch announces the real route completion before its owner starts
+ok 88 - AP-02: dispatch announces the real route completion before its owner starts
+  ---
+  duration_ms: 0.7447
+  type: 'test'
+  ...
+1..88
+# tests 88
+# suites 0
+# pass 88
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 12243.3347

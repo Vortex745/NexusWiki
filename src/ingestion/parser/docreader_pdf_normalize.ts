@@ -18,6 +18,8 @@ interface MappedSourceBlock {
   locator?: Record<string, unknown>
 }
 
+const CODE_FENCE_START = /^(`{3,})([^`]*)$/
+
 export interface NormalizedDocReaderResult {
   blocks: NormalizedBlock[]
   warnings: string[]
@@ -79,19 +81,20 @@ function isTableStart(lines: Line[], index: number): boolean {
 function parseTableRow(line: string): string[] {
   let value = line.trim()
   if (value.startsWith("|")) value = value.slice(1)
-  if (value.endsWith("|")) value = value.slice(0, -1)
   const cells: string[] = []
   let cell = ""
+  let backslashes = 0
   for (let index = 0; index < value.length; index += 1) {
-    if (value[index] === "\\" && value[index + 1] === "|") {
-      cell += "|"
-      index += 1
+    if (value[index] === "|" && backslashes % 2 === 1) {
+      cell = cell.slice(0, -1) + "|"
     } else if (value[index] === "|") {
       cells.push(cell.trim())
       cell = ""
+      if (index === value.length - 1) return cells
     } else {
       cell += value[index]
     }
+    backslashes = value[index] === "\\" ? backslashes + 1 : 0
   }
   cells.push(cell.trim())
   return cells
@@ -330,11 +333,14 @@ export function normalizeDocReaderEnvelope(
       continue
     }
 
-    const fence = /^```\s*([\w.+-]*)\s*$/.exec(line.text)
+    const fence = CODE_FENCE_START.exec(line.text)
     if (fence) {
+      const info = fence[2].trim()
+      const language = /^([\w.+-]+)(?:\s|$)/.exec(info)?.[1]
       const content: string[] = []
+      const fenceEnd = new RegExp("^`{" + fence[1].length + ",}\\s*$")
       let cursor = index + 1
-      while (cursor < lines.length && !/^```\s*$/.test(lines[cursor].text)) {
+      while (cursor < lines.length && !fenceEnd.test(lines[cursor].text)) {
         content.push(lines[cursor].text)
         cursor += 1
       }
@@ -349,7 +355,10 @@ export function normalizeDocReaderEnvelope(
         content.join("\n"),
         { start: line.start, end: lines[cursor].end },
         {},
-        fence[1] ? { language: fence[1] } : {}
+        {
+          ...(language ? { language } : {}),
+          ...(info && info !== language ? { fenceInfo: info } : {}),
+        }
       )
       index = cursor + 1
       continue
@@ -379,7 +388,7 @@ export function normalizeDocReaderEnvelope(
       cursor < lines.length &&
       lines[cursor].text.trim() &&
       !/^(#{1,6})\s+/.test(lines[cursor].text) &&
-      !/^```/.test(lines[cursor].text) &&
+      !CODE_FENCE_START.test(lines[cursor].text) &&
       !isTableStart(lines, cursor)
     ) {
       paragraph.push(lines[cursor])

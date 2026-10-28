@@ -1,0 +1,18 @@
+TAP version 13
+# (node:54820) ExperimentalWarning: localStorage is not available because --localstorage-file was not provided.
+# (Use `node --trace-warnings ...` to show where the warning was created)
+# Subtest: editing a clarification branch sends only the replacement question to real dispatch
+ok 1 - editing a clarification branch sends only the replacement question to real dispatch
+  ---
+  duration_ms: 158.1255
+  type: 'test'
+  ...
+1..1
+# tests 1
+# suites 0
+# pass 1
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 4771.5857

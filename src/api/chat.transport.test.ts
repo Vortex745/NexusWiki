@@ -4,6 +4,7 @@ import test from "node:test"
 import express from "express"
 import { createChatRouter, type AnswerEventsSource } from "./chat"
 import { AnswerTraceRepository } from "../answer/trace_repository"
+import { SqliteConversationHistoryStore } from "../answer/conversation_history_store"
 import type { AnswerRunEvent, AnswerRunResult } from "../types"
 import { openDb } from "../ingestion/tracking/db"
 import { createMastraChatEventAdapter } from "../mastra/chat_event_adapter"
@@ -98,9 +99,10 @@ function buildApp() {
   const app = express()
   const db = openDb(":memory:")
   const traceRepository = new AnswerTraceRepository(db)
+  const conversationHistory = new SqliteConversationHistoryStore(db)
   app.use(express.json())
-  app.use("/api", createChatRouter(traceRepository, stubEventsSource()))
-  return { app, db, traceRepository }
+  app.use("/api", createChatRouter(traceRepository, stubEventsSource(), undefined, undefined, undefined, conversationHistory))
+  return { app, db, traceRepository, conversationHistory }
 }
 
 async function listen(app: express.Express) {
@@ -264,10 +266,11 @@ test("GET /api/chat/runs/:runId returns 404 when run not in trace repository", a
 })
 
 test("GET /api/chat/runs/:runId returns trace when events were persisted directly", async () => {
-  const { app, db, traceRepository } = buildApp()
+  const { app, db, traceRepository, conversationHistory } = buildApp()
   const { server, port } = await listen(app)
   try {
     // Transport test: persist events directly (no observer side-effect from runAnswer).
+    conversationHistory.ensureDirectory(FIXED_SESSION_ID, "default", "local", "Synthetic question")
     for (const event of makeEvents(FIXED_RUN_ID, FIXED_SESSION_ID)) traceRepository.append(event)
 
     const historyResponse = await fetch(`http://127.0.0.1:${port}/api/chat/runs/${FIXED_RUN_ID}`)
@@ -316,7 +319,7 @@ test("approved answer basis survives real adapter, SSE, JSON, SQLite history and
   })
   const app = express()
   app.use(express.json())
-  app.use("/api", createChatRouter(repository, source))
+  app.use("/api", createChatRouter(repository, source, undefined, undefined, undefined, new SqliteConversationHistoryStore(db)))
   const { server, port } = await listen(app)
   const readBasis = (events: AnswerRunEvent[]) => events
     .filter((event) => event.type === "progress" && event.stage === "validation")

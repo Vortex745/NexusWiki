@@ -1,0 +1,106 @@
+node:internal/modules/esm/load:191
+    throw new ERR_UNSUPPORTED_ESM_URL_SCHEME(parsed, schemes);
+          ^
+
+Error [ERR_UNSUPPORTED_ESM_URL_SCHEME]: Only URLs with a scheme in: file, data, and node are supported by the default ESM loader. On Windows, absolute paths must be valid file:// URLs. Received protocol 'c:'
+    at throwIfUnsupportedURLScheme (node:internal/modules/esm/load:191:11)
+    at defaultLoadSync (node:internal/modules/esm/load:144:3)
+    at #loadAndMaybeBlockOnLoaderThread (node:internal/modules/esm/loader:809:12)
+    at nextStep (node:internal/modules/customization_hooks:189:26)
+    at load (file:///C:/Users/14253/Desktop/Agentic%20RAG/node_modules/tsx/dist/register-zZ7SWseA.mjs:2:5386)
+    at nextStep (node:internal/modules/customization_hooks:189:26)
+    at loadWithHooks (node:internal/modules/customization_hooks:374:18)
+    at #loadSync (node:internal/modules/esm/loader:832:16)
+    at ModuleLoader.load (node:internal/modules/esm/loader:790:26)
+    at ModuleLoader.loadAndTranslate (node:internal/modules/esm/loader:501:31) {
+  code: 'ERR_UNSUPPORTED_ESM_URL_SCHEME'
+}
+
+Node.js v26.8.1
+✖ src\ingestion\direct_text.test.ts (469.3693ms)
+node:internal/modules/esm/load:191
+    throw new ERR_UNSUPPORTED_ESM_URL_SCHEME(parsed, schemes);
+          ^
+
+Error [ERR_UNSUPPORTED_ESM_URL_SCHEME]: Only URLs with a scheme in: file, data, and node are supported by the default ESM loader. On Windows, absolute paths must be valid file:// URLs. Received protocol 'c:'
+    at throwIfUnsupportedURLScheme (node:internal/modules/esm/load:191:11)
+    at defaultLoadSync (node:internal/modules/esm/load:144:3)
+    at #loadAndMaybeBlockOnLoaderThread (node:internal/modules/esm/loader:809:12)
+    at nextStep (node:internal/modules/customization_hooks:189:26)
+    at load (file:///C:/Users/14253/Desktop/Agentic%20RAG/node_modules/tsx/dist/register-zZ7SWseA.mjs:2:5386)
+    at nextStep (node:internal/modules/customization_hooks:189:26)
+    at loadWithHooks (node:internal/modules/customization_hooks:374:18)
+    at #loadSync (node:internal/modules/esm/loader:832:16)
+    at ModuleLoader.load (node:internal/modules/esm/loader:790:26)
+    at ModuleLoader.loadAndTranslate (node:internal/modules/esm/loader:501:31) {
+  code: 'ERR_UNSUPPORTED_ESM_URL_SCHEME'
+}
+
+Node.js v26.8.1
+✖ src\ingestion\storage\persistence.test.ts (449.9558ms)
+node:internal/modules/esm/load:191
+    throw new ERR_UNSUPPORTED_ESM_URL_SCHEME(parsed, schemes);
+          ^
+
+Error [ERR_UNSUPPORTED_ESM_URL_SCHEME]: Only URLs with a scheme in: file, data, and node are supported by the default ESM loader. On Windows, absolute paths must be valid file:// URLs. Received protocol 'c:'
+    at throwIfUnsupportedURLScheme (node:internal/modules/esm/load:191:11)
+    at defaultLoadSync (node:internal/modules/esm/load:144:3)
+    at #loadAndMaybeBlockOnLoaderThread (node:internal/modules/esm/loader:809:12)
+    at nextStep (node:internal/modules/customization_hooks:189:26)
+    at load (file:///C:/Users/14253/Desktop/Agentic%20RAG/node_modules/tsx/dist/register-zZ7SWseA.mjs:2:5386)
+    at nextStep (node:internal/modules/customization_hooks:189:26)
+    at loadWithHooks (node:internal/modules/customization_hooks:374:18)
+    at #loadSync (node:internal/modules/esm/loader:832:16)
+    at ModuleLoader.load (node:internal/modules/esm/loader:790:26)
+    at ModuleLoader.loadAndTranslate (node:internal/modules/esm/loader:501:31) {
+  code: 'ERR_UNSUPPORTED_ESM_URL_SCHEME'
+}
+
+Node.js v26.8.1
+✖ src\ingestion\truth\txt_truth.test.ts (427.5982ms)
+node:internal/modules/esm/load:191
+    throw new ERR_UNSUPPORTED_ESM_URL_SCHEME(parsed, schemes);
+          ^
+
+Error [ERR_UNSUPPORTED_ESM_URL_SCHEME]: Only URLs with a scheme in: file, data, and node are supported by the default ESM loader. On Windows, absolute paths must be valid file:// URLs. Received protocol 'c:'
+    at throwIfUnsupportedURLScheme (node:internal/modules/esm/load:191:11)
+    at defaultLoadSync (node:internal/modules/esm/load:144:3)
+    at #loadAndMaybeBlockOnLoaderThread (node:internal/modules/esm/loader:809:12)
+    at nextStep (node:internal/modules/customization_hooks:189:26)
+    at load (file:///C:/Users/14253/Desktop/Agentic%20RAG/node_modules/tsx/dist/register-zZ7SWseA.mjs:2:5386)
+    at nextStep (node:internal/modules/customization_hooks:189:26)
+    at loadWithHooks (node:internal/modules/customization_hooks:374:18)
+    at #loadSync (node:internal/modules/esm/loader:832:16)
+    at ModuleLoader.load (node:internal/modules/esm/loader:790:26)
+    at ModuleLoader.loadAndTranslate (node:internal/modules/esm/loader:501:31) {
+  code: 'ERR_UNSUPPORTED_ESM_URL_SCHEME'
+}
+
+Node.js v26.8.1
+✖ src\mcp\capability_server.test.ts (415.6002ms)
+ℹ tests 4
+ℹ suites 0
+ℹ pass 0
+ℹ fail 4
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 514.431
+
+✖ failing tests:
+
+test at src\ingestion\direct_text.test.ts:1:1
+✖ src\ingestion\direct_text.test.ts (469.3693ms)
+  'test failed'
+
+test at src\ingestion\storage\persistence.test.ts:1:1
+✖ src\ingestion\storage\persistence.test.ts (449.9558ms)
+  'test failed'
+
+test at src\ingestion\truth\txt_truth.test.ts:1:1
+✖ src\ingestion\truth\txt_truth.test.ts (427.5982ms)
+  'test failed'
+
+test at src\mcp\capability_server.test.ts:1:1
+✖ src\mcp\capability_server.test.ts (415.6002ms)
+  'test failed'

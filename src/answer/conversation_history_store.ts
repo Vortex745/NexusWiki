@@ -303,12 +303,17 @@ export class SqliteConversationHistoryStore {
     }
   }
 
-  /** The lock, or null when the caller does not own the directory. */
-  getSessionLock(sessionId: string, tenantId: string, subjectId: string): SessionLock | null {
+  /** Directory ownership is independent of an assistant/knowledge lock. */
+  ownsSession(sessionId: string, tenantId: string, subjectId: string): boolean {
     const row = this.db
       .prepare(`SELECT subject_id FROM conversation_directories WHERE id = ? AND tenant_id = ?`)
       .get(sessionId, tenantId) as { subject_id: string } | undefined
-    if (!row || row.subject_id !== subjectId) return null
+    return row?.subject_id === subjectId
+  }
+
+  /** The lock, or null for an unowned or not-yet-locked directory. */
+  getSessionLock(sessionId: string, tenantId: string, subjectId: string): SessionLock | null {
+    if (!this.ownsSession(sessionId, tenantId, subjectId)) return null
     return this.readLock(sessionId)
   }
 
@@ -383,6 +388,12 @@ export class SqliteConversationHistoryStore {
       // A pending clarification belongs to the turn that asked for it: an edit
       // or regenerate that drops that turn must not leave the question waiting
       // to swallow the NEXT message as if it were its answer.
+      this.db
+        .prepare(
+          `DELETE FROM conversation_turns
+           WHERE session_id = ? AND tenant_id = ? AND kind = 'pending_clarification'`
+        )
+        .run(sessionId, tenantId)
       // (clarification_pending is keyed by session id alone; ownership was
       // already asserted above.)
       this.db
@@ -429,10 +440,7 @@ export class SqliteConversationHistoryStore {
 
   /** Another user's directory is indistinguishable from an unknown one. */
   private assertOwned(sessionId: string, tenantId: string, subjectId: string): void {
-    const row = this.db
-      .prepare(`SELECT subject_id FROM conversation_directories WHERE id = ? AND tenant_id = ?`)
-      .get(sessionId, tenantId) as { subject_id: string } | undefined
-    if (!row || row.subject_id !== subjectId) {
+    if (!this.ownsSession(sessionId, tenantId, subjectId)) {
       throw new ConversationHistoryError("conversation not found")
     }
   }

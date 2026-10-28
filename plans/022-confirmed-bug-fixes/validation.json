@@ -1,0 +1,29 @@
+{
+  "checkedAt": "2026-10-28T16:46:06.021Z",
+  "status": "pass",
+  "scope": "Document consistency and execution evidence; full-regression limitations remain separate",
+  "tickets": 5,
+  "userStories": 35,
+  "acceptanceCriteria": 35,
+  "acceptanceCriteriaChecked": 35,
+  "sourceAcceptancePreservedUnchecked": 35,
+  "requiredSectionsPerTicket": 7,
+  "resolvedLocalLinks": 67,
+  "dependencyCycles": 0,
+  "testingSeamsConfirmed": true,
+  "ticketsPublished": true,
+  "implementationStatus": "completed",
+  "fixVerificationStatus": "passed",
+  "fullRegressionStatus": "failed_pre_existing",
+  "verifiedHead": "65c84c2e6192b4915243977dab40fa9b6d890d04",
+  "checks": [
+    "unique ticket acceptance ownership",
+    "seven stories and seven checked acceptance items per execution ticket",
+    "required source and execution sections",
+    "local links resolve",
+    "source specifications retain approved-source status",
+    "five resolved execution tickets",
+    "G-BF tied to 408 passing tests and successful backend build",
+    "full-regression failures kept separate"
+  ]
+}

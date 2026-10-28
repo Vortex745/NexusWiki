@@ -1,0 +1,2515 @@
+TAP version 13
+# Subtest: truncate from clears current pending while preserving anchor inclusion, counts and summary rules
+ok 1 - truncate from clears current pending while preserving anchor inclusion, counts and summary rules
+  ---
+  duration_ms: 46.9889
+  type: 'test'
+  ...
+# Subtest: an unknown truncate-from anchor leaves validated, displayed, pending and summary state unchanged
+ok 2 - an unknown truncate-from anchor leaves validated, displayed, pending and summary state unchanged
+  ---
+  duration_ms: 12.9332
+  type: 'test'
+  ...
+# Subtest: truncate after clears current pending while preserving anchor inclusion, counts and summary rules
+ok 3 - truncate after clears current pending while preserving anchor inclusion, counts and summary rules
+  ---
+  duration_ms: 14.9939
+  type: 'test'
+  ...
+# Subtest: an unknown truncate-after anchor leaves validated, displayed, pending and summary state unchanged
+ok 4 - an unknown truncate-after anchor leaves validated, displayed, pending and summary state unchanged
+  ---
+  duration_ms: 13.277
+  type: 'test'
+  ...
+# Subtest: branch pending cleanup is restricted to the selected session and tenant
+ok 5 - branch pending cleanup is restricted to the selected session and tenant
+  ---
+  duration_ms: 11.7117
+  type: 'test'
+  ...
+# Subtest: pending cleanup failure rolls back the same branch transaction
+ok 6 - pending cleanup failure rolls back the same branch transaction
+  ---
+  duration_ms: 12.8683
+  type: 'test'
+  ...
+# (node:10440) ExperimentalWarning: localStorage is not available because --localstorage-file was not provided.
+# (Use `node --trace-warnings ...` to show where the warning was created)
+# Subtest: history is user-isolated and terminal statuses stay distinguishable
+ok 7 - history is user-isolated and terminal statuses stay distinguishable
+  ---
+  duration_ms: 43.9748
+  type: 'test'
+  ...
+# Subtest: the one-time browser import is idempotent, user-isolated and never touches memory
+ok 8 - the one-time browser import is idempotent, user-isolated and never touches memory
+  ---
+  duration_ms: 14.7843
+  type: 'test'
+  ...
+# Subtest: the chat transport records only non-completed terminals; completed runs are not duplicated
+ok 9 - the chat transport records only non-completed terminals; completed runs are not duplicated
+  ---
+  duration_ms: 188.1259
+  type: 'test'
+  ...
+# [chat] Error: Error: stream exploded before terminal
+#     at eventsSource (C:\\Users\\14253\\.codex\\worktrees\\confirmed-bug-fixes\\Agentic RAG\\src\\answer\\conversation_history.test.ts:300:13)
+#     at eventsSource.next (<anonymous>)
+#     at <anonymous> (C:\\Users\\14253\\.codex\\worktrees\\confirmed-bug-fixes\\Agentic RAG\\src\\api\\chat.ts:612:26)
+#     at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+# Subtest: a stream that dies without a terminal event records a provider_error turn
+ok 10 - a stream that dies without a terminal event records a provider_error turn
+  ---
+  duration_ms: 93.9883
+  type: 'test'
+  ...
+# Subtest: the first message locks the assistant version and knowledge subset
+ok 11 - the first message locks the assistant version and knowledge subset
+  ---
+  duration_ms: 21.9904
+  type: 'test'
+  ...
+# Subtest: editing an earlier question truncates later validated memory
+ok 12 - editing an earlier question truncates later validated memory
+  ---
+  duration_ms: 30.0971
+  type: 'test'
+  ...
+# Subtest: Ticket 08 P1: saveValidatedTurn + loadRecentTurns round-trip
+ok 13 - Ticket 08 P1: saveValidatedTurn + loadRecentTurns round-trip
+  ---
+  duration_ms: 41.7772
+  type: 'test'
+  ...
+# Subtest: Ticket 08 P1: tenant-bound isolation — tenant-b cannot read tenant-a turns
+ok 14 - Ticket 08 P1: tenant-bound isolation — tenant-b cannot read tenant-a turns
+  ---
+  duration_ms: 12.8508
+  type: 'test'
+  ...
+# Subtest: Ticket 08 P1: session-bound isolation — session-2 cannot read session-1 turns
+ok 15 - Ticket 08 P1: session-bound isolation — session-2 cannot read session-1 turns
+  ---
+  duration_ms: 15.0443
+  type: 'test'
+  ...
+# Subtest: Ticket 08 P1: bounded limit — loadRecentTurns returns at most `limit` most-recent turns in chronological order
+ok 16 - Ticket 08 P1: bounded limit — loadRecentTurns returns at most `limit` most-recent turns in chronological order
+  ---
+  duration_ms: 17.1094
+  type: 'test'
+  ...
+# Subtest: Ticket 08 P6: deleteInactiveBefore purges sessions whose most recent activity predates the cutoff (session-level TTL)
+ok 17 - Ticket 08 P6: deleteInactiveBefore purges sessions whose most recent activity predates the cutoff (session-level TTL)
+  ---
+  duration_ms: 12.5678
+  type: 'test'
+  ...
+# Subtest: Ticket 08 P6: deleteInactiveBefore also purges pending clarifications for inactive sessions
+ok 18 - Ticket 08 P6: deleteInactiveBefore also purges pending clarifications for inactive sessions
+  ---
+  duration_ms: 10.1438
+  type: 'test'
+  ...
+# Subtest: Ticket 01: saveRollingSummary + getRollingSummary round-trip
+ok 19 - Ticket 01: saveRollingSummary + getRollingSummary round-trip
+  ---
+  duration_ms: 12.5264
+  type: 'test'
+  ...
+# Subtest: Ticket 01: getRollingSummary returns null for non-existent session
+ok 20 - Ticket 01: getRollingSummary returns null for non-existent session
+  ---
+  duration_ms: 15.1898
+  type: 'test'
+  ...
+# Subtest: Ticket 01: getRollingSummary enforces tenant-bound isolation
+ok 21 - Ticket 01: getRollingSummary enforces tenant-bound isolation
+  ---
+  duration_ms: 10.7408
+  type: 'test'
+  ...
+# Subtest: Ticket 01: getRollingSummary enforces session-bound isolation
+ok 22 - Ticket 01: getRollingSummary enforces session-bound isolation
+  ---
+  duration_ms: 10.538
+  type: 'test'
+  ...
+# Subtest: Ticket 01: saveRollingSummary is idempotent when re-saving the same checkpoint
+ok 23 - Ticket 01: saveRollingSummary is idempotent when re-saving the same checkpoint
+  ---
+  duration_ms: 9.3534
+  type: 'test'
+  ...
+# Subtest: Ticket 01: saveRollingSummary advances checkpoint when summarizedThroughTurnId is strictly greater
+ok 24 - Ticket 01: saveRollingSummary advances checkpoint when summarizedThroughTurnId is strictly greater
+  ---
+  duration_ms: 9.1601
+  type: 'test'
+  ...
+# Subtest: Ticket 01: saveRollingSummary rejects strictly smaller summarizedThroughTurnId (regression)
+ok 25 - Ticket 01: saveRollingSummary rejects strictly smaller summarizedThroughTurnId (regression)
+  ---
+  duration_ms: 12.0479
+  type: 'test'
+  ...
+# Subtest: Ticket 01: loadConversationMemory on empty session returns null summary + empty turns
+ok 26 - Ticket 01: loadConversationMemory on empty session returns null summary + empty turns
+  ---
+  duration_ms: 9.9066
+  type: 'test'
+  ...
+# Subtest: Ticket 01: loadConversationMemory returns summary when no validated turns exist
+ok 27 - Ticket 01: loadConversationMemory returns summary when no validated turns exist
+  ---
+  duration_ms: 10.987
+  type: 'test'
+  ...
+# Subtest: Ticket 01: loadConversationMemory returns turns when no summary exists
+ok 28 - Ticket 01: loadConversationMemory returns turns when no summary exists
+  ---
+  duration_ms: 12.2356
+  type: 'test'
+  ...
+# Subtest: Ticket 01: loadConversationMemory returns summary + recent turns together
+ok 29 - Ticket 01: loadConversationMemory returns summary + recent turns together
+  ---
+  duration_ms: 10.8884
+  type: 'test'
+  ...
+# Subtest: Ticket 01: loadConversationMemory caps at six completed pairs (≤12 turns)
+ok 30 - Ticket 01: loadConversationMemory caps at six completed pairs (≤12 turns)
+  ---
+  duration_ms: 13.2455
+  type: 'test'
+  ...
+# Subtest: Ticket 01: loadConversationMemory drops trailing unpaired user turn
+ok 31 - Ticket 01: loadConversationMemory drops trailing unpaired user turn
+  ---
+  duration_ms: 10.8426
+  type: 'test'
+  ...
+# Subtest: Ticket 01: loadConversationMemory returns recentTurns in chronological (oldest-first) order
+ok 32 - Ticket 01: loadConversationMemory returns recentTurns in chronological (oldest-first) order
+  ---
+  duration_ms: 12.4095
+  type: 'test'
+  ...
+# Subtest: Ticket 01: loadConversationMemory enforces tenant-bound isolation
+ok 33 - Ticket 01: loadConversationMemory enforces tenant-bound isolation
+  ---
+  duration_ms: 10.2369
+  type: 'test'
+  ...
+# Subtest: Ticket 01: loadConversationMemory enforces session-bound isolation
+ok 34 - Ticket 01: loadConversationMemory enforces session-bound isolation
+  ---
+  duration_ms: 10.8006
+  type: 'test'
+  ...
+# Subtest: Ticket 01: loadConversationMemory excludes pending clarifications from recentTurns
+ok 35 - Ticket 01: loadConversationMemory excludes pending clarifications from recentTurns
+  ---
+  duration_ms: 14.7915
+  type: 'test'
+  ...
+# Subtest: Ticket 01: deleteInactiveBefore also deletes rolling summaries for inactive sessions
+ok 36 - Ticket 01: deleteInactiveBefore also deletes rolling summaries for inactive sessions
+  ---
+  duration_ms: 12.9737
+  type: 'test'
+  ...
+# Subtest: Ticket 01: deleteInactiveBefore preserves rolling summaries for active sessions
+ok 37 - Ticket 01: deleteInactiveBefore preserves rolling summaries for active sessions
+  ---
+  duration_ms: 12.0782
+  type: 'test'
+  ...
+# Subtest: Ticket 01: deleteInactiveBefore preserves summaries for mixed-age sessions (session-level TTL)
+ok 38 - Ticket 01: deleteInactiveBefore preserves summaries for mixed-age sessions (session-level TTL)
+  ---
+  duration_ms: 11.4589
+  type: 'test'
+  ...
+# Subtest: Ticket 02 P1: loadConversationMemory reports totalValidatedTurnCount=0 for empty session
+ok 39 - Ticket 02 P1: loadConversationMemory reports totalValidatedTurnCount=0 for empty session
+  ---
+  duration_ms: 11.1553
+  type: 'test'
+  ...
+# Subtest: Ticket 02 P1: loadConversationMemory reports totalValidatedTurnCount + oldestRecentTurnId for 1 pair
+ok 40 - Ticket 02 P1: loadConversationMemory reports totalValidatedTurnCount + oldestRecentTurnId for 1 pair
+  ---
+  duration_ms: 12.4442
+  type: 'test'
+  ...
+# Subtest: Ticket 02 P1: totalValidatedTurnCount counts ALL validated turns, not just the recent window
+ok 41 - Ticket 02 P1: totalValidatedTurnCount counts ALL validated turns, not just the recent window
+  ---
+  duration_ms: 13.839
+  type: 'test'
+  ...
+# Subtest: Ticket 02 P1: totalValidatedTurnCount excludes pending clarifications
+ok 42 - Ticket 02 P1: totalValidatedTurnCount excludes pending clarifications
+  ---
+  duration_ms: 15.838
+  type: 'test'
+  ...
+# Subtest: Ticket 02 P1: loadOlderTurnsForSummarization round-trip loads turns in id-ascending order
+ok 43 - Ticket 02 P1: loadOlderTurnsForSummarization round-trip loads turns in id-ascending order
+  ---
+  duration_ms: 10.9928
+  type: 'test'
+  ...
+# Subtest: Ticket 02 P1: loadOlderTurnsForSummarization returns empty when toIdInclusive <= fromIdExclusive
+ok 44 - Ticket 02 P1: loadOlderTurnsForSummarization returns empty when toIdInclusive <= fromIdExclusive
+  ---
+  duration_ms: 10.7859
+  type: 'test'
+  ...
+# Subtest: Ticket 02 P1: loadOlderTurnsForSummarization enforces tenant-bound isolation
+ok 45 - Ticket 02 P1: loadOlderTurnsForSummarization enforces tenant-bound isolation
+  ---
+  duration_ms: 12.2233
+  type: 'test'
+  ...
+# Subtest: Ticket 02 P1: loadOlderTurnsForSummarization excludes pending clarifications
+ok 46 - Ticket 02 P1: loadOlderTurnsForSummarization excludes pending clarifications
+  ---
+  duration_ms: 9.9744
+  type: 'test'
+  ...
+# Subtest: Ticket 02 P1: loadOlderTurnsForSummarization returns empty for unknown session
+ok 47 - Ticket 02 P1: loadOlderTurnsForSummarization returns empty for unknown session
+  ---
+  duration_ms: 11.198
+  type: 'test'
+  ...
+# Subtest: Ticket 03: deleteInactiveBefore removes validated turns, pending clarification and rolling summary together
+ok 48 - Ticket 03: deleteInactiveBefore removes validated turns, pending clarification and rolling summary together
+  ---
+  duration_ms: 11.332
+  type: 'test'
+  ...
+# Subtest: Ticket 03: deleteInactiveBefore does not touch immutable answer_run_events trace history
+ok 49 - Ticket 03: deleteInactiveBefore does not touch immutable answer_run_events trace history
+  ---
+  duration_ms: 14.6263
+  type: 'test'
+  ...
+# Subtest: Ticket 03: deleteInactiveBefore is idempotent — second call returns 0 and does not error
+ok 50 - Ticket 03: deleteInactiveBefore is idempotent — second call returns 0 and does not error
+  ---
+  duration_ms: 17.6888
+  type: 'test'
+  ...
+# Subtest: P1 regression: peekPendingClarification is tenant-bound and non-destructive
+ok 51 - P1 regression: peekPendingClarification is tenant-bound and non-destructive
+  ---
+  duration_ms: 16.3291
+  type: 'test'
+  ...
+# Subtest: P1 regression: claimPendingClarification atomically returns a pending message once
+ok 52 - P1 regression: claimPendingClarification atomically returns a pending message once
+  ---
+  duration_ms: 15.8838
+  type: 'test'
+  ...
+# Subtest: trace append is idempotent and replay preserves event order
+ok 53 - trace append is idempotent and replay preserves event order
+  ---
+  duration_ms: 46.7609
+  type: 'test'
+  ...
+# Subtest: trace append rejects conflicting reuse of an event identity
+ok 54 - trace append rejects conflicting reuse of an event identity
+  ---
+  duration_ms: 12.8384
+  type: 'test'
+  ...
+# (node:54648) ExperimentalWarning: localStorage is not available because --localstorage-file was not provided.
+# (Use `node --trace-warnings ...` to show where the warning was created)
+# Subtest: an upload is listed with its parse status, usage and the session limits
+ok 55 - an upload is listed with its parse status, usage and the session limits
+  ---
+  duration_ms: 228.3887
+  type: 'test'
+  ...
+# Subtest: a percent-encoded UTF-8 attachment name round-trips through the header
+ok 56 - a percent-encoded UTF-8 attachment name round-trips through the header
+  ---
+  duration_ms: 152.324
+  type: 'test'
+  ...
+# Subtest: an unsupported x-parser override is refused with 400 before anything is stored
+ok 57 - an unsupported x-parser override is refused with 400 before anything is stored
+  ---
+  duration_ms: 57.1209
+  type: 'test'
+  ...
+# Subtest: limits and unsupported types answer per file, not as a failed batch
+ok 58 - limits and unsupported types answer per file, not as a failed batch
+  ---
+  duration_ms: 86.5819
+  type: 'test'
+  ...
+# Subtest: one session cannot read or promote another session's attachment
+ok 59 - one session cannot read or promote another session's attachment
+  ---
+  duration_ms: 78.0337
+  type: 'test'
+  ...
+# Subtest: promotion needs the ingest capability and an active target base
+ok 60 - promotion needs the ingest capability and an active target base
+  ---
+  duration_ms: 121.8671
+  type: 'test'
+  ...
+# Subtest: an unpromoted attachment can be removed, a promoted one cannot
+ok 61 - an unpromoted attachment can be removed, a promoted one cannot
+  ---
+  duration_ms: 69.5505
+  type: 'test'
+  ...
+# Subtest: cleanup retires unpromoted rows and keeps promoted ones
+ok 62 - cleanup retires unpromoted rows and keeps promoted ones
+  ---
+  duration_ms: 43.0125
+  type: 'test'
+  ...
+# (node:58696) ExperimentalWarning: localStorage is not available because --localstorage-file was not provided.
+# (Use `node --trace-warnings ...` to show where the warning was created)
+# Subtest: editing a clarification branch sends only the replacement question to real dispatch
+ok 63 - editing a clarification branch sends only the replacement question to real dispatch
+  ---
+  duration_ms: 313.1135
+  type: 'test'
+  ...
+# Subtest: regenerating a clarification replaces display history without doubling the pending question
+ok 64 - regenerating a clarification replaces display history without doubling the pending question
+  ---
+  duration_ms: 115.4736
+  type: 'test'
+  ...
+# Subtest: an ordinary clarification answer still combines the pending question with its supplement
+ok 65 - an ordinary clarification answer still combines the pending question with its supplement
+  ---
+  duration_ms: 55.1155
+  type: 'test'
+  ...
+# Subtest: Bearer other-subject cannot truncate another owner's pending branch
+ok 66 - Bearer other-subject cannot truncate another owner's pending branch
+  ---
+  duration_ms: 46.086
+  type: 'test'
+  ...
+# Subtest: Bearer other-tenant cannot truncate another owner's pending branch
+ok 67 - Bearer other-tenant cannot truncate another owner's pending branch
+  ---
+  duration_ms: 47.7199
+  type: 'test'
+  ...
+# (node:42276) ExperimentalWarning: localStorage is not available because --localstorage-file was not provided.
+# (Use `node --trace-warnings ...` to show where the warning was created)
+# Subtest: the first message locks the assistant version and knowledge subset against later requests
+ok 68 - the first message locks the assistant version and knowledge subset against later requests
+  ---
+  duration_ms: 227.1329
+  type: 'test'
+  ...
+# Subtest: a locked knowledge subset that cannot be resolved fails closed instead of widening
+ok 69 - a locked knowledge subset that cannot be resolved fails closed instead of widening
+  ---
+  duration_ms: 96.829
+  type: 'test'
+  ...
+# Subtest: an overlapping run for the same session is refused before any answer work
+ok 70 - an overlapping run for the same session is refused before any answer work
+  ---
+  duration_ms: 103.4014
+  type: 'test'
+  ...
+# [chat] terminal event runId does not match the request; not recorded
+# Subtest: a terminal event carrying another run's id is not recorded
+ok 71 - a terminal event carrying another run's id is not recorded
+  ---
+  duration_ms: 27.6474
+  type: 'test'
+  ...
+# Subtest: edit and regenerate drop the replaced run, later memory and the derived summary
+ok 72 - edit and regenerate drop the replaced run, later memory and the derived summary
+  ---
+  duration_ms: 41.2682
+  type: 'test'
+  ...
+# Subtest: the shared entry receives frozen identity, knowledge and assistant snapshots
+ok 73 - the shared entry receives frozen identity, knowledge and assistant snapshots
+  ---
+  duration_ms: 27.0165
+  type: 'test'
+  ...
+# Subtest: a legacy request locks the default assistant without scanning the workspace
+ok 74 - a legacy request locks the default assistant without scanning the workspace
+  ---
+  duration_ms: 25.4436
+  type: 'test'
+  ...
+# (node:54188) ExperimentalWarning: localStorage is not available because --localstorage-file was not provided.
+# (Use `node --trace-warnings ...` to show where the warning was created)
+# Subtest: an authenticated user in another tenant cannot restore a private run
+ok 75 - an authenticated user in another tenant cannot restore a private run
+  ---
+  duration_ms: 129.1812
+  type: 'test'
+  ...
+# Subtest: the owner restores the complete ordered events of a locked session
+ok 76 - the owner restores the complete ordered events of a locked session
+  ---
+  duration_ms: 34.1912
+  type: 'test'
+  ...
+# Subtest: the owner can restore a session before any assistant or knowledge lock exists
+ok 77 - the owner can restore a session before any assistant or knowledge lock exists
+  ---
+  duration_ms: 41.054
+  type: 'test'
+  ...
+# Subtest: another subject in the same tenant receives the same not-found response
+ok 78 - another subject in the same tenant receives the same not-found response
+  ---
+  duration_ms: 63.4333
+  type: 'test'
+  ...
+# Subtest: the same subject identifier in another tenant receives the same not-found response
+ok 79 - the same subject identifier in another tenant receives the same not-found response
+  ---
+  duration_ms: 41.4074
+  type: 'test'
+  ...
+# Subtest: a foreign user supplying the owner's identity in query parameters receives the same not-found response
+ok 80 - a foreign user supplying the owner's identity in query parameters receives the same not-found response
+  ---
+  duration_ms: 24.3015
+  type: 'test'
+  ...
+# Subtest: unknown runs and persisted traces without a directory are indistinguishable
+ok 81 - unknown runs and persisted traces without a directory are indistinguishable
+  ---
+  duration_ms: 29.842
+  type: 'test'
+  ...
+# Subtest: missing identity is rejected by the existing authentication gate
+ok 82 - missing identity is rejected by the existing authentication gate
+  ---
+  duration_ms: 25.1977
+  type: 'test'
+  ...
+# Subtest: an authenticated owner without chat scope is rejected before history is returned
+ok 83 - an authenticated owner without chat scope is rejected before history is returned
+  ---
+  duration_ms: 37.1266
+  type: 'test'
+  ...
+# Subtest: Ticket 05 wiring: createChatRouter without sessionBinder is backward compatible (no 409, behavior unchanged)
+ok 84 - Ticket 05 wiring: createChatRouter without sessionBinder is backward compatible (no 409, behavior unchanged)
+  ---
+  duration_ms: 171.4558
+  type: 'test'
+  ...
+# Subtest: Ticket 05 wiring: first-sight bind returns 200 and binder records the binding
+ok 85 - Ticket 05 wiring: first-sight bind returns 200 and binder records the binding
+  ---
+  duration_ms: 38.3532
+  type: 'test'
+  ...
+# Subtest: Ticket 05 wiring: consistent reuse (same sessionId + same tenant/subject) returns 200, not 409
+ok 86 - Ticket 05 wiring: consistent reuse (same sessionId + same tenant/subject) returns 200, not 409
+  ---
+  duration_ms: 59.2015
+  type: 'test'
+  ...
+# Subtest: Ticket 05 wiring: conflicting reuse returns 409 Conflict with existing binding preserved
+ok 87 - Ticket 05 wiring: conflicting reuse returns 409 Conflict with existing binding preserved
+  ---
+  duration_ms: 64.3587
+  type: 'test'
+  ...
+# Subtest: Ticket 05 wiring: 409 conflict does NOT call eventsSource (no Answer run created — side-effect gating)
+ok 88 - Ticket 05 wiring: 409 conflict does NOT call eventsSource (no Answer run created — side-effect gating)
+  ---
+  duration_ms: 31.565
+  type: 'test'
+  ...
+# Subtest: Ticket 05 wiring: single-tenant deterministic identity is used when no access middleware is mounted
+ok 89 - Ticket 05 wiring: single-tenant deterministic identity is used when no access middleware is mounted
+  ---
+  duration_ms: 40.0103
+  type: 'test'
+  ...
+# (node:47992) ExperimentalWarning: localStorage is not available because --localstorage-file was not provided.
+# (Use `node --trace-warnings ...` to show where the warning was created)
+# Subtest: complete chat JSON and SSE preserve the Answer event contract
+ok 90 - complete chat JSON and SSE preserve the Answer event contract
+  ---
+  duration_ms: 198.0743
+  type: 'test'
+  ...
+# Subtest: GET /api/chat/reasoning publishes the injected frozen capability with no store caching
+ok 91 - GET /api/chat/reasoning publishes the injected frozen capability with no store caching
+  ---
+  duration_ms: 29.7295
+  type: 'test'
+  ...
+# Subtest: GET /api/chat/reasoning reports unsupported on a bare router
+ok 92 - GET /api/chat/reasoning reports unsupported on a bare router
+  ---
+  duration_ms: 23.1261
+  type: 'test'
+  ...
+# Subtest: every invalid reasoning effort is a 400 with zero side effects
+ok 93 - every invalid reasoning effort is a 400 with zero side effects
+  ---
+  duration_ms: 89.1259
+  type: 'test'
+  ...
+# Subtest: a valid enum on an unsupported endpoint is refused before any side effect
+ok 94 - a valid enum on an unsupported endpoint is refused before any side effect
+  ---
+  duration_ms: 27.8865
+  type: 'test'
+  ...
+# Subtest: JSON, SSE and the persisted trace agree on the requested effort
+ok 95 - JSON, SSE and the persisted trace agree on the requested effort
+  ---
+  duration_ms: 48.4371
+  type: 'test'
+  ...
+# Subtest: an omitted request keeps the field out of JSON, SSE and the trace
+ok 96 - an omitted request keeps the field out of JSON, SSE and the trace
+  ---
+  duration_ms: 36.9455
+  type: 'test'
+  ...
+# Subtest: POST /api/chat with empty message returns 400
+ok 97 - POST /api/chat with empty message returns 400
+  ---
+  duration_ms: 247.3005
+  type: 'test'
+  ...
+# Subtest: SSE transport encodes every event as `data: <json>\\n\\n` with correct fields
+ok 98 - SSE transport encodes every event as `data: <json>\\n\\n` with correct fields
+  ---
+  duration_ms: 52.3243
+  type: 'test'
+  ...
+# Subtest: JSON transport encodes terminal fields and echoes full event stream
+ok 99 - JSON transport encodes terminal fields and echoes full event stream
+  ---
+  duration_ms: 26.4444
+  type: 'test'
+  ...
+# Subtest: GET /api/chat/runs/:runId returns 404 when run not in trace repository
+ok 100 - GET /api/chat/runs/:runId returns 404 when run not in trace repository
+  ---
+  duration_ms: 24.1285
+  type: 'test'
+  ...
+# Subtest: GET /api/chat/runs/:runId returns trace when events were persisted directly
+ok 101 - GET /api/chat/runs/:runId returns trace when events were persisted directly
+  ---
+  duration_ms: 25.4631
+  type: 'test'
+  ...
+# Subtest: approved answer basis survives real adapter, SSE, JSON, SQLite history and conversation consumption
+ok 102 - approved answer basis survives real adapter, SSE, JSON, SQLite history and conversation consumption
+  ---
+  duration_ms: 64.6064
+  type: 'test'
+  ...
+# (node:50268) ExperimentalWarning: localStorage is not available because --localstorage-file was not provided.
+# (Use `node --trace-warnings ...` to show where the warning was created)
+# Subtest: limits: five files, 20 MB each and 50 MB per session, reported per file
+ok 103 - limits: five files, 20 MB each and 50 MB per session, reported per file
+  ---
+  duration_ms: 7293.3069
+  type: 'test'
+  ...
+# Subtest: a binary document is extracted through the import parser in the background
+ok 104 - a binary document is extracted through the import parser in the background
+  ---
+  duration_ms: 20.9795
+  type: 'test'
+  ...
+# Subtest: a PDF attachment honors the force-OCR parser override
+ok 105 - a PDF attachment honors the force-OCR parser override
+  ---
+  duration_ms: 15.8868
+  type: 'test'
+  ...
+# Subtest: isolation: a session only ever sees its own attachments
+ok 106 - isolation: a session only ever sees its own attachments
+  ---
+  duration_ms: 30.6768
+  type: 'test'
+  ...
+# Subtest: retrieval carries attachment provenance, never public knowledge membership
+ok 107 - retrieval carries attachment provenance, never public knowledge membership
+  ---
+  duration_ms: 15.3315
+  type: 'test'
+  ...
+# Subtest: promotion is explicit, follows the same-name/version rules and is one-way
+ok 108 - promotion is explicit, follows the same-name/version rules and is one-way
+  ---
+  duration_ms: 24.0731
+  type: 'test'
+  ...
+# Subtest: cleanup retires only this session's unpromoted attachments
+ok 109 - cleanup retires only this session's unpromoted attachments
+  ---
+  duration_ms: 28.5222
+  type: 'test'
+  ...
+# Subtest: promotion submits through the injected lifecycle seam with a session-scoped identity
+ok 110 - promotion submits through the injected lifecycle seam with a session-scoped identity
+  ---
+  duration_ms: 13.4479
+  type: 'test'
+  ...
+# (node:63920) ExperimentalWarning: localStorage is not available because --localstorage-file was not provided.
+# (Use `node --trace-warnings ...` to show where the warning was created)
+# Subtest: the pipeline persists DocReader extraction evidence, parser metadata and policy
+ok 111 - the pipeline persists DocReader extraction evidence, parser metadata and policy
+  ---
+  duration_ms: 44.2579
+  type: 'test'
+  ...
+# Subtest: P6.1 default activation: completed doc activates immediately
+ok 112 - P6.1 default activation: completed doc activates immediately
+  ---
+  duration_ms: 42.9713
+  type: 'test'
+  ...
+# Subtest: P6.1 review mode is ignored: completed doc activates immediately
+ok 113 - P6.1 review mode is ignored: completed doc activates immediately
+  ---
+  duration_ms: 22.0221
+  type: 'test'
+  ...
+# Subtest: P6.1 review mode: a newer completed version becomes active
+ok 114 - P6.1 review mode: a newer completed version becomes active
+  ---
+  duration_ms: 25.6913
+  type: 'test'
+  ...
+# Subtest: P6.1 review mode: approve is an idempotent no-op for an already-active doc
+ok 115 - P6.1 review mode: approve is an idempotent no-op for an already-active doc
+  ---
+  duration_ms: 67.93
+  type: 'test'
+  ...
+# Subtest: P6.1 review mode: rejecting an already-active doc does not move the active pointer
+ok 116 - P6.1 review mode: rejecting an already-active doc does not move the active pointer
+  ---
+  duration_ms: 96.0961
+  type: 'test'
+  ...
+# Subtest: P6.1 backward compat: default lifecycle activates on completion
+ok 117 - P6.1 backward compat: default lifecycle activates on completion
+  ---
+  duration_ms: 27.0314
+  type: 'test'
+  ...
+# Subtest: P6.1 review mode: failed ingestion does NOT mark pending_review (only completed runs gate)
+ok 118 - P6.1 review mode: failed ingestion does NOT mark pending_review (only completed runs gate)
+  ---
+  duration_ms: 42.0766
+  type: 'test'
+  ...
+# Subtest: P6.1 review mode: cancelled ingestion does NOT mark pending_review
+ok 119 - P6.1 review mode: cancelled ingestion does NOT mark pending_review
+  ---
+  duration_ms: 32.8561
+  type: 'test'
+  ...
+# Subtest: P6.1 蓝军: technical completion activates inside the lifecycle, without the retired gate
+ok 120 - P6.1 蓝军: technical completion activates inside the lifecycle, without the retired gate
+  ---
+  duration_ms: 5.6979
+  type: 'test'
+  ...
+# Subtest: P6.2 caller audit: no production file constructs new IngestionLifecycle(...) directly
+ok 121 - P6.2 caller audit: no production file constructs new IngestionLifecycle(...) directly
+  ---
+  duration_ms: 272.3812
+  type: 'test'
+  ...
+# Subtest: P6.2 caller audit: HTTP/worker/CLI callers explicitly use createIngestionLifecycle factory
+ok 122 - P6.2 caller audit: HTTP/worker/CLI callers explicitly use createIngestionLifecycle factory
+  ---
+  duration_ms: 2.6127
+  type: 'test'
+  ...
+# Subtest: P6.2 explicit-deny: docRepo.activate() only in the lifecycle auto-branch
+ok 123 - P6.2 explicit-deny: docRepo.activate() only in the lifecycle auto-branch
+  ---
+  duration_ms: 146.9172
+  type: 'test'
+  ...
+# Subtest: P6.2 explicit-deny: no production code hardcodes SET candidate_state = 'approved'
+ok 124 - P6.2 explicit-deny: no production code hardcodes SET candidate_state = 'approved'
+  ---
+  duration_ms: 176.2263
+  type: 'test'
+  ...
+# Subtest: P6.2 explicit-deny: SET active_doc_id only in doc_repo.ts and db.ts migration
+ok 125 - P6.2 explicit-deny: SET active_doc_id only in doc_repo.ts and db.ts migration
+  ---
+  duration_ms: 222.2577
+  type: 'test'
+  ...
+# Subtest: P6.2 factory wiring: createIngestionLifecycle no longer reads a review mode or quality gate
+ok 126 - P6.2 factory wiring: createIngestionLifecycle no longer reads a review mode or quality gate
+  ---
+  duration_ms: 1.0822
+  type: 'test'
+  ...
+# Subtest: P6.3 review mode is ignored: completed docs activate while the review store stays readable
+ok 127 - P6.3 review mode is ignored: completed docs activate while the review store stays readable
+  ---
+  duration_ms: 52.8044
+  type: 'test'
+  ...
+# Subtest: P6.3 replay invariant: re-approve preserves the FIRST reviewer's audit fields
+ok 128 - P6.3 replay invariant: re-approve preserves the FIRST reviewer's audit fields
+  ---
+  duration_ms: 22.9624
+  type: 'test'
+  ...
+# Subtest: P6.3 蓝军 static contract: no new CandidateReviewStore methods for retry/cancel
+ok 129 - P6.3 蓝军 static contract: no new CandidateReviewStore methods for retry/cancel
+  ---
+  duration_ms: 2.6086
+  type: 'test'
+  ...
+# Subtest: P6.3 蓝军 static contract: technical completion activates inside the lifecycle
+ok 130 - P6.3 蓝军 static contract: technical completion activates inside the lifecycle
+  ---
+  duration_ms: 2.2474
+  type: 'test'
+  ...
+# Subtest: INGESTION_STAGE_NAMES is the exclusive source of truth for stage order
+ok 131 - INGESTION_STAGE_NAMES is the exclusive source of truth for stage order
+  ---
+  duration_ms: 3.612
+  type: 'test'
+  ...
+# Subtest: TrackedStageExecution rejects out-of-order stage calls
+ok 132 - TrackedStageExecution rejects out-of-order stage calls
+  ---
+  duration_ms: 75.6548
+  type: 'test'
+  ...
+# Subtest: TrackedStageExecution rejects stage calls after the sequence is complete
+ok 133 - TrackedStageExecution rejects stage calls after the sequence is complete
+  ---
+  duration_ms: 29.5977
+  type: 'test'
+  ...
+# Subtest: PipelineStageRunner does not independently finalize task or document states
+ok 134 - PipelineStageRunner does not independently finalize task or document states
+  ---
+  duration_ms: 0.5534
+  type: 'test'
+  ...
+# Subtest: an ingestion job exposes its complete four-stage success lifecycle
+ok 135 - an ingestion job exposes its complete four-stage success lifecycle
+  ---
+  duration_ms: 57.4694
+  type: 'test'
+  ...
+# Subtest: unchanged source content is a queryable no-op
+ok 136 - unchanged source content is a queryable no-op
+  ---
+  duration_ms: 49.267
+  type: 'test'
+  ...
+# Subtest: re-uploading content whose source was retired is a new import, not a hidden no-op
+ok 137 - re-uploading content whose source was retired is a new import, not a hidden no-op
+  ---
+  duration_ms: 59.3133
+  type: 'test'
+  ...
+# Subtest: duplicate in-flight source content reuses the existing version and task
+ok 138 - duplicate in-flight source content reuses the existing version and task
+  ---
+  duration_ms: 17.7025
+  type: 'test'
+  ...
+# Subtest: Windows file identity is stable across path casing
+ok 139 - Windows file identity is stable across path casing
+  ---
+  duration_ms: 19.393
+  type: 'test'
+  ...
+# Subtest: same canonical source is isolated by tenant
+ok 140 - same canonical source is isolated by tenant
+  ---
+  duration_ms: 23.011
+  type: 'test'
+  ...
+# Subtest: legacy alias adoption stays within the tenant and updates access metadata
+ok 141 - legacy alias adoption stays within the tenant and updates access metadata
+  ---
+  duration_ms: 35.155
+  type: 'test'
+  ...
+# Subtest: Ticket 03 KB-02A: a legacy alias is not adopted across knowledge bases
+ok 142 - Ticket 03 KB-02A: a legacy alias is not adopted across knowledge bases
+  ---
+  duration_ms: 28.0102
+  type: 'test'
+  ...
+# Subtest: a failed replacement remains inspectable without replacing the active version
+ok 143 - a failed replacement remains inspectable without replacing the active version
+  ---
+  duration_ms: 51.4196
+  type: 'test'
+  ...
+# Subtest: a successful replacement completes and switches the active identity
+ok 144 - a successful replacement completes and switches the active identity
+  ---
+  duration_ms: 29.5361
+  type: 'test'
+  ...
+# Subtest: an older version finishing late cannot disturb the active identity
+ok 145 - an older version finishing late cannot disturb the active identity
+  ---
+  duration_ms: 30.5602
+  type: 'test'
+  ...
+# Subtest: an ingestion job cannot complete when its runner omits required stages
+ok 146 - an ingestion job cannot complete when its runner omits required stages
+  ---
+  duration_ms: 18.4101
+  type: 'test'
+  ...
+# Subtest: a failed ingestion job leaves no open stage spans
+ok 147 - a failed ingestion job leaves no open stage spans
+  ---
+  duration_ms: 20.2241
+  type: 'test'
+  ...
+# Subtest: a failed ingestion job persists 2s, 4s, and 8s retries
+ok 148 - a failed ingestion job persists 2s, 4s, and 8s retries
+  ---
+  duration_ms: 142.24
+  type: 'test'
+  ...
+# Subtest: an ingestion job can complete after its persisted retry
+ok 149 - an ingestion job can complete after its persisted retry
+  ---
+  duration_ms: 19.3104
+  type: 'test'
+  ...
+# Subtest: stale running claims consume retry budget and eventually dead-letter
+ok 150 - stale running claims consume retry budget and eventually dead-letter
+  ---
+  duration_ms: 37.4903
+  type: 'test'
+  ...
+# Subtest: a stale worker callback cannot mutate a newer attempt
+ok 151 - a stale worker callback cannot mutate a newer attempt
+  ---
+  duration_ms: 20.3889
+  type: 'test'
+  ...
+# Subtest: a pending ingestion job can be cancelled idempotently
+ok 152 - a pending ingestion job can be cancelled idempotently
+  ---
+  duration_ms: 16.1572
+  type: 'test'
+  ...
+# Subtest: a running ingestion job cancels open spans and fences its late callback
+ok 153 - a running ingestion job cancels open spans and fences its late callback
+  ---
+  duration_ms: 17.0925
+  type: 'test'
+  ...
+# Subtest: cancellation wins when it races failure persistence
+    # Subtest: after 0 recorded failures
+    ok 1 - after 0 recorded failures
+      ---
+      duration_ms: 25.534
+      type: 'test'
+      ...
+    # Subtest: after 3 recorded failures
+    ok 2 - after 3 recorded failures
+      ---
+      duration_ms: 21.0181
+      type: 'test'
+      ...
+    1..2
+ok 154 - cancellation wins when it races failure persistence
+  ---
+  duration_ms: 47.524
+  type: 'test'
+  ...
+# Subtest: raw file submissions hash and persist the original bytes
+ok 155 - raw file submissions hash and persist the original bytes
+  ---
+  duration_ms: 15.7562
+  type: 'test'
+  ...
+# Subtest: cancelling through another lifecycle aborts the running parser signal
+ok 156 - cancelling through another lifecycle aborts the running parser signal
+  ---
+  duration_ms: 20.8877
+  type: 'test'
+  ...
+# Subtest: Ticket 04 KB-02B: knowledge ownership survives retry, cancellation and activation
+ok 157 - Ticket 04 KB-02B: knowledge ownership survives retry, cancellation and activation
+  ---
+  duration_ms: 30.0247
+  type: 'test'
+  ...
+# (node:28120) DeprecationWarning: Calling start() is no longer necessary. It can be safely omitted.
+# (Use `node --trace-deprecation ...` to show where the warning was created)
+# Subtest: ListEngines returns engine metadata and the builtin PDF helper recognizes it
+ok 158 - ListEngines returns engine metadata and the builtin PDF helper recognizes it
+  ---
+  duration_ms: 335.0588
+  type: 'test'
+  ...
+# Subtest: ReadStream yields the metadata frame before images and preserves order
+ok 159 - ReadStream yields the metadata frame before images and preserves order
+  ---
+  duration_ms: 111.8049
+  type: 'test'
+  ...
+# Subtest: ListEngines reports a deadline as a transient DocReaderError
+ok 160 - ListEngines reports a deadline as a transient DocReaderError
+  ---
+  duration_ms: 127.6501
+  type: 'test'
+  ...
+# Subtest: ReadStream cancellation rejects with docreader_cancelled and stops the stream
+ok 161 - ReadStream cancellation rejects with docreader_cancelled and stops the stream
+  ---
+  duration_ms: 102.1448
+  type: 'test'
+  ...
+# Subtest: a broken stream rejects instead of ending silently
+ok 162 - a broken stream rejects instead of ending silently
+  ---
+  duration_ms: 1.9882
+  type: 'test'
+  ...
+# Subtest: an oversized frame maps to docreader_message_too_large
+ok 163 - an oversized frame maps to docreader_message_too_large
+  ---
+  duration_ms: 79.6298
+  type: 'test'
+  ...
+# Subtest: the client rejects empty addresses and non-positive timeouts
+ok 164 - the client rejects empty addresses and non-positive timeouts
+  ---
+  duration_ms: 0.5816
+  type: 'test'
+  ...
+# Subtest: an early consumer exit cancels the stream without an unhandled error
+ok 165 - an early consumer exit cancels the stream without an unhandled error
+  ---
+  duration_ms: 148.0254
+  type: 'test'
+  ...
+# Subtest: native markdown becomes page-aware blocks with ratio locators and no boundingBox
+ok 166 - native markdown becomes page-aware blocks with ratio locators and no boundingBox
+  ---
+  duration_ms: 16.6241
+  type: 'test'
+  ...
+# Subtest: Unicode code point offsets map correctly across an emoji
+ok 167 - Unicode code point offsets map correctly across an emoji
+  ---
+  duration_ms: 2.2995
+  type: 'test'
+  ...
+# Subtest: a table spanning two source blocks stays one table with a locator list
+ok 168 - a table spanning two source blocks stays one table with a locator list
+  ---
+  duration_ms: 8.5857
+  type: 'test'
+  ...
+# Subtest: a missing or invalid locator degrades to a warning and keeps the text
+ok 169 - a missing or invalid locator degrades to a warning and keeps the text
+  ---
+  duration_ms: 1.9078
+  type: 'test'
+  ...
+# Subtest: meta.error is a terminal parse failure
+ok 170 - meta.error is a terminal parse failure
+  ---
+  duration_ms: 6.8733
+  type: 'test'
+  ...
+# Subtest: an image before metadata is an invalid stream
+ok 171 - an image before metadata is an invalid stream
+  ---
+  duration_ms: 1.4751
+  type: 'test'
+  ...
+# Subtest: a declared image that never arrives is an image-missing failure
+ok 172 - a declared image that never arrives is an image-missing failure
+  ---
+  duration_ms: 0.7012
+  type: 'test'
+  ...
+# Subtest: scanned pages without an OCR stage fail explicitly, not as empty success
+ok 173 - scanned pages without an OCR stage fail explicitly, not as empty success
+  ---
+  duration_ms: 2.0942
+  type: 'test'
+  ...
+# Subtest: force-scanned uses the DocReader override and a stable SHA filename
+ok 174 - force-scanned uses the DocReader override and a stable SHA filename
+  ---
+  duration_ms: 1.0848
+  type: 'test'
+  ...
+# Subtest: the extraction fingerprint changes with force mode and stays stable otherwise
+ok 175 - the extraction fingerprint changes with force mode and stays stable otherwise
+  ---
+  duration_ms: 3.7834
+  type: 'test'
+  ...
+# Subtest: an envelope larger than the output limit fails instead of being persisted
+ok 176 - an envelope larger than the output limit fails instead of being persisted
+  ---
+  duration_ms: 1.6789
+  type: 'test'
+  ...
+# Subtest: scanned pages are OCR'd and merged into page order even when images arrive reversed
+ok 177 - scanned pages are OCR'd and merged into page order even when images arrive reversed
+  ---
+  duration_ms: 1.2246
+  type: 'test'
+  ...
+# Subtest: a legal empty OCR page is skipped, while an all-empty document fails
+ok 178 - a legal empty OCR page is skipped, while an all-empty document fails
+  ---
+  duration_ms: 1.0389
+  type: 'test'
+  ...
+# Subtest: a mixed native/scan PDF keeps native and OCR blocks in page order
+ok 179 - a mixed native/scan PDF keeps native and OCR blocks in page order
+  ---
+  duration_ms: 0.7095
+  type: 'test'
+  ...
+# Subtest: an OCR failure aborts the whole parse
+ok 180 - an OCR failure aborts the whole parse
+  ---
+  duration_ms: 0.5428
+  type: 'test'
+  ...
+# Subtest: image-only markdown is never indexed as paragraph text
+ok 181 - image-only markdown is never indexed as paragraph text
+  ---
+  duration_ms: 0.5325
+  type: 'test'
+  ...
+# Subtest: aligned DocReader text is reconstructed as a table while the caption stays a paragraph
+ok 182 - aligned DocReader text is reconstructed as a table while the caption stays a paragraph
+  ---
+  duration_ms: 1.3197
+  type: 'test'
+  ...
+# Subtest: wrapped whitespace table rows are assembled without inventing cells
+ok 183 - wrapped whitespace table rows are assembled without inventing cells
+  ---
+  duration_ms: 0.7238
+  type: 'test'
+  ...
+# Subtest: ordinary prose with numbers stays a paragraph, not a table
+ok 184 - ordinary prose with numbers stays a paragraph, not a table
+  ---
+  duration_ms: 0.3953
+  type: 'test'
+  ...
+# (node:57904) ExperimentalWarning: localStorage is not available because --localstorage-file was not provided.
+# (Use `node --trace-warnings ...` to show where the warning was created)
+# Subtest: four-backtick PDF code fences retain code and surrounding prose
+ok 185 - four-backtick PDF code fences retain code and surrounding prose
+  ---
+  duration_ms: 7.2681
+  type: 'test'
+  ...
+# Subtest: PDF code fences with attributes retain the info string, code and surrounding prose
+ok 186 - PDF code fences with attributes retain the info string, code and surrounding prose
+  ---
+  duration_ms: 1.5472
+  type: 'test'
+  ...
+# Subtest: ordinary triple-backtick PDF code fences keep their language and block contract
+ok 187 - ordinary triple-backtick PDF code fences keep their language and block contract
+  ---
+  duration_ms: 4.4094
+  type: 'test'
+  ...
+# Subtest: an unfinished PDF fence (```typescript) keeps the original rest and warning
+ok 188 - an unfinished PDF fence (```typescript) keeps the original rest and warning
+  ---
+  duration_ms: 1.4908
+  type: 'test'
+  ...
+# Subtest: an unfinished PDF fence (````python title="demo") keeps the original rest and warning
+ok 189 - an unfinished PDF fence (````python title="demo") keeps the original rest and warning
+  ---
+  duration_ms: 0.8832
+  type: 'test'
+  ...
+# Subtest: a four-backtick PDF fence contains shorter fences and closes at a longer fence
+ok 190 - a four-backtick PDF fence contains shorter fences and closes at a longer fence
+  ---
+  duration_ms: 1.3827
+  type: 'test'
+  ...
+# Subtest: continuous and unrecognized PDF fences make progress without dropping raw text
+ok 191 - continuous and unrecognized PDF fences make progress without dropping raw text
+  ---
+  duration_ms: 10.5111
+  type: 'test'
+  ...
+# Subtest: empty consecutive PDF fences consume their delimiters and keep adjacent prose
+ok 192 - empty consecutive PDF fences consume their delimiters and keep adjacent prose
+  ---
+  duration_ms: 1.287
+  type: 'test'
+  ...
+# Subtest: PDF fences retain raw extraction and Unicode page locators through both parser entry points
+ok 193 - PDF fences retain raw extraction and Unicode page locators through both parser entry points
+  ---
+  duration_ms: 6.9204
+  type: 'test'
+  ...
+# Subtest: the knowledge import pipeline indexes PDF fence content and keeps its raw extraction
+ok 194 - the knowledge import pipeline indexes PDF fence content and keeps its raw extraction
+  ---
+  duration_ms: 5455.8274
+  type: 'test'
+  ...
+# Subtest: a PDF attachment becomes ready and searchable through the same fence parser
+ok 195 - a PDF attachment becomes ready and searchable through the same fence parser
+  ---
+  duration_ms: 74.7977
+  type: 'test'
+  ...
+# Subtest: a final escaped pipe without a PDF table border stays in the final cell
+ok 196 - a final escaped pipe without a PDF table border stays in the final cell
+  ---
+  duration_ms: 10.4064
+  type: 'test'
+  ...
+# Subtest: an even backslash run leaves the final PDF table pipe as a border
+ok 197 - an even backslash run leaves the final PDF table pipe as a border
+  ---
+  duration_ms: 3.9232
+  type: 'test'
+  ...
+# Subtest: an escaped final PDF table pipe followed by an explicit border creates no extra cell
+ok 198 - an escaped final PDF table pipe followed by an explicit border creates no extra cell
+  ---
+  duration_ms: 1.073
+  type: 'test'
+  ...
+# Subtest: trailing whitespace does not change PDF table escape or border meaning
+ok 199 - trailing whitespace does not change PDF table escape or border meaning
+  ---
+  duration_ms: 1.8041
+  type: 'test'
+  ...
+# Subtest: interior PDF table pipes follow the same odd and even backslash rule as borders
+ok 200 - interior PDF table pipes follow the same odd and even backslash rule as borders
+  ---
+  duration_ms: 0.9629
+  type: 'test'
+  ...
+# Subtest: longer backslash runs preserve literal slashes while identifying final PDF table borders
+ok 201 - longer backslash runs preserve literal slashes while identifying final PDF table borders
+  ---
+  duration_ms: 0.7007
+  type: 'test'
+  ...
+# Subtest: ordinary bordered PDF tables retain headers, columns and whitespace trimming
+ok 202 - ordinary bordered PDF tables retain headers, columns and whitespace trimming
+  ---
+  duration_ms: 1.4537
+  type: 'test'
+  ...
+# Subtest: ordinary unbordered PDF tables retain headers, columns and whitespace trimming
+ok 203 - ordinary unbordered PDF tables retain headers, columns and whitespace trimming
+  ---
+  duration_ms: 3.5584
+  type: 'test'
+  ...
+# Subtest: structured escaped PDF table values retain their original raw extraction and surrounding prose
+ok 204 - structured escaped PDF table values retain their original raw extraction and surrounding prose
+  ---
+  duration_ms: 5.3476
+  type: 'test'
+  ...
+# (node:62316) ExperimentalWarning: localStorage is not available because --localstorage-file was not provided.
+# (Use `node --trace-warnings ...` to show where the warning was created)
+# Subtest: UT-06 路由：TXT 携带 PDF 专用 override 归一到文本路径且记录原意图
+ok 205 - UT-06 路由：TXT 携带 PDF 专用 override 归一到文本路径且记录原意图
+  ---
+  duration_ms: 7.2388
+  type: 'test'
+  ...
+# Subtest: UT-06 路由：类型兼容的 override 保持权威单候选，既有格式不受影响
+ok 206 - UT-06 路由：类型兼容的 override 保持权威单候选，既有格式不受影响
+  ---
+  duration_ms: 1.6297
+  type: 'test'
+  ...
+# Subtest: UT-06 真实上传到解析选择：TXT + 历史 PDF override 实际用 markitdown 解析成功
+ok 207 - UT-06 真实上传到解析选择：TXT + 历史 PDF override 实际用 markitdown 解析成功
+  ---
+  duration_ms: 211.5175
+  type: 'test'
+  ...
+# Subtest: Ticket 06 P3: openDb migration adds tenant_id/allowed_groups columns to page_index_nodes with correct DEFAULTs
+ok 208 - Ticket 06 P3: openDb migration adds tenant_id/allowed_groups columns to page_index_nodes with correct DEFAULTs
+  ---
+  duration_ms: 38.0984
+  type: 'test'
+  ...
+# Subtest: Ticket 06 P3: replaceNodes() without accessMetadata falls back to DEFAULT 'default' / '[]'
+ok 209 - Ticket 06 P3: replaceNodes() without accessMetadata falls back to DEFAULT 'default' / '[]'
+  ---
+  duration_ms: 12.7521
+  type: 'test'
+  ...
+# Subtest: Ticket 06 P3: replaceNodes() with accessMetadata writes the provided tenantId/allowedGroups
+ok 210 - Ticket 06 P3: replaceNodes() with accessMetadata writes the provided tenantId/allowedGroups
+  ---
+  duration_ms: 19.4999
+  type: 'test'
+  ...
+# Subtest: Ticket 06 P3: replaceNodes() applies accessMetadata to every node in the batch
+ok 211 - Ticket 06 P3: replaceNodes() applies accessMetadata to every node in the batch
+  ---
+  duration_ms: 17.8568
+  type: 'test'
+  ...
+# Subtest: Ticket 06 P3: getNodesByDocument() returns PageIndexNode with tenantId/allowedGroups populated
+ok 212 - Ticket 06 P3: getNodesByDocument() returns PageIndexNode with tenantId/allowedGroups populated
+  ---
+  duration_ms: 17.1108
+  type: 'test'
+  ...
+# Subtest: Ticket 06 P3: getNodesByDocument() returns DEFAULT access metadata when replaceNodes omitted it
+ok 213 - Ticket 06 P3: getNodesByDocument() returns DEFAULT access metadata when replaceNodes omitted it
+  ---
+  duration_ms: 17.902
+  type: 'test'
+  ...
+# Subtest: Ticket 06 P3: searchNodes() returns PageIndexNode with access metadata populated
+ok 214 - Ticket 06 P3: searchNodes() returns PageIndexNode with access metadata populated
+  ---
+  duration_ms: 23.1158
+  type: 'test'
+  ...
+# Subtest: Ticket 06 P3: replaceNodes() overwrites previous access metadata on re-replace (immutability = no UPDATE, but DELETE+INSERT is allowed)
+ok 215 - Ticket 06 P3: replaceNodes() overwrites previous access metadata on re-replace (immutability = no UPDATE, but DELETE+INSERT is allowed)
+  ---
+  duration_ms: 18.4541
+  type: 'test'
+  ...
+# Subtest: PT-10 AC01: five higher-sorted foreign-knowledge-base nodes leave the target's bounded slot intact
+ok 216 - PT-10 AC01: five higher-sorted foreign-knowledge-base nodes leave the target's bounded slot intact
+  ---
+  duration_ms: 19.5931
+  type: 'test'
+  ...
+# Subtest: PT-10 AC02: cross-tenant matches sorting ahead of the target never consume its slot
+ok 217 - PT-10 AC02: cross-tenant matches sorting ahead of the target never consume its slot
+  ---
+  duration_ms: 14.9766
+  type: 'test'
+  ...
+# Subtest: PT-10 AC02: an invisible group's nodes never consume a group-restricted caller's slots
+ok 218 - PT-10 AC02: an invisible group's nodes never consume a group-restricted caller's slots
+  ---
+  duration_ms: 15.4916
+  type: 'test'
+  ...
+# Subtest: PT-10 AC02: non-active document versions never consume the active caller's slots
+ok 219 - PT-10 AC02: non-active document versions never consume the active caller's slots
+  ---
+  duration_ms: 17.657
+  type: 'test'
+  ...
+# Subtest: PT-10 AC03: a configured-but-empty active set selects nothing while an unconfigured axis keeps the default behavior
+ok 220 - PT-10 AC03: a configured-but-empty active set selects nothing while an unconfigured axis keeps the default behavior
+  ---
+  duration_ms: 11.2196
+  type: 'test'
+  ...
+# Subtest: PT-10 AC03: the SQL active axis is exactly ActiveVersionRepository.getActiveDocIds()
+ok 221 - PT-10 AC03: the SQL active axis is exactly ActiveVersionRepository.getActiveDocIds()
+  ---
+  duration_ms: 16.2865
+  type: 'test'
+  ...
+# Subtest: PT-10 AC04: an untagged legacy row stays refused under an explicit scope and selectable without one
+ok 222 - PT-10 AC04: an untagged legacy row stays refused under an explicit scope and selectable without one
+  ---
+  duration_ms: 24.4778
+  type: 'test'
+  ...
+# Subtest: PT-10 AC04: a multi-knowledge-base scope returns the union of the named bases only
+ok 223 - PT-10 AC04: a multi-knowledge-base scope returns the union of the named bases only
+  ---
+  duration_ms: 14.664
+  type: 'test'
+  ...
+# Subtest: PT-10 AC05: eight eligible nodes return the first five in the stable (document_id, node_id) order
+ok 224 - PT-10 AC05: eight eligible nodes return the first five in the stable (document_id, node_id) order
+  ---
+  duration_ms: 15.9068
+  type: 'test'
+  ...
+# Subtest: PT-10 AC07: LIKE wildcards stay literal, zero hits stay empty, and metadata still comes back
+ok 225 - PT-10 AC07: LIKE wildcards stay literal, zero hits stay empty, and metadata still comes back
+  ---
+  duration_ms: 11.9416
+  type: 'test'
+  ...
+# Subtest: PT-10 AC07: a malformed access-metadata row degrades exactly like the application-layer filter
+ok 226 - PT-10 AC07: a malformed access-metadata row degrades exactly like the application-layer filter
+  ---
+  duration_ms: 10.2651
+  type: 'test'
+  ...
+# Subtest: PT-10 AC08: eligibility is resolved in the query — ineligible matches are never materialised
+ok 227 - PT-10 AC08: eligibility is resolved in the query — ineligible matches are never materialised
+  ---
+  duration_ms: 53.6424
+  type: 'test'
+  ...
+# Subtest: PT-10 AC08: a 2,000-document active set adds no bound parameters to the node query
+ok 228 - PT-10 AC08: a 2,000-document active set adds no bound parameters to the node query
+  ---
+  duration_ms: 32.4902
+  type: 'test'
+  ...
+# Subtest: P4 retire: returns null for non-existent source (404)
+ok 229 - P4 retire: returns null for non-existent source (404)
+  ---
+  duration_ms: 52.5944
+  type: 'test'
+  ...
+# Subtest: P4 retire: returns null for cross-tenant source (404)
+ok 230 - P4 retire: returns null for cross-tenant source (404)
+  ---
+  duration_ms: 15.4303
+  type: 'test'
+  ...
+# Subtest: P4 retire on active source: transitions to retired + creates tombstone + enqueues 4 cleanup tasks per doc
+ok 231 - P4 retire on active source: transitions to retired + creates tombstone + enqueues 4 cleanup tasks per doc
+  ---
+  duration_ms: 28.5945
+  type: 'test'
+  ...
+# Subtest: P4 retire on quarantined source: quarantined → retired is legal
+ok 232 - P4 retire on quarantined source: quarantined → retired is legal
+  ---
+  duration_ms: 20.311
+  type: 'test'
+  ...
+# Subtest: P4 retire with multiple docs: enqueues 4*N tasks + tombstone records all doc_ids
+ok 233 - P4 retire with multiple docs: enqueues 4*N tasks + tombstone records all doc_ids
+  ---
+  duration_ms: 28.2628
+  type: 'test'
+  ...
+# Subtest: P4 retire with zero docs: enqueues zero tasks + tombstone with empty retired_version_ids
+ok 234 - P4 retire with zero docs: enqueues zero tasks + tombstone with empty retired_version_ids
+  ---
+  duration_ms: 13.0074
+  type: 'test'
+  ...
+# Subtest: P4 retire on already-retired source: idempotent (no new tombstone, no duplicate tasks)
+ok 235 - P4 retire on already-retired source: idempotent (no new tombstone, no duplicate tasks)
+  ---
+  duration_ms: 36.9324
+  type: 'test'
+  ...
+# Subtest: P4 idempotent retire: enqueues MISSING tasks only (handles interrupted previous retire)
+ok 236 - P4 idempotent retire: enqueues MISSING tasks only (handles interrupted previous retire)
+  ---
+  duration_ms: 18.834
+  type: 'test'
+  ...
+# Subtest: P4 tombstone: records reason and actor verbatim
+ok 237 - P4 tombstone: records reason and actor verbatim
+  ---
+  duration_ms: 25.722
+  type: 'test'
+  ...
+# Subtest: P4 cleanup ops: enqueues exactly cleanup_es, cleanup_neo4j, cleanup_pageindex, cleanup_images per doc
+ok 238 - P4 cleanup ops: enqueues exactly cleanup_es, cleanup_neo4j, cleanup_pageindex, cleanup_images per doc
+  ---
+  duration_ms: 14.7806
+  type: 'test'
+  ...
+# Subtest: P4 safety property: retired state persists across idempotent re-calls (no reactivation)
+ok 239 - P4 safety property: retired state persists across idempotent re-calls (no reactivation)
+  ---
+  duration_ms: 19.5854
+  type: 'test'
+  ...
+# Subtest: P4 RetirementResult shape: first call returns idempotent=false + tombstoneId
+ok 240 - P4 RetirementResult shape: first call returns idempotent=false + tombstoneId
+  ---
+  duration_ms: 13.3766
+  type: 'test'
+  ...
+# Subtest: retirement retracts existing Wiki contributions even when generation is disabled
+ok 241 - retirement retracts existing Wiki contributions even when generation is disabled
+  ---
+  duration_ms: 20.7759
+  type: 'test'
+  ...
+# Subtest: a knowledge-base wipe retires every source of that base and only that base
+ok 242 - a knowledge-base wipe retires every source of that base and only that base
+  ---
+  duration_ms: 50.5466
+  type: 'test'
+  ...
+# Subtest: a wipe keeps the metadata rows and writes one tombstone per source
+ok 243 - a wipe keeps the metadata rows and writes one tombstone per source
+  ---
+  duration_ms: 41.3799
+  type: 'test'
+  ...
+# Subtest: a second wipe reports everything as already retired and queues nothing again
+ok 244 - a second wipe reports everything as already retired and queues nothing again
+  ---
+  duration_ms: 21.2748
+  type: 'test'
+  ...
+# Subtest: a partially retired knowledge base splits the counts honestly
+ok 245 - a partially retired knowledge base splits the counts honestly
+  ---
+  duration_ms: 20.9677
+  type: 'test'
+  ...
+# Subtest: another tenant's source under the same knowledge-base id is out of reach
+ok 246 - another tenant's source under the same knowledge-base id is out of reach
+  ---
+  duration_ms: 16.0894
+  type: 'test'
+  ...
+# Subtest: an unknown knowledge base id wipes nothing
+ok 247 - an unknown knowledge base id wipes nothing
+  ---
+  duration_ms: 15.462
+  type: 'test'
+  ...
+# Subtest: C4: a retirement command hands its trace to the wiki retraction job
+ok 248 - C4: a retirement command hands its trace to the wiki retraction job
+  ---
+  duration_ms: 21.2412
+  type: 'test'
+  ...
+# Subtest: P2 getSource: returns null for non-existent source
+ok 249 - P2 getSource: returns null for non-existent source
+  ---
+  duration_ms: 49.7374
+  type: 'test'
+  ...
+# Subtest: P2 getSource: returns null for cross-tenant source (no information leak)
+ok 250 - P2 getSource: returns null for cross-tenant source (no information leak)
+  ---
+  duration_ms: 13.339
+  type: 'test'
+  ...
+# Subtest: P2 getSource: returns entry with lifecycle_state='active' for new source
+ok 251 - P2 getSource: returns entry with lifecycle_state='active' for new source
+  ---
+  duration_ms: 21.1131
+  type: 'test'
+  ...
+# Subtest: P2 transition: active → quarantined succeeds
+ok 252 - P2 transition: active → quarantined succeeds
+  ---
+  duration_ms: 59.7232
+  type: 'test'
+  ...
+# Subtest: P2 transition: active → retired succeeds
+ok 253 - P2 transition: active → retired succeeds
+  ---
+  duration_ms: 31.7918
+  type: 'test'
+  ...
+# Subtest: P2 transition: quarantined → active succeeds (manual un-quarantine)
+ok 254 - P2 transition: quarantined → active succeeds (manual un-quarantine)
+  ---
+  duration_ms: 25.5189
+  type: 'test'
+  ...
+# Subtest: P2 transition: quarantined → retired succeeds (escalation)
+ok 255 - P2 transition: quarantined → retired succeeds (escalation)
+  ---
+  duration_ms: 12.2712
+  type: 'test'
+  ...
+# Subtest: P2 transition: retired → active throws InvalidSourceLifecycleTransitionError (L1593 non-reactivation)
+ok 256 - P2 transition: retired → active throws InvalidSourceLifecycleTransitionError (L1593 non-reactivation)
+  ---
+  duration_ms: 20.5262
+  type: 'test'
+  ...
+# Subtest: P2 transition: retired → quarantined throws (retired is terminal)
+ok 257 - P2 transition: retired → quarantined throws (retired is terminal)
+  ---
+  duration_ms: 13.9693
+  type: 'test'
+  ...
+# Subtest: P2 transition: same-state transition throws (strict — HTTP layer handles idempotency)
+ok 258 - P2 transition: same-state transition throws (strict — HTTP layer handles idempotency)
+  ---
+  duration_ms: 15.1938
+  type: 'test'
+  ...
+# Subtest: P2 transition: returns null for non-existent source (404 semantics)
+ok 259 - P2 transition: returns null for non-existent source (404 semantics)
+  ---
+  duration_ms: 14.8422
+  type: 'test'
+  ...
+# Subtest: P2 transition: returns null for cross-tenant source (404, no leak)
+ok 260 - P2 transition: returns null for cross-tenant source (404, no leak)
+  ---
+  duration_ms: 13.9423
+  type: 'test'
+  ...
+# Subtest: P2 createTombstone: inserts row and returns SourceTombstone
+ok 261 - P2 createTombstone: inserts row and returns SourceTombstone
+  ---
+  duration_ms: 34.556
+  type: 'test'
+  ...
+# Subtest: P2 getLatestTombstone: returns null when no tombstone exists
+ok 262 - P2 getLatestTombstone: returns null when no tombstone exists
+  ---
+  duration_ms: 20.2302
+  type: 'test'
+  ...
+# Subtest: P2 getLatestTombstone: returns null for cross-tenant source
+ok 263 - P2 getLatestTombstone: returns null for cross-tenant source
+  ---
+  duration_ms: 16.9327
+  type: 'test'
+  ...
+# Subtest: P2 getLatestTombstone: returns most recent tombstone when multiple exist for same source
+ok 264 - P2 getLatestTombstone: returns most recent tombstone when multiple exist for same source
+  ---
+  duration_ms: 13.6286
+  type: 'test'
+  ...
+# Subtest: P2 transition: updatedAt is refreshed on every successful transition
+ok 265 - P2 transition: updatedAt is refreshed on every successful transition
+  ---
+  duration_ms: 33.0174
+  type: 'test'
+  ...
+# Subtest: P2 SourceLifecycleEntry: returned entry shape matches interface
+ok 266 - P2 SourceLifecycleEntry: returned entry shape matches interface
+  ---
+  duration_ms: 11.8171
+  type: 'test'
+  ...
+# Subtest: Clef dispatch passes cancellation and isolates decision metadata across concurrent runs
+ok 267 - Clef dispatch passes cancellation and isolates decision metadata across concurrent runs
+  ---
+  duration_ms: 37.181
+  type: 'test'
+  ...
+# Subtest: T11 dispatch \#1 simple route → simpleRunner handles, directAmbiguousRunner NOT called
+ok 268 - T11 dispatch \#1 simple route → simpleRunner handles, directAmbiguousRunner NOT called
+  ---
+  duration_ms: 9.9211
+  type: 'test'
+  ...
+# Subtest: T11 dispatch \#2 direct route → directAmbiguousRunner handles without probing simpleRunner
+ok 269 - T11 dispatch \#2 direct route → directAmbiguousRunner handles without probing simpleRunner
+  ---
+  duration_ms: 1.0892
+  type: 'test'
+  ...
+# Subtest: MEM-02 regression: an explicit long-term-memory query bypasses knowledge retrieval
+ok 270 - MEM-02 regression: an explicit long-term-memory query bypasses knowledge retrieval
+  ---
+  duration_ms: 34.9716
+  type: 'test'
+  ...
+# Subtest: T11 dispatch \#2 ambiguous route → directAmbiguousRunner handles without probing simpleRunner
+ok 271 - T11 dispatch \#2 ambiguous route → directAmbiguousRunner handles without probing simpleRunner
+  ---
+  duration_ms: 10.9069
+  type: 'test'
+  ...
+# Subtest: T11 dispatch \#3 complex route without complexRunner → RouteNotSupportedError
+ok 272 - T11 dispatch \#3 complex route without complexRunner → RouteNotSupportedError
+  ---
+  duration_ms: 2.0326
+  type: 'test'
+  ...
+# Subtest: T11 dispatch \#4 selected owner AbortError propagates unchanged
+ok 273 - T11 dispatch \#4 selected owner AbortError propagates unchanged
+  ---
+  duration_ms: 0.9098
+  type: 'test'
+  ...
+# Subtest: T11 dispatch \#5 provider_error from simpleRunner → propagates (no fallback)
+ok 274 - T11 dispatch \#5 provider_error from simpleRunner → propagates (no fallback)
+  ---
+  duration_ms: 0.6892
+  type: 'test'
+  ...
+# Subtest: T11 dispatch \#6 identity preservation: runId/sessionId/accessContext passed through
+ok 275 - T11 dispatch \#6 identity preservation: runId/sessionId/accessContext passed through
+  ---
+  duration_ms: 0.5625
+  type: 'test'
+  ...
+# Subtest: T12 dispatch \#1 complex route WITH complexRunner wired → complexRunner handles (no legacy fallback)
+ok 276 - T12 dispatch \#1 complex route WITH complexRunner wired → complexRunner handles (no legacy fallback)
+  ---
+  duration_ms: 0.6819
+  type: 'test'
+  ...
+# Subtest: T12 dispatch \#2 complexRunner throws RouteNotComplexError → propagates (router disagreement)
+ok 277 - T12 dispatch \#2 complexRunner throws RouteNotComplexError → propagates (router disagreement)
+  ---
+  duration_ms: 3.4752
+  type: 'test'
+  ...
+# Subtest: T12 dispatch \#3 complexRunner throws non-route error → propagates (no further fallback)
+ok 278 - T12 dispatch \#3 complexRunner throws non-route error → propagates (no further fallback)
+  ---
+  duration_ms: 0.5156
+  type: 'test'
+  ...
+# Subtest: P1 regression: dispatch makes one authoritative route decision and invokes only its owner
+ok 279 - P1 regression: dispatch makes one authoritative route decision and invokes only its owner
+  ---
+  duration_ms: 0.3812
+  type: 'test'
+  ...
+# Subtest: P1 regression: concurrent dispatches cannot both claim the same pending clarification
+ok 280 - P1 regression: concurrent dispatches cannot both claim the same pending clarification
+  ---
+  duration_ms: 3.0009
+  type: 'test'
+  ...
+# Subtest: AP-02: dispatch announces the real route completion before its owner starts
+ok 281 - AP-02: dispatch announces the real route completion before its owner starts
+  ---
+  duration_ms: 1.0276
+  type: 'test'
+  ...
+# [search] attachment channel unavailable: attachment store unavailable
+# [search] attachment channel unavailable: attachment store unavailable
+# (node:9520) ExperimentalWarning: localStorage is not available because --localstorage-file was not provided.
+# (Use `node --trace-warnings ...` to show where the warning was created)
+# Subtest: the attachment channel joins a search only when the run carries a session
+ok 282 - the attachment channel joins a search only when the run carries a session
+  ---
+  duration_ms: 75.1392
+  type: 'test'
+  ...
+# Subtest: a session with no knowledge selection still answers from its own attachments
+ok 283 - a session with no knowledge selection still answers from its own attachments
+  ---
+  duration_ms: 44.4176
+  type: 'test'
+  ...
+# Subtest: another session's attachment is unreachable, even for the same user
+ok 284 - another session's attachment is unreachable, even for the same user
+  ---
+  duration_ms: 53.7149
+  type: 'test'
+  ...
+# Subtest: temporary citations say attachment, never knowledge-base membership
+ok 285 - temporary citations say attachment, never knowledge-base membership
+  ---
+  duration_ms: 102.5812
+  type: 'test'
+  ...
+# Subtest: a fresh session has nothing to retrieve until a file is attached
+ok 286 - a fresh session has nothing to retrieve until a file is attached
+  ---
+  duration_ms: 15.1967
+  type: 'test'
+  ...
+# Subtest: PT-02 AC05: a failing attachment source degrades the search and names the channel
+ok 287 - PT-02 AC05: a failing attachment source degrades the search and names the channel
+  ---
+  duration_ms: 1.8041
+  type: 'test'
+  ...
+# Subtest: PT-02 AC05: an empty knowledge scope with a failing attachment source stays insufficient and says why
+ok 288 - PT-02 AC05: an empty knowledge scope with a failing attachment source stays insufficient and says why
+  ---
+  duration_ms: 26.4147
+  type: 'test'
+  ...
+# Subtest: PT-02 AC05: a composition without attachment capability keeps the fail-closed empty scope
+ok 289 - PT-02 AC05: a composition without attachment capability keeps the fail-closed empty scope
+  ---
+  duration_ms: 0.4015
+  type: 'test'
+  ...
+# Subtest: PT-02 AC04: every search of one run reads the same bound session triple
+ok 290 - PT-02 AC04: every search of one run reads the same bound session triple
+  ---
+  duration_ms: 17.5613
+  type: 'test'
+  ...
+# (node:53556) ExperimentalWarning: localStorage is not available because --localstorage-file was not provided.
+# (Use `node --trace-warnings ...` to show where the warning was created)
+# Subtest: BF-01: BM25 and assembled parents exclude a retired source before cleanup
+ok 291 - BF-01: BM25 and assembled parents exclude a retired source before cleanup
+  ---
+  duration_ms: 106.6708
+  type: 'test'
+  ...
+# Subtest: BF-01: PageIndex navigation and hydrated context exclude retirement while nodes remain stored
+ok 292 - BF-01: PageIndex navigation and hydrated context exclude retirement while nodes remain stored
+  ---
+  duration_ms: 35.1835
+  type: 'test'
+  ...
+# Subtest: BF-01: vector results and parents stay hidden with an empty active set
+ok 293 - BF-01: vector results and parents stay hidden with an empty active set
+  ---
+  duration_ms: 26.78
+  type: 'test'
+  ...
+# Subtest: BF-01: delayed and failed cleanup cannot restore BM25, vector or PageIndex visibility
+ok 294 - BF-01: delayed and failed cleanup cannot restore BM25, vector or PageIndex visibility
+  ---
+  duration_ms: 145.2199
+  type: 'test'
+  ...
+# Subtest: BF-01: lifecycle filtering preserves version, tenant, group and knowledge-base exclusions
+ok 295 - BF-01: lifecycle filtering preserves version, tenant, group and knowledge-base exclusions
+  ---
+  duration_ms: 80.7123
+  type: 'test'
+  ...
+# [search] parent expansion unavailable: parent lookup failed
+# [search] reranker unavailable: reranker model timeout
+# [search] graph channel unavailable: neo4j unavailable
+# [search] vector channel unavailable: unavailable
+# [search] bm25 channel unavailable: unavailable
+# [search] graph channel unavailable: unavailable
+# [search] pageIndex channel unavailable: unavailable
+# [search] pageIndex channel unavailable: unavailable
+# [search] graph channel unavailable: Neo4j: could not perform discovery
+# [search] graph channel unavailable: neo4j unavailable
+# [search] graph channel unavailable: ServiceUnavailable: Neo4j bolt connection refused
+# [search] graph channel unavailable: Neo4j unreachable
+# [search] bm25 channel unavailable: bm25 unavailable
+# [search] vector channel unavailable: unavailable
+# [search] bm25 channel unavailable: unavailable
+# Subtest: RRF preserves channel and graph provenance for shared evidence
+ok 296 - RRF preserves channel and graph provenance for shared evidence
+  ---
+  duration_ms: 22.1607
+  type: 'test'
+  ...
+# Subtest: RRF does not collapse equal chunk ids from different document versions
+ok 297 - RRF does not collapse equal chunk ids from different document versions
+  ---
+  duration_ms: 1.0224
+  type: 'test'
+  ...
+# Subtest: runtime search recalls child, image, and legacy passages and loads parents by document
+ok 298 - runtime search recalls child, image, and legacy passages and loads parents by document
+  ---
+  duration_ms: 1.5836
+  type: 'test'
+  ...
+# Subtest: graph search follows provenance back to chunk evidence
+ok 299 - graph search follows provenance back to chunk evidence
+  ---
+  duration_ms: 6.5868
+  type: 'test'
+  ...
+# Subtest: graph search bounds provenance lookup and keeps relationships on supporting chunks
+ok 300 - graph search bounds provenance lookup and keeps relationships on supporting chunks
+  ---
+  duration_ms: 3.354
+  type: 'test'
+  ...
+# Subtest: hybrid search owns all channels, fusion, reranking, dedupe, and top-K
+ok 301 - hybrid search owns all channels, fusion, reranking, dedupe, and top-K
+  ---
+  duration_ms: 2.1565
+  type: 'test'
+  ...
+# Subtest: child recall expands a bounded parent without changing evidence identity
+ok 302 - child recall expands a bounded parent without changing evidence identity
+  ---
+  duration_ms: 1.3499
+  type: 'test'
+  ...
+# Subtest: parent expansion failure degrades to the recalled child
+ok 303 - parent expansion failure degrades to the recalled child
+  ---
+  duration_ms: 2.4203
+  type: 'test'
+  ...
+# Subtest: missing parent records degrade without dropping recalled children
+ok 304 - missing parent records degrade without dropping recalled children
+  ---
+  duration_ms: 1.6861
+  type: 'test'
+  ...
+# Subtest: reranker adapter reject degrades to fused results without escaping the seam
+ok 305 - reranker adapter reject degrades to fused results without escaping the seam
+  ---
+  duration_ms: 2.6573
+  type: 'test'
+  ...
+# Subtest: one unavailable channel returns degraded results from the others
+ok 306 - one unavailable channel returns degraded results from the others
+  ---
+  duration_ms: 0.9182
+  type: 'test'
+  ...
+# Subtest: all unavailable channels return an explicit insufficient outcome
+ok 307 - all unavailable channels return an explicit insufficient outcome
+  ---
+  duration_ms: 0.9523
+  type: 'test'
+  ...
+# Subtest: page index search recalls chunks linked to matching page index nodes
+ok 308 - page index search recalls chunks linked to matching page index nodes
+  ---
+  duration_ms: 0.9518
+  type: 'test'
+  ...
+# Subtest: pageIndex channel participates in fusion and degrades when unavailable
+ok 309 - pageIndex channel participates in fusion and degrades when unavailable
+  ---
+  duration_ms: 1.2924
+  type: 'test'
+  ...
+# Subtest: active version filter excludes chunks from non-active document versions
+ok 310 - active version filter excludes chunks from non-active document versions
+  ---
+  duration_ms: 0.9621
+  type: 'test'
+  ...
+# Subtest: no active version filter when repo is absent
+ok 311 - no active version filter when repo is absent
+  ---
+  duration_ms: 0.5756
+  type: 'test'
+  ...
+# Subtest: Ticket 07 P1: Searcher.search passes accessContext to each channel
+ok 312 - Ticket 07 P1: Searcher.search passes accessContext to each channel
+  ---
+  duration_ms: 0.5047
+  type: 'test'
+  ...
+# Subtest: Ticket 07 P1: Searcher.search passes undefined accessContext when omitted (backward compat)
+ok 313 - Ticket 07 P1: Searcher.search passes undefined accessContext when omitted (backward compat)
+  ---
+  duration_ms: 0.5301
+  type: 'test'
+  ...
+# Subtest: Ticket 07 P2: vectorSearch includes tenant filter when accessContext is provided
+ok 314 - Ticket 07 P2: vectorSearch includes tenant filter when accessContext is provided
+  ---
+  duration_ms: 0.7089
+  type: 'test'
+  ...
+# Subtest: Ticket 07 P2: vectorSearch includes group filter when accessContext.groups is non-empty
+ok 315 - Ticket 07 P2: vectorSearch includes group filter when accessContext.groups is non-empty
+  ---
+  duration_ms: 1.1191
+  type: 'test'
+  ...
+# Subtest: Ticket 07 P2: vectorSearch without accessContext has no tenant or group filter (backward compat)
+ok 316 - Ticket 07 P2: vectorSearch without accessContext has no tenant or group filter (backward compat)
+  ---
+  duration_ms: 0.6258
+  type: 'test'
+  ...
+# Subtest: Ticket 07 P2: bm25Search includes tenant and group filter when accessContext is provided
+ok 317 - Ticket 07 P2: bm25Search includes tenant and group filter when accessContext is provided
+  ---
+  duration_ms: 1.0181
+  type: 'test'
+  ...
+# Subtest: Ticket 07 P2: bm25Search without accessContext has no tenant or group filter (backward compat)
+ok 318 - Ticket 07 P2: bm25Search without accessContext has no tenant or group filter (backward compat)
+  ---
+  duration_ms: 0.5562
+  type: 'test'
+  ...
+# Subtest: Ticket 07 P3: pageIndexSearch filters PageIndex nodes by tenantId before ES lookup
+ok 319 - Ticket 07 P3: pageIndexSearch filters PageIndex nodes by tenantId before ES lookup
+  ---
+  duration_ms: 0.4954
+  type: 'test'
+  ...
+# Subtest: Ticket 07 P3: pageIndexSearch filters PageIndex nodes by allowedGroups for group-restricted user
+ok 320 - Ticket 07 P3: pageIndexSearch filters PageIndex nodes by allowedGroups for group-restricted user
+  ---
+  duration_ms: 0.3695
+  type: 'test'
+  ...
+# Subtest: Ticket 07 P3: pageIndexSearch without accessContext does not filter nodes (backward compat)
+ok 321 - Ticket 07 P3: pageIndexSearch without accessContext does not filter nodes (backward compat)
+  ---
+  duration_ms: 0.2404
+  type: 'test'
+  ...
+# Subtest: Ticket 07 P3: pageIndexSearch ES recheck includes ACL filter when accessContext provided
+ok 322 - Ticket 07 P3: pageIndexSearch ES recheck includes ACL filter when accessContext provided
+  ---
+  duration_ms: 0.2366
+  type: 'test'
+  ...
+# Subtest: Ticket 07 P4: graphSearch filters provenance by tenantId before ES recheck
+ok 323 - Ticket 07 P4: graphSearch filters provenance by tenantId before ES recheck
+  ---
+  duration_ms: 0.9697
+  type: 'test'
+  ...
+# Subtest: Ticket 07 P4: graphSearch filters provenance by allowedGroups for group-restricted user
+ok 324 - Ticket 07 P4: graphSearch filters provenance by allowedGroups for group-restricted user
+  ---
+  duration_ms: 0.5903
+  type: 'test'
+  ...
+# Subtest: Ticket 07 P4: graphSearch without accessContext does not filter provenance (backward compat)
+ok 325 - Ticket 07 P4: graphSearch without accessContext does not filter provenance (backward compat)
+  ---
+  duration_ms: 0.3571
+  type: 'test'
+  ...
+# Subtest: Ticket 07 P4: graphSearch ES recheck includes ACL filter when accessContext provided
+ok 326 - Ticket 07 P4: graphSearch ES recheck includes ACL filter when accessContext provided
+  ---
+  duration_ms: 0.3145
+  type: 'test'
+  ...
+# Subtest: Ticket 07 P4: graphSearch legacy 2-element provenance passes through app-layer filter to ES gate
+ok 327 - Ticket 07 P4: graphSearch legacy 2-element provenance passes through app-layer filter to ES gate
+  ---
+  duration_ms: 0.2559
+  type: 'test'
+  ...
+# Subtest: P2.2 fallback path is exercised when provenance is empty (multi_match query shape, not primary bool.should)
+ok 328 - P2.2 fallback path is exercised when provenance is empty (multi_match query shape, not primary bool.should)
+  ---
+  duration_ms: 0.3076
+  type: 'test'
+  ...
+# Subtest: P2.2 fallback deny: missing tenant tag → tenantId filter present (fail closed for untagged)
+ok 329 - P2.2 fallback deny: missing tenant tag → tenantId filter present (fail closed for untagged)
+  ---
+  duration_ms: 0.4928
+  type: 'test'
+  ...
+# Subtest: P2.2 fallback deny: cross-tenant → tenantId filter present (denies tenant-b chunk when caller is tenant-a)
+ok 330 - P2.2 fallback deny: cross-tenant → tenantId filter present (denies tenant-b chunk when caller is tenant-a)
+  ---
+  duration_ms: 0.2815
+  type: 'test'
+  ...
+# Subtest: P2.2 fallback deny: wrong group → allowedGroups filter present (denies non-intersecting group)
+ok 331 - P2.2 fallback deny: wrong group → allowedGroups filter present (denies non-intersecting group)
+  ---
+  duration_ms: 0.2388
+  type: 'test'
+  ...
+# Subtest: P2.2 fallback deny: inactive version → documentId terms filter present (denies non-active documents)
+ok 332 - P2.2 fallback deny: inactive version → documentId terms filter present (denies non-active documents)
+  ---
+  duration_ms: 0.5184
+  type: 'test'
+  ...
+# Subtest: P2.2 fallback backward compat: no accessContext and no activeVersionRepo → fallback filter unchanged (just childFilter)
+ok 333 - P2.2 fallback backward compat: no accessContext and no activeVersionRepo → fallback filter unchanged (just childFilter)
+  ---
+  duration_ms: 0.8915
+  type: 'test'
+  ...
+# Subtest: P2.3 outage: graph driver session.run throws → SearcherImpl degrades gracefully (graph unavailable, other channels produce results)
+ok 334 - P2.3 outage: graph driver session.run throws → SearcherImpl degrades gracefully (graph unavailable, other channels produce results)
+  ---
+  duration_ms: 0.8301
+  type: 'test'
+  ...
+# Subtest: P2.3 outage: accessContext propagated to all available channels during graph outage
+ok 335 - P2.3 outage: accessContext propagated to all available channels during graph outage
+  ---
+  duration_ms: 1.3213
+  type: 'test'
+  ...
+# Subtest: P2.3 outage: no unauthorized leak — ES queries from available channels contain all 3 ACL filters (tenant + group + active-version) during outage
+ok 336 - P2.3 outage: no unauthorized leak — ES queries from available channels contain all 3 ACL filters (tenant + group + active-version) during outage
+  ---
+  duration_ms: 0.7775
+  type: 'test'
+  ...
+# Subtest: P2.3 outage: backward compat — accessContext undefined → degradation behavior unchanged (no ACL filter)
+ok 337 - P2.3 outage: backward compat — accessContext undefined → degradation behavior unchanged (no ACL filter)
+  ---
+  duration_ms: 0.4526
+  type: 'test'
+  ...
+# Subtest: P2.3 outage: graph driver session() throws (driver itself broken) → graphSearch throws before ES query
+ok 338 - P2.3 outage: graph driver session() throws (driver itself broken) → graphSearch throws before ES query
+  ---
+  duration_ms: 3.5046
+  type: 'test'
+  ...
+# Subtest: P2.3 outage: no hang — search completes promptly during graph outage
+ok 339 - P2.3 outage: no hang — search completes promptly during graph outage
+  ---
+  duration_ms: 0.813
+  type: 'test'
+  ...
+# Subtest: P2.3 provenance regression: fallback path (empty provenance) Evidence carries all 3 ACL attributions (tenant + group + active-version)
+ok 340 - P2.3 provenance regression: fallback path (empty provenance) Evidence carries all 3 ACL attributions (tenant + group + active-version)
+  ---
+  duration_ms: 1.5845
+  type: 'test'
+  ...
+# Subtest: P2.3 outage: full SearcherImpl flow with RuntimeSearchOperations — graph throws, other channels produce ACL-filtered Evidence
+ok 341 - P2.3 outage: full SearcherImpl flow with RuntimeSearchOperations — graph throws, other channels produce ACL-filtered Evidence
+  ---
+  duration_ms: 0.9478
+  type: 'test'
+  ...
+# Subtest: Ticket 07 P5: loadParents includes tenant filter when accessContext provided
+ok 342 - Ticket 07 P5: loadParents includes tenant filter when accessContext provided
+  ---
+  duration_ms: 0.2627
+  type: 'test'
+  ...
+# Subtest: Ticket 07 P5: loadParents includes group filter when accessContext.groups is non-empty
+ok 343 - Ticket 07 P5: loadParents includes group filter when accessContext.groups is non-empty
+  ---
+  duration_ms: 0.1727
+  type: 'test'
+  ...
+# Subtest: Ticket 07 P5: loadParents without accessContext has no filter (backward compat)
+ok 344 - Ticket 07 P5: loadParents without accessContext has no filter (backward compat)
+  ---
+  duration_ms: 0.1772
+  type: 'test'
+  ...
+# Subtest: Ticket 07 P5: SearcherImpl.search passes accessContext to loadParents
+ok 345 - Ticket 07 P5: SearcherImpl.search passes accessContext to loadParents
+  ---
+  duration_ms: 0.3617
+  type: 'test'
+  ...
+# Subtest: Ticket 06 P2: default search (no channels option) executes all four channels and omits unselectedChannels
+ok 346 - Ticket 06 P2: default search (no channels option) executes all four channels and omits unselectedChannels
+  ---
+  duration_ms: 0.3492
+  type: 'test'
+  ...
+# Subtest: Ticket 06 P2: single-channel subset (vector only) executes only vectorSearch and reports unselectedChannels
+ok 347 - Ticket 06 P2: single-channel subset (vector only) executes only vectorSearch and reports unselectedChannels
+  ---
+  duration_ms: 0.2849
+  type: 'test'
+  ...
+# Subtest: Ticket 06 P2: multi-channel subset (vector + bm25) executes only requested channels
+ok 348 - Ticket 06 P2: multi-channel subset (vector + bm25) executes only requested channels
+  ---
+  duration_ms: 0.2683
+  type: 'test'
+  ...
+# Subtest: Ticket 06 P2: degraded outcome with channel selection reports partial failure among selected channels only
+ok 349 - Ticket 06 P2: degraded outcome with channel selection reports partial failure among selected channels only
+  ---
+  duration_ms: 0.3933
+  type: 'test'
+  ...
+# Subtest: Ticket 06 P2: insufficient outcome with channel selection reports all selected channels unavailable
+ok 350 - Ticket 06 P2: insufficient outcome with channel selection reports all selected channels unavailable
+  ---
+  duration_ms: 0.5845
+  type: 'test'
+  ...
+# Subtest: Ticket 06 P2: ACL propagation with channel selection — accessContext passed to selected channels only
+ok 351 - Ticket 06 P2: ACL propagation with channel selection — accessContext passed to selected channels only
+  ---
+  duration_ms: 0.7181
+  type: 'test'
+  ...
+# Subtest: Ticket 06 P2: graphBudget omitted when graph channel not selected, present when selected
+ok 352 - Ticket 06 P2: graphBudget omitted when graph channel not selected, present when selected
+  ---
+  duration_ms: 0.5892
+  type: 'test'
+  ...
+# Subtest: P7.2 regression: mid-rerank cancellation terminates the run instead of degrading to reranker_unavailable
+ok 353 - P7.2 regression: mid-rerank cancellation terminates the run instead of degrading to reranker_unavailable
+  ---
+  duration_ms: 0.4942
+  type: 'test'
+  ...
+# Subtest: P7.2 regression: mid-parent-load cancellation terminates the run instead of degrading to parent_expansion_unavailable
+ok 354 - P7.2 regression: mid-parent-load cancellation terminates the run instead of degrading to parent_expansion_unavailable
+  ---
+  duration_ms: 0.6431
+  type: 'test'
+  ...
+# [search] reranker unavailable: dedicated reranker is not configured (set RERANK_API_KEY and RERANK_BASE_URL)
+# [search] pageIndex channel unavailable: page index table unavailable
+# Subtest: P7.2 regression: hung Neo4j session.run rejects promptly on abort and closes the session
+ok 355 - P7.2 regression: hung Neo4j session.run rejects promptly on abort and closes the session
+  ---
+  duration_ms: 42.9378
+  type: 'test'
+  ...
+# Subtest: Ticket 05: vectorSearch scopes to the knowledge-base ids
+ok 356 - Ticket 05: vectorSearch scopes to the knowledge-base ids
+  ---
+  duration_ms: 1.144
+  type: 'test'
+  ...
+# Subtest: Ticket 05: bm25Search scopes to the knowledge-base ids
+ok 357 - Ticket 05: bm25Search scopes to the knowledge-base ids
+  ---
+  duration_ms: 0.3554
+  type: 'test'
+  ...
+# Subtest: Ticket 05: an unscoped channel emits no knowledge-base clause (backward compat)
+ok 358 - Ticket 05: an unscoped channel emits no knowledge-base clause (backward compat)
+  ---
+  duration_ms: 0.2584
+  type: 'test'
+  ...
+# Subtest: Ticket 05: an explicit empty scope returns no evidence without any query or embedding
+ok 359 - Ticket 05: an explicit empty scope returns no evidence without any query or embedding
+  ---
+  duration_ms: 0.4452
+  type: 'test'
+  ...
+# Subtest: Ticket 05: an empty scope dispatches no channel at all, all four requested
+ok 360 - Ticket 05: an empty scope dispatches no channel at all, all four requested
+  ---
+  duration_ms: 0.2557
+  type: 'test'
+  ...
+# Subtest: Ticket 05: SearcherImpl.search forwards the retrieval scope to both channels
+ok 361 - Ticket 05: SearcherImpl.search forwards the retrieval scope to both channels
+  ---
+  duration_ms: 0.365
+  type: 'test'
+  ...
+# Subtest: Ticket 05: contradictory documents in two knowledge bases never cross
+ok 362 - Ticket 05: contradictory documents in two knowledge bases never cross
+  ---
+  duration_ms: 3.4251
+  type: 'test'
+  ...
+# Subtest: Ticket 06: a shared entity does not reveal another knowledge base's relations or documents
+ok 363 - Ticket 06: a shared entity does not reveal another knowledge base's relations or documents
+  ---
+  duration_ms: 1.3235
+  type: 'test'
+  ...
+# Subtest: Ticket 06: graphSearch scoped recheck carries the knowledge-base clause and drops unowned provenance
+ok 364 - Ticket 06: graphSearch scoped recheck carries the knowledge-base clause and drops unowned provenance
+  ---
+  duration_ms: 0.8064
+  type: 'test'
+  ...
+# Subtest: Ticket 06: graphSearch name-fallback hydration carries the knowledge-base clause
+ok 365 - Ticket 06: graphSearch name-fallback hydration carries the knowledge-base clause
+  ---
+  duration_ms: 0.4647
+  type: 'test'
+  ...
+# Subtest: Ticket 06: graphSearch without a scope keeps reading every knowledge base (backward compat)
+ok 366 - Ticket 06: graphSearch without a scope keeps reading every knowledge base (backward compat)
+  ---
+  duration_ms: 0.3695
+  type: 'test'
+  ...
+# Subtest: Ticket 06: a re-ingested chunk's tagged provenance outranks its legacy entry
+ok 367 - Ticket 06: a re-ingested chunk's tagged provenance outranks its legacy entry
+  ---
+  duration_ms: 0.3404
+  type: 'test'
+  ...
+# Subtest: Ticket 06: graphSearch with an explicit empty scope queries nothing
+ok 368 - Ticket 06: graphSearch with an explicit empty scope queries nothing
+  ---
+  duration_ms: 0.1979
+  type: 'test'
+  ...
+# Subtest: Ticket 06: pageIndexSearch filters nodes by knowledge base and carries the clause into hydration
+ok 369 - Ticket 06: pageIndexSearch filters nodes by knowledge base and carries the clause into hydration
+  ---
+  duration_ms: 0.2724
+  type: 'test'
+  ...
+# Subtest: Ticket 06: pageIndexSearch without a scope keeps reading every knowledge base (backward compat)
+ok 370 - Ticket 06: pageIndexSearch without a scope keeps reading every knowledge base (backward compat)
+  ---
+  duration_ms: 0.2489
+  type: 'test'
+  ...
+# Subtest: Ticket 06: pageIndexSearch with an explicit empty scope queries nothing
+ok 371 - Ticket 06: pageIndexSearch with an explicit empty scope queries nothing
+  ---
+  duration_ms: 0.1841
+  type: 'test'
+  ...
+# Subtest: Ticket 06: SearcherImpl.search forwards the retrieval scope to graph and PageIndex channels
+ok 372 - Ticket 06: SearcherImpl.search forwards the retrieval scope to graph and PageIndex channels
+  ---
+  duration_ms: 0.3754
+  type: 'test'
+  ...
+# Subtest: Ticket 07: loadParents carries the knowledge-base clause when a scope is provided
+ok 373 - Ticket 07: loadParents carries the knowledge-base clause when a scope is provided
+  ---
+  duration_ms: 0.1908
+  type: 'test'
+  ...
+# Subtest: Ticket 07: loadParents never hydrates a parent outside the scope
+ok 374 - Ticket 07: loadParents never hydrates a parent outside the scope
+  ---
+  duration_ms: 0.2554
+  type: 'test'
+  ...
+# Subtest: Ticket 07: loadParents without a scope keeps the legacy query shape
+ok 375 - Ticket 07: loadParents without a scope keeps the legacy query shape
+  ---
+  duration_ms: 0.1453
+  type: 'test'
+  ...
+# Subtest: Ticket 07: loadParents with an explicit empty scope returns nothing without a query
+ok 376 - Ticket 07: loadParents with an explicit empty scope returns nothing without a query
+  ---
+  duration_ms: 0.1136
+  type: 'test'
+  ...
+# Subtest: Ticket 07: SearcherImpl forwards the run's scope object identity into parent expansion
+ok 377 - Ticket 07: SearcherImpl forwards the run's scope object identity into parent expansion
+  ---
+  duration_ms: 0.316
+  type: 'test'
+  ...
+# Subtest: PT-10 AC01: five higher-sorted foreign-knowledge-base nodes no longer push the target out of the PageIndex quota
+ok 378 - PT-10 AC01: five higher-sorted foreign-knowledge-base nodes no longer push the target out of the PageIndex quota
+  ---
+  duration_ms: 1.9742
+  type: 'test'
+  ...
+# Subtest: PT-10 AC02: cross-tenant matches sorting ahead of the target never consume its slot
+ok 379 - PT-10 AC02: cross-tenant matches sorting ahead of the target never consume its slot
+  ---
+  duration_ms: 0.534
+  type: 'test'
+  ...
+# Subtest: PT-10 AC02: an invisible group's nodes never consume a group-restricted caller's slot
+ok 380 - PT-10 AC02: an invisible group's nodes never consume a group-restricted caller's slot
+  ---
+  duration_ms: 0.8215
+  type: 'test'
+  ...
+# Subtest: PT-10 AC02: a non-active document version never consumes the active caller's slot
+ok 381 - PT-10 AC02: a non-active document version never consumes the active caller's slot
+  ---
+  duration_ms: 0.5726
+  type: 'test'
+  ...
+# Subtest: PT-10 AC03: a configured-but-empty active set hides everything while an unconfigured repository keeps the default read
+ok 382 - PT-10 AC03: a configured-but-empty active set hides everything while an unconfigured repository keeps the default read
+  ---
+  duration_ms: 0.5628
+  type: 'test'
+  ...
+# Subtest: PT-10 AC04: an explicit empty knowledge scope queries neither PageIndex nor Elasticsearch
+ok 383 - PT-10 AC04: an explicit empty knowledge scope queries neither PageIndex nor Elasticsearch
+  ---
+  duration_ms: 0.2233
+  type: 'test'
+  ...
+# Subtest: PT-10 AC04: an admin caller gains no cross-tenant or cross-knowledge-base reach from the node quota
+ok 384 - PT-10 AC04: an admin caller gains no cross-tenant or cross-knowledge-base reach from the node quota
+  ---
+  duration_ms: 0.8298
+  type: 'test'
+  ...
+# Subtest: PT-10 AC05: eight eligible nodes yield the first five, deduped by linked chunk and cut to topK
+ok 385 - PT-10 AC05: eight eligible nodes yield the first five, deduped by linked chunk and cut to topK
+  ---
+  duration_ms: 1.1219
+  type: 'test'
+  ...
+# Subtest: PT-10 AC06: material that lost eligibility between selection and hydration is refused
+ok 386 - PT-10 AC06: material that lost eligibility between selection and hydration is refused
+  ---
+  duration_ms: 0.3611
+  type: 'test'
+  ...
+# Subtest: PT-10 AC06: a repository that ignores the eligibility argument is still filtered before hydration
+ok 387 - PT-10 AC06: a repository that ignores the eligibility argument is still filtered before hydration
+  ---
+  duration_ms: 0.2817
+  type: 'test'
+  ...
+# Subtest: PT-10 AC07: a failing repository stays an explainable channel outage and the abort signal still reaches hydration
+ok 388 - PT-10 AC07: a failing repository stays an explainable channel outage and the abort signal still reaches hydration
+  ---
+  duration_ms: 1.6576
+  type: 'test'
+  ...
+# [search] web channel unavailable: web evidence unavailable: policy denied: intranet.local
+# [search] web channel unavailable: web evidence unavailable:
+# [search] web channel unavailable: web evidence unavailable: tavily failed: tavily 503
+# Subtest: a URL pasted into the message joins retrieval as web evidence — no opt-in flag needed
+ok 389 - a URL pasted into the message joins retrieval as web evidence — no opt-in flag needed
+  ---
+  duration_ms: 62.955
+  type: 'test'
+  ...
+# Subtest: web search is opt-in: no URL and no useWeb → the channel never runs
+ok 390 - web search is opt-in: no URL and no useWeb → the channel never runs
+  ---
+  duration_ms: 1.1127
+  type: 'test'
+  ...
+# Subtest: web search requested but unconfigured reports web_unconfigured without faking success
+ok 391 - web search requested but unconfigured reports web_unconfigured without faking success
+  ---
+  duration_ms: 2.0988
+  type: 'test'
+  ...
+# Subtest: a fully failed web attempt marks the channel unavailable; knowledge-only answering continues
+ok 392 - a fully failed web attempt marks the channel unavailable; knowledge-only answering continues
+  ---
+  duration_ms: 3.5412
+  type: 'test'
+  ...
+# Subtest: web citations carry origin + URL + fetch time and stay distinct from knowledge citations
+ok 393 - web citations carry origin + URL + fetch time and stay distinct from knowledge citations
+  ---
+  duration_ms: 4.8104
+  type: 'test'
+  ...
+# Subtest: an empty knowledge scope with only web evidence still answers; with no web evidence it stays fail-closed
+ok 394 - an empty knowledge scope with only web evidence still answers; with no web evidence it stays fail-closed
+  ---
+  duration_ms: 4.0567
+  type: 'test'
+  ...
+# Subtest: PT-03 AC01: an explicit opt-in with no URL still asks the configured provider
+ok 395 - PT-03 AC01: an explicit opt-in with no URL still asks the configured provider
+  ---
+  duration_ms: 3.0855
+  type: 'test'
+  ...
+# Subtest: PT-03 AC02: opt-in web evidence is labelled web, never a knowledge-base document or an attachment
+ok 396 - PT-03 AC02: opt-in web evidence is labelled web, never a knowledge-base document or an attachment
+  ---
+  duration_ms: 8.1018
+  type: 'test'
+  ...
+# Subtest: PT-03 AC05: zero web results, a failed provider and a missing capability degrade distinctly
+ok 397 - PT-03 AC05: zero web results, a failed provider and a missing capability degrade distinctly
+  ---
+  duration_ms: 2.0637
+  type: 'test'
+  ...
+# Subtest: PT-03 AC03: an opt-out search never asks the provider, and a URL still follows the read policy
+ok 398 - PT-03 AC03: an opt-out search never asks the provider, and a URL still follows the read policy
+  ---
+  duration_ms: 1.5287
+  type: 'test'
+  ...
+# (node:33664) ExperimentalWarning: localStorage is not available because --localstorage-file was not provided.
+# (Use `node --trace-warnings ...` to show where the warning was created)
+# Subtest: the run-log distinguishes success, unchanged, timeout, rate limit and invalid URL
+ok 399 - the run-log distinguishes success, unchanged, timeout, rate limit and invalid URL
+  ---
+  duration_ms: 108.1477
+  type: 'test'
+  ...
+# Subtest: pausing sync stops new runs but leaves imported content searchable
+ok 400 - pausing sync stops new runs but leaves imported content searchable
+  ---
+  duration_ms: 26.2872
+  type: 'test'
+  ...
+# Subtest: one temporary miss never retires content; two misses mark it pending
+ok 401 - one temporary miss never retires content; two misses mark it pending
+  ---
+  duration_ms: 77.9454
+  type: 'test'
+  ...
+# Subtest: a truncated sitemap read never folds into the missing-page ledger
+ok 402 - a truncated sitemap read never folds into the missing-page ledger
+  ---
+  duration_ms: 48.7914
+  type: 'test'
+  ...
+# Subtest: a failed or garbage sitemap read leaves the ledger untouched
+ok 403 - a failed or garbage sitemap read leaves the ledger untouched
+  ---
+  duration_ms: 40.3563
+  type: 'test'
+  ...
+# Subtest: a redirecting page still links to its content for later retirement
+ok 404 - a redirecting page still links to its content for later retirement
+  ---
+  duration_ms: 44.0024
+  type: 'test'
+  ...
+# Subtest: retirement requires explicit administrator confirmation of a pending page
+ok 405 - retirement requires explicit administrator confirmation of a pending page
+  ---
+  duration_ms: 61.4475
+  type: 'test'
+  ...
+# Subtest: failure classification covers the fetcher's real error shapes
+ok 406 - failure classification covers the fetcher's real error shapes
+  ---
+  duration_ms: 1.7488
+  type: 'test'
+  ...
+1..406
+# tests 408
+# suites 0
+# pass 408
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 37657.9214

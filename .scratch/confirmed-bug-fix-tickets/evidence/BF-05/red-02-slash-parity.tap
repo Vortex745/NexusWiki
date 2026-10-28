@@ -1,0 +1,65 @@
+TAP version 13
+# Subtest: a final escaped pipe without a PDF table border stays in the final cell
+ok 1 - a final escaped pipe without a PDF table border stays in the final cell
+  ---
+  duration_ms: 5.7225
+  type: 'test'
+  ...
+# Subtest: an even backslash run leaves the final PDF table pipe as a border
+not ok 2 - an even backslash run leaves the final PDF table pipe as a border
+  ---
+  duration_ms: 4.1288
+  type: 'test'
+  location: 'C:\\Users\\14253\\.codex\\bf-20261028\\worktrees\\bf-05\\src\\ingestion\\parser\\docreader_pdf_tables.test.ts:2:2209'
+  failureType: 'testCodeFailure'
+  error: |-
+    Expected values to be strictly deep-equal:
+    + actual - expected
+    ... Skipped lines
+
+      {
+        headers: [
+          'Field',
+          'Value'
+        ],
+    ...
+            'symbol',
+    +       'A\\|'
+    -       'A\\\\'
+          ]
+        ]
+      }
+
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected:
+    headers:
+      0: 'Field'
+      1: 'Value'
+    rows:
+      0:
+        0: 'symbol'
+        1: 'A\\\\'
+  actual:
+    headers:
+      0: 'Field'
+      1: 'Value'
+    rows:
+      0:
+        0: 'symbol'
+        1: 'A\\|'
+  operator: 'deepStrictEqual'
+  stack: |-
+    TestContext.<anonymous> (C:\Users\14253\.codex\bf-20261028\worktrees\bf-05\src\ingestion\parser\docreader_pdf_tables.test.ts:58:10)
+    async Test.run (node:internal/test_runner/test:1409:7)
+    async Test.processPendingSubtests (node:internal/test_runner/test:974:7)
+  ...
+1..2
+# tests 2
+# suites 0
+# pass 1
+# fail 1
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 765.0091
