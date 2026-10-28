@@ -251,3 +251,23 @@ test("the client rejects empty addresses and non-positive timeouts", () => {
   assert.throws(() => new DocReaderClient({ address: "", timeoutMs: 1_000 }), /DOCREADER_ADDR/)
   assert.throws(() => new DocReaderClient({ address: "127.0.0.1:1", timeoutMs: 0 }), /DOCREADER_TIMEOUT_MS/)
 })
+
+test("an early consumer exit cancels the stream without an unhandled error", async (t) => {
+  const { address, server } = await startServer({
+    ReadStream: (call: grpc.ServerWritableStream<unknown, unknown>) => {
+      call.write({ meta: { ...metadata, error: "terminal" } })
+      // Deliberately never end: the consumer throws on meta.error and exits.
+    },
+  })
+  const client = new DocReaderClient({ address, timeoutMs: 5_000 })
+  t.after(() => {
+    client.close()
+    server.forceShutdown()
+  })
+  const iterator = client.readStream(request())[Symbol.asyncIterator]()
+  const first = await iterator.next()
+  assert.equal((first.value?.meta as { error: string }).error, "terminal")
+  await iterator.return(undefined)
+  await new Promise((resolve) => setTimeout(resolve, 50))
+  assert.ok(true, "no unhandled cancellation error")
+})

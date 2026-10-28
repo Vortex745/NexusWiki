@@ -285,10 +285,19 @@ export class DocReaderClient {
       }
     } finally {
       options.signal?.removeEventListener("abort", onAbort)
-      call.removeListener("data", onData)
-      call.removeListener("error", onError)
-      call.removeListener("end", onEnd)
-      if (!settled) call.cancel()
+      if (settled) {
+        call.removeListener("data", onData)
+        call.removeListener("error", onError)
+        call.removeListener("end", onEnd)
+      } else {
+        // The consumer exited early (e.g. meta.error or an OCR failure). Keep
+        // the late cancellation error from becoming an unhandled stream event.
+        call.removeListener("error", onError)
+        call.on("error", () => {})
+        call.removeListener("data", onData)
+        call.removeListener("end", onEnd)
+        call.cancel()
+      }
     }
   }
 

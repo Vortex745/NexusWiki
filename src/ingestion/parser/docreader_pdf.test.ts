@@ -347,3 +347,12 @@ test("an OCR failure aborts the whole parse", async () => {
   )
   await assert.rejects(doc.parseRaw({ content: PDF, fileName: "ocr-fail.pdf" }), /ocr unavailable/)
 })
+
+test("image-only markdown is never indexed as paragraph text", async () => {
+  const markdown = "![page](images/x_page_1.jpg)\n\nOCR body text\n\n<img src=\"images/y_page_2.jpg\">"
+  const doc = parser([metaFrame(markdown)])
+  const raw = await doc.parseRaw({ content: PDF, fileName: "images.pdf" })
+  const blocks = doc.normalizeRaw(raw, "doc-images")
+  assert.equal(blocks.length, 1)
+  assert.equal(blocks[0].text, "OCR body text")
+})

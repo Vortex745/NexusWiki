@@ -9,6 +9,7 @@ interface Args {
   force: boolean
   reprocess: boolean
   failDocreader: boolean
+  drainRetries: boolean
   out: string | null
   source: string
 }
@@ -19,6 +20,7 @@ function parseArgs(argv: string[]): Args {
     force: false,
     reprocess: false,
     failDocreader: false,
+    drainRetries: false,
     out: null,
     source: `acceptance-${Date.now()}`,
   }
@@ -28,6 +30,7 @@ function parseArgs(argv: string[]): Args {
     else if (arg === "--force") args.force = true
     else if (arg === "--reprocess") args.reprocess = true
     else if (arg === "--fail-docreader") args.failDocreader = true
+    else if (arg === "--drain-retries") args.drainRetries = true
     else if (arg === "--out") args.out = argv[++index] ?? null
     else if (arg === "--source") args.source = argv[++index] ?? args.source
   }
@@ -70,7 +73,19 @@ async function main(): Promise<void> {
     },
     knowledgeBaseId: "kb-acceptance",
   })
-  const run = await lifecycle.runNext()
+  let run = await lifecycle.runNext()
+  if (args.drainRetries) {
+    for (let attempt = 0; attempt < 4; attempt += 1) {
+      const current = lifecycle.getStatus(submitted.docId)
+      const task = current?.task
+      if (!task || task.status === "failed" || task.status === "cancelled" || task.status === "completed") break
+      const waitMs = task.nextAttemptAt
+        ? Math.max(0, Date.parse(task.nextAttemptAt) - Date.now()) + 250
+        : 0
+      await new Promise((resolveWait) => setTimeout(resolveWait, waitMs))
+      run = await lifecycle.runNext()
+    }
+  }
   const elapsedMs = Date.now() - started
   const status = lifecycle.getStatus(submitted.docId)
   const repo = new DocumentRepo(db)

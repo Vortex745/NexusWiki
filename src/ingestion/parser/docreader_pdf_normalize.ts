@@ -38,6 +38,14 @@ function object(value: unknown): Record<string, unknown> {
   return value as Record<string, unknown>
 }
 
+function isImageOnlyMarkdown(text: string): boolean {
+  const remaining = text
+    .replace(/!\[[^\]]*\]\([^)]*\)/g, "")
+    .replace(/<img\b[^>]*>/gi, "")
+    .trim()
+  return remaining.length === 0
+}
+
 function blockId(
   documentId: string,
   index: number,
@@ -195,6 +203,7 @@ export function normalizeDocReaderEnvelope(
   ): void => {
     const normalizedText = text.trim()
     if (!normalizedText) return
+    if (type === "paragraph" && isImageOnlyMarkdown(normalizedText)) return
     const matched = sources.filter(
       (source) => source.start < range.end && range.start < source.end
     )
