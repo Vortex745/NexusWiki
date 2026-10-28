@@ -1,0 +1,11 @@
+Updating 9884617..ef02c84
+Fast-forward
+ .../evidence/baseline/build.log                    |   4 +
+ .../evidence/baseline/focused.log                  | 297 +++++++++++++++++++++
+ .../evidence/baseline/report.json                  |  22 ++
+ .../confirmed-bug-fix-tickets/execution-state.json |  14 +-
+ HANDOFF.md                                         |   7 +
+ 5 files changed, 337 insertions(+), 7 deletions(-)
+ create mode 100644 .scratch/confirmed-bug-fix-tickets/evidence/baseline/build.log
+ create mode 100644 .scratch/confirmed-bug-fix-tickets/evidence/baseline/focused.log
+ create mode 100644 .scratch/confirmed-bug-fix-tickets/evidence/baseline/report.json
