@@ -1,9 +1,9 @@
 import assert from "node:assert/strict"
 import test from "node:test"
 import { setTimeout as delay } from "node:timers/promises"
-import { DocReaderPdfParser } from "./docreader_pdf"
+import type { DocReaderPdfParser } from "./docreader_pdf"
+import { createFakeDocReaderParser } from "./docreader_pdf.test.fixtures"
 import type { DocReaderRawEnvelope } from "./docreader_pdf_types"
-import type { ReadStreamResponse__Output } from "./docreader_types/docreader/ReadStreamResponse"
 
 const PDF = Buffer.from("%PDF-1.7\n")
 
@@ -15,31 +15,7 @@ function parser(
     locatorJson: '{"type":"pdf","page":1,"bbox":[0.1,0.2,0.9,0.8]}',
   }]
 ): DocReaderPdfParser {
-  return new DocReaderPdfParser({
-    address: "fake-docreader",
-    timeoutMs: 1_000,
-    inputLimitBytes: 1024,
-    outputLimitBytes: 1024 * 1024,
-    clientFactory: () => ({
-      async *readStream() {
-        yield {
-          meta: {
-            markdown_content: markdown,
-            image_dir_path: "",
-            metadata: { page_count: "1" },
-            error: "",
-            image_count: 0,
-            source_blocks: sourceBlocks.map((block) => ({
-              start: block.start,
-              end: block.end,
-              locator_json: block.locatorJson,
-            })),
-          },
-        } as ReadStreamResponse__Output
-      },
-      close() {},
-    }),
-  })
+  return createFakeDocReaderParser(markdown, sourceBlocks)
 }
 
 test("four-backtick PDF code fences retain code and surrounding prose", { timeout: 2_000 }, async () => {

@@ -1,0 +1,61 @@
+npm notice run kefu-rag-main@1.0.0 test:docreader
+npm notice run node --import tsx --import ./scripts/test-env.ts --test --test-concurrency=1 src/ingestion/parser/docreader*.test.ts
+(node:62088) DeprecationWarning: Calling start() is no longer necessary. It can be safely omitted.
+(Use `node --trace-deprecation ...` to show where the warning was created)
+✔ ListEngines returns engine metadata and the builtin PDF helper recognizes it (327.8915ms)
+✔ ReadStream yields the metadata frame before images and preserves order (95.4816ms)
+✔ ListEngines reports a deadline as a transient DocReaderError (173.4734ms)
+✔ ReadStream cancellation rejects with docreader_cancelled and stops the stream (154.5528ms)
+✔ a broken stream rejects instead of ending silently (14.386ms)
+✔ an oversized frame maps to docreader_message_too_large (146.6935ms)
+✔ the client rejects empty addresses and non-positive timeouts (1.1012ms)
+✔ an early consumer exit cancels the stream without an unhandled error (155.2161ms)
+✔ native markdown becomes page-aware blocks with ratio locators and no boundingBox (9.7747ms)
+✔ Unicode code point offsets map correctly across an emoji (1.5929ms)
+✔ a table spanning two source blocks stays one table with a locator list (4.4857ms)
+✔ a missing or invalid locator degrades to a warning and keeps the text (1.1353ms)
+✔ meta.error is a terminal parse failure (1.3473ms)
+✔ an image before metadata is an invalid stream (0.8803ms)
+✔ a declared image that never arrives is an image-missing failure (0.5772ms)
+✔ scanned pages without an OCR stage fail explicitly, not as empty success (1.897ms)
+✔ force-scanned uses the DocReader override and a stable SHA filename (2.1157ms)
+✔ the extraction fingerprint changes with force mode and stays stable otherwise (0.9359ms)
+✔ an envelope larger than the output limit fails instead of being persisted (0.7836ms)
+✔ scanned pages are OCR'd and merged into page order even when images arrive reversed (1.2912ms)
+✔ a legal empty OCR page is skipped, while an all-empty document fails (1.6652ms)
+✔ a mixed native/scan PDF keeps native and OCR blocks in page order (0.7134ms)
+✔ an OCR failure aborts the whole parse (0.5201ms)
+✔ image-only markdown is never indexed as paragraph text (0.4289ms)
+✔ aligned DocReader text is reconstructed as a table while the caption stays a paragraph (1.2009ms)
+✔ wrapped whitespace table rows are assembled without inventing cells (0.8009ms)
+✔ ordinary prose with numbers stays a paragraph, not a table (0.5408ms)
+(node:29716) ExperimentalWarning: localStorage is not available because --localstorage-file was not provided.
+(Use `node --trace-warnings ...` to show where the warning was created)
+✔ four-backtick PDF code fences retain code and surrounding prose (14.4591ms)
+✔ PDF code fences with attributes retain the info string, code and surrounding prose (1.3238ms)
+✔ ordinary triple-backtick PDF code fences keep their language and block contract (1.1272ms)
+✔ an unfinished PDF fence (```typescript) keeps the original rest and warning (4.0016ms)
+✔ an unfinished PDF fence (````python title="demo") keeps the original rest and warning (0.8622ms)
+✔ a four-backtick PDF fence contains shorter fences and closes at a longer fence (4.8229ms)
+✔ continuous and unrecognized PDF fences make progress without dropping raw text (18.2743ms)
+✔ empty consecutive PDF fences consume their delimiters and keep adjacent prose (5.0777ms)
+✔ PDF fences retain raw extraction and Unicode page locators through both parser entry points (8.5613ms)
+✔ the knowledge import pipeline indexes PDF fence content and keeps its raw extraction (5270.5308ms)
+✔ a PDF attachment becomes ready and searchable through the same fence parser (86.2607ms)
+✔ a final escaped pipe without a PDF table border stays in the final cell (6.6306ms)
+✔ an even backslash run leaves the final PDF table pipe as a border (1.0129ms)
+✔ an escaped final PDF table pipe followed by an explicit border creates no extra cell (0.7394ms)
+✔ trailing whitespace does not change PDF table escape or border meaning (0.7524ms)
+✔ interior PDF table pipes follow the same odd and even backslash rule as borders (0.6431ms)
+✔ longer backslash runs preserve literal slashes while identifying final PDF table borders (0.6482ms)
+✔ ordinary bordered PDF tables retain headers, columns and whitespace trimming (0.6213ms)
+✔ ordinary unbordered PDF tables retain headers, columns and whitespace trimming (0.4027ms)
+✔ structured escaped PDF table values retain their original raw extraction and surrounding prose (1.2572ms)
+ℹ tests 47
+ℹ suites 0
+ℹ pass 47
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 11233.6479

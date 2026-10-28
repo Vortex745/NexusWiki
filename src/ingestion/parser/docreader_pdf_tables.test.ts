@@ -1,36 +1,16 @@
 import assert from "node:assert/strict"
 import test from "node:test"
-import { DocReaderPdfParser } from "./docreader_pdf"
-import type { ReadStreamResponse__Output } from "./docreader_types/docreader/ReadStreamResponse"
+import type { DocReaderPdfParser } from "./docreader_pdf"
+import { createFakeDocReaderParser } from "./docreader_pdf.test.fixtures"
 
 const PDF = Buffer.from("%PDF-1.7\n")
 
 function parser(markdown: string): DocReaderPdfParser {
-  return new DocReaderPdfParser({
-    address: "fake-docreader",
-    timeoutMs: 1_000,
-    inputLimitBytes: 1024,
-    outputLimitBytes: 1024 * 1024,
-    clientFactory: () => ({
-      async *readStream() {
-        yield {
-          meta: {
-            markdown_content: markdown,
-            image_dir_path: "",
-            metadata: { page_count: "1" },
-            error: "",
-            image_count: 0,
-            source_blocks: [{
-              start: 0,
-              end: Array.from(markdown).length,
-              locator_json: '{"type":"pdf","page":1}',
-            }],
-          },
-        } as ReadStreamResponse__Output
-      },
-      close() {},
-    }),
-  })
+  return createFakeDocReaderParser(markdown, [{
+    start: 0,
+    end: Array.from(markdown).length,
+    locatorJson: '{"type":"pdf","page":1}',
+  }])
 }
 
 test("a final escaped pipe without a PDF table border stays in the final cell", async () => {
