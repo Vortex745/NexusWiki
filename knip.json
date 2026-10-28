@@ -1,8 +1,6 @@
 {
   "$schema": "./node_modules/knip/schema.json",
   "entry": [
-    "src/index.ts",
-    "src/ingestion/cli.ts",
     "src/mcp/server_main.ts",
     "src/**/*.test.ts",
     "frontend/src/**/*.test.ts",
@@ -13,11 +11,20 @@
     "frontend/src/**/*",
     "scripts/**/*"
   ],
-  "ignoreDependencies": [],
+  "ignoreDependencies": [
+    "glimm",
+    "shiki"
+  ],
   "ignore": [
     "src/api/models.ts",
     "src/mastra/stop_conditions.ts",
-    "src/answer/clarification_store.ts"
+    "src/answer/clarification_store.ts",
+    "src/ingestion/index_verification.ts",
+    "frontend/src/components/arc/scroll-area/**",
+    "frontend/src/components/thread/ThinkingLoader.tsx",
+    "frontend/src/hooks/use-highlighted-code.ts",
+    "frontend/src/lib/highlighter.tsx",
+    "frontend/src/lib/useAccentSweep.ts"
   ],
   "rules": {
     "exports": "warn",

@@ -2,7 +2,7 @@ services:
   docreader:
     image: agentic-rag-docreader:256a3f296686
     build:
-      context: https://github.com/Tencent/WeKnora.git#256a3f296686
+      context: ${DOCREADER_BUILD_CONTEXT:-https://github.com/Tencent/WeKnora.git#256a3f2966866337f7dc3c5fcc10037f2ae18d52}
       dockerfile: docker/Dockerfile.docreader
     container_name: agentic-rag-docreader
     ports:
