@@ -53,3 +53,7 @@ All commands ran in the assigned worktree. No real provider, business database, 
 | BF-03-A7 | Genuine specified-message red before fix, green after fix, and 88/88 related regressions | pass |
 
 All seven acceptance criteria are covered; none is incomplete. Parent owns aggregate suites and final review.
+
+## Integration synchronization
+
+Implementation commit: `237f4afe0188f551fdb8afb890ef6d83b94d8d25`. Merged current integration tip `6acd0e41fdc4696e6b43e8b4398e4c1f15569f0c` into this branch as `1eed49fa0bd8fdda518379c2d4540a2e17f7e6ce`; output is in `integration-sync.log`. The incoming code changes are BF-01 retrieval eligibility and BF-05 PDF table normalization. They change none of the BF-03 implementation/HTTP/store tests, chat route or dispatcher paths. The completed affected checks were therefore not repeated; the parent handles combined verification and review.
