@@ -320,28 +320,36 @@ export class ESStore {
       return
     }
 
-    await this.client.indices.create({
-      index: this.indexName,
-      settings: { number_of_shards: 1, number_of_replicas: 0 },
-      mappings: {
-        properties: {
-          id: { type: "keyword" },
-          documentId: { type: "keyword" },
-          ...CHUNK_KEYWORD_PROPERTIES,
-          content: { type: "text" },
-          embedding: {
-            type: "dense_vector",
-            dims: this.embeddingDimensions,
-            index: true,
-            similarity: "cosine",
-          },
-          metadata: {
-            type: "object",
-            properties: CHUNK_METADATA_FLOAT_PROPERTIES,
+    try {
+      await this.client.indices.create({
+        index: this.indexName,
+        settings: { number_of_shards: 1, number_of_replicas: 0 },
+        mappings: {
+          properties: {
+            id: { type: "keyword" },
+            documentId: { type: "keyword" },
+            ...CHUNK_KEYWORD_PROPERTIES,
+            content: { type: "text" },
+            embedding: {
+              type: "dense_vector",
+              dims: this.embeddingDimensions,
+              index: true,
+              similarity: "cosine",
+            },
+            metadata: {
+              type: "object",
+              properties: CHUNK_METADATA_FLOAT_PROPERTIES,
+            },
           },
         },
-      },
-    })
+      })
+    } catch (error) {
+      // Per-store memoization cannot prevent two workers (two lifecycles)
+      // creating the same index concurrently. The loser of that race must
+      // treat the existing index as success, not fail its document.
+      const message = error instanceof Error ? error.message : String(error)
+      if (!message.includes("resource_already_exists_exception")) throw error
+    }
   }
 
   async storeChunks(
