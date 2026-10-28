@@ -428,7 +428,7 @@ export class SessionAttachmentService implements AttachmentSearchOperations {
       fileName: file.name,
       ...(file.mimeType ? { mimeType: file.mimeType } : {}),
     })
-    const blocks = await this.parserFor(route.candidates[0]).parse({
+    const blocks = await this.parserFor(route.candidates[0], route).parse({
       content: file.content,
       fileName: file.name,
       ...(file.mimeType ? { mimeType: file.mimeType } : {}),

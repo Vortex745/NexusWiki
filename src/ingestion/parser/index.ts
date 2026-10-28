@@ -41,6 +41,22 @@ export { runBoundedProcess } from "./process"
 export { DirectTextParser, decodeTextBytes } from "./direct_text"
 export { OcrApiParser } from "./ocr_api"
 export type { OcrApiParserOptions } from "./ocr_api"
+export { DocReaderClient, DocReaderError, builtinPdfEngine } from "./docreader_client"
+export {
+  DocReaderPdfParser,
+  docreaderParserConfigVersion,
+} from "./docreader_pdf"
+export type {
+  DocReaderClientLike,
+  DocReaderOcrPageInput,
+  DocReaderPdfParserOptions,
+} from "./docreader_pdf"
+export type {
+  DocReaderRawEnvelope,
+  DocReaderImageSummary,
+  DocReaderOcrPageResult,
+  DocReaderSourceBlockSummary,
+} from "./docreader_pdf_types"
 export type { TextDecodeProvenance } from "./direct_text"
 export type { BoundedProcessInput } from "./process"
 export { isParserOverride, selectParser, selectParserRoute, SUPPORTED_DOCUMENT_EXTENSIONS } from "./router"

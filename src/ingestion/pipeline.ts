@@ -18,8 +18,10 @@ import {
 import {
   BuiltinPdfParser,
   DirectTextParser,
+  DocReaderPdfParser,
   MarkItDownParser,
   OcrApiParser,
+  docreaderParserConfigVersion,
   selectParserRoute,
   type Parser,
   type ParserRouteInfo,
@@ -58,7 +60,7 @@ import {
   buildPageEvidence,
 } from "./tracking/extraction_evidence_repo"
 
-export type ParserResolver = (type: ParserType) => Parser
+export type ParserResolver = (type: ParserType, route?: ParserRouteInfo) => Parser
 
 /**
  * Eval refactor Ticket 02: the LLM boundary of the wikify stage. Extraction
@@ -95,11 +97,20 @@ interface ChunkStoreStageResult {
  * attachment path parses binary documents with the SAME parser instances the
  * import pipeline uses — one format list, one extraction behavior.
  */
-export function createConfiguredParser(type: ParserType): Parser {
+export function createConfiguredParser(type: ParserType, route?: ParserRouteInfo): Parser {
   const config = loadConfig()
   // UT-10: the faithful TXT path decodes in-process — no runtime to configure.
   if (type === "direct-txt") {
     return new DirectTextParser()
+  }
+  if (type === "docreader-pdf") {
+    return new DocReaderPdfParser({
+      address: config.docreaderAddr ?? "127.0.0.1:50051",
+      timeoutMs: config.docreaderTimeoutMs ?? 300_000,
+      inputLimitBytes: config.parserInputLimitBytes ?? 20 * 1024 * 1024,
+      outputLimitBytes: config.parserOutputLimitBytes ?? 20 * 1024 * 1024,
+      forceScanned: route?.pdfForceScanned === true,
+    })
   }
   if (type === "builtin-pdf") {
     return new BuiltinPdfParser({
@@ -134,7 +145,7 @@ export function createConfiguredParser(type: ParserType): Parser {
  * different parser settings and must never be treated as interchangeable
  * (the UT-19 reuse path consumes this judgement).
  */
-function parserConfigFingerprint(type: ParserType): string {
+function parserConfigFingerprint(type: ParserType, route?: ParserRouteInfo): string {
   // loadConfig requires the full production env; restricted test environments
   // fall back to the SAME defaults configuredParser would use — the
   // fingerprint stays deterministic either way.
@@ -143,6 +154,14 @@ function parserConfigFingerprint(type: ParserType): string {
     config = loadConfig()
   } catch {
     config = {} as ReturnType<typeof loadConfig>
+  }
+  if (type === "docreader-pdf") {
+    return docreaderParserConfigVersion({
+      forceScanned: route?.pdfForceScanned === true,
+      timeoutMs: config.parserTimeoutMs ?? 120_000,
+      inputLimitBytes: config.parserInputLimitBytes ?? 20 * 1024 * 1024,
+      outputLimitBytes: config.parserOutputLimitBytes ?? 20 * 1024 * 1024,
+    })
   }
   if (type === "ocr-api") {
     // Ticket 24: one shared fingerprint source with the quality gate's OCR
@@ -381,14 +400,14 @@ export class PipelineStageRunner implements IngestionStageRunner {
             document.version
           )
           const reuseCandidate = parserRoute.candidates[0]
-          const reuseFingerprint = parserConfigFingerprint(reuseCandidate)
+          const reuseFingerprint = parserConfigFingerprint(reuseCandidate, parserRoute)
           if (
             reuseEvidence &&
             reuseEvidence.valid &&
             reuseEvidence.artifact.parserType === reuseCandidate &&
             reuseEvidence.artifact.parserConfigVersion === reuseFingerprint
           ) {
-            const reuseParser = this.resolveParser(reuseCandidate)
+            const reuseParser = this.resolveParser(reuseCandidate, parserRoute)
             if (typeof reuseParser.normalizeRaw === "function") {
               try {
                 rawExtraction = reuseEvidence.artifact.rawExtraction
@@ -408,7 +427,7 @@ export class PipelineStageRunner implements IngestionStageRunner {
           }
 
           if (!reusedExtraction) {
-            const parser = this.resolveParser(reuseCandidate)
+            const parser = this.resolveParser(reuseCandidate, parserRoute)
             if (typeof parser.parseRaw === "function" && typeof parser.normalizeRaw === "function") {
               // UT-09 truth seam: capture the RAW extraction (pre-cleaning)
               // for the durable evidence record; normalization happens on
@@ -493,7 +512,7 @@ export class PipelineStageRunner implements IngestionStageRunner {
                   : null
               let warnings = provenance?.warnings ?? []
               let pageCount: number | null = null
-              if (usedParser === "builtin-pdf" || usedParser === "ocr-api") {
+              if (usedParser === "builtin-pdf" || usedParser === "ocr-api" || usedParser === "docreader-pdf") {
                 try {
                   const rawJson = JSON.parse(rawExtraction) as {
                     warnings?: unknown
@@ -530,7 +549,7 @@ export class PipelineStageRunner implements IngestionStageRunner {
                 version: document.version,
                 schemaVersion: EXTRACTION_EVIDENCE_SCHEMA_VERSION,
                 parserType: usedParser,
-                parserConfigVersion: parserConfigFingerprint(usedParser),
+                parserConfigVersion: parserConfigFingerprint(usedParser, parserRoute),
                 rawExtraction,
                 rawExtractionSha256: stageRawExtractionSha256,
                 warnings,

@@ -1,5 +1,12 @@
 // Legacy names remain readable in persisted extraction provenance.
-export type ParserType = "markitdown" | "marker" | "mineru" | "builtin-pdf" | "direct-txt" | "ocr-api"
+export type ParserType =
+  | "markitdown"
+  | "marker"
+  | "mineru"
+  | "builtin-pdf"
+  | "direct-txt"
+  | "ocr-api"
+  | "docreader-pdf"
 
 export type NormalizedBlockType =
   | "heading"
@@ -11,7 +18,7 @@ export type NormalizedBlockType =
 
 export interface ParserProvenance {
   parser: ParserType
-  adapter: "cli" | "script" | "in-process" | "api"
+  adapter: "cli" | "script" | "in-process" | "api" | "grpc"
 }
 
 /**

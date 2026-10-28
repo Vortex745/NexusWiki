@@ -60,6 +60,7 @@ const PARSER_OVERRIDES = new Set<ParserType>([
   "builtin-pdf",
   "direct-txt",
   "ocr-api",
+  "docreader-pdf",
 ])
 
 export interface ParserSelectionInput {
@@ -78,6 +79,8 @@ export interface ParserRouteInfo {
   candidates: ParserType[]
   reason: string
   authoritative: boolean
+  /** PDF-only: route the whole document through DocReader's scanned mode. */
+  pdfForceScanned?: boolean
 }
 
 export function isParserOverride(value: string): value is ParserType {
@@ -89,7 +92,7 @@ function parserOverride(value: string): ParserType {
     return value
   }
   throw new Error(
-    `Unsupported parser override: ${value}. Expected markitdown, ocr-api, builtin-pdf, or direct-txt.`
+    `Unsupported parser override: ${value}. Expected markitdown, ocr-api, builtin-pdf, docreader-pdf, or direct-txt.`
   )
 }
 
@@ -111,6 +114,7 @@ const PARSER_COMPATIBLE_CLASSES: Record<ParserType, Set<ParserFileClass>> = {
   // mineru is the OCR-aware extractor for images and also handles PDFs.
   mineru: new Set<ParserFileClass>(["pdf", "image"]),
   "ocr-api": new Set<ParserFileClass>(["pdf", "image"]),
+  "docreader-pdf": new Set<ParserFileClass>(["pdf"]),
   // UT-10: the faithful TXT path is strictly plain text — no other format may
   // enter it (structured text like .md/.csv keeps its markdown-aware route).
   "direct-txt": new Set<ParserFileClass>(["text"]),
@@ -157,21 +161,34 @@ export function selectParserRoute(input: ParserSelectionInput): ParserRouteInfo 
         authoritative: false,
       }
     }
+    if (fileClass === "pdf") {
+      const forceScanned = parser === "ocr-api" || parser === "marker" || parser === "mineru"
+      return {
+        candidates: ["docreader-pdf"],
+        reason: forceScanned
+          ? `${parser} legacy PDF override mapped to DocReader force-scanned`
+          : `${parser} PDF override mapped to DocReader auto`,
+        authoritative: true,
+        pdfForceScanned: forceScanned,
+      }
+    }
     return {
       candidates: [parser === "marker" || parser === "mineru" ? "ocr-api" : parser],
       reason: parser === "marker" || parser === "mineru"
         ? `${parser} legacy OCR override mapped to ocr-api`
         : "explicit parser override",
       authoritative: true,
+      pdfForceScanned: false,
     }
   }
 
   const extension = extname(input.fileName).toLowerCase()
   if (extension === ".pdf") {
     return {
-      candidates: ["builtin-pdf"],
-      reason: "PDF documents use text-layer extraction; select ocr-api for OCR",
+      candidates: ["docreader-pdf"],
+      reason: "PDF documents use the DocReader builtin parser; force OCR via the OCR option",
       authoritative: false,
+      pdfForceScanned: false,
     }
   }
   if (extension === ".txt") {
@@ -203,9 +220,10 @@ export function selectParserRoute(input: ParserSelectionInput): ParserRouteInfo 
   const mimeType = input.mimeType?.split(";", 1)[0].trim().toLowerCase()
   if (mimeType === "application/pdf") {
     return {
-      candidates: ["builtin-pdf"],
-      reason: "PDF documents use text-layer extraction; select ocr-api for OCR",
+      candidates: ["docreader-pdf"],
+      reason: "PDF documents use the DocReader builtin parser; force OCR via the OCR option",
       authoritative: false,
+      pdfForceScanned: false,
     }
   }
   if (mimeType?.startsWith("image/")) {

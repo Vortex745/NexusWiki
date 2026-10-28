@@ -12,6 +12,7 @@
 // so a transient fault means the same wait-and-retry policy wherever it met
 // the pipeline, and no caller can grow a private, driftier budget.
 import { PDF_QUALITY_REJECTION_CODE, PdfQualityRejectionError } from "./quality/pdf_ocr_fallback_flag"
+import { DocReaderError } from "./parser/docreader_client"
 
 export type IngestionFailureCategory =
   | "capability_missing"
@@ -170,6 +171,13 @@ export function classifyIngestionError(error: unknown): IngestionErrorClassifica
       // status API can render page-level reasons and separate a quality
       // rejection from a gate service fault (both are permanent_input).
       reasonCodes: [...error.reasonCodes],
+    }
+  }
+  if (error instanceof DocReaderError) {
+    return {
+      category: error.category,
+      reasonCode: error.reasonCode,
+      retryable: error.category === "transient",
     }
   }
   if (error instanceof OcrApiError) {

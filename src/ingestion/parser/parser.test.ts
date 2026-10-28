@@ -12,14 +12,14 @@ test("common documents route to MarkItDown and explicit override records its rea
     { parser: "markitdown", reason: "extension .docx is supported by MarkItDown" }
   )
   // Ticket 21: markitdown is the text converter only — a PDF override
-  // normalizes to the type-matched builtin-pdf route with the reason recorded.
+  // normalizes to the type-matched DocReader route with the reason recorded.
   assert.deepEqual(
     selectParser({
       fileName: "paper.pdf",
       mimeType: "application/pdf",
       override: "markitdown",
     }).parser,
-    "builtin-pdf"
+    "docreader-pdf"
   )
   assert.match(
     selectParser({
@@ -29,9 +29,9 @@ test("common documents route to MarkItDown and explicit override records its rea
     }).reason,
     /markitdown is not compatible with pdf files/
   )
-  assert.deepEqual(
-    selectParser({ fileName: "paper.pdf", mimeType: "text/plain" }),
-    { parser: "builtin-pdf", reason: "PDF documents use text-layer extraction; select ocr-api for OCR" }
+  assert.equal(
+    selectParser({ fileName: "paper.pdf", mimeType: "text/plain" }).parser,
+    "docreader-pdf"
   )
   assert.deepEqual(
     selectParser({ fileName: "scan.png", mimeType: "image/png" }),
@@ -39,7 +39,7 @@ test("common documents route to MarkItDown and explicit override records its rea
   )
   assert.deepEqual(
     selectParser({ fileName: "scan.pdf", override: "mineru" }),
-    { parser: "ocr-api", reason: "mineru legacy OCR override mapped to ocr-api" }
+    { parser: "docreader-pdf", reason: "mineru legacy PDF override mapped to DocReader force-scanned" }
   )
 })
 

@@ -37,25 +37,33 @@ test("UT-06 路由：TXT 携带 PDF 专用 override 归一到文本路径且记�
 })
 
 test("UT-06 路由：类型兼容的 override 保持权威单候选，既有格式不受影响", () => {
-  // PDF 上显式选择 PDF 类解析器 → 权威。
+  // PDF 上显式选择 PDF 类解析器 → 权威，并全部映射到 DocReader。
   const markerOnPdf = selectParserRoute({ fileName: "a.pdf", mimeType: "application/pdf", override: "marker" })
-  assert.deepEqual(markerOnPdf.candidates, ["ocr-api"])
+  assert.deepEqual(markerOnPdf.candidates, ["docreader-pdf"])
   assert.equal(markerOnPdf.authoritative, true)
+  assert.equal(markerOnPdf.pdfForceScanned, true)
   // mineru 同样支持 PDF（OCR 提取器）→ 权威保持既有行为。
   const mineruOnPdf = selectParserRoute({ fileName: "scan.pdf", override: "mineru" })
-  assert.deepEqual(mineruOnPdf.candidates, ["ocr-api"])
+  assert.deepEqual(mineruOnPdf.candidates, ["docreader-pdf"])
   assert.equal(mineruOnPdf.authoritative, true)
+  assert.equal(mineruOnPdf.pdfForceScanned, true)
   // Ticket 21: markitdown is the text converter only — an explicit markitdown
-  // choice on a PDF normalizes to the type-matched route (builtin-pdf), since
-  // markitdown has no raw seam or page evidence the quality gate could ground.
+  // choice on a PDF normalizes to the type-matched DocReader route.
   const markitdownOnPdf = selectParserRoute({ fileName: "simple.pdf", mimeType: "application/pdf", override: "markitdown" })
-  assert.deepEqual(markitdownOnPdf.candidates, ["builtin-pdf"])
+  assert.deepEqual(markitdownOnPdf.candidates, ["docreader-pdf"])
   assert.equal(markitdownOnPdf.authoritative, false)
   assert.match(markitdownOnPdf.reason, /markitdown/)
   assert.match(markitdownOnPdf.reason, /not compatible with pdf files/)
 
   // 无 override 的自动路由回归：PDF / 图片 / 文本 / Markdown / CSV。
-  assert.deepEqual(selectParserRoute({ fileName: "a.pdf" }).candidates, ["builtin-pdf"])
+  assert.deepEqual(selectParserRoute({ fileName: "a.pdf" }).candidates, ["docreader-pdf"])
+  assert.equal(selectParserRoute({ fileName: "a.pdf" }).pdfForceScanned, false)
+  const forceRoute = selectParserRoute({ fileName: "a.pdf", override: "ocr-api" })
+  assert.deepEqual(forceRoute.candidates, ["docreader-pdf"])
+  assert.equal(forceRoute.pdfForceScanned, true)
+  const builtinRoute = selectParserRoute({ fileName: "a.pdf", override: "builtin-pdf" })
+  assert.deepEqual(builtinRoute.candidates, ["docreader-pdf"])
+  assert.equal(builtinRoute.pdfForceScanned, false)
   assert.deepEqual(selectParserRoute({ fileName: "a.png" }).candidates, ["ocr-api"])
   // UT-10：.txt / text/plain 走保真 direct-txt；结构化文本（md/csv）不变。
   assert.deepEqual(selectParserRoute({ fileName: "a.txt" }).candidates, ["direct-txt"])
