@@ -45,6 +45,28 @@ interface RawExtraction {
   batches: RawBatch[]
 }
 
+interface PageValidationOptions {
+  /** A successful OCR response may legitimately contain a textless page. */
+  allowEmpty?: boolean
+  /** The provider may return page_md without textblocks; keep the markdown. */
+  allowLayoutFallback?: boolean
+}
+
+export interface OcrImagePageInput {
+  image: Buffer
+  page: number
+  fileName: string
+  signal?: AbortSignal
+  timeoutMs: number
+}
+
+export interface OcrImagePageResult {
+  page: number
+  text: string
+  raw: unknown
+  warnings: string[]
+}
+
 function malformed(detail: string): never {
   throw new OcrApiError(`malformed ocr-api output: ${detail}`, "permanent_input")
 }
@@ -64,7 +86,12 @@ function parseJson(text: string): unknown {
   }
 }
 
-function pages(response: JsonObject, count: number, pageStart = 0): JsonObject[] {
+function pages(
+  response: JsonObject,
+  count: number,
+  pageStart = 0,
+  options: PageValidationOptions = {}
+): JsonObject[] {
   if (response.code !== 10000) return malformed("missing successful business code")
   const data = object(response.data)
   const detail = typeof data.detail === "string" ? parseJson(data.detail) : data.detail
@@ -78,7 +105,9 @@ function pages(response: JsonObject, count: number, pageStart = 0): JsonObject[]
     }
     const textblocks = ordered[index].textblocks
     if (textblocks !== undefined && !Array.isArray(textblocks)) return malformed("invalid textblocks")
-    if (textblocks === undefined && (ordered[index].page_md as string).trim()) return malformed("missing textblocks")
+    if (textblocks === undefined && (ordered[index].page_md as string).trim() && !options.allowLayoutFallback) {
+      return malformed("missing textblocks")
+    }
     if (Array.isArray(textblocks)) {
       for (const block of textblocks) {
         const source = object(block)
@@ -90,11 +119,17 @@ function pages(response: JsonObject, count: number, pageStart = 0): JsonObject[]
   // malformed later page could be hidden by an earlier apparently empty page.
   for (let index = 0; index < count; index += 1) {
     const page = ordered[index]
-    if ((page.textblocks === undefined || (Array.isArray(page.textblocks) && page.textblocks.length === 0)) && !(page.page_md as string).trim()) {
-      const pageNumber = pageStart + index + 1
-      throw new OcrApiError(`OCR page ${pageNumber} has no recognized text; empty content remains unverified`, "permanent_input", "ocr_empty_page_unverified", pageNumber)
+    const textblocks = page.textblocks
+    const hasBlocks = Array.isArray(textblocks) && textblocks.length > 0
+    const hasMarkdown = typeof page.page_md === "string" && page.page_md.trim().length > 0
+    if (!hasBlocks && !hasMarkdown) {
+      if (!options.allowEmpty) {
+        const pageNumber = pageStart + index + 1
+        throw new OcrApiError(`OCR page ${pageNumber} has no recognized text; empty content remains unverified`, "permanent_input", "ocr_empty_page_unverified", pageNumber)
+      }
+      continue
     }
-    if (!Array.isArray(page.textblocks)) return malformed("missing textblocks")
+    if (!Array.isArray(textblocks) && !options.allowLayoutFallback) return malformed("missing textblocks")
   }
   return ordered
 }
@@ -215,6 +250,61 @@ export class OcrApiParser {
     } catch (error) {
       if (input.signal?.aborted) throw new DOMException("OCR was cancelled", "AbortError")
       if (deadline.aborted) throw new OcrApiError(`OCR API timed out after ${this.options.timeoutMs}ms`, "transient")
+      throw error
+    }
+  }
+
+  /**
+   * Read one scanned page image with the SAME signing, form limits and error
+   * taxonomy as the PDF route. A successful provider response with no text is a
+   * legal empty page here; the caller decides whether the whole document still
+   * has indexable content.
+   */
+  async readImagePage(input: OcrImagePageInput): Promise<OcrImagePageResult> {
+    input.signal?.throwIfAborted()
+    if (!this.options.accessKeyId.trim() || !this.options.secretAccessKey.trim()) {
+      throw new OcrApiError("OCR API is unconfigured. Set VOLC_ACCESSKEY and VOLC_SECRETKEY on the server.", "capability_missing")
+    }
+    if (!Number.isInteger(input.page) || input.page < 1) {
+      throw new OcrApiError("OCR image page must be a positive integer", "permanent_input")
+    }
+    if (!input.image.length || input.image.length > this.options.inputLimitBytes) {
+      throw new OcrApiError(`OCR input is empty or exceeded ${this.options.inputLimitBytes} bytes`, "permanent_input")
+    }
+    const body = form(input.image, "image", 1)
+    if (Buffer.byteLength(body) > FORM_LIMIT_BYTES) {
+      throw new OcrApiError("OCR encoded request exceeded 8388608 bytes; compress this page image.", "permanent_input")
+    }
+    const timeoutMs = Math.max(1, Math.min(input.timeoutMs, this.options.timeoutMs))
+    const deadline = AbortSignal.timeout(timeoutMs)
+    const signal = input.signal ? AbortSignal.any([input.signal, deadline]) : deadline
+    try {
+      const response = await this.request(body, signal, this.options.outputLimitBytes)
+      const page = pages(response.value, 1, 0, { allowEmpty: true, allowLayoutFallback: true })[0]
+      const warnings = new Set<string>()
+      const textblocks = Array.isArray(page.textblocks) ? page.textblocks : []
+      const parts: string[] = []
+      for (const blockValue of textblocks) {
+        const block = object(blockValue)
+        const label = typeof block.label === "string" ? block.label : ""
+        const text = typeof block.text === "string" ? block.text : ""
+        if (label === "image") warnings.add("ocr_image_semantics_unverified")
+        if (!text.trim()) {
+          if (label !== "image") warnings.add("ocr_empty_textblock")
+          continue
+        }
+        if (text.includes("\0") || text.includes("\uFFFD")) warnings.add("ocr_text_corruption")
+        parts.push(text.trim())
+      }
+      let text = parts.join("\n\n")
+      if (!text && typeof page.page_md === "string" && page.page_md.trim()) {
+        text = page.page_md.trim()
+        warnings.add("ocr_layout_missing")
+      }
+      return { page: input.page, text, raw: response.value, warnings: [...warnings] }
+    } catch (error) {
+      if (input.signal?.aborted) throw new DOMException("OCR was cancelled", "AbortError")
+      if (deadline.aborted) throw new OcrApiError(`OCR API timed out after ${timeoutMs}ms`, "transient")
       throw error
     }
   }

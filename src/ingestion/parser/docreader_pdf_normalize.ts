@@ -222,6 +222,23 @@ export function normalizeDocReaderEnvelope(
     })
   }
 
+  const addOcrBlock = (text: string, page: number): void => {
+    const index = blocks.length
+    blocks.push({
+      id: blockId(documentId, index, "paragraph", text),
+      index,
+      type: "paragraph",
+      text,
+      page,
+      sectionPath: [],
+      metadata: {
+        sourceLocators: [{ type: "pdf", page }],
+        docreaderOcr: true,
+      },
+      provenance: { parser: "docreader-pdf", adapter: "grpc" },
+    })
+  }
+
   const lines = splitLines(envelope.markdown)
   for (let index = 0; index < lines.length;) {
     const line = lines[index]
@@ -304,6 +321,30 @@ export function normalizeDocReaderEnvelope(
     )
     index = cursor
   }
+
+  for (const image of envelope.images) {
+    if (image.kind !== "scan" || !image.ocr) continue
+    for (const warning of image.ocr.warnings ?? []) warnings.add(warning)
+    const text = image.ocr.text.trim()
+    if (!text) continue
+    const page = image.ocr.page ?? image.page
+    if (!Number.isInteger(page) || (page as number) < 1) continue
+    for (const paragraph of text.split(/\n\s*\n/).map((part) => part.trim()).filter(Boolean)) {
+      addOcrBlock(paragraph, page as number)
+    }
+  }
+
+  // Merge native and OCR blocks in original page order. Stable sort keeps the
+  // within-page order from the markdown scan.
+  blocks.sort((left, right) => {
+    const leftPage = left.page ?? Number.MAX_SAFE_INTEGER
+    const rightPage = right.page ?? Number.MAX_SAFE_INTEGER
+    return leftPage - rightPage || left.index - right.index
+  })
+  blocks.forEach((block, index) => {
+    block.index = index
+    block.id = blockId(documentId, index, block.type, block.text)
+  })
 
   if (blocks.length === 0) {
     throw new DocReaderError(

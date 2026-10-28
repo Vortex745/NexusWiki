@@ -198,7 +198,7 @@ export class DocReaderPdfParser {
               "docreader_invalid_stream"
             )
           }
-          images.push(await this.consumeImage(frame.image, input, deadlineAt))
+          images.push(await this.consumeImage(frame.image, input, deadlineAt, warnings))
           continue
         }
         throw new DocReaderError(
@@ -290,7 +290,8 @@ export class DocReaderPdfParser {
   private async consumeImage(
     image: ImageRef__Output,
     input: Omit<ParseDocumentInput, "documentId">,
-    deadlineAt: number
+    deadlineAt: number,
+    warnings: Set<string>
   ): Promise<DocReaderImageSummary> {
     const bytes = image.image_data
     if (!bytes || bytes.length === 0) {
@@ -329,6 +330,7 @@ export class DocReaderPdfParser {
         signal: input.signal,
         timeoutMs: Math.max(1, deadlineAt - Date.now()),
       })
+      for (const warning of summary.ocr.warnings) warnings.add(warning)
     }
     return summary
   }

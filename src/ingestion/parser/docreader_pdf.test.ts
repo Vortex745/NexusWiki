@@ -247,3 +247,103 @@ test("an envelope larger than the output limit fails instead of being persisted"
     }
   )
 })
+
+test("scanned pages are OCR'd and merged into page order even when images arrive reversed", async () => {
+  const doc = parser(
+    [
+      metaFrame("", [], { imageCount: 2 }),
+      imageFrame("images/scan_page_2.jpg", "two"),
+      imageFrame("images/scan_page_1.jpg", "one"),
+    ],
+    {
+      ocrPage: async (input) => ({
+        page: input.page,
+        text: `Page ${input.page} text`,
+        raw: { page: input.page },
+        warnings: [],
+      }),
+    }
+  )
+  const raw = await doc.parseRaw({ content: PDF, fileName: "scan.pdf" })
+  const blocks = doc.normalizeRaw(raw, "doc-scan")
+  assert.deepEqual(blocks.map((block) => [block.page, block.text]), [
+    [1, "Page 1 text"],
+    [2, "Page 2 text"],
+  ])
+  assert.ok(blocks.every((block) => block.metadata.docreaderOcr === true))
+})
+
+test("a legal empty OCR page is skipped, while an all-empty document fails", async () => {
+  const doc = parser(
+    [
+      metaFrame("", [], { imageCount: 2 }),
+      imageFrame("images/scan_page_1.jpg", "one"),
+      imageFrame("images/scan_page_2.jpg", "two"),
+    ],
+    {
+      ocrPage: async (input) => ({
+        page: input.page,
+        text: input.page === 1 ? "" : "Body on page two",
+        raw: {},
+        warnings: [],
+      }),
+    }
+  )
+  const raw = await doc.parseRaw({ content: PDF, fileName: "empty-page.pdf" })
+  const blocks = doc.normalizeRaw(raw, "doc-empty-page")
+  assert.deepEqual(blocks.map((block) => [block.page, block.text]), [[2, "Body on page two"]])
+
+  const allEmpty = parser(
+    [
+      metaFrame("", [], { imageCount: 1 }),
+      imageFrame("images/scan_page_1.jpg", "one"),
+    ],
+    { ocrPage: async (input) => ({ page: input.page, text: "", raw: {}, warnings: [] }) }
+  )
+  const emptyRaw = await allEmpty.parseRaw({ content: PDF, fileName: "all-empty.pdf" })
+  assert.throws(
+    () => allEmpty.normalizeRaw(emptyRaw, "doc-all-empty"),
+    (error: unknown) => {
+      assert.ok(error instanceof DocReaderError)
+      assert.equal(error.reasonCode, "docreader_no_extractable_text")
+      return true
+    }
+  )
+})
+
+test("a mixed native/scan PDF keeps native and OCR blocks in page order", async () => {
+  const markdown = "# Native page\n"
+  const doc = parser(
+    [
+      metaFrame(markdown, [
+        { start: 0, end: codePointOffset(markdown, markdown.length), locatorJson: '{"type":"pdf","page":1}' },
+      ], { imageCount: 1 }),
+      imageFrame("images/scan_page_2.jpg", "two"),
+    ],
+    {
+      ocrPage: async (input) => ({
+        page: input.page,
+        text: "Scanned page two",
+        raw: {},
+        warnings: [],
+      }),
+    }
+  )
+  const raw = await doc.parseRaw({ content: PDF, fileName: "mixed.pdf" })
+  const blocks = doc.normalizeRaw(raw, "doc-mixed")
+  assert.deepEqual(blocks.map((block) => [block.page, block.type]), [
+    [1, "heading"],
+    [2, "paragraph"],
+  ])
+})
+
+test("an OCR failure aborts the whole parse", async () => {
+  const doc = parser(
+    [
+      metaFrame("", [], { imageCount: 1 }),
+      imageFrame("images/scan_page_1.jpg", "one"),
+    ],
+    { ocrPage: async () => { throw new Error("ocr unavailable") } }
+  )
+  await assert.rejects(doc.parseRaw({ content: PDF, fileName: "ocr-fail.pdf" }), /ocr unavailable/)
+})

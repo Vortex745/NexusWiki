@@ -104,12 +104,21 @@ export function createConfiguredParser(type: ParserType, route?: ParserRouteInfo
     return new DirectTextParser()
   }
   if (type === "docreader-pdf") {
+    const ocr = new OcrApiParser({
+      accessKeyId: config.ocrAccessKeyId ?? "",
+      secretAccessKey: config.ocrSecretAccessKey ?? "",
+      sessionToken: config.ocrSessionToken,
+      timeoutMs: config.parserTimeoutMs ?? 120_000,
+      inputLimitBytes: config.parserInputLimitBytes ?? 20 * 1024 * 1024,
+      outputLimitBytes: config.parserOutputLimitBytes ?? 20 * 1024 * 1024,
+    })
     return new DocReaderPdfParser({
       address: config.docreaderAddr ?? "127.0.0.1:50051",
       timeoutMs: config.docreaderTimeoutMs ?? 300_000,
       inputLimitBytes: config.parserInputLimitBytes ?? 20 * 1024 * 1024,
       outputLimitBytes: config.parserOutputLimitBytes ?? 20 * 1024 * 1024,
       forceScanned: route?.pdfForceScanned === true,
+      ocrPage: (page) => ocr.readImagePage(page),
     })
   }
   if (type === "builtin-pdf") {
@@ -161,6 +170,11 @@ function parserConfigFingerprint(type: ParserType, route?: ParserRouteInfo): str
       timeoutMs: config.parserTimeoutMs ?? 120_000,
       inputLimitBytes: config.parserInputLimitBytes ?? 20 * 1024 * 1024,
       outputLimitBytes: config.parserOutputLimitBytes ?? 20 * 1024 * 1024,
+      ocrVersion: ocrApiParserConfigVersion({
+        timeoutMs: config.parserTimeoutMs ?? 120_000,
+        inputLimitBytes: config.parserInputLimitBytes ?? 20 * 1024 * 1024,
+        outputLimitBytes: config.parserOutputLimitBytes ?? 20 * 1024 * 1024,
+      }),
     })
   }
   if (type === "ocr-api") {
