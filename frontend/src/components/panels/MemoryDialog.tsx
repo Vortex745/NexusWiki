@@ -1,16 +1,15 @@
-import { Button as UiButton } from "@/components/primitives/button"
-import { Input } from "@/components/primitives/input"
+import { Button as UiButton } from "@/components/ui/Button"
+import { Input } from "@/components/arc/input/input"
 import { SearchField } from "../arc/search-field/search-field"
-import { Textarea } from "@/components/primitives/textarea"
-import { PanelDialog } from "../ui/Dialog"
-import { DialogTitle } from "../primitives/dialog"
-import { Brain, Check, Pencil, Sparkles, Trash2, X } from "../ui/icons"
+import { Textarea } from "@/components/arc/textarea/textarea"
+import { ConfirmDialog, PanelDialog } from "../ui/Dialog"
+import { DangerNote } from "../ui/containers"
+import { Check, Pencil, Sparkles, Trash2 } from "../ui/icons"
 import { useState } from "react"
 
 import { formatMemoryDate, useMemoryFilter } from "../../lib/memory"
 import { useAppShell } from "../../runtime/AppShellContext"
 import { useMemoryApi } from "../../runtime/MemoryContext"
-import { Dialog } from "../ui/Dialog"
 import { Button } from "../ui/Controls"
 import { Icon } from "../ui/Icon"
 
@@ -101,30 +100,11 @@ export function MemoryDialog({
       open={open}
       onClose={onClose}
       titleId="memory-title"
-      className="flex flex-col sm:max-w-[520px] h-[min(680px,calc(100dvh-64px))]"
+      title="上下文记忆"
+      className="sm:max-w-[520px] h-[min(680px,calc(100dvh-64px))]"
     >
-      <div className="flex h-12 items-center justify-between border-b border-line px-5 max-md:px-4">
-        <div className="flex items-center gap-2">
-          <Icon icon={Brain} className="size-4 text-muted-foreground" />
-          <DialogTitle id="memory-title" className="">
-            上下文记忆
-          </DialogTitle>
-        </div>
-        <UiButton
-          variant="ghost"
-          size="icon-sm"
-          type="button"
-          onClick={onClose}
-          aria-label="关闭记忆面板"
-          title="关闭"
-          className="grid size-7 flex-none place-items-center"
-        >
-          <Icon data-icon="inline-start" icon={X} />
-        </UiButton>
-      </div>
-
       {/* Search + quick add */}
-      <div className="flex flex-col gap-2 border-b border-line bg-surface-subtle p-3">
+      <div className="flex flex-none flex-col gap-2 border-b border-line bg-surface-subtle p-3">
         <SearchField
           aria-label="搜索已保存的偏好与事实"
           clearLabel="清空记忆搜索"
@@ -213,7 +193,7 @@ export function MemoryDialog({
 
       {/* List */}
       <div className="min-h-0 flex-1 overflow-y-auto p-4">
-        <div className="mb-2 flex items-center justify-between text-[11px] text-muted-foreground/70">
+        <div className="mb-2 flex items-center justify-between text-[11px] text-faint/70">
           <span>
             {loaded
               ? `已记住 ${memories.length} 条上下文事实`
@@ -221,7 +201,7 @@ export function MemoryDialog({
           </span>
         </div>
         {filtered.length === 0 ? (
-          <div className="py-8 text-center text-xs text-muted-foreground/70">
+          <div className="py-8 text-center text-xs text-faint/70">
             {loaded ? "暂无匹配记忆" : "加载中…"}
           </div>
         ) : (
@@ -231,12 +211,12 @@ export function MemoryDialog({
               return (
                 <li
                   key={entry.id}
-                  className="flex items-start justify-between gap-2.5 rounded-[14px] border border-line bg-surface-subtle p-2.5 transition-colors hover:border-muted-foreground/40 hover:bg-surface"
+                  className="flex items-start justify-between gap-2.5 rounded-[14px] border border-line bg-surface-subtle p-2.5 transition-colors hover:border-faint/40 hover:bg-surface"
                 >
                   <div className="min-w-0 flex-1">
                     <div className="mb-1 flex items-center gap-2">
                       <span
-                        className="inline-flex items-center rounded border border-line bg-surface-subtle px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground"
+                        className="inline-flex items-center rounded border border-line bg-surface-subtle px-1.5 py-0.5 text-[10px] font-medium text-faint"
                         title={
                           entry.assistantId
                             ? `仅在该助手（${entry.assistantId}）的对话中生效`
@@ -245,7 +225,7 @@ export function MemoryDialog({
                       >
                         {entry.assistantId ? "助手限定" : "全局"}
                       </span>
-                      <span className="font-mono text-[10px] text-muted-foreground/60">
+                      <span className="font-mono text-[10px] text-faint/60">
                         {formatMemoryDate(entry.createdAt)}
                       </span>
                     </div>
@@ -350,43 +330,23 @@ export function MemoryDialog({
 
       {/* Clear-all replaces the OS confirm() (unstylable, no transition): the
           nested confirm-tier dialog gets the shared top-layer transitions. */}
-      <Dialog
+      <ConfirmDialog
         open={confirmingClear}
         onClose={() => {
           if (!busy) setConfirmingClear(false)
         }}
         title="清空全部记忆"
         titleId="memory-clear-title"
-        icon={Trash2}
-        tier="confirm"
+        confirmLabel="清空全部"
+        onConfirm={() => {
+          setBusy(true)
+          void handleClear()
+        }}
+        busy={busy}
       >
-        <div className="flex flex-col gap-2 text-xs leading-relaxed text-muted-foreground">
-          <p>确定要清空所有已保存的上下文记忆吗？</p>
-          <p className="rounded-[10px] border border-danger-line bg-danger-subtle px-3 py-2 text-danger">
-            此操作不可恢复。
-          </p>
-        </div>
-        <div className="flex justify-end gap-2">
-          <Button
-            size="sm"
-            disabled={busy}
-            onClick={() => setConfirmingClear(false)}
-          >
-            取消
-          </Button>
-          <Button
-            size="sm"
-            tone="danger"
-            disabled={busy}
-            onClick={() => {
-              setBusy(true)
-              void handleClear()
-            }}
-          >
-            清空全部
-          </Button>
-        </div>
-      </Dialog>
+        <p>确定要清空所有已保存的上下文记忆吗？</p>
+        <DangerNote>此操作不可恢复。</DangerNote>
+      </ConfirmDialog>
     </PanelDialog>
   )
 }

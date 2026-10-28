@@ -1,5 +1,5 @@
 import { projectTraceEvents, type TraceEvent } from "@core/conversation"
-import { Check, Circle, CircleAlert, Minus } from "lucide-react"
+import { Check, Circle, CircleAlert, Minus } from "../ui/icons"
 import { TRACE_PATH_STEPS, traceEventLabel } from "../../lib/constants"
 import {
   Trace,
@@ -7,7 +7,7 @@ import {
   TraceIcon,
   TraceTitle,
   TraceDescription,
-} from "../primitives/trace"
+} from "../chat/trace"
 export function TraceSteps({ events }: { events: readonly TraceEvent[] }) {
   const projected = projectTraceEvents(events as TraceEvent[])
   const settled = projected.some((item) => item.stage === "done")
@@ -61,7 +61,7 @@ export function TraceSteps({ events }: { events: readonly TraceEvent[] }) {
                           : ""}
               </TraceDescription>
             </TraceLine>
-            <p className="pl-6 text-xs leading-relaxed text-muted-foreground">
+            <p className="pl-6 text-xs leading-relaxed text-faint">
               {event
                 ? traceEventLabel(event)
                 : settled

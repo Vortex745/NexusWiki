@@ -71,7 +71,6 @@ import {
   createSharedAnswerEntry,
   type SharedAnswerEventsSource,
 } from "../mastra/shared_answer_entry"
-import type { EvalAssistantSnapshot } from "./contracts"
 
 // ---------------------------------------------------------------------------
 // Types
@@ -121,19 +120,6 @@ export interface IsolatedEvalResourceOptions {
    * (Ticket 11) passes its own adapter so the shared default is untouched.
    */
   reranker?: Reranker
-  /**
-   * Ticket 28 (EVAL-02A): the immutable assistant configuration this task runs
-   * with. Its system prompt is applied through the SAME shared entry (leading
-   * system message) and its rerank binding decides whether the scope owns a
-   * dedicated reranker at all.
-   */
-  assistant?: EvalAssistantSnapshot
-  /**
-   * Ticket 28: with an assistant snapshot that pins `rerankModelProfileId:
-   * null`, the scope must NOT fall back to the RERANK_* config adapter —
-   * otherwise "rerank disabled" would silently still rerank.
-   */
-  disableRerank?: boolean
 }
 
 export interface EvalDisposeReport {
@@ -496,20 +482,18 @@ export function createIsolatedEvalResources(
     options.readinessIntervalMs ?? DEFAULT_READINESS_INTERVAL_MS
   const prepareTimeoutMs =
     options.prepareTimeoutMs ?? DEFAULT_PREPARE_TIMEOUT_MS
-  // Ticket 03: evaluation uses the same dedicated rerank adapter as normal
-  // chat; Ticket 11 can inject a per-task model override; Ticket 28 can
-  // disable it entirely for a comparison configuration that pins no reranker.
-  const reranker = options.disableRerank
-    ? undefined
-    : options.reranker ??
-      createDedicatedReranker({
-        baseUrl: config.rerankBaseUrl,
-        apiKey: config.rerankApiKey,
-        model: config.rerankModel,
-        timeoutMs: config.rerankTimeoutMs,
-        maxDocumentChars: config.rerankMaxDocumentChars,
-        ...(options.tracing ? { tracing: options.tracing } : {}),
-      })
+  // Ticket 03: the scope uses the same dedicated rerank adapter as normal
+  // chat; a caller may inject its own adapter for a per-run override.
+  const reranker =
+    options.reranker ??
+    createDedicatedReranker({
+      baseUrl: config.rerankBaseUrl,
+      apiKey: config.rerankApiKey,
+      model: config.rerankModel,
+      timeoutMs: config.rerankTimeoutMs,
+      maxDocumentChars: config.rerankMaxDocumentChars,
+      ...(options.tracing ? { tracing: options.tracing } : {}),
+    })
 
   // One in-memory SQLite owns tracking + sessions + traces for the scope.
   const db: DB = openDb(":memory:")
@@ -837,10 +821,9 @@ export function createIsolatedEvalResources(
       handoffStore: new SqliteHandoffStore(db),
       // The hard observer is the scope's OWN trace repository: the run's events
       // become a durable record inside this scope's in-memory SQLite (deleted
-      // with `dispose()`), which is what lets the EvaluationService score the
-      // persisted run instead of a copy that lived only as long as the loop
-      // that streamed it (PL-05 / PT-09:AC01). The side-channel collector
-      // stays a soft observer.
+      // with `dispose()`), so a consumer can score the persisted run instead of
+      // a copy that lived only as long as the loop that streamed it. The
+      // side-channel collector stays a soft observer.
       traceObserver: traceRepository,
       observers: [traceCollector],
     })
@@ -855,21 +838,6 @@ export function createIsolatedEvalResources(
       entry.eventsSource(message, {
         ...runOptions,
         accessContext,
-        // Ticket 28 (EVAL-02A): an evaluation task that named an assistant runs
-        // its immutable snapshot through the SAME shared entry normal chat
-        // uses — the leading prompt comes from here, and the rerank binding has
-        // already decided which operations this scope was built with.
-        ...(options.assistant
-          ? {
-              assistant: {
-                id: options.assistant.assistantId,
-                version: options.assistant.version,
-                systemPrompt: options.assistant.systemPrompt,
-                rerankModelProfileId: options.assistant.rerankModelProfileId,
-                toolPolicy: options.assistant.toolPolicy,
-              },
-            }
-          : {}),
       })
 
     return {

@@ -226,8 +226,8 @@ export function createChatRouter(
     // ids that must already belong to its own tenant.
     let retrievalScope: RetrievalScope | undefined
     if (retrievalScopeResolver) {
-      // Ticket 14: the ONE shared HTTP mapping (also used by the
-      // retrieval-debug route) — identical statuses, no drift.
+      // Ticket 14: the ONE shared HTTP mapping for knowledge-scope
+      // resolution — identical statuses, no drift.
       const resolved = resolveScopeOrRespond(res, retrievalScopeResolver, accessContext, requestedKnowledgeBaseIds)
       if (!resolved) return
       retrievalScope = resolved

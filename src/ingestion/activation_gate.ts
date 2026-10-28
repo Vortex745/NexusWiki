@@ -9,6 +9,19 @@
 
 export const ACTIVATION_EVIDENCE_SCHEMA_VERSION = 1
 
+/**
+ * 激活政策版本：OCR 通用未核验提示作为可接受 warning 的版本。接受事实
+ * 随候选证据持久化，政策再变化时历史接受仍可区分。
+ */
+export const ACTIVATION_POLICY_VERSION = "ocr-advisory-v1"
+
+/**
+ * 唯一可被政策接受的软提示：OCR 传输与页码完整，但内容未经逐字核验。
+ * 必须精确匹配——不按 ocr_ 或 structural_risk 前缀批量豁免。
+ */
+export const ACTIVATION_WARNING_OCR_CONTENT_UNVERIFIED =
+  "structural_risk: ocr_content_unverified"
+
 /** 理由码：缺联合激活证据记录本身。 */
 export const ACTIVATION_BLOCKED_EVIDENCE_RECORD_MISSING =
   "activation_evidence_record_missing"
@@ -67,6 +80,13 @@ export interface ActivationGateDecision {
   reasonCodes: string[]
   /** 单条可读摘要（全部理由码拼接）。 */
   reason: string | null
+  /**
+   * 政策接受的非阻断提示。仅在通过时有值；不得写进 activationBlockReason
+   * ——它们不是拒绝理由，原始内容凭证仍保留未核验事实。
+   */
+  warningCodes: string[]
+  /** 产出本次接受结论的政策版本；拒绝时为 null。 */
+  policyVersion: string | null
 }
 
 function denied(reasonCodes: string[]): ActivationGateDecision {
@@ -74,14 +94,26 @@ function denied(reasonCodes: string[]): ActivationGateDecision {
     passed: false,
     reasonCodes,
     reason: reasonCodes.join(";"),
+    warningCodes: [],
+    policyVersion: null,
+  }
+}
+
+function passed(warningCodes: string[]): ActivationGateDecision {
+  return {
+    passed: true,
+    reasonCodes: [],
+    reason: null,
+    warningCodes,
+    policyVersion: ACTIVATION_POLICY_VERSION,
   }
 }
 
 /**
  * 评估联合激活门槛。evidence 是 documents.candidate_evidence 的解析值
- * （未设置时为 null）。本函数绝不产出"通过"——在 UT-15/16/17 引入真实
- * 凭证产出者之前，一切候选都被拒绝；这是用户已确认的早期护栏顺序
- * （early_guard_then_proofs）：中间票不得临时放开激活。
+ * （未设置时为 null）。只有双凭证、绑定与检索可见性全部通过才放行；
+ * 内容凭证为 pending_review 时，唯一例外是理由集恰好只有 OCR 通用未核验
+ * 提示——那只是政策接受的 warning，继续走完全部索引硬检查，绝不提前放行。
  */
 export function evaluateActivationGate(evidence: unknown): ActivationGateDecision {
   if (evidence === null || evidence === undefined) {
@@ -114,16 +146,26 @@ export function evaluateActivationGate(evidence: unknown): ActivationGateDecisio
   ) {
     return denied([ACTIVATION_BLOCKED_EVIDENCE_SCHEMA_MISMATCH])
   }
+  let warningCodes: string[] = []
   if (contentProof.verdict !== "pass") {
+    // 政策只接受唯一一项 OCR 通用未核验提示：理由数组必须是非空单元素且
+    // 精确等于该字符串。空白、未知、混合或非字符串理由都保持原拒绝路径。
     const detailCodes = Array.isArray(contentProof.reasonCodes)
       ? (contentProof.reasonCodes as unknown[]).filter(
           (code): code is string => typeof code === "string"
         )
       : []
-    return denied([ACTIVATION_BLOCKED_CONTENT_PROOF_PENDING_REVIEW, ...detailCodes])
+    const accepted =
+      Array.isArray(contentProof.reasonCodes) &&
+      contentProof.reasonCodes.length === 1 &&
+      contentProof.reasonCodes[0] === ACTIVATION_WARNING_OCR_CONTENT_UNVERIFIED
+    if (!accepted) {
+      return denied([ACTIVATION_BLOCKED_CONTENT_PROOF_PENDING_REVIEW, ...detailCodes])
+    }
+    warningCodes = [ACTIVATION_WARNING_OCR_CONTENT_UNVERIFIED]
   }
 
-  // 内容凭证为 pass：只有进入索引核验资格，绝不直接激活。
+  // 内容凭证为 pass（或仅剩可接受提示）：只有进入索引核验资格，绝不直接激活。
   if (record.indexProof === null || record.indexProof === undefined) {
     return denied([ACTIVATION_BLOCKED_INDEX_PROOF_MISSING])
   }
@@ -174,6 +216,6 @@ export function evaluateActivationGate(evidence: unknown): ActivationGateDecisio
     return denied([ACTIVATION_BLOCKED_NOT_SEARCHABLE])
   }
 
-  // 双凭证 pass、绑定一致、检索可见：联合激活放行。
-  return { passed: true, reasonCodes: [], reason: null }
+  // 双凭证通过（或唯一 OCR 软提示被政策接受）、绑定一致、检索可见：放行。
+  return passed(warningCodes)
 }

@@ -250,8 +250,8 @@ export async function inventoryDemoNamespace(
 
   let neo4jProvenanceOwned = false
   try {
-    // Evaluation scopes are never namespace-reset targets (their own tool is
-    // `npm run eval:residue`) — mirror the one-time rebuild's guard.
+    // Legacy evaluation scopes are never namespace-reset targets — mirror the
+    // one-time rebuild's guard.
     const owners = (await clients.graph.listProvenanceTenants()).filter(
       (owner) => !owner.startsWith(EVAL_TENANT_PREFIX)
     )

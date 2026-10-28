@@ -1,20 +1,12 @@
-import { Button as UiButton } from "@/components/primitives/button"
-import { Alert, AlertDescription } from "@/components/primitives/alert"
-import { Input } from "@/components/primitives/input"
-import { PanelDialog } from "../ui/Dialog"
-import { DialogTitle } from "../primitives/dialog"
-import {
-  BookOpen,
-  FileText,
-  NotebookPen,
-  RefreshCw,
-  Trash2,
-  X,
-} from "../ui/icons"
+import { Button as UiButton } from "@/components/ui/Button"
+import { Alert } from "@/components/arc/alert/alert"
+import { Input } from "@/components/arc/input/input"
+import { ConfirmDialog, PanelBody, PanelDialog } from "../ui/Dialog"
+import { DangerNote, InlineMessage } from "../ui/containers"
+import { FileText, NotebookPen, RefreshCw } from "../ui/icons"
 import { useEffect, useState } from "react"
 
 import { Icon } from "../ui/Icon"
-import { Dialog } from "../ui/Dialog"
 import { Button, Select, StatusBadge } from "../ui/Controls"
 import { cn } from "../../lib/cn"
 import { useSignedInSession } from "../../runtime/SessionContext"
@@ -112,7 +104,7 @@ function persistView(kbId: string, view: DocumentCatalogView): void {
 }
 
 const rowButtonClass =
-  "inline-flex h-7 cursor-pointer items-center gap-1 rounded-lg border border-line px-2 text-[11px] text-muted-foreground transition-colors hover:bg-surface-subtle hover:text-ink disabled:cursor-not-allowed disabled:opacity-50"
+  "inline-flex h-7 cursor-pointer items-center gap-1 rounded-lg border border-line px-2 text-[11px] text-faint transition-colors hover:bg-surface-subtle hover:text-ink disabled:cursor-not-allowed disabled:opacity-50"
 
 /**
  * Ticket 12 (DOC-01B): administrator actions reuse the server's lifecycle —
@@ -178,7 +170,7 @@ function DocumentRow({
       <div className="flex items-center gap-3 max-md:flex-wrap">
         <Icon
           icon={FileText}
-          className="size-4 flex-none text-muted-foreground"
+          className="size-4 flex-none text-faint"
         />
         <div className="min-w-0 flex-1">
           <div className="flex min-w-0 items-center gap-2">
@@ -189,7 +181,7 @@ function DocumentRow({
               {STATUS_LABELS[doc.status] ?? doc.status}
             </StatusBadge>
             {/* Metadata, not status: no border, no fill. */}
-            <span className="flex-none font-mono text-[10px] text-muted-foreground/60">
+            <span className="flex-none font-mono text-[10px] text-faint/60">
               v{doc.version}
             </span>
             {doc.active ? (
@@ -197,7 +189,7 @@ function DocumentRow({
             ) : null}
           </div>
           {subtitle ? (
-            <p className="mt-0.5 truncate text-[11px] text-muted-foreground/80">
+            <p className="mt-0.5 truncate text-[11px] text-faint/80">
               {subtitle}
             </p>
           ) : null}
@@ -288,12 +280,10 @@ function DocumentRow({
       </div>
 
       {errorDetail !== null ? (
-        <Alert
-          variant="destructive"
-          role="alert"
+        <Alert tone="danger" title="发生错误"
           className="mt-2 border px-2 py-1.5"
         >
-          <AlertDescription>{errorDetail}</AlertDescription>
+          {errorDetail}
         </Alert>
       ) : null}
     </li>
@@ -321,38 +311,21 @@ function DeleteSourceDialog({
   onConfirm: (target: DocumentCatalogEntryPayload) => void
 }) {
   return (
-    <Dialog
+    <ConfirmDialog
       open={target !== null}
       onClose={onClose}
       title={target ? `删除「${target.title}」` : "删除文档"}
       titleId="documents-delete-title"
-      icon={Trash2}
-      tier="confirm"
+      confirmLabel="确认删除"
+      onConfirm={() => target && onConfirm(target)}
+      busy={busy}
+      confirmDisabled={target === null}
     >
-      <div className="flex flex-col gap-2 text-xs leading-relaxed text-muted-foreground">
-        <p>将删除这个文档的全部版本，它将不再参与检索。</p>
-        <p
-          className="rounded-[10px] border border-danger-line bg-danger-subtle px-3 py-2 text-danger"
-          title="分块、图谱关系、页索引节点与图片资产交给后台队列清理，命令返回只代表已排队。文档的版本记录和删除墓碑保留，历史回答里的引用仍可追溯。"
-        >
-          此操作不可恢复。
-        </p>
-      </div>
-
-      <div className="flex justify-end gap-2">
-        <Button size="sm" onClick={onClose} disabled={busy}>
-          取消
-        </Button>
-        <Button
-          size="sm"
-          tone="danger"
-          disabled={busy || target === null}
-          onClick={() => target && onConfirm(target)}
-        >
-          确认删除
-        </Button>
-      </div>
-    </Dialog>
+      <p>将删除这个文档的全部版本，它将不再参与检索。</p>
+      <DangerNote hint="分块、图谱关系、页索引节点与图片资产交给后台队列清理，命令返回只代表已排队。文档的版本记录和删除墓碑保留，历史回答里的引用仍可追溯。">
+        此操作不可恢复。
+      </DangerNote>
+    </ConfirmDialog>
   )
 }
 
@@ -591,55 +564,34 @@ export function DocumentsDialog({
       open={open && Boolean(kbId)}
       onClose={onClose}
       titleId="documents-title"
-      className="grid grid-rows-[auto_auto_minmax(0,1fr)] sm:max-w-3xl"
+      title={`文档目录${knowledgeBase ? ` · ${knowledgeBase.name}` : ""}`}
+      className="sm:max-w-3xl"
     >
-      <div className="flex h-13 flex-none items-center justify-between border-b border-line px-5 max-md:px-4">
-        <div className="flex min-w-0 items-center gap-2">
-          <Icon
-            icon={BookOpen}
-            className="size-4 flex-none text-muted-foreground"
-          />
-          <DialogTitle id="documents-title" className="truncate">
-            文档目录{knowledgeBase ? ` · ${knowledgeBase.name}` : ""}
-          </DialogTitle>
-        </div>
-        <div className="flex flex-none items-center gap-1.5">
+      <div className="flex h-12 flex-none items-center justify-end gap-1.5 border-b border-line px-5 max-md:px-4">
+        <UiButton
+          variant="outline"
+          size="sm"
+          type="button"
+          onClick={() => setWikiOpen(true)}
+          title="浏览 Wiki 页面"
+          className="inline-flex h-7 items-center gap-1 px-2"
+        >
+          <Icon data-icon="inline-start" icon={NotebookPen} />
+          Wiki
+        </UiButton>
+        {canAdmin ? (
           <UiButton
             variant="outline"
             size="sm"
             type="button"
-            onClick={() => setWikiOpen(true)}
-            title="浏览 Wiki 页面"
+            onClick={() => setSyncOpen(true)}
+            title="管理同步数据源"
             className="inline-flex h-7 items-center gap-1 px-2"
           >
-            <Icon data-icon="inline-start" icon={NotebookPen} />
-            Wiki
+            <Icon data-icon="inline-start" icon={RefreshCw} />
+            同步
           </UiButton>
-          {canAdmin ? (
-            <UiButton
-              variant="outline"
-              size="sm"
-              type="button"
-              onClick={() => setSyncOpen(true)}
-              title="管理同步数据源"
-              className="inline-flex h-7 items-center gap-1 px-2"
-            >
-              <Icon data-icon="inline-start" icon={RefreshCw} />
-              同步
-            </UiButton>
-          ) : null}
-          <UiButton
-            variant="ghost"
-            size="icon-sm"
-            type="button"
-            onClick={onClose}
-            aria-label="关闭文档目录"
-            title="关闭"
-            className="grid size-7 flex-none place-items-center"
-          >
-            <Icon data-icon="inline-start" icon={X} />
-          </UiButton>
-        </div>
+        ) : null}
       </div>
       {/* Ticket 38 (WIKI-01): the per-knowledge-base Wiki workshop. */}
       <WikiDialog
@@ -664,48 +616,26 @@ export function DocumentsDialog({
       {/* Deleting a directory deletes what is inside it — the one place in this
           panel where a single click retires many documents at once, so the
           count is in the sentence rather than in a tooltip. */}
-      <Dialog
+      <ConfirmDialog
         open={folderToDelete !== null}
         onClose={() => setFolderToDelete(null)}
         title={
           folderToDelete ? `删除分类「${folderToDelete.name}」` : "删除文档分类"
         }
         titleId="documents-folder-delete-title"
-        icon={Trash2}
-        tier="confirm"
+        confirmLabel="确认删除"
+        onConfirm={confirmFolderDelete}
+        busy={busy}
       >
-        <div className="flex flex-col gap-2 text-xs leading-relaxed text-muted-foreground">
-          <p>
-            这个分类下有
-            {folderToDelete ? ` ${folderToDelete.documents} ` : " 0 "}
-            篇文档。删除分类会同时删除这些文档，它们不再参与检索。
-          </p>
-          <p
-            className="rounded-[10px] border border-danger-line bg-danger-subtle px-3 py-2 text-danger"
-            title="每篇文档各自记录一次删除并交给后台队列清理分块、图谱关系与页索引节点，命令返回只代表已排队。版本记录和删除墓碑保留，历史回答里的引用仍可追溯。"
-          >
-            此操作不可恢复。要留下这些文档的话请点取消。
-          </p>
-        </div>
-
-        <div className="flex justify-end gap-2">
-          <Button
-            size="sm"
-            onClick={() => setFolderToDelete(null)}
-            disabled={busy}
-          >
-            取消
-          </Button>
-          <Button
-            size="sm"
-            tone="danger"
-            disabled={busy}
-            onClick={confirmFolderDelete}
-          >
-            确认删除
-          </Button>
-        </div>
-      </Dialog>
+        <p>
+          这个分类下有
+          {folderToDelete ? ` ${folderToDelete.documents} ` : " 0 "}
+          篇文档。删除分类会同时删除这些文档，它们不再参与检索。
+        </p>
+        <DangerNote hint="每篇文档各自记录一次删除并交给后台队列清理分块、图谱关系与页索引节点，命令返回只代表已排队。版本记录和删除墓碑保留，历史回答里的引用仍可追溯。">
+          此操作不可恢复。要留下这些文档的话请点取消。
+        </DangerNote>
+      </ConfirmDialog>
 
       {/* Filters. Each Select is sized by its own wrapper rather than by a
           `wrapperClassName="flex-none"`: the component's base `flex-1` would
@@ -834,20 +764,18 @@ export function DocumentsDialog({
             )}
           </div>
         ) : null}
-        <span className="ml-auto font-mono text-[11px] text-muted-foreground/70">
+        <span className="ml-auto font-mono text-[11px] text-faint/70">
           {catalog ? `${catalog.total} 篇` : ""}
         </span>
       </div>
 
       {/* List: loading / error / empty / rows */}
-      <div className="flex min-h-0 flex-col overflow-y-auto px-5 py-4 max-md:px-4">
+      <PanelBody>
         {status === "loading" || status === "idle" ? (
-          <p className="px-1 py-6 text-center text-xs text-muted-foreground">
-            正在加载文档目录…
-          </p>
+          <InlineMessage>正在加载文档目录…</InlineMessage>
         ) : status === "error" ? (
-          <Alert variant="destructive" role="alert" className="border p-3">
-            <AlertDescription>
+          <Alert tone="danger" title="发生错误" className="border p-3">
+
               <p className="text-xs text-danger">文档目录读取失败：{error}</p>
               <UiButton
                 variant="ghost"
@@ -860,14 +788,14 @@ export function DocumentsDialog({
               >
                 重试
               </UiButton>
-            </AlertDescription>
+
           </Alert>
         ) : (catalog?.documents.length ?? 0) === 0 ? (
-          <p className="px-1 py-6 text-center text-xs text-muted-foreground">
+          <InlineMessage>
             {view?.status || view?.tag || view?.folder
               ? "没有符合筛选条件的文档。"
               : "这个知识库还没有文档，先去导入一些吧。"}
-          </p>
+          </InlineMessage>
         ) : (
           <>
             <ul className="flex flex-col gap-2">
@@ -897,7 +825,7 @@ export function DocumentsDialog({
                 >
                   上一页
                 </UiButton>
-                <span className="font-mono text-[11px] text-muted-foreground">
+                <span className="font-mono text-[11px] text-faint">
                   {view?.page ?? 1} / {totalPages}
                 </span>
                 <UiButton
@@ -914,7 +842,7 @@ export function DocumentsDialog({
             ) : null}
           </>
         )}
-      </div>
+      </PanelBody>
     </PanelDialog>
   )
 }

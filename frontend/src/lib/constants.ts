@@ -24,14 +24,6 @@ export const TRACE_STATUS_LABELS: Record<string, string> = {
   handoff_required: "已转人工",
 }
 
-/** Starter prompts on the empty thread, in the composer's own voice. */
-export const SUGGESTIONS = [
-  { label: "常见问题", prompt: "今天有哪些常见客户问题需要优先处理？" },
-  { label: "技术排查", prompt: "请根据知识库帮我排查这个技术问题：" },
-  { label: "回复草稿", prompt: "请帮我写一份清晰、专业的客户回复：" },
-  { label: "解决思路", prompt: "请围绕这个客户需求提供几个解决思路：" },
-] as const
-
 /** Mirrors the backend parser router (src/ingestion/parser/router.ts): this
  * set is the single format source of truth for the import flow — no component
  * keeps a second whitelist. */
@@ -40,6 +32,7 @@ export const IMPORT_FILE_EXTENSIONS = new Set([
   ".doc",
   ".docx",
   ".md",
+  ".markdown",
   ".txt",
   ".html",
   ".htm",
@@ -60,6 +53,9 @@ export const IMPORT_FILE_EXTENSIONS = new Set([
   ".tif",
   ".tiff",
 ])
+/** The composer's attachment picker accepts exactly the importable formats. */
+export const ATTACHMENT_ACCEPT = Array.from(IMPORT_FILE_EXTENSIONS).join(",")
+
 export const IMPORT_CONCURRENCY = 3
 export const IMPORT_POLL_MS = 1500
 export const IMPORT_MAX_FILES_HINT = 500
@@ -83,9 +79,6 @@ export const IMPORT_PARSER_OPTIONS = [
   { value: "ocr-api", label: "OCR API（扫描件与复杂 PDF）" },
   { value: "builtin-pdf", label: "builtin-pdf" },
 ] as const
-
-/** Evaluation task polling interval (ticket 04). */
-export const EVALUATION_POLL_MS = 1000
 
 export const MIME_BY_EXTENSION: Record<string, string> = {
   ".pdf": "application/pdf",

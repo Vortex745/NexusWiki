@@ -163,6 +163,11 @@ test("LO-04-AC02: a rejected request and a server failure are classified differe
   const db = openDb(":memory:")
   const { logger, destination } = buildLogger()
   const app = createApp({ db, logger, eventsSource: recordingSource([]) })
+  // A route that answers 5xx, mounted on top of the app's own stack: the
+  // lifecycle middleware still records the terminal.
+  app.get("/api/test-failure", (_req, res) => {
+    res.status(500).json({ error: "forced failure" })
+  })
   const { server, port } = await listen(app)
   try {
     const rejected = await fetch(`http://127.0.0.1:${port}/api/knowledge-bases`, {
@@ -172,18 +177,14 @@ test("LO-04-AC02: a rejected request and a server failure are classified differe
     })
     assert.equal(rejected.status, 400)
 
-    const failed = await fetch(`http://127.0.0.1:${port}/api/retrieval-debug`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ query: "anything" }),
-    })
+    const failed = await fetch(`http://127.0.0.1:${port}/api/test-failure`)
     assert.ok(failed.status >= 500, `expected a server failure, got ${failed.status}`)
 
     await logger.flush()
     const terminals = destination.terminals()
     assert.equal(terminals.length, 2)
     const rejectedRecord = terminals.find((record) => record.path === "/api/knowledge-bases")
-    const failedRecord = terminals.find((record) => record.path === "/api/retrieval-debug")
+    const failedRecord = terminals.find((record) => record.path === "/api/test-failure")
     assert.equal(rejectedRecord?.outcome, "rejected")
     assert.equal(rejectedRecord?.level, "warn")
     assert.equal(failedRecord?.outcome, "error")
@@ -275,10 +276,10 @@ test("LO-04-AC04: concurrent requests never share a correlation id", async () =>
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ name: "second" }),
       }),
-      fetch(`http://127.0.0.1:${port}/api/retrieval-debug`, {
+      fetch(`http://127.0.0.1:${port}/api/knowledge-bases`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ query: "x" }),
+        body: JSON.stringify({ name: "third" }),
       }),
     ])
     await logger.flush()
@@ -288,7 +289,11 @@ test("LO-04-AC04: concurrent requests never share a correlation id", async () =>
     const ids = new Set(terminals.map((record) => record.requestId))
     assert.equal(ids.size, 3, "each request owns its id")
     const operations = terminals.map((record) => record.operation).sort()
-    assert.deepEqual(operations, ["knowledge_base.manage", "knowledge_base.manage", "retrieval.debug"])
+    assert.deepEqual(operations, [
+      "knowledge_base.manage",
+      "knowledge_base.manage",
+      "knowledge_base.manage",
+    ])
   } finally {
     server.close()
     db.close()

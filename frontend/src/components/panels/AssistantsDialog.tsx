@@ -1,5 +1,9 @@
-import { Button as UiButton } from "@/components/primitives/button"
-import { Alert, AlertDescription } from "@/components/primitives/alert"
+import { Alert } from "@/components/arc/alert/alert"
+import { Checkbox as ArcCheckbox } from "@/components/arc/checkbox/checkbox"
+import {
+  ExpandingButtonGroup,
+  type ExpandingButtonGroupItem,
+} from "@/components/arc/expanding-button-group/expanding-button-group"
 import { Archive, ArchiveRestore, Bot, Pencil, Plus, Trash2 } from "../ui/icons"
 import { useState } from "react"
 
@@ -8,8 +12,8 @@ import {
   assistantStore,
   isDefaultAssistantId,
 } from "../../runtime/assistantStore"
-import { useKnowledgeBases } from "../../runtime/knowledgeStore"
-import { Dialog } from "../ui/Dialog"
+import { ConfirmDialog, Dialog } from "../ui/Dialog"
+import { DangerNote, InlineMessage, ListRow } from "../ui/containers"
 import {
   Button,
   Checkbox,
@@ -56,6 +60,7 @@ interface FormState {
   description: string
   allowedGroups: string
   systemPrompt: string
+  /** No editor control; an existing binding rides along unchanged on save. */
   knowledgeBaseIds: string[]
   rerankBound: boolean
   toolPolicy: AssistantConfigPayload["toolPolicy"]
@@ -87,6 +92,20 @@ function formFrom(assistant: AssistantPayload | null): FormState {
   }
 }
 
+/** Row subtitle: the description when there is one, plus the config summary; both absent renders no line at all. */
+function detailLine(assistant: AssistantPayload): string {
+  const meta = assistant.config
+    ? [
+        assistant.config.toolPolicy === "none" ? "无工具" : "只读检索",
+        assistant.config.rerankModelProfileId === "rerank" ? "重排序" : null,
+        assistant.config.memoryEnabled ? "记忆" : null,
+      ]
+        .filter(Boolean)
+        .join(" · ")
+    : ""
+  return [(assistant.description ?? "").trim(), meta].filter(Boolean).join(" · ")
+}
+
 export function AssistantsDialog({
   open,
   onClose,
@@ -95,7 +114,6 @@ export function AssistantsDialog({
   onClose: () => void
 }) {
   const { showToast } = useAppShell()
-  const { activeKnowledgeBases } = useKnowledgeBases()
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [assistants, setAssistants] = useState<AssistantPayload[]>([])
@@ -112,7 +130,7 @@ export function AssistantsDialog({
     try {
       setAssistants(await fetchAssistants())
     } catch (err) {
-      setError(err instanceof Error ? err.message : "助手列表读取失败")
+      setError(err instanceof Error ? err.message : "专家列表读取失败")
     } finally {
       setLoading(false)
     }
@@ -140,11 +158,11 @@ export function AssistantsDialog({
 
   const handleSave = async () => {
     if (!form.name.trim()) {
-      setValidation("助手名称必填")
+      setValidation("专家名称必填")
       return
     }
     if (form.name.trim().length > 200) {
-      setValidation("助手名称最多 200 字符")
+      setValidation("专家名称最多 200 字符")
       return
     }
     if (form.systemPrompt.length > 8000) {
@@ -187,7 +205,7 @@ export function AssistantsDialog({
         setAssistants((previous) =>
           previous.map((a) => (a.id === updated.id ? updated : a)),
         )
-        showToast("助手已保存")
+        showToast("专家已保存")
       } else {
         const created = await createAssistant({
           name: form.name.trim(),
@@ -196,9 +214,10 @@ export function AssistantsDialog({
           config,
         })
         setAssistants((previous) => [...previous, created])
-        showToast("助手已创建")
+        showToast("专家已创建")
       }
       closeEditor()
+      void assistantStore.refresh()
     } catch (err) {
       showToast(err instanceof Error ? err.message : "保存失败")
     } finally {
@@ -206,7 +225,7 @@ export function AssistantsDialog({
     }
   }
 
-  const handleArchive = async (assistant: AssistantPayload) => {
+  const handleArchive = async (assistant: AssistantPayload): Promise<boolean> => {
     setBusy(true)
     try {
       const updated = await archiveAssistant(assistant.id)
@@ -214,14 +233,17 @@ export function AssistantsDialog({
         previous.map((a) => (a.id === updated.id ? updated : a)),
       )
       showToast(`「${assistant.name}」已归档`)
+      void assistantStore.refresh()
+      return true
     } catch (err) {
       showToast(err instanceof Error ? err.message : "归档失败")
+      return false
     } finally {
       setBusy(false)
     }
   }
 
-  const handleRestore = async (assistant: AssistantPayload) => {
+  const handleRestore = async (assistant: AssistantPayload): Promise<boolean> => {
     setBusy(true)
     try {
       const updated = await restoreAssistant(assistant.id)
@@ -229,8 +251,11 @@ export function AssistantsDialog({
         previous.map((a) => (a.id === updated.id ? updated : a)),
       )
       showToast(`「${assistant.name}」已恢复`)
+      void assistantStore.refresh()
+      return true
     } catch (err) {
       showToast(err instanceof Error ? err.message : "恢复失败")
+      return false
     } finally {
       setBusy(false)
     }
@@ -242,6 +267,7 @@ export function AssistantsDialog({
       await deleteAssistant(assistant.id)
       setAssistants((previous) => previous.filter((a) => a.id !== assistant.id))
       showToast(`「${assistant.name}」已删除`)
+      void assistantStore.refresh()
     } catch (err) {
       showToast(err instanceof Error ? err.message : "删除失败")
     } finally {
@@ -284,181 +310,188 @@ export function AssistantsDialog({
     }
   }
 
-  const toggleKnowledgeBase = (id: string) => {
-    setForm((previous) => ({
-      ...previous,
-      knowledgeBaseIds: previous.knowledgeBaseIds.includes(id)
-        ? previous.knowledgeBaseIds.filter((existing) => existing !== id)
-        : [...previous.knowledgeBaseIds, id],
-    }))
-  }
-
   const editorOpen = creating || editing !== null
   const isEmpty = !loading && !error && assistants.length === 0
 
   return (
-    <Dialog
-      open={open}
-      onClose={onClose}
-      onOpen={() => void load()}
-      title="助手管理"
-      titleId="assistants-title"
-      icon={Bot}
-      toolbar={
-        editorOpen || isEmpty ? null : (
-          <div className="flex justify-end">
-            <Button
-              size="sm"
-              tone="primary"
-              icon={Plus}
-              onClick={startCreate}
-              disabled={busy}
-              title="新建助手"
-            >
-              新建助手
-            </Button>
-          </div>
-        )
-      }
-    >
-      {editorOpen ? (
-        <div className="flex flex-col gap-3 rounded-[14px] border border-brand-line bg-brand-subtle/40 p-3">
-          {/* Create mode adds no heading: the panel itself is the「新建助手」CTA's
-              open state, so a second "新建助手" line only repeated it. */}
-          {editing ? (
-            <p className="text-[11px] font-medium text-ink">
-              编辑「{editing.name}」（配置修改将生成新版本）
-            </p>
-          ) : null}
-          <div className="grid gap-2 md:grid-cols-2">
-            <Field label="名称">
-              <TextInput
-                value={form.name}
-                onChange={(event) =>
-                  setForm({ ...form, name: event.target.value })
-                }
-                placeholder="必填"
-                maxLength={200}
-              />
-            </Field>
-            <Field label="描述">
-              <TextInput
-                value={form.description}
-                onChange={(event) =>
-                  setForm({ ...form, description: event.target.value })
-                }
-                placeholder="可选"
-                maxLength={2000}
-              />
-            </Field>
-          </div>
-          <Field label="系统提示词">
-            <TextArea
-              value={form.systemPrompt}
-              onChange={(event) =>
-                setForm({ ...form, systemPrompt: event.target.value })
-              }
-              placeholder="可选，最多 8000 字符"
-              rows={3}
-            />
-          </Field>
-          {activeKnowledgeBases.length > 0 ||
-          form.knowledgeBaseIds.length > 0 ? (
-            <div>
-              <p className="text-[11px] text-muted-foreground">
-                绑定知识库（可多选，留空 = 无知识上下文）
-              </p>
-              <div className="mt-1 flex flex-wrap gap-1.5">
-                {(() => {
-                  // Union: every bound id stays visible even when it is no
-                  // longer in the active list (e.g. archived afterwards) —
-                  // otherwise an admin could neither see nor unbind it.
-                  const seen = new Set<string>()
-                  const chips: Array<{ id: string; name: string }> = []
-                  for (const id of form.knowledgeBaseIds) {
-                    if (seen.has(id)) continue
-                    seen.add(id)
-                    chips.push({
-                      id,
-                      name:
-                        activeKnowledgeBases.find((b) => b.id === id)?.name ??
-                        id,
-                    })
-                  }
-                  for (const base of activeKnowledgeBases) {
-                    if (!seen.has(base.id))
-                      chips.push({ id: base.id, name: base.name })
-                  }
-                  return chips.map(({ id, name }) => {
-                    // Toggle chips, not actions: `Button` has no pressed state and
-                    // its fixed radius/height would break the pill. Brand here marks
-                    // the active selection, which is what the token reserves it for.
-                    const selected = form.knowledgeBaseIds.includes(id)
-                    return (
-                      <UiButton
-                        variant="outline"
-                        size="sm"
-                        key={id}
-                        type="button"
-                        onClick={() => toggleKnowledgeBase(id)}
-                        aria-pressed={selected}
-                        className={
-                          selected ? "border px-2 py-0.5" : "border px-2 py-0.5"
-                        }
-                      >
-                        {name}
-                      </UiButton>
-                    )
-                  })
-                })()}
-              </div>
-            </div>
-          ) : null}
-          <div className="flex flex-wrap items-end gap-x-4 gap-y-2">
-            <div className="w-40">
-              <Field label="工具策略">
-                <Select
-                  value={form.toolPolicy}
-                  onChange={(event) =>
-                    setForm({
-                      ...form,
-                      toolPolicy: event.target.value as FormState["toolPolicy"],
-                    })
-                  }
-                >
-                  <option value="read_only_retrieval">只读检索</option>
-                  <option value="none">不使用工具</option>
-                </Select>
-              </Field>
-            </div>
-            <Checkbox
-              checked={form.rerankBound}
-              onChange={(next) => setForm({ ...form, rerankBound: next })}
-              label="绑定重排序模型"
-            />
-            <Checkbox
-              checked={form.memoryEnabled}
-              onChange={(next) => setForm({ ...form, memoryEnabled: next })}
-              label="启用会话记忆"
-            />
-          </div>
-          <Field label="可见分组">
-            <TextInput
-              value={form.allowedGroups}
-              onChange={(event) =>
-                setForm({ ...form, allowedGroups: event.target.value })
-              }
-              placeholder="逗号分隔，留空 = 全员可见"
-            />
-          </Field>
-          <div className="flex flex-wrap items-center justify-end gap-2 border-t border-brand-line/60 pt-2.5">
-            {validation ? (
-              <Alert
-                variant="destructive"
-                role="alert"
-                className="min-w-0 flex-1"
+    <>
+      <Dialog
+        open={open}
+        onClose={onClose}
+        onOpen={() => void load()}
+        title="专家管理"
+        titleId="assistants-title"
+        dividers={false}
+        bodyClassName="scrollbar-hidden"
+        toolbar={
+          isEmpty ? null : (
+            <div className="flex justify-end">
+              <Button
+                size="lg"
+                tone="primary"
+                icon={Plus}
+                onClick={startCreate}
+                disabled={busy}
+                title="新建专家"
+                className="px-4"
               >
-                <AlertDescription>{validation}</AlertDescription>
+                新建专家
+              </Button>
+            </div>
+          )
+        }
+      >
+        {loading ? (
+          <InlineMessage>正在加载专家…</InlineMessage>
+        ) : error ? (
+          <Alert tone="danger" title="发生错误" className="border p-3">
+
+              <p className="text-xs text-danger">专家列表读取失败：{error}</p>
+              <Button size="sm" className="mt-2" onClick={() => void load()}>
+                重试
+              </Button>
+
+          </Alert>
+        ) : isEmpty ? (
+          <EmptyState
+            icon={Bot}
+            message="还没有专家，点击「新建专家」创建第一个。"
+            action={
+              <Button
+                size="lg"
+                tone="primary"
+                icon={Plus}
+                onClick={startCreate}
+                disabled={busy}
+                title="新建专家"
+                className="px-4"
+              >
+                新建专家
+              </Button>
+            }
+          />
+        ) : (
+          <ul className="flex flex-col gap-2">
+            {assistants.map((assistant) => {
+              const displayName = isDefaultAssistantId(assistant.id)
+                ? "默认专家"
+                : assistant.name
+              const detail = detailLine(assistant)
+              const actions: ExpandingButtonGroupItem[] = []
+              if (assistant.status === "active") {
+                actions.push(
+                  {
+                    id: "edit",
+                    label: "编辑",
+                    icon: <Pencil />,
+                    onSelect: () => startEdit(assistant),
+                    disabled: busy,
+                  },
+                  {
+                    id: "archive",
+                    label: "归档",
+                    doneLabel: "已归档",
+                    icon: <Archive />,
+                    onSelect: () => handleArchive(assistant),
+                    disabled: busy,
+                  },
+                )
+              } else {
+                actions.push({
+                  id: "restore",
+                  label: "恢复",
+                  doneLabel: "已恢复",
+                  icon: <ArchiveRestore />,
+                  onSelect: () => handleRestore(assistant),
+                  disabled: busy,
+                })
+              }
+              if (!isDefaultAssistantId(assistant.id)) {
+                actions.push({
+                  id: "delete",
+                  label: "删除",
+                  tone: "danger",
+                  icon: <Trash2 />,
+                  onSelect: () => setDeleting(assistant),
+                  disabled: busy,
+                })
+              }
+              return (
+                <ListRow key={assistant.id}>
+                  <div className="min-w-0 flex-1">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="truncate text-xs font-medium text-ink">
+                        {displayName}
+                      </span>
+                      {assistant.status === "archived" ? (
+                        <StatusBadge>已归档</StatusBadge>
+                      ) : null}
+                    </div>
+                    {detail ? (
+                      <p className="mt-0.5 truncate text-[11px] text-faint">
+                        {detail}
+                      </p>
+                    ) : null}
+                  </div>
+                  <div className="flex flex-none items-center gap-2 max-md:w-full max-md:justify-end">
+                    <ArcCheckbox
+                      checked={assistant.sidebarVisible !== false}
+                      disabled={isDefaultAssistantId(assistant.id)}
+                      onCheckedChange={(next) =>
+                        void handleToggleSidebar(assistant, next === true)
+                      }
+                      aria-label={`在侧边栏显示「${displayName}」`}
+                      title={
+                        isDefaultAssistantId(assistant.id)
+                          ? "默认专家始终显示在侧边栏"
+                          : "勾选后该专家显示在侧边栏的选择器中"
+                      }
+                    />
+                    <ExpandingButtonGroup
+                      label={`「${displayName}」操作`}
+                      size="sm"
+                      items={actions}
+                    />
+                  </div>
+                </ListRow>
+              )
+            })}
+          </ul>
+        )}
+
+        {/* Physical delete replaces a window.confirm: the nested confirm-tier
+            dialog gets the shared top-layer transitions, and busy guards close. */}
+        <ConfirmDialog
+          open={deleting !== null}
+          onClose={() => {
+            if (!busy) setDeleting(null)
+          }}
+          title={deleting ? `删除「${deleting.name}」` : "删除专家"}
+          titleId="assistants-delete-title"
+          confirmLabel="确认删除"
+          onConfirm={() => deleting && void handleRemove(deleting)}
+          busy={busy}
+          confirmDisabled={deleting === null}
+        >
+          <p>将删除这个专家及其全部配置版本，此操作不可恢复。</p>
+          <DangerNote>
+            引用它的历史对话将无法继续使用该专家运行（评估报告中的历史快照不受影响）。
+          </DangerNote>
+        </ConfirmDialog>
+      </Dialog>
+
+      <Dialog
+        open={editorOpen}
+        onClose={closeEditor}
+        title={editing ? `编辑「${editing.name}」` : "新建专家"}
+        titleId="assistant-editor-title"
+        tier="form"
+        bodyClassName="scrollbar-hidden"
+        footer={
+          <div className="flex flex-wrap items-center justify-end gap-2">
+            {validation ? (
+              <Alert tone="danger" title="发生错误" className="min-w-0 flex-1">
+                {validation}
               </Alert>
             ) : null}
             <Button size="sm" onClick={closeEditor} title="取消">
@@ -474,161 +507,81 @@ export function AssistantsDialog({
               保存
             </Button>
           </div>
-        </div>
-      ) : null}
-
-      {loading ? (
-        <p className="px-1 py-6 text-center text-xs text-muted-foreground">
-          正在加载助手…
-        </p>
-      ) : error ? (
-        <Alert variant="destructive" role="alert" className="border p-3">
-          <AlertDescription>
-            <p className="text-xs text-danger">助手列表读取失败：{error}</p>
-            <Button size="sm" className="mt-2" onClick={() => void load()}>
-              重试
-            </Button>
-          </AlertDescription>
-        </Alert>
-      ) : isEmpty ? (
-        <EmptyState
-          icon={Bot}
-          message="还没有助手，点击「新建助手」创建第一个。"
-          action={
-            <Button
-              size="sm"
-              tone="primary"
-              icon={Plus}
-              onClick={startCreate}
-              disabled={busy}
-              title="新建助手"
-            >
-              新建助手
-            </Button>
-          }
-        />
-      ) : (
-        <ul className="flex flex-col gap-2">
-          {assistants.map((assistant) => (
-            <li
-              key={assistant.id}
-              className="flex items-center gap-3 rounded-[10px] border border-line px-3 py-2.5 transition-colors hover:border-muted-foreground/40 max-md:flex-wrap"
-            >
-              <div className="min-w-0 flex-1">
-                <div className="flex flex-wrap items-center gap-2">
-                  <span className="truncate text-xs font-medium text-ink">
-                    {assistant.name}
-                  </span>
-                  <StatusBadge>v{assistant.currentVersion}</StatusBadge>
-                  {assistant.status === "archived" ? (
-                    <StatusBadge>已归档</StatusBadge>
-                  ) : null}
-                </div>
-                <p className="mt-0.5 truncate text-[11px] text-muted-foreground">
-                  {assistant.description || "无描述"}
-                  {assistant.config
-                    ? ` · ${assistant.config.toolPolicy === "none" ? "无工具" : "只读检索"}${
-                        assistant.config.rerankModelProfileId === "rerank"
-                          ? " · 重排序"
-                          : ""
-                      }${assistant.config.memoryEnabled ? " · 记忆" : ""}`
-                    : ""}
-                </p>
-              </div>
-              <div className="flex flex-none items-center gap-1.5 max-md:w-full max-md:justify-end">
-                <Checkbox
-                  checked={assistant.sidebarVisible !== false}
-                  disabled={isDefaultAssistantId(assistant.id)}
-                  onChange={(next) => void handleToggleSidebar(assistant, next)}
-                  label="侧边栏"
-                  title={
-                    isDefaultAssistantId(assistant.id)
-                      ? "默认助手始终显示在侧边栏"
-                      : "勾选后该助手显示在侧边栏的选择器中"
-                  }
-                />
-                {assistant.status === "active" ? (
-                  <Button
-                    size="sm"
-                    icon={Pencil}
-                    onClick={() => startEdit(assistant)}
-                    disabled={busy}
-                    title="编辑（配置修改将生成新版本）"
-                  >
-                    编辑
-                  </Button>
-                ) : null}
-                {assistant.status === "active" ? (
-                  <Button
-                    size="sm"
-                    icon={Archive}
-                    onClick={() => void handleArchive(assistant)}
-                    disabled={busy}
-                    title="归档后不可编辑，历史版本仍可引用"
-                  >
-                    归档
-                  </Button>
-                ) : (
-                  <Button
-                    size="sm"
-                    icon={ArchiveRestore}
-                    onClick={() => void handleRestore(assistant)}
-                    disabled={busy}
-                    title="恢复为启用"
-                  >
-                    恢复
-                  </Button>
-                )}
-                {isDefaultAssistantId(assistant.id) ? null : (
-                  <Button
-                    size="sm"
-                    tone="danger"
-                    icon={Trash2}
-                    onClick={() => setDeleting(assistant)}
-                    disabled={busy}
-                    title="物理删除，不可恢复"
-                  >
-                    删除
-                  </Button>
-                )}
-              </div>
-            </li>
-          ))}
-        </ul>
-      )}
-
-      {/* Physical delete replaces a window.confirm: the nested confirm-tier
-          dialog gets the shared top-layer transitions, and busy guards close. */}
-      <Dialog
-        open={deleting !== null}
-        onClose={() => {
-          if (!busy) setDeleting(null)
-        }}
-        title={deleting ? `删除「${deleting.name}」` : "删除助手"}
-        titleId="assistants-delete-title"
-        icon={Trash2}
-        tier="confirm"
+        }
       >
-        <div className="flex flex-col gap-2 text-xs leading-relaxed text-muted-foreground">
-          <p>将删除这个助手及其全部配置版本，此操作不可恢复。</p>
-          <p className="rounded-[10px] border border-danger-line bg-danger-subtle px-3 py-2 text-danger">
-            引用它的历史对话将无法继续使用该助手运行（评估报告中的历史快照不受影响）。
-          </p>
+        {editing ? (
+          <p className="text-[11px] text-faint">配置修改将生成新版本。</p>
+        ) : null}
+        <div className="grid gap-2 md:grid-cols-2">
+          <Field label="名称">
+            <TextInput
+              value={form.name}
+              onChange={(event) =>
+                setForm({ ...form, name: event.target.value })
+              }
+              placeholder="必填"
+              maxLength={200}
+            />
+          </Field>
+          <Field label="描述">
+            <TextInput
+              value={form.description}
+              onChange={(event) =>
+                setForm({ ...form, description: event.target.value })
+              }
+              placeholder="可选"
+              maxLength={2000}
+            />
+          </Field>
         </div>
-        <div className="flex justify-end gap-2">
-          <Button size="sm" disabled={busy} onClick={() => setDeleting(null)}>
-            取消
-          </Button>
-          <Button
-            size="sm"
-            tone="danger"
-            disabled={busy || deleting === null}
-            onClick={() => deleting && void handleRemove(deleting)}
-          >
-            确认删除
-          </Button>
+        <Field label="系统提示词" hint="定义这个专家的回答方式与性格。">
+          <TextArea
+            value={form.systemPrompt}
+            onChange={(event) =>
+              setForm({ ...form, systemPrompt: event.target.value })
+            }
+            placeholder="可选，最多 8000 字符"
+            rows={3}
+          />
+        </Field>
+        <div className="flex flex-wrap items-end gap-x-4 gap-y-2">
+          <div className="w-40">
+            <Field label="工具策略">
+              <Select
+                value={form.toolPolicy}
+                onChange={(event) =>
+                  setForm({
+                    ...form,
+                    toolPolicy: event.target.value as FormState["toolPolicy"],
+                  })
+                }
+              >
+                <option value="read_only_retrieval">只读检索</option>
+                <option value="none">不使用工具</option>
+              </Select>
+            </Field>
+          </div>
+          <Checkbox
+            checked={form.rerankBound}
+            onChange={(next) => setForm({ ...form, rerankBound: next })}
+            label="绑定重排序模型"
+          />
+          <Checkbox
+            checked={form.memoryEnabled}
+            onChange={(next) => setForm({ ...form, memoryEnabled: next })}
+            label="启用会话记忆"
+          />
         </div>
+        <Field label="可见分组">
+          <TextInput
+            value={form.allowedGroups}
+            onChange={(event) =>
+              setForm({ ...form, allowedGroups: event.target.value })
+            }
+            placeholder="逗号分隔，留空 = 全员可见"
+          />
+        </Field>
       </Dialog>
-    </Dialog>
+    </>
   )
 }

@@ -15,7 +15,7 @@ import { SpanRepo } from "./tracking/span_repo"
 import { TaskRepo } from "./tracking/task_repo"
 import { WikiStore } from "../wiki/store"
 import { ArtifactCleanupService, isCleanupOperation } from "../knowledge/cleanup"
-import { evaluateActivationGate } from "./activation_gate"
+import { ACTIVATION_POLICY_VERSION, evaluateActivationGate } from "./activation_gate"
 import {
   allowedOperationsFor,
   classifyIngestionError,
@@ -151,6 +151,17 @@ export interface IngestionStatus {
    * success and activation are independent since the gate.
    */
   activationBlockReason: string | null
+  /**
+   * Non-blocking warnings the activation policy accepted for this version
+   * (e.g. OCR text that was not proofread). Empty for legacy rows, rejected
+   * candidates and never-attempted activations — never a block reason.
+   */
+  activationWarnings: string[]
+  /**
+   * Policy version that produced the acceptance fact; null when the version
+   * was not activated under a recorded acceptance.
+   */
+  activationPolicyVersion: string | null
   /**
    * Ticket UT-26: the candidate pipeline state ('pending_review' while
    * ACTIVATION_MODE=review holds a completed candidate for business
@@ -544,6 +555,7 @@ export class IngestionLifecycle {
 
     const documentVersion = this.docRepo.getVersionInfo(docId)
     if (!documentVersion) return null
+    const activationAcceptance = this.docRepo.getActivationAcceptance(docId)
 
     return {
       docId,
@@ -553,6 +565,8 @@ export class IngestionLifecycle {
       documentVersion,
       spanTree: buildSpanTree(this.spanRepo.listByDoc(docId)),
       activationBlockReason: this.docRepo.getActivationBlockReason(docId),
+      activationWarnings: activationAcceptance?.warningCodes ?? [],
+      activationPolicyVersion: activationAcceptance?.policyVersion ?? null,
       candidateState: this.docRepo.getOperationalState(docId)?.candidateState ?? null,
       failure: readFailureRecord(this.docRepo.get(docId)),
     }
@@ -917,6 +931,14 @@ export class IngestionLifecycle {
             this.docRepo.activate(task.docId)
             this.docRepo.clearActivationBlock(task.docId)
             if (this.docRepo.getActive(document.sourceId)?.id === document.id) {
+              // Acceptance is recorded only when the active pointer really
+              // points at this version; an older candidate the gate passed
+              // must not claim the newer version's activation.
+              this.docRepo.recordActivationAcceptance(task.docId, {
+                policyVersion: decision.policyVersion ?? ACTIVATION_POLICY_VERSION,
+                warningCodes: decision.warningCodes,
+                evaluatedAt: this.now().toISOString(),
+              })
               const wiki = new WikiStore(this.db, this.now)
               if (wiki.enabled(document.tenantId ?? "default", document.knowledgeBaseId ?? "")) {
                 // LO-16: the derived wiki job continues this ingestion task's

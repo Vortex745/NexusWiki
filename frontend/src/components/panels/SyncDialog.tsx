@@ -1,12 +1,9 @@
-import { Button as UiButton } from "@/components/primitives/button"
-import { Alert, AlertDescription } from "@/components/primitives/alert"
-import { Input } from "@/components/primitives/input"
-import { PanelDialog } from "../ui/Dialog"
-import { DialogTitle } from "../primitives/dialog"
-import { RefreshCw, X } from "../ui/icons"
+import { Button as UiButton } from "@/components/ui/Button"
+import { Alert } from "@/components/arc/alert/alert"
+import { Input } from "@/components/arc/input/input"
+import { PanelBody, PanelDialog } from "../ui/Dialog"
 import { useCallback, useEffect, useState } from "react"
 
-import { Icon } from "../ui/Icon"
 import { Select } from "../ui/Controls"
 import {
   createSyncSource,
@@ -134,40 +131,18 @@ export function SyncDialog({
       open={open}
       onClose={onClose}
       titleId="sync-title"
-      className="grid grid-rows-[auto_auto_minmax(0,1fr)] sm:max-w-3xl"
+      title={`同步数据源${knowledgeBase ? ` · ${knowledgeBase.name}` : ""}`}
+      className="sm:max-w-3xl"
     >
-      <div className="flex h-13 flex-none items-center justify-between border-b border-line px-5 max-md:px-4">
-        <div className="flex min-w-0 items-center gap-2">
-          <Icon
-            icon={RefreshCw}
-            className="size-4 flex-none text-muted-foreground"
-          />
-          <DialogTitle id="sync-title" className="truncate">
-            同步数据源{knowledgeBase ? ` · ${knowledgeBase.name}` : ""}
-          </DialogTitle>
-        </div>
-        <UiButton
-          variant="ghost"
-          size="icon-sm"
-          type="button"
-          onClick={onClose}
-          aria-label="关闭同步数据源"
-          title="关闭"
-          className="grid size-7 flex-none place-items-center"
-        >
-          <Icon data-icon="inline-start" icon={X} />
-        </UiButton>
-      </div>
-
-      <div className="flex min-h-0 flex-col gap-4 overflow-y-auto px-5 py-4 max-md:px-4">
+      <PanelBody className="gap-4">
         {error ? (
-          <Alert variant="destructive" role="alert" className="border p-3">
-            <AlertDescription>{error}</AlertDescription>
+          <Alert tone="danger" title="发生错误" className="border p-3">
+            {error}
           </Alert>
         ) : null}
 
         <section className="rounded-[14px] border border-line p-3">
-          <p className="text-[10px] font-medium text-muted-foreground">
+          <p className="text-[10px] font-medium text-faint">
             新建数据源（URL 或 sitemap，绑定本知识库）
           </p>
           <div className="mt-2 flex flex-wrap items-center gap-2">
@@ -214,7 +189,7 @@ export function SyncDialog({
               创建
             </UiButton>
           </div>
-          <p className="mt-1.5 text-[10px] text-muted-foreground/60">
+          <p className="mt-1.5 text-[10px] text-faint/60">
             同步复用与导入一致的安全抓取（内网拒绝 / 重定向校验 /
             大小上限），内容经正常摄取流程入库；内容未变化时不会产生新版本。
           </p>
@@ -222,7 +197,7 @@ export function SyncDialog({
 
         {lastReport ? (
           <section className="rounded-[14px] border border-line p-3">
-            <p className="text-[10px] font-medium text-muted-foreground">
+            <p className="text-[10px] font-medium text-faint">
               最近一次同步报告
             </p>
             <ul className="mt-1.5 flex flex-col gap-0.5">
@@ -233,7 +208,7 @@ export function SyncDialog({
                       page.status === "failed"
                         ? "font-mono text-[10px] text-danger"
                         : page.status === "unchanged"
-                          ? "font-mono text-[10px] text-muted-foreground/70"
+                          ? "font-mono text-[10px] text-faint/70"
                           : "font-mono text-[10px] text-brand"
                     }
                   >
@@ -241,7 +216,7 @@ export function SyncDialog({
                   </span>{" "}
                   <span className="truncate">{page.uri}</span>
                   {page.detail ? (
-                    <span className="text-[10px] text-muted-foreground/60">
+                    <span className="text-[10px] text-faint/60">
                       {" "}
                       — {page.detail}
                     </span>
@@ -258,11 +233,11 @@ export function SyncDialog({
         ) : null}
 
         <section className="rounded-[14px] border border-line p-3">
-          <p className="text-[10px] font-medium text-muted-foreground">
+          <p className="text-[10px] font-medium text-faint">
             数据源列表
           </p>
           {sources.length === 0 ? (
-            <p className="mt-2 text-xs text-muted-foreground/70">
+            <p className="mt-2 text-xs text-faint/70">
               还没有同步数据源。
             </p>
           ) : (
@@ -277,12 +252,12 @@ export function SyncDialog({
                       className={
                         source.state === "active"
                           ? "rounded bg-brand-subtle px-1 text-[10px] text-brand"
-                          : "rounded bg-surface-subtle px-1 text-[10px] text-muted-foreground/70"
+                          : "rounded bg-surface-subtle px-1 text-[10px] text-faint/70"
                       }
                     >
                       {source.state === "active" ? "启用" : "已暂停"}
                     </span>
-                    <span className="rounded bg-surface-subtle px-1 text-[10px] text-muted-foreground">
+                    <span className="rounded bg-surface-subtle px-1 text-[10px] text-faint">
                       {source.kind === "url" ? "URL" : "Sitemap"}
                     </span>
                     <span
@@ -291,12 +266,12 @@ export function SyncDialog({
                     >
                       {source.uri}
                     </span>
-                    <span className="font-mono text-[10px] text-muted-foreground/60">
+                    <span className="font-mono text-[10px] text-faint/60">
                       {INTERVALS.find((entry) => entry.id === source.interval)
                         ?.label ?? source.interval}
                     </span>
                   </div>
-                  <p className="mt-0.5 text-[10px] text-muted-foreground/60">
+                  <p className="mt-0.5 text-[10px] text-faint/60">
                     {source.lastSyncStatus
                       ? `上次同步：${source.lastSyncAt ?? "—"} · ${source.lastSyncStatus}`
                       : "尚未同步过。"}
@@ -338,7 +313,7 @@ export function SyncDialog({
             </ul>
           )}
         </section>
-      </div>
+      </PanelBody>
     </PanelDialog>
   )
 }

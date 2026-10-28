@@ -430,9 +430,9 @@ const SCHEMA = [
   )`,
   // Ticket 16 (MODEL-01A): the admin-toggleable enabled state of the three
   // built-in model profiles. The table deliberately holds ONLY the toggle —
-  // model ids, base URLs and dimensions always derive from the live config
+  // model ids, base URLs and credentials live in the server environment file
   // (single source of truth), so a profile row can never disagree with what
-  // the process actually calls. Rows are seeded INSERT OR IGNORE at registry
+  // the process calls. Rows are seeded INSERT OR IGNORE at registry
   // construction; a toggle is the only UPDATE this table ever sees.
   `CREATE TABLE IF NOT EXISTS model_profiles (
     id TEXT PRIMARY KEY,

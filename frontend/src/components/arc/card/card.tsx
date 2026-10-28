@@ -33,8 +33,8 @@ type Landing = { top: number; left: number; width: number; height: number };
 
 const { blur, duration, ease, spring, stagger } = motionTokens;
 /** One critically damped spring carries the surface both ways, so it never overshoots and can reverse mid-flight. Closing is a touch quicker. */
-const grow: Transition = { ...spring.smooth, visualDuration: .3 };
-const settle: Transition = { ...spring.smooth, visualDuration: .26 };
+const grow: Transition = { ...spring.smooth, visualDuration: .22 };
+const settle: Transition = { ...spring.smooth, visualDuration: .2 };
 const RETURN_MS = 300;
 const fade: Transition = { duration: duration.instant };
 /** The photo drifts in slowly while the card is pointed at, and eases back a little faster. */

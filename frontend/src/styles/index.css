@@ -1,14 +1,13 @@
 @import "tailwindcss";
-@import "tw-animate-css";
-@import "shadcn/tailwind.css";
 @import "@fontsource-variable/geist";
 @import "@fontsource-variable/inter";
-@import "./solid-glass.css";
 
 /* Existing theme ownership uses the .dark class on <html>. */
 @custom-variant dark (&:where(.dark, .dark *));
 
-/* Legacy application aliases map to the official shadcn semantic theme below. */
+/* App aliases resolve onto the Arc foundation tokens (foundation.css). The
+   names are the application's own vocabulary; foundation owns the values and
+   flips them for dark mode via [data-theme]. */
 @theme {
   --font-sans:
     Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
@@ -20,22 +19,24 @@
     monospace;
 
   --color-canvas: var(--background);
-  --color-surface: var(--card);
-  --color-surface-subtle: var(--muted);
+  --color-surface: var(--surface);
+  --color-surface-raised: var(--surface-raised);
+  --color-surface-muted: var(--surface-muted);
+  --color-surface-subtle: var(--surface-muted);
   --color-line: var(--border);
   --color-ink: var(--foreground);
 
-  --color-faint: var(--muted-foreground);
+  --color-faint: var(--text-muted);
 
-  --color-on-primary: var(--primary-foreground);
-  --color-primary-hover: var(--primary);
+  --color-on-primary: var(--accent-foreground);
+  --color-primary-hover: var(--accent-strong);
 
   --color-brand: var(--foreground);
   --color-brand-hover: var(--foreground);
   --color-brand-subtle: var(--surface-muted);
   --color-brand-line: var(--border);
-  --color-accent: var(--surface-muted);
-  --color-accent-foreground: var(--foreground);
+  --color-accent: var(--accent);
+  --color-accent-subtle: var(--accent-subtle);
 
   /* Status colors remain semantic aliases for existing business states. */
   --color-danger: #b91c1c;
@@ -77,33 +78,9 @@
 }
 
 @layer base {
-  :root {
-    --sidebar-accent: var(--surface-muted);
-    --sidebar-accent-foreground: var(--foreground);
-  }
-
   .dark {
-    --sidebar-accent: var(--surface-muted);
-    --sidebar-accent-foreground: var(--foreground);
-    /* The ramp inverts direction but keeps the same rule: surface sits a step
-       away from canvas and reads as a well, separation comes from the ring. */
-    --color-canvas: var(--background);
-    --color-surface: var(--card);
-    --color-surface-subtle: var(--muted);
-    --color-line: var(--border);
-
-    --color-ink: var(--foreground);
-
-    --color-faint: var(--muted-foreground);
-
-    --color-on-primary: var(--primary-foreground);
-    --color-primary-hover: var(--primary);
-
-    --color-brand: var(--foreground);
-    --color-brand-hover: var(--foreground);
-    --color-brand-subtle: var(--accent);
-    --color-brand-line: var(--border);
-
+    /* Foundation flips the neutral ramp via [data-theme="dark"]; only the
+       app-owned status palette and dialog shadow need an explicit dark value. */
     --color-danger: #f87171;
     --color-danger-subtle: #2a1515;
     --color-danger-line: #7f1d1d;
@@ -123,7 +100,7 @@
   }
 
   body {
-    @apply overflow-hidden font-sans text-sm leading-6 antialiased bg-background text-foreground;
+    @apply overflow-hidden font-sans text-sm leading-6 antialiased bg-canvas text-ink;
   }
 
   button,
@@ -142,9 +119,8 @@
     opacity: 1;
   }
 
-  /* Only the box: reicon glyphs carry their own fill/stroke per path, and a
-     stroke default inherited here redraws the filled outlines at 1.75px —
-     about 1.6x the ink the glyphs were designed with at the 16px icon size. */
+  /* Only the box: lucide glyphs carry their paint (stroke="currentColor") on
+     their own root svg, so no stroke default is inherited here. */
   svg {
     @apply size-[16px] shrink-0;
   }
@@ -157,7 +133,7 @@
     @apply bg-ink text-canvas;
   }
   * {
-    @apply border-border outline-ring/50;
+    @apply border-line outline-accent/50;
   }
   html {
     @apply font-sans;
@@ -239,9 +215,9 @@
   color: transparent;
   background-image: linear-gradient(
     90deg,
-    var(--muted-foreground) 35%,
+    var(--text-muted) 35%,
     var(--color-ink) 50%,
-    var(--muted-foreground) 65%
+    var(--text-muted) 65%
   );
   background-size: 200% 100%;
   background-repeat: no-repeat;
@@ -255,6 +231,55 @@
   }
   100% {
     background-position: -50% center;
+  }
+}
+
+/* transitions.dev — Shimmer text. The base layer holds the muted tone; the
+   ::before layer paints the moving ink band onto the same glyphs. */
+:root {
+  --shimmer-dur: 2000ms;
+  --shimmer-base: var(--text-muted);
+  --shimmer-highlight: var(--color-ink);
+  --shimmer-band: 400%;
+  --shimmer-ease: linear;
+}
+.t-shimmer {
+  position: relative;
+  display: inline-block;
+  color: var(--shimmer-base);
+}
+.t-shimmer::before {
+  content: attr(data-text);
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background-image: linear-gradient(
+    90deg,
+    transparent 0%,
+    transparent 40%,
+    var(--shimmer-highlight) 50%,
+    transparent 60%,
+    transparent 100%
+  );
+  background-size: var(--shimmer-band) 100%;
+  background-repeat: no-repeat;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  -webkit-text-fill-color: transparent;
+  animation: t-shimmer var(--shimmer-dur) var(--shimmer-ease) infinite;
+}
+@keyframes t-shimmer {
+  0% {
+    background-position: 100% 0;
+  }
+  100% {
+    background-position: 0% 0;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .t-shimmer::before {
+    animation: none !important;
   }
 }
 
@@ -335,8 +360,10 @@
 /* A zero-width flex item is still charged the row's column-gap, so a row
    holding one hidden copy sat 8px and a row holding two sat 16px wider than
    the icon alone — `justify-center` then missed the rail's centre line by half
-   the difference. Only rows that actually carry a copy are touched. */
-.sidebar-shell[data-collapsed="true"] :is(button, div):has(> .sidebar-copy) {
+   the difference (one gap for one copy, two for two). The gap carrier is
+   whichever element directly parents the copies: the Arc button nests its
+   label in an inner slot span, so the selector must not name a tag. */
+.sidebar-shell[data-collapsed="true"] :has(> .sidebar-copy) {
   column-gap: 0;
 }
 .sidebar-shell .sidebar-module {
@@ -352,6 +379,64 @@
   transition-property: max-height, opacity, margin, transform;
   transition-duration: 180ms;
   transition-timing-function: cubic-bezier(0.16, 1, 0.3, 1);
+}
+/* The knowledge tree can outgrow the module cap, so it scrolls inside its own
+   frame. The bar is hidden on purpose: wheel, trackpad and keyboard still work. */
+.sidebar-shell .sidebar-module.sidebar-module-scroll {
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: none;
+}
+.sidebar-shell .sidebar-module.sidebar-module-scroll::-webkit-scrollbar {
+  display: none;
+}
+.sidebar-shell[data-collapsed="true"] .sidebar-module.sidebar-module-scroll {
+  overflow: hidden;
+}
+/* Only the knowledge tree gives up height. It is the one module with its own
+   scroll frame, so a short window shrinks it instead of pushing the expert
+   picker past the sidebar's bottom edge. The floor keeps a couple of rows
+   reachable; the whole shell only scrolls below that. */
+.sidebar-shell:not([data-collapsed="true"]) .sidebar-module.sidebar-module-shrink {
+  flex-shrink: 1;
+  min-height: 3.5rem;
+}
+/* The recent list keeps its header, search row and one full row even when
+   every flexible pixel is gone; without this floor it collapses to 0 and the
+   header paints over the utility row. 4.75rem = 36px header + 4px gap + 36px
+   row. The thread list itself keeps its own scrollbar. */
+.sidebar-shell:not([data-collapsed="true"]) .sidebar-recent {
+  min-height: 4.75rem;
+}
+/* The expert picker keeps the sidebar's small section label while the rows and
+   the travelling highlight stay entirely Arc-owned. Rows share the sidebar's
+   edges like every control above them. */
+/* The sidebar renders the section title (a fold button); the legend stays for
+   the fieldset's accessible name only. */
+.expert-radio fieldset > legend {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
+}
+.expert-radio fieldset label {
+  min-width: 0;
+  /* 5px keeps the row at 36px — the height of the sidebar's controls. */
+  padding-block: 5px;
+}
+.expert-radio fieldset label > span:last-child {
+  min-width: 0;
+  flex: 1;
+}
+.expert-radio fieldset label strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .sidebar-shell[data-collapsed="true"] .sidebar-module {
   max-height: 0;
@@ -370,6 +455,8 @@
   margin-bottom: 0.5rem;
 }
 .sidebar-shell .sidebar-search-label {
+  font-size: 0.8rem;
+  color: var(--text-secondary);
   transition-property: opacity, translate;
   transition-duration: 180ms;
   transition-timing-function: cubic-bezier(0.16, 1, 0.3, 1);
@@ -378,26 +465,12 @@
   opacity: 0;
   translate: -0.5rem 0;
 }
-.sidebar-search-field {
-  width: 2rem;
-  opacity: 0;
-  pointer-events: none;
-  transform-origin: right center;
-  scale: 0.96;
-  transition-property: width, opacity, scale;
-  transition-duration: 180ms;
-  transition-timing-function: cubic-bezier(0.16, 1, 0.3, 1);
+/* The search lane runs one step tighter than the component's toolbar default:
+   a 36px circle — the sidebar's own control height — with a 14px glyph. */
+.sidebar-search-lane {
+  --control-height-md: 2.25rem;
+  --es-glyph-half: 7px;
 }
-.sidebar-search-field-open {
-  width: 100%;
-  opacity: 1;
-  pointer-events: auto;
-  scale: 1;
-}
-.sidebar-shell[data-collapsed="true"] .sidebar-search-field {
-  display: none;
-}
-
 /* The sidebar's inline disclosure: the 工作区 panel and the 知识库 section both
    use it. It is not a popover — it grows the sidebar's own flow, so the reveal
    is the grid track (0fr → 1fr) and the content below travels to make room
@@ -447,25 +520,43 @@
   min-height: 0;
   overflow: hidden;
 }
-.workspace-section {
+/* A knowledge base's document rows: the same fold, plus a short fade-and-rise
+   cascade so the list reads as arriving rather than being pasted in. The delay
+   follows DOM position via --kb-doc-index (set inline by Sidebar.tsx); closing
+   drops the animation entirely, so the fold exits as one motion. */
+.kb-doc-list > li {
+  animation: kb-doc-item-in 200ms var(--ease-out) both;
+  animation-delay: calc(var(--kb-doc-index, 0) * 18ms + 30ms);
+}
+@keyframes kb-doc-item-in {
+  from {
+    opacity: 0;
+    translate: 0 3px;
+  }
+  to {
+    opacity: 1;
+    translate: 0 0;
+  }
+}
+#workspace-menu > * {
   opacity: 0;
   translate: 0 4px;
   transition-property: opacity, translate;
   transition-duration: 150ms;
   transition-timing-function: var(--ease-out);
 }
-.sidebar-disclosure[data-open="true"] .workspace-section {
+.sidebar-disclosure[data-open="true"] #workspace-menu > * {
   opacity: 1;
   translate: 0 0;
   transition-duration: 180ms;
-  /* Cascade by DOM position rather than an inline index: the scope gates drop
-     whole sections, so nth-child always counts what actually rendered. */
+  /* Cascade by DOM position: every row renders (a missing scope disables it
+     rather than dropping it), so nth-child always counts what shows. */
   transition-delay: 40ms;
 }
-.sidebar-disclosure[data-open="true"] .workspace-section:nth-child(2) {
+.sidebar-disclosure[data-open="true"] #workspace-menu > :nth-child(2) {
   transition-delay: 80ms;
 }
-.sidebar-disclosure[data-open="true"] .workspace-section:nth-child(3) {
+.sidebar-disclosure[data-open="true"] #workspace-menu > :nth-child(3) {
   transition-delay: 120ms;
 }
 
@@ -526,6 +617,16 @@
   display: none;
 }
 
+/* The Arc card quick look grows into its own scrolling panel. It carries the
+   same native bar the app already hides elsewhere, so the panel opts out
+   through the portal attribute the card sets on it. */
+[data-framer-portal-id] {
+  scrollbar-width: none;
+}
+[data-framer-portal-id]::-webkit-scrollbar {
+  display: none;
+}
+
 /* Markdown inside assistant bubbles — restrained prose sized to the bubble. */
 @layer components {
   .markdown-body {
@@ -568,7 +669,7 @@
     @apply text-brand underline underline-offset-2;
   }
   .markdown-body blockquote {
-    @apply my-2 border-l-2 border-brand-line pl-3 text-muted-foreground;
+    @apply my-2 border-l-2 border-brand-line pl-3 text-faint;
   }
   .markdown-body code {
     @apply rounded bg-surface-subtle px-1 py-0.5 font-mono text-[0.85em] text-ink;
@@ -636,14 +737,6 @@
 
   span[data-trace-status] {
     scale: none !important;
-  }
-
-  /* tw-animate-css ships no reduced-motion handling of its own, so the
-     accordion keyframes would animate height under reduce. Collapse the
-     duration; the open/closed result still applies. */
-  [data-slot="trace-collapsible-content"],
-  [data-slot="collapsible-content"] {
-    animation-duration: 1ms !important;
   }
 
   /* Toast: keep the fade, drop the slide. */
@@ -715,7 +808,6 @@
   }
   .sidebar-shell .sidebar-copy,
   .sidebar-shell .sidebar-module,
-  .sidebar-search-field,
   .sidebar-search-label {
     transition-duration: 1ms !important;
   }
@@ -731,109 +823,64 @@
   .sidebar-disclosure[data-open="true"],
   .sidebar-folder-tree,
   .sidebar-folder-tree[data-open="true"],
-  .workspace-section {
+  #workspace-menu > * {
     transition-duration: 1ms !important;
     transition-delay: 0ms !important;
   }
-  .workspace-section {
-    translate: none !important;
+  .kb-doc-list > li {
+    animation: none !important;
   }
-  .sidebar-search-field {
-    scale: none !important;
+  #workspace-menu > * {
+    translate: none !important;
   }
   /* Restore an opaque fill: the shimmer effect paints clipped text through a
      transparent colour, so killing the animation alone would leave the label
      invisible. */
   .t-shimmer-label {
     animation: none !important;
-    color: var(--muted-foreground) !important;
-    -webkit-text-fill-color: var(--muted-foreground) !important;
+    color: var(--text-muted) !important;
+    -webkit-text-fill-color: var(--text-muted) !important;
   }
 }
 
 @theme inline {
-  --font-heading: var(--font-sans);
+  --font-heading: var(--font-display);
   --font-sans:
     "Geist Variable", ui-sans-serif, system-ui, -apple-system, "Segoe UI",
     "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
-  --color-sidebar-ring: var(--sidebar-ring);
-  --color-sidebar-border: var(--sidebar-border);
-  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
-  --color-sidebar-accent: var(--sidebar-accent);
-  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
-  --color-sidebar-primary: var(--sidebar-primary);
-  --color-sidebar-foreground: var(--sidebar-foreground);
-  --color-sidebar: var(--sidebar);
-  --color-chart-5: var(--chart-5);
-  --color-chart-4: var(--chart-4);
-  --color-chart-3: var(--chart-3);
-  --color-chart-2: var(--chart-2);
-  --color-chart-1: var(--chart-1);
-  --color-ring: var(--ring);
-  --color-input: var(--input);
-  --color-border: var(--border);
-  --color-destructive: var(--destructive);
-  --color-accent-foreground: var(--accent-foreground);
-  --color-accent: var(--accent);
-  --color-muted: var(--muted);
-  --color-muted-foreground: var(--muted-foreground);
-
-  --color-secondary-foreground: var(--secondary-foreground);
-  --color-secondary: var(--secondary);
-  --color-primary-foreground: var(--primary-foreground);
-  --color-primary: var(--primary);
-  --color-popover-foreground: var(--popover-foreground);
-  --color-popover: var(--popover);
-  --color-card-foreground: var(--card-foreground);
-  --color-card: var(--card);
-  --color-foreground: var(--foreground);
-  --color-background: var(--background);
-  --radius-sm: calc(var(--radius) * 0.6);
-  --radius-md: calc(var(--radius) * 0.8);
-  --radius-lg: var(--radius);
-  --radius-xl: calc(var(--radius) * 1.4);
-  --radius-2xl: calc(var(--radius) * 1.8);
-  --radius-3xl: calc(var(--radius) * 2.2);
-  --radius-4xl: calc(var(--radius) * 2.6);
+  /* App-owned radius scale (base 0.625rem); the rounded-* utilities resolve
+     against it. */
+  --radius-sm: calc(var(--radius-base) * 0.6);
+  --radius-md: calc(var(--radius-base) * 0.8);
+  --radius-lg: var(--radius-base);
+  --radius-xl: calc(var(--radius-base) * 1.4);
+  --radius-2xl: calc(var(--radius-base) * 1.8);
+  --radius-3xl: calc(var(--radius-base) * 2.2);
+  --radius-4xl: calc(var(--radius-base) * 2.6);
 }
 
 :root {
-  --destructive: oklch(0.577 0.245 27.325);
-  --chart-1: oklch(0.87 0 0);
-  --chart-2: oklch(0.556 0 0);
-  --chart-3: oklch(0.439 0 0);
-  --chart-4: oklch(0.371 0 0);
-  --chart-5: oklch(0.269 0 0);
-  --radius: 0.625rem;
+  --radius-base: 0.625rem;
 }
 
-.dark {
-  --destructive: oklch(0.704 0.191 22.216);
-  --chart-1: oklch(0.87 0 0);
-  --chart-2: oklch(0.556 0 0);
-  --chart-3: oklch(0.439 0 0);
-  --chart-4: oklch(0.371 0 0);
-  --chart-5: oklch(0.269 0 0);
-}
-
-/* Shared motion: Radix owns presence/focus; CSS only presents the state. */
+/* Shared motion: Radix owns presence/focus; CSS only presents the state.
+   Surfaces opt in with data-motion-surface (dialog content/overlay, sheet). */
 :root {
   --motion-panel: 250ms;
   --motion-feedback: 120ms;
-  --motion-toast: 200ms;
   --motion-reduced: 100ms;
 }
 
-:is([data-slot="dialog-overlay"], [data-slot="sheet-overlay"])[data-state="open"] {
+:is([data-motion-surface="dialog-overlay"], [data-motion-surface="sheet-overlay"])[data-state="open"] {
   animation: surface-fade-in var(--motion-panel) var(--ease-out) both;
 }
-:is([data-slot="dialog-overlay"], [data-slot="sheet-overlay"])[data-state="closed"] {
+:is([data-motion-surface="dialog-overlay"], [data-motion-surface="sheet-overlay"])[data-state="closed"] {
   animation: surface-fade-out var(--motion-panel) var(--ease-out) both;
 }
-[data-slot="dialog-content"][data-state="open"] {
+[data-motion-surface="dialog"][data-state="open"] {
   animation: surface-in var(--motion-panel) var(--ease-out) both;
 }
-[data-slot="dialog-content"][data-state="closed"] {
+[data-motion-surface="dialog"][data-state="closed"] {
   animation: surface-out var(--motion-panel) var(--ease-out) both;
 }
 [data-motion-surface="sheet"][data-side="left"] {
@@ -896,56 +943,27 @@
   opacity: 1;
 }
 
-/* Sonner's state rules have differing specificity; retain its transform values
-   and gesture math, overriding only the presentation timing/properties. */
-[data-sonner-toaster] {
-  transition: transform var(--motion-toast) var(--ease-out);
-}
-[data-sonner-toaster] [data-sonner-toast].cn-toast {
-  transition-property: transform, opacity !important;
-  transition-duration: var(--motion-toast) !important;
-  transition-timing-function: var(--ease-out) !important;
-  animation-duration: var(--motion-toast) !important;
-  animation-timing-function: var(--ease-out) !important;
-}
-[data-sonner-toaster] .cn-toast > :not([data-close-button]) {
-  transition: opacity var(--motion-toast) var(--ease-out) !important;
-}
-[data-sonner-toaster] [data-sonner-toast].cn-toast[data-swiping="true"] {
-  transition: none !important;
-}
-
 @media (prefers-reduced-motion: reduce) {
-  :is([data-slot="dialog-content"], [data-motion-surface="sheet"])[data-state="open"] {
+  :is([data-motion-surface="dialog"], [data-motion-surface="sheet"])[data-state="open"] {
     animation-name: surface-fade-in;
   }
-  :is([data-slot="dialog-content"], [data-motion-surface="sheet"])[data-state="closed"] {
+  :is([data-motion-surface="dialog"], [data-motion-surface="sheet"])[data-state="closed"] {
     animation-name: surface-fade-out;
   }
-  :is([data-slot="dialog-content"], [data-motion-surface="sheet"], [data-slot="dialog-overlay"], [data-slot="sheet-overlay"])[data-state] {
+  :is([data-motion-surface="dialog"], [data-motion-surface="sheet"], [data-motion-surface="dialog-overlay"], [data-motion-surface="sheet-overlay"])[data-state] {
     animation-duration: var(--motion-reduced);
   }
   [data-copy-glyph] {
     transition-duration: var(--motion-reduced);
-  }
-  [data-sonner-toaster],
-  [data-sonner-toaster] [data-sonner-toast].cn-toast,
-  [data-sonner-toaster] .cn-toast > :not([data-close-button]) {
-    transition-property: opacity !important;
-    transition-duration: var(--motion-reduced) !important;
-    animation: none !important;
   }
 }
 
 /* A keyboard action never waits for decorative motion, including Escape while
    an entrance is playing. Do not suppress focus or change any input events. */
 html:not([data-motion-input="pointer"]) :is(
-  [data-slot="dialog-content"], [data-slot="dialog-overlay"],
-  [data-motion-surface="sheet"], [data-slot="sheet-overlay"],
-  [data-slot="tooltip-content"], [data-slot="popover-content"],
-  [data-slot="dropdown-menu-content"], [data-slot="select-content"],
-  [data-copy-glyph], [data-sonner-toaster], [data-sonner-toast].cn-toast,
-  [data-sonner-toast].cn-toast > *,
+  [data-motion-surface="dialog"], [data-motion-surface="dialog-overlay"],
+  [data-motion-surface="sheet"], [data-motion-surface="sheet-overlay"],
+  [data-copy-glyph],
   .trace-panel
 ) {
   animation: none !important;
@@ -956,5 +974,220 @@ html:not([data-motion-input="pointer"]) :is(
   button:not(:disabled),
   [role="button"]:not([aria-disabled="true"]) {
     cursor: pointer;
+  }
+}
+
+/* ---------------------------------------------------------------------------
+   Vendored scroll-fade + shimmer utilities (from the shadcn tailwind
+   stylesheet, re-owned). The chat scroller and attachment rail fade their
+   overflow edges; streaming labels shimmer.
+   --------------------------------------------------------------------------- */
+@property --scroll-fade-b {
+  syntax: "<length-percentage>";
+  inherits: false;
+  initial-value: 0px;
+}
+@property --scroll-fade-s {
+  syntax: "<length-percentage>";
+  inherits: false;
+  initial-value: 0px;
+}
+@property --scroll-fade-e {
+  syntax: "<length-percentage>";
+  inherits: false;
+  initial-value: 0px;
+}
+
+@theme inline {
+  @keyframes scroll-fade-reveal-b {
+    from {
+      --scroll-fade-b: var(--_scroll-fade-size-b, var(--scroll-fade-size, min(12%, calc(var(--spacing) * 10))));
+    }
+    to {
+      --scroll-fade-b: 0px;
+    }
+  }
+  @keyframes scroll-fade-reveal-s {
+    from {
+      --scroll-fade-s: 0px;
+    }
+    to {
+      --scroll-fade-s: var(--_scroll-fade-size-s, var(--scroll-fade-size, min(12%, calc(var(--spacing) * 10))));
+    }
+  }
+  @keyframes scroll-fade-reveal-e {
+    from {
+      --scroll-fade-e: var(--_scroll-fade-size-e, var(--scroll-fade-size, min(12%, calc(var(--spacing) * 10))));
+    }
+    to {
+      --scroll-fade-e: 0px;
+    }
+  }
+}
+
+@utility scroll-fade-b {
+  --_scroll-fade-size-b: var(
+    --scroll-fade-b-size,
+    var(--scroll-fade-size, min(12%, calc(var(--spacing) * 10)))
+  );
+  --scroll-fade-mask: linear-gradient(
+    to bottom,
+    #000 0,
+    #000 calc(100% - var(--scroll-fade-b, 0px)),
+    transparent 100%
+  );
+  -webkit-mask-image: var(--scroll-fade-mask);
+  mask-image: var(--scroll-fade-mask);
+  -webkit-mask-composite: source-in;
+  mask-composite: intersect;
+  -webkit-mask-repeat: no-repeat;
+  mask-repeat: no-repeat;
+
+  @supports (animation-timeline: scroll()) {
+    animation: scroll-fade-reveal-b 1ms ease-in-out;
+    animation-timeline: scroll(self y);
+    animation-range: calc(
+        100% - var(--scroll-fade-reveal, calc(var(--spacing) * 24))
+      )
+      100%;
+    animation-fill-mode: both;
+  }
+
+  @supports not (animation-timeline: scroll()) {
+    --scroll-fade-b: var(--_scroll-fade-size-b);
+  }
+}
+
+@utility scroll-fade-x {
+  --_scroll-fade-size-s: var(
+    --scroll-fade-s-size,
+    var(--scroll-fade-size, min(12%, calc(var(--spacing) * 10)))
+  );
+  --_scroll-fade-size-e: var(
+    --scroll-fade-e-size,
+    var(--scroll-fade-size, min(12%, calc(var(--spacing) * 10)))
+  );
+  --scroll-fade-inline: linear-gradient(
+    to right,
+    transparent 0,
+    #000 var(--scroll-fade-s, 0px),
+    #000 calc(100% - var(--scroll-fade-e, 0px)),
+    transparent 100%
+  );
+  &:where([dir="rtl"], [dir="rtl"] *) {
+    --scroll-fade-inline: linear-gradient(
+      to left,
+      transparent 0,
+      #000 var(--scroll-fade-s, 0px),
+      #000 calc(100% - var(--scroll-fade-e, 0px)),
+      transparent 100%
+    );
+  }
+  -webkit-mask-image: var(--scroll-fade-mask, var(--scroll-fade-inline));
+  mask-image: var(--scroll-fade-mask, var(--scroll-fade-inline));
+  -webkit-mask-composite: source-in;
+  mask-composite: intersect;
+  -webkit-mask-repeat: no-repeat;
+  mask-repeat: no-repeat;
+
+  @supports (animation-timeline: scroll()) {
+    animation:
+      scroll-fade-reveal-s 1ms ease-in-out,
+      scroll-fade-reveal-e 1ms ease-in-out;
+    animation-timeline: scroll(self inline), scroll(self inline);
+    animation-range:
+      0 var(--scroll-fade-reveal, calc(var(--spacing) * 24)),
+      calc(100% - var(--scroll-fade-reveal, calc(var(--spacing) * 24))) 100%;
+    animation-fill-mode: both;
+  }
+
+  @supports not (animation-timeline: scroll()) {
+    --scroll-fade-s: var(--_scroll-fade-size-s);
+    --scroll-fade-e: var(--_scroll-fade-size-e);
+  }
+}
+
+@utility shimmer {
+  --_spread: var(--shimmer-spread, calc(3ch + 40px));
+  --_base: currentColor;
+  --_highlight: var(
+    --shimmer-color,
+    oklch(from currentColor l c h / calc(alpha* 0.2))
+  );
+
+  background-image: var(
+    --shimmer-image,
+    linear-gradient(
+      calc(90deg + var(--shimmer-angle)),
+      var(--_base) calc(50% - var(--_spread)),
+      color-mix(in oklch, var(--_highlight), var(--_base) 50%)
+        calc(50% - var(--_spread) * 0.5),
+      var(--_highlight) 50%,
+      color-mix(in oklch, var(--_highlight), var(--_base) 50%)
+        calc(50% + var(--_spread) * 0.5),
+      var(--_base) calc(50% + var(--_spread))
+    )
+  );
+  background-repeat: no-repeat;
+  background-size: calc(200% + var(--_spread) * 2) 100%;
+  background-position: 0 0;
+  background-clip: text;
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: var(--shimmer-text-fill, transparent);
+  animation: shimmer-text var(--shimmer-duration, 2s) linear infinite;
+
+  @media (prefers-reduced-motion: reduce) {
+    animation: none;
+    background-image: none;
+    -webkit-text-fill-color: currentColor;
+  }
+}
+
+@utility shimmer-none {
+  --shimmer-image: none;
+  --shimmer-text-fill: currentColor;
+}
+
+@utility no-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+
+  &::-webkit-scrollbar {
+    display: none;
+  }
+}
+
+/* The chat viewport stays invisible until the provider applied its default
+   scroll position, so a fresh thread never paints mid-scroll. */
+[data-slot="message-scroller-viewport"][data-pending-scroll] {
+  visibility: hidden;
+}
+
+/* Arc's theme-reveal page transition. The Theme Switch only reports the change;
+   this layer owns the new-theme wipe that the component demo shows. */
+html[data-theme-motion]::view-transition-old(root) {
+  animation: none;
+}
+
+html[data-theme-motion]::view-transition-new(root) {
+  animation-name: theme-reveal;
+  animation-duration: 0.38s;
+  animation-timing-function: cubic-bezier(0.22, 1, 0.36, 1);
+  animation-fill-mode: both;
+}
+
+@keyframes theme-reveal {
+  0% {
+    clip-path: inset(0px 100% 0px 0px);
+  }
+  100% {
+    clip-path: inset(0px);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html[data-theme-motion]::view-transition-old(root),
+  html[data-theme-motion]::view-transition-new(root) {
+    animation-duration: 0.01ms !important;
   }
 }

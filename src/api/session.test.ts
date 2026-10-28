@@ -6,7 +6,7 @@ import type { Request, Response } from "express"
 import { createAccessMiddleware } from "./access_middleware"
 import { createSessionRouter, type DemoAuthOptions } from "./session"
 import { JoseIdentityAdapter } from "../identity/jose_adapter"
-import { startDemoOidcIssuer, type DemoOidcIssuerHandle } from "../identity/demo_oidc_issuer"
+import { startDemoOidcIssuer, DEMO_TOKEN_TTL_SECONDS, type DemoOidcIssuerHandle } from "../identity/demo_oidc_issuer"
 import { DEMO_ACCOUNTS, DEMO_TENANT_ID } from "../identity/demo_accounts"
 import type { AccessContext, IdentityAdapter } from "../access/context"
 
@@ -142,6 +142,22 @@ test("Ticket 01: all three demo accounts receive the expected role, groups and s
         `${account.key} role is derived from the granted scopes`
       )
     }
+  } finally {
+    await harness.close()
+  }
+})
+
+test("Ticket 01: a demo sign-in stays valid for seven days", async () => {
+  const harness = await startHarness({ demoAuth: true })
+  try {
+    const signIn = await login(harness.port, { account: "admin", password: DEMO_PASSWORD })
+    assert.equal(signIn.status, 200)
+    const token = signIn.json.accessToken as string
+    const claims = JSON.parse(
+      Buffer.from(token.split(".")[1], "base64url").toString("utf8")
+    ) as { iat: number; exp: number }
+    assert.equal(DEMO_TOKEN_TTL_SECONDS, 7 * 24 * 60 * 60, "the gate lifetime is seven days")
+    assert.equal(claims.exp - claims.iat, DEMO_TOKEN_TTL_SECONDS)
   } finally {
     await harness.close()
   }

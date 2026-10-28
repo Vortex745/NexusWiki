@@ -7,12 +7,22 @@ export interface RadioGroupProps { label: string; options: { value: string; labe
 
 /** Sizes the highlight to the chosen row. A new choice glides on the morph spring; the first paint and resizes place it at once. */
 function place(highlight: HTMLElement | null, row: HTMLElement | null | undefined, at: { current: string }, glide: boolean) {
-  const next = row ? `${row.offsetTop} ${row.offsetHeight}` : "";
-  if (!highlight || next === at.current) return;
+  if (!highlight) return;
+  const rowRect = row?.getBoundingClientRect();
+  const optionsRect = highlight.parentElement?.getBoundingClientRect();
+  // Fractional rects instead of offsetTop/offsetHeight: those round to whole
+  // pixels, and under scaled displays the highlight's bottom border lands a
+  // pixel above the row's edge, leaving the row's grey border visible below a
+  // black outline. Both rects share the scroll offset, so the difference is the
+  // highlight's local position.
+  const top = rowRect && optionsRect ? rowRect.top - optionsRect.top : 0;
+  const height = rowRect ? rowRect.height : 0;
+  const next = row ? `${top} ${height}` : "";
+  if (next === at.current) return;
   const visible = at.current !== "";
   at.current = next;
   if (!row) { animate(highlight, { opacity: 0 }, { duration: 0 }); return; }
-  const target = { y: row.offsetTop, height: row.offsetHeight, opacity: 1 };
+  const target = { y: top, height, opacity: 1 };
   if (glide && visible) { animate(highlight, target, { ...motionTokens.spring.morph, opacity: { duration: 0 } }); return; }
   // Written to the element too, so the paint that drops the server fallback already shows the highlight in place.
   Object.assign(highlight.style, { transform: `translateY(${target.y}px)`, height: `${target.height}px`, opacity: "1" });

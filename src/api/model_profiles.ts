@@ -1,22 +1,27 @@
 /**
  * Ticket 16 (MODEL-01A) — model-profile HTTP API (admin only).
  *
- *   GET  /api/models/profiles        non-secret metadata for the three slots
- *   PATCH /api/models/profiles/:id   { enabled: boolean } — the only mutation
- *   POST /api/models/profiles/:id/test  protocol-specific connectivity test
+ *   GET  /api/models/profiles              non-secret metadata for the three slots
+ *   PATCH /api/models/profiles/:id         { enabled: boolean } — the persisted toggle
+ *   GET  /api/models/profiles/:id/config   key-less view of one slot
+ *   PUT  /api/models/profiles/:id/config   save Base URL / key / model into .env
+ *   POST /api/models/profiles/:id/discover OpenAI-compatible model list
+ *   POST /api/models/profiles/:id/test     protocol-specific connectivity test
  *
- * Security envelope (acceptance criteria 1 & 4):
- *   - the payload is derived from server config and contains NO keys and NO
- *     full provider URLs (host only);
- *   - a request can never inject a base URL, key or model — PATCH toggles the
- *     persisted flag, the test always probes the SERVER's configured slot;
- *   - the routes never write environment files (the toggle lives in SQLite).
+ * Security envelope:
+ *   - list/config payloads NEVER contain a key; a stored key is only reported
+ *     as present, and the form treats a blank key as "keep the stored one";
+ *   - saves go to the server environment file through the registry, which
+ *     preserves every other line (the toggle itself stays in SQLite);
+ *   - probes bind to the resolved slot (environment file first), so a
+ *     just-saved configuration is exactly what gets tested.
  */
 
 import { Router, type Request, type Response } from "express"
 import type OpenAI from "openai"
 import { singleTenantAccessContext, type AccessContext } from "../access/context"
 import type { AppConfig } from "../config"
+import { createOpenAIClient, openaiClientOptions } from "../clients"
 import type { TracingRuntime } from "../tracing/contract"
 import { createDedicatedReranker } from "../retrieval/search/dedicated_reranker"
 import type { RetrievalResult } from "../types/retrieval"
@@ -24,6 +29,8 @@ import {
   ModelProfileError,
   ModelProfileRegistry,
   type ModelProfileClients,
+  type ModelProfileCredentials,
+  type ModelProfileId,
 } from "../models/profiles"
 
 function resolveContext(res: Response): AccessContext {
@@ -129,8 +136,16 @@ function failedResult(err: unknown, redactions: readonly string[] = []): Profile
 }
 
 /** Every configured provider URL — redacted from unexpected provider errors. */
-function redactFrom(config: AppConfig): string[] {
-  return [config.openaiBaseUrl, config.embeddingBaseUrl, config.rerankBaseUrl]
+function redactFrom(config: AppConfig, extra?: string): string[] {
+  return [config.openaiBaseUrl, config.embeddingBaseUrl, config.rerankBaseUrl, extra ?? ""]
+}
+
+function openAiProbeClient(creds: ModelProfileCredentials, config: AppConfig): OpenAI {
+  return createOpenAIClient({
+    apiKey: creds.apiKey,
+    ...(creds.baseUrl ? { baseURL: creds.baseUrl } : {}),
+    ...openaiClientOptions(config),
+  })
 }
 
 /**
@@ -139,13 +154,23 @@ function redactFrom(config: AppConfig): string[] {
  * it, so a passing chat path would read as broken.
  */
 async function testChatProfile(
-  chatClient: OpenAI,
-  config: AppConfig
+  creds: ModelProfileCredentials,
+  config: AppConfig,
+  bootClient?: OpenAI
 ): Promise<ProfileTestResult> {
+  if (!creds.apiKey) {
+    return {
+      ok: false,
+      latencyMs: null,
+      error: "the chat profile has no API key configured",
+      hint: "Save an API key on this card (or set OPENAI_API_KEY), then test again.",
+    }
+  }
+  const client = bootClient ?? openAiProbeClient(creds, config)
   const result = await timeBoxed(async (signal) => {
-    const completion = await chatClient.chat.completions.create(
+    const completion = await client.chat.completions.create(
       {
-        model: config.openaiChatModel,
+        model: creds.model,
         messages: [{ role: "user", content: "ping" }],
         max_tokens: 1,
       },
@@ -155,7 +180,9 @@ async function testChatProfile(
       throw new Error("provider returned no choices")
     }
   })
-  return result.error ? failedResult(result.error, redactFrom(config)) : okResult(result.ms)
+  return result.error
+    ? failedResult(result.error, redactFrom(config, creds.baseUrl))
+    : okResult(result.ms)
 }
 
 /**
@@ -164,13 +191,23 @@ async function testChatProfile(
  * would poison every future vector write, so it must fail loudly here.
  */
 async function testEmbeddingProfile(
-  embeddingClient: OpenAI,
-  config: AppConfig
+  creds: ModelProfileCredentials,
+  config: AppConfig,
+  bootClient?: OpenAI
 ): Promise<ProfileTestResult> {
+  if (!creds.apiKey) {
+    return {
+      ok: false,
+      latencyMs: null,
+      error: "the embedding profile has no API key configured",
+      hint: "Save an API key on this card (or set EMBEDDING_API_KEY), then test again.",
+    }
+  }
+  const client = bootClient ?? openAiProbeClient(creds, config)
   const result = await timeBoxed(async (signal) => {
-    const response = await embeddingClient.embeddings.create(
+    const response = await client.embeddings.create(
       {
-        model: config.embeddingModel,
+        model: creds.model,
         input: "ping",
         // Probe with the production encoding (float, not the SDK base64
         // default) so a provider-side truncation is caught here, not at
@@ -189,7 +226,9 @@ async function testEmbeddingProfile(
       )
     }
   })
-  return result.error ? failedResult(result.error, redactFrom(config)) : okResult(result.ms)
+  return result.error
+    ? failedResult(result.error, redactFrom(config, creds.baseUrl))
+    : okResult(result.ms)
 }
 
 /**
@@ -197,11 +236,15 @@ async function testEmbeddingProfile(
  * it IS the protocol (Edgefn `POST {base}/rerank`) with all its response
  * validation, so the test validates exactly what retrieval will call.
  */
-async function testRerankProfile(config: AppConfig, tracing?: TracingRuntime): Promise<ProfileTestResult> {
+async function testRerankProfile(
+  creds: ModelProfileCredentials,
+  config: AppConfig,
+  tracing?: TracingRuntime
+): Promise<ProfileTestResult> {
   const reranker = createDedicatedReranker({
-    baseUrl: config.rerankBaseUrl,
-    apiKey: config.rerankApiKey,
-    model: config.rerankModel,
+    baseUrl: creds.baseUrl,
+    apiKey: creds.apiKey,
+    model: creds.model,
     timeoutMs: TEST_TIMEOUT_MS,
     maxDocumentChars: 1_000,
     ...(tracing ? { tracing } : {}),
@@ -211,7 +254,7 @@ async function testRerankProfile(config: AppConfig, tracing?: TracingRuntime): P
       ok: false,
       latencyMs: null,
       error: "the rerank profile has no credentials configured",
-      hint: "Set RERANK_API_KEY in the server environment and restart, then enable it.",
+      hint: "Save an API key on this card (or set RERANK_API_KEY), then test again.",
     }
   }
   // rerank() only reads chunk.content; the remaining fields are irrelevant to
@@ -237,6 +280,32 @@ export interface ModelProfilesRouterDeps {
   clients: ModelProfileClients
   /** LO-12: observe the real rerank probe like any other provider call. */
   tracing?: TracingRuntime
+}
+
+/**
+ * True when the slot still resolves to the boot config, so the injected
+ * runtime client (test seam, tracing/budget wrapper) is the right prober.
+ * A saved slot builds a throwaway client from the new values instead.
+ */
+function usesBootSlot(
+  creds: ModelProfileCredentials,
+  config: AppConfig,
+  kind: "chat" | "embedding"
+): boolean {
+  const env =
+    kind === "chat"
+      ? { apiKey: config.openaiApiKey, baseUrl: config.openaiBaseUrl }
+      : { apiKey: config.embeddingApiKey, baseUrl: config.embeddingBaseUrl }
+  return creds.apiKey === env.apiKey && creds.baseUrl === env.baseUrl
+}
+
+function parseHttpUrl(value: string): URL | null {
+  try {
+    const url = new URL(value)
+    return url.protocol === "http:" || url.protocol === "https:" ? url : null
+  } catch {
+    return null
+  }
 }
 
 export function createModelProfilesRouter(deps: ModelProfilesRouterDeps): Router {
@@ -268,6 +337,142 @@ export function createModelProfilesRouter(deps: ModelProfilesRouterDeps): Router
     }
   })
 
+  router.get("/models/profiles/:id/config", (req: Request, res: Response) => {
+    const ctx = resolveContext(res)
+    if (!requireAdmin(ctx, res)) return
+    const id = String(req.params.id)
+    const profile = deps.registry.get(id)
+    if (!profile) {
+      res.status(404).json({ error: `unknown model profile "${id}"` })
+      return
+    }
+    res.json({ config: deps.registry.configView(profile.id) })
+  })
+
+  /**
+   * Persist one slot into the server environment file. A blank/missing API
+   * key keeps the stored one — the form never receives the key back, so an
+   * empty field cannot mean "erase the credential".
+   */
+  router.put("/models/profiles/:id/config", async (req: Request, res: Response) => {
+    const ctx = resolveContext(res)
+    if (!requireAdmin(ctx, res)) return
+    const id = String(req.params.id)
+    const profile = deps.registry.get(id)
+    if (!profile) {
+      res.status(404).json({ error: `unknown model profile "${id}"` })
+      return
+    }
+    const body = (req.body ?? {}) as Record<string, unknown>
+    const baseUrl = typeof body.baseUrl === "string" ? body.baseUrl.trim() : ""
+    const parsed = parseHttpUrl(baseUrl)
+    if (!parsed || parsed.username || parsed.password) {
+      res.status(400).json({
+        error: "baseUrl must be an absolute http(s) URL without embedded credentials",
+      })
+      return
+    }
+    const model = typeof body.model === "string" ? body.model.trim() : ""
+    if (!model) {
+      res.status(400).json({ error: "body.model is required" })
+      return
+    }
+    let apiKey: string | undefined
+    if (body.apiKey !== undefined && body.apiKey !== null) {
+      if (typeof body.apiKey !== "string") {
+        res.status(400).json({ error: "body.apiKey must be a string" })
+        return
+      }
+      const trimmed = body.apiKey.trim()
+      if (trimmed.length > 512) {
+        res.status(400).json({ error: "body.apiKey is too long" })
+        return
+      }
+      if (trimmed) apiKey = trimmed
+    }
+    try {
+      const config = await deps.registry.saveConfig(id, {
+        baseUrl,
+        model,
+        ...(apiKey !== undefined ? { apiKey } : {}),
+      })
+      res.json({ config })
+    } catch (error) {
+      if (error instanceof ModelProfileError) {
+        res
+          .status(error.status)
+          .json({ error: error.message, ...(error.hint ? { hint: error.hint } : {}) })
+        return
+      }
+      throw error
+    }
+  })
+
+  /**
+   * Ask an OpenAI-compatible provider which models the credentials may use.
+   * Values in the body let the form probe BEFORE saving; omitted fields fall
+   * back to the slot's resolved credentials. The rerank slot speaks a
+   * dedicated protocol, so its answer is narrowed to ids the provider
+   * publishes as rerankers — an empty list is a valid answer there.
+   */
+  router.post("/models/profiles/:id/discover", async (req: Request, res: Response) => {
+    const ctx = resolveContext(res)
+    if (!requireAdmin(ctx, res)) return
+    const id = String(req.params.id)
+    const profile = deps.registry.get(id)
+    if (!profile) {
+      res.status(404).json({ error: `unknown model profile "${id}"` })
+      return
+    }
+    const creds = deps.registry.credentials(id as ModelProfileId)
+    const body = (req.body ?? {}) as Record<string, unknown>
+    const baseUrl =
+      typeof body.baseUrl === "string" && body.baseUrl.trim()
+        ? body.baseUrl.trim()
+        : creds.baseUrl
+    const apiKey =
+      typeof body.apiKey === "string" && body.apiKey.trim()
+        ? body.apiKey.trim()
+        : creds.apiKey
+    if (baseUrl && !parseHttpUrl(baseUrl)) {
+      res.status(400).json({ error: "baseUrl must be an absolute http(s) URL" })
+      return
+    }
+    if (!apiKey) {
+      res.json({
+        ok: false,
+        models: [],
+        error: "no API key available",
+        hint: "填入 API key 后再检测模型。",
+      })
+      return
+    }
+    const client = createOpenAIClient({
+      apiKey,
+      ...(baseUrl ? { baseURL: baseUrl } : {}),
+      ...openaiClientOptions(deps.config),
+    })
+    const result = await timeBoxed(async (signal) => {
+      const page = await client.models.list({ signal })
+      return page.data
+    })
+    if (result.error) {
+      const { error, hint } = classifyProviderError(result.error, [baseUrl])
+      res.json({ ok: false, models: [], error, hint })
+      return
+    }
+    const models = Array.from(
+      new Set((result.value ?? []).map((model) => model.id).filter(Boolean))
+    ).sort()
+    // A reranker can never be a chat or embedding id, so only promise the
+    // form what the provider actually publishes as a reranker.
+    const discovered =
+      profile.kind === "rerank"
+        ? models.filter((model) => /rerank/i.test(model))
+        : models
+    res.json({ ok: true, models: discovered.slice(0, 500) })
+  })
+
   router.post("/models/profiles/:id/test", async (req: Request, res: Response) => {
     const ctx = resolveContext(res)
     if (!requireAdmin(ctx, res)) return
@@ -277,13 +482,24 @@ export function createModelProfilesRouter(deps: ModelProfilesRouterDeps): Router
       res.status(404).json({ error: `unknown model profile "${id}"` })
       return
     }
+    const creds = deps.registry.credentials(profile.id)
     let result: ProfileTestResult
     if (id === "chat") {
-      result = await testChatProfile(deps.clients.chatClient, deps.config)
+      result = await testChatProfile(
+        creds,
+        deps.config,
+        usesBootSlot(creds, deps.config, "chat") ? deps.clients.chatClient : undefined
+      )
     } else if (id === "embedding") {
-      result = await testEmbeddingProfile(deps.clients.embeddingClient, deps.config)
+      result = await testEmbeddingProfile(
+        creds,
+        deps.config,
+        usesBootSlot(creds, deps.config, "embedding")
+          ? deps.clients.embeddingClient
+          : undefined
+      )
     } else {
-      result = await testRerankProfile(deps.config, deps.tracing)
+      result = await testRerankProfile(creds, deps.config, deps.tracing)
     }
     res.json({ id, checkedAt: new Date().toISOString(), ...result })
   })

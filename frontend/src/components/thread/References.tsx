@@ -1,6 +1,6 @@
 import { Card } from "../arc/card/card"
-import { Badge } from "../primitives/badge"
-import { Button as UiButton } from "@/components/primitives/button"
+import { Badge } from "../arc/badge/badge"
+import { Button as UiButton } from "@/components/ui/Button"
 import {
   assetUrl,
   formatReferenceLocation,
@@ -112,7 +112,7 @@ export function ReferencesPanel({
             key={reference.id}
             data-reference-item={reference.id}
             data-highlighted={highlightedId === reference.id}
-            className="min-w-0 transition-shadow data-[highlighted=true]:ring-2 data-[highlighted=true]:ring-ring"
+            className="min-w-0 transition-shadow data-[highlighted=true]:ring-2 data-[highlighted=true]:ring-accent"
             title={
               temporary && reference.attachmentName
                 ? reference.attachmentName
@@ -123,14 +123,13 @@ export function ReferencesPanel({
               <>
                 {temporary ? (
                   <Badge
-                    variant="secondary"
                     title="来自本次会话的临时附件，不属于知识库"
                   >
                     临时
                   </Badge>
                 ) : null}
                 {faq ? (
-                  <Badge variant="secondary">
+                  <Badge>
                     FAQ
                     {Number.isInteger(reference.faqVersion)
                       ? " v" + reference.faqVersion

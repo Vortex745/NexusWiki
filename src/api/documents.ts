@@ -151,6 +151,14 @@ export function createDocumentsRouter(options: {
       }
       const tag = req.query.tag ? String(req.query.tag) : undefined
       const folder = req.query.folder ? String(req.query.folder) : undefined
+      // The sidebar's content tree asks for the usable rows only; the
+      // management view omits this and keeps every version visible.
+      const activeRaw = req.query.active ? String(req.query.active) : undefined
+      if (activeRaw !== undefined && activeRaw !== "true" && activeRaw !== "false") {
+        res.status(400).json({ error: "active must be true or false" })
+        return
+      }
+      const active = activeRaw === undefined ? undefined : activeRaw === "true"
 
       const catalog: DocumentCatalogPage = documentRepo.listCatalog({
         tenantId: context.tenantId,
@@ -160,6 +168,7 @@ export function createDocumentsRouter(options: {
         ...(status ? { status } : {}),
         ...(tag ? { tag } : {}),
         ...(folder ? { folder } : {}),
+        ...(active !== undefined ? { active } : {}),
         viewerGroups: [...context.groups],
         admin: isAdmin(context),
       })

@@ -184,6 +184,29 @@ export class SqliteSessionAttachmentStore {
   }
 
   /**
+   * Store the extracted text of a row that is still `parsing` — binary formats
+   * are extracted after the upload returns, so their text lands here. The
+   * `parsing` precondition is the same one `markStatus` uses: a retired row is
+   * never rewritten by a parse that finishes late.
+   */
+  setContent(
+    id: string,
+    sessionId: string,
+    tenantId: string,
+    subjectId: string,
+    content: string,
+    now: string
+  ): void {
+    this.db
+      .prepare(
+        `UPDATE session_attachments SET content = ?, updated_at = ?
+         WHERE id = ? AND session_id = ? AND tenant_id = ? AND subject_id = ?
+           AND status = 'parsing'`
+      )
+      .run(content, now, id, sessionId, tenantId, subjectId)
+  }
+
+  /**
    * Settle a row that is still `parsing`. The precondition is what keeps a
    * retired row dead: a parse that finishes after a removal must not resurrect
    * the attachment into the session's live set.

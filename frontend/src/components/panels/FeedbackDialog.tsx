@@ -1,5 +1,5 @@
-import { Alert, AlertDescription } from "@/components/primitives/alert"
-import { Button as UiButton } from "@/components/primitives/button"
+import { Alert } from "@/components/arc/alert/alert"
+import { Button as UiButton } from "@/components/ui/Button"
 import { MessageSquareWarning } from "../ui/icons"
 import { useCallback, useState } from "react"
 
@@ -115,7 +115,6 @@ export function FeedbackDialog({
       onOpen={() => void refresh()}
       title="答案反馈审阅"
       titleId="feedback-title"
-      icon={MessageSquareWarning}
       tier="work"
       toolbar={
         <form
@@ -183,8 +182,8 @@ export function FeedbackDialog({
       }
     >
       {error ? (
-        <Alert variant="destructive" role="alert" className="border px-3 py-2">
-          <AlertDescription>{error}</AlertDescription>
+        <Alert tone="danger" title="发生错误" className="border px-3 py-2">
+          {error}
         </Alert>
       ) : null}
 
@@ -229,7 +228,7 @@ export function FeedbackDialog({
                   </StatusBadge>
                   <StatusBadge>{STATUS_LABELS[record.status]}</StatusBadge>
                   {record.reasonCode ? (
-                    <span className="text-muted-foreground">
+                    <span className="text-faint">
                       原因：
                       {REASON_LABELS.get(record.reasonCode) ??
                         record.reasonCode}

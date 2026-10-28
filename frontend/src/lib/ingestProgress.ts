@@ -27,6 +27,10 @@ export interface ImportOutcome {
   state: ImportOutcomeState
   /** Stable activation-gate reason codes (raw, ";"-joined upstream). */
   blockReasons: string[]
+  /** Policy-accepted non-blocking warnings (e.g. OCR text not proofread). */
+  activationWarnings: string[]
+  /** Policy version that accepted the warnings; null when none recorded. */
+  activationPolicyVersion: string | null
   /** Machine-readable operations the server allows for this failure. */
   allowedOperations: string[]
   /** A prior version remains active — the blocked candidate replaced nothing
@@ -43,7 +47,7 @@ export interface ImportOutcome {
 /** Stable activation-gate reason codes → explainable copy (UT-26); unknown
  * codes pass through verbatim so new server reasons never render as blank. */
 const ACTIVATION_REASON_TEXT: Record<string, string> = {
-  activation_content_proof_pending_review: "内容完整性待校验（复杂或存在疑点的文件不会静默替换现有版本）",
+  activation_content_proof_pending_review: "内容完整性待校验（该版本尚未启用）",
   activation_index_proof_failed: "索引核验未通过（写入内容与来源不一致）",
   activation_proof_binding_mismatch: "完整性凭证与期望产物不一致",
   activation_not_searchable: "索引尚不可检索",
@@ -52,6 +56,16 @@ const ACTIVATION_REASON_TEXT: Record<string, string> = {
   activation_index_proof_missing: "索引核验凭证缺失",
   activation_evidence_schema_mismatch: "完整性证据格式不匹配",
   activation_gate_verification_not_implemented: "核验未实现",
+}
+
+/** Policy-accepted warnings → short, non-alarming copy. Unknown codes pass
+ * through so a new accepted warning never renders as blank. */
+const ACTIVATION_WARNING_TEXT: Record<string, string> = {
+  "structural_risk: ocr_content_unverified": "来自 OCR，未逐字核对",
+}
+
+export function describeActivationWarnings(warnings: ReadonlyArray<string>): string[] {
+  return warnings.map((warning) => ACTIVATION_WARNING_TEXT[warning] ?? warning)
 }
 
 export function describeActivationReasons(reasons: ReadonlyArray<string>): string[] {
@@ -182,6 +196,55 @@ export function buildImportSteps(progress: ImportProgress, isLocal: boolean, upl
   return [{ name: "upload", label: "上传", status: uploadStatus }, ...stages]
 }
 
+/**
+ * How a server catalog row reads in 上传记录. The row's coarse `status` only
+ * says the pipeline finished — it never says retrieval adopted the version.
+ * Adoption is the `active` pointer (sources.active_doc_id), while a held
+ * candidate is a completed row with candidateState pending_review (business
+ * approval) or a recorded activation block reason (content-integrity hold).
+ */
+export type RecordDisplayState =
+  | "processing"
+  | "adopted"
+  | "pending_review"
+  | "business_review"
+  | "inactive"
+  | "failed"
+  | "cancelled"
+
+export interface RecordDisplayView {
+  state: RecordDisplayState
+  label: string
+}
+
+export interface RecordDisplayInput {
+  status: "pending" | "completed" | "failed" | "cancelled"
+  candidateState?: string | null
+  active?: boolean
+  activationBlockReason?: string | null
+}
+
+/** Derive the record row presentation from the server's own fields. ✅ is
+ * reserved for a completed version that the active pointer actually holds. */
+export function deriveRecordView(record: RecordDisplayInput): RecordDisplayView {
+  if (record.status === "failed") return { state: "failed", label: "失败" }
+  if (record.status === "cancelled") return { state: "cancelled", label: "已取消" }
+  if (record.status !== "completed") return { state: "processing", label: "处理中" }
+  // Business approval hold: a completed candidate never became active.
+  if (record.candidateState === "pending_review") {
+    return { state: "business_review", label: "待审中" }
+  }
+  // Integrity hold: activation was denied and the reason was recorded.
+  if ((record.activationBlockReason ?? "").trim() !== "") {
+    return { state: "pending_review", label: "待校验" }
+  }
+  if (record.active) return { state: "adopted", label: "已完成" }
+  // Completed but not the active pointer: an older version (superseded by a
+  // newer one) or a candidate that was never enabled. Both are non-active,
+  // neither is a success — no ✅, no failure ❌.
+  return { state: "inactive", label: "非活动版本" }
+}
+
 export interface ImportProgress {
   status: ImportStatus
   percent: number | null
@@ -234,12 +297,19 @@ export function deriveIngestProgress(payload: IngestStatus): ImportProgress {
   // heuristics (extraction length, text presence, stage labels).
   const failureCategory = payload.failure?.category ?? null
   const blockReasons = blocked ? (payload.activationBlockReason as string).split(";").filter(Boolean) : []
+  const acceptanceWarnings = Array.isArray(payload.activationWarnings)
+    ? payload.activationWarnings.filter((warning): warning is string => typeof warning === "string")
+    : []
+  const acceptancePolicyVersion =
+    typeof payload.activationPolicyVersion === "string" ? payload.activationPolicyVersion : null
   const version = payload.documentVersion
   const outcome: ImportOutcome | null =
     status === "pending_review"
       ? {
           state: "pending_review",
           blockReasons,
+          activationWarnings: [],
+          activationPolicyVersion: null,
           allowedOperations: [],
           oldVersionUsable: version != null && !version.active && version.version > 1,
         }
@@ -247,6 +317,8 @@ export function deriveIngestProgress(payload: IngestStatus): ImportProgress {
         ? {
             state: "business_review",
             blockReasons: [],
+            activationWarnings: [],
+            activationPolicyVersion: null,
             allowedOperations: [],
             oldVersionUsable: version != null && !version.active && version.version > 1,
           }
@@ -254,6 +326,8 @@ export function deriveIngestProgress(payload: IngestStatus): ImportProgress {
           ? {
               state: failureCategory === "capability_missing" ? "capability_missing" : "failed",
               blockReasons: [],
+              activationWarnings: [],
+              activationPolicyVersion: null,
               allowedOperations: payload.failure?.allowedOperations ?? [],
               oldVersionUsable: version != null && !version.active && version.version > 1,
               // Ticket 26: the raw evidence the failure copy keys off.
@@ -262,9 +336,16 @@ export function deriveIngestProgress(payload: IngestStatus): ImportProgress {
               ...(payload.failure?.userGuidance ? { userGuidance: payload.failure.userGuidance } : {}),
             }
           : status === "cancelled"
-            ? { state: "cancelled", blockReasons: [], allowedOperations: [], oldVersionUsable: false }
+            ? { state: "cancelled", blockReasons: [], activationWarnings: [], activationPolicyVersion: null, allowedOperations: [], oldVersionUsable: false }
             : status === "completed"
-              ? { state: "completed", blockReasons: [], allowedOperations: [], oldVersionUsable: false }
+              ? {
+                  state: "completed",
+                  blockReasons: [],
+                  activationWarnings: acceptanceWarnings,
+                  activationPolicyVersion: acceptancePolicyVersion,
+                  allowedOperations: [],
+                  oldVersionUsable: false,
+                }
               : null
   const retryAt = payload.task?.nextAttemptAt ?? null
   const waitingForRetry = status === "pending" && root?.span.status === "failed"
@@ -358,7 +439,7 @@ export function deriveIngestProgress(payload: IngestStatus): ImportProgress {
   // replace the file, already inside the mapped reasons).
   const describedFailure = failureRecord ? describeFailure(failureRecord) : null
   const summary = status === "completed" ? "处理完成"
-    : status === "pending_review" ? "处理完成，但内容待校验，未替换现有版本"
+    : status === "pending_review" ? "处理完成，但内容待校验，尚未启用"
     : status === "business_review" ? "处理完成，等待业务审批"
     : status === "cancelled" ? "已取消"
     : status === "failed" && failureRecord?.reasonCode === "pdf_quality_gate_rejected" ? "上传失败"

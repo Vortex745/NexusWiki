@@ -10,8 +10,9 @@
  *
  * Sizes map to honest statuses: 413 for the per-file (20 MB) and session
  * (50 MB) limits, 400 for the five-file cap and empty files, 415 for types
- * outside the supported text set. Parsing is per file: a rejected or failed
- * file never hides the accepted ones.
+ * outside the same document set the import accepts. Parsing is per file: a
+ * rejected or failed file never hides the accepted ones. Binary documents
+ * answer 201 as "parsing" and settle in the background (the composer polls).
  */
 
 import express, { Router, type Request, type Response } from "express"

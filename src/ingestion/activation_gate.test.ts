@@ -23,6 +23,8 @@ import {
   ACTIVATION_BLOCKED_INDEX_PROOF_MISSING,
   ACTIVATION_BLOCKED_NOT_SEARCHABLE,
   ACTIVATION_BLOCKED_PROOF_BINDING_MISMATCH,
+  ACTIVATION_POLICY_VERSION,
+  ACTIVATION_WARNING_OCR_CONTENT_UNVERIFIED,
   evaluateActivationGate,
 } from "./activation_gate"
 import { SqliteCandidateReviewStore } from "../knowledge/candidate_review_store"
@@ -139,6 +141,95 @@ test("UT-17 联合核验：绑定一致且检索可见才放行；陈旧凭证/�
   })
   assert.equal(noProbe.passed, false)
   assert.deepEqual(noProbe.reasonCodes, [ACTIVATION_BLOCKED_NOT_SEARCHABLE])
+})
+
+test("OCR 软提示政策：唯一通用理由放行，任何混入理由仍拒绝", () => {
+  const bindings = { expectedChunksSha256: "digest-ocr", expectedChunkCount: 2 }
+  const indexProof = {
+    verdict: "pass",
+    reasonCodes: [],
+    manifestSha256: "digest-ocr",
+    searchVisibleCount: 2,
+  }
+  const accepted = evaluateActivationGate({
+    schemaVersion: 1,
+    contentProof: {
+      verdict: "pending_review",
+      reasonCodes: [ACTIVATION_WARNING_OCR_CONTENT_UNVERIFIED],
+      bindings,
+    },
+    indexProof,
+  })
+  assert.equal(accepted.passed, true)
+  assert.deepEqual(accepted.reasonCodes, [])
+  assert.deepEqual(accepted.warningCodes, [ACTIVATION_WARNING_OCR_CONTENT_UNVERIFIED])
+  assert.equal(accepted.policyVersion, ACTIVATION_POLICY_VERSION)
+
+  const rejectedReasonSets: unknown[] = [
+    [],
+    undefined,
+    ["ocr_content_unverified"],
+    ["structural_risk: OCR_CONTENT_UNVERIFIED"],
+    [ACTIVATION_WARNING_OCR_CONTENT_UNVERIFIED, "structural_risk: ocr_empty_textblock"],
+    [ACTIVATION_WARNING_OCR_CONTENT_UNVERIFIED, ""],
+  ]
+  for (const reasonCodes of rejectedReasonSets) {
+    const decision = evaluateActivationGate({
+      schemaVersion: 1,
+      contentProof: { verdict: "pending_review", reasonCodes, bindings },
+      indexProof,
+    })
+    assert.equal(decision.passed, false, JSON.stringify(reasonCodes))
+    assert.equal(decision.reasonCodes[0], ACTIVATION_BLOCKED_CONTENT_PROOF_PENDING_REVIEW)
+    assert.deepEqual(decision.warningCodes, [])
+    assert.equal(decision.policyVersion, null)
+  }
+})
+
+test("OCR 软提示只买来索引检查资格：索引缺失/失败/绑定不一致/不可见仍拒绝", () => {
+  const contentProof = {
+    verdict: "pending_review",
+    reasonCodes: [ACTIVATION_WARNING_OCR_CONTENT_UNVERIFIED],
+    bindings: { expectedChunksSha256: "digest-ocr", expectedChunkCount: 1 },
+  }
+  const cases: Array<{ indexProof: unknown; expected: string }> = [
+    { indexProof: null, expected: ACTIVATION_BLOCKED_INDEX_PROOF_MISSING },
+    {
+      indexProof: {
+        verdict: "fail",
+        reasonCodes: ["index_missing_chunks"],
+        manifestSha256: "digest-ocr",
+        searchVisibleCount: 1,
+      },
+      expected: ACTIVATION_BLOCKED_INDEX_PROOF_FAILED,
+    },
+    {
+      indexProof: {
+        verdict: "pass",
+        reasonCodes: [],
+        manifestSha256: "digest-old",
+        searchVisibleCount: 1,
+      },
+      expected: ACTIVATION_BLOCKED_PROOF_BINDING_MISMATCH,
+    },
+    {
+      indexProof: {
+        verdict: "pass",
+        reasonCodes: [],
+        manifestSha256: "digest-ocr",
+        searchVisibleCount: 0,
+      },
+      expected: ACTIVATION_BLOCKED_NOT_SEARCHABLE,
+    },
+  ]
+  for (const { indexProof, expected } of cases) {
+    const decision = evaluateActivationGate({ schemaVersion: 1, contentProof, indexProof })
+    assert.equal(decision.passed, false)
+    assert.equal(decision.reasonCodes[0], expected)
+    assert.ok(!decision.reasonCodes.includes(ACTIVATION_WARNING_OCR_CONTENT_UNVERIFIED))
+    assert.deepEqual(decision.warningCodes, [])
+    assert.equal(decision.policyVersion, null)
+  }
 })
 
 test("UT-04 自动激活：阶段成功的候选保持未激活并记录缺失原因", async () => {
@@ -281,6 +372,62 @@ test("UT-17 双凭证 pass 且绑定一致 → 联合激活放行；取消约束
     const cancellation = lifecycle.cancel(second.docId)
     assert.equal(cancellation?.status, "cancelled")
     assert.equal(cancellation?.changed, true)
+  } finally {
+    db.close()
+  }
+})
+
+test("OCR 软提示自动激活：原始 pending_review 保留，接受事实单独记录且新证据不继承", async () => {
+  const db = openDb(":memory:")
+  try {
+    const lifecycle = new IngestionLifecycle(db, completingRunner())
+    const docRepo = new DocumentRepo(db)
+    const submitted = lifecycle.submit({ title: "普通 OCR 图", content: "正文", source: "ocr-advisory-test" })
+    docRepo.setCandidateEvidence(submitted.docId, {
+      schemaVersion: 1,
+      contentProof: {
+        verdict: "pending_review",
+        reasonCodes: [ACTIVATION_WARNING_OCR_CONTENT_UNVERIFIED],
+        bindings: { expectedChunksSha256: "digest-ocr", expectedChunkCount: 1 },
+      },
+      indexProof: {
+        verdict: "pass",
+        reasonCodes: [],
+        manifestSha256: "digest-ocr",
+        searchVisibleCount: 1,
+      },
+    })
+    await lifecycle.runNext()
+
+    const source = db.prepare(
+      "SELECT active_doc_id FROM sources WHERE source_id = (SELECT source_id FROM documents WHERE doc_id = ?)"
+    ).get(submitted.docId) as { active_doc_id: string | null }
+    assert.equal(source.active_doc_id, submitted.docId, "唯一软提示且索引通过 → 普通 OCR 成为活动版本")
+
+    const status = lifecycle.getStatus(submitted.docId)
+    assert.equal(status?.activationBlockReason, null)
+    assert.deepEqual(status?.activationWarnings, [ACTIVATION_WARNING_OCR_CONTENT_UNVERIFIED])
+    assert.equal(status?.activationPolicyVersion, ACTIVATION_POLICY_VERSION)
+
+    const acceptance = docRepo.getActivationAcceptance(submitted.docId)
+    assert.ok(acceptance)
+    assert.deepEqual(acceptance?.warningCodes, [ACTIVATION_WARNING_OCR_CONTENT_UNVERIFIED])
+    assert.equal(acceptance?.expectedChunksSha256, "digest-ocr")
+    assert.equal(typeof acceptance?.evaluatedAt, "string")
+
+    const evidence = docRepo.getCandidateEvidence(submitted.docId) as {
+      contentProof: { verdict: string; reasonCodes: string[] }
+    }
+    assert.equal(evidence.contentProof.verdict, "pending_review", "原始内容事实不改写")
+    assert.deepEqual(evidence.contentProof.reasonCodes, [ACTIVATION_WARNING_OCR_CONTENT_UNVERIFIED])
+
+    // 新的摄取产物重新生成证据：旧的接受记录不得继承。
+    docRepo.setCandidateEvidence(submitted.docId, {
+      schemaVersion: 1,
+      contentProof: evidence.contentProof,
+      indexProof: null,
+    })
+    assert.equal(docRepo.getActivationAcceptance(submitted.docId), null)
   } finally {
     db.close()
   }

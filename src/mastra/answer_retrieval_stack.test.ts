@@ -4,9 +4,8 @@
  *
  * Ticket 49 moved the shared entry's retrieval assembly into
  * `AnswerRetrievalStack`. This suite pins the branches that only an isolated
- * evaluation scope, a retrieval-debug caller or an optional evidence channel
- * exercises, so a later ticket cannot quietly drop a seam while the ordinary
- * chat path stays green:
+ * evaluation scope or an optional evidence channel exercises, so a later
+ * ticket cannot quietly drop a seam while the ordinary chat path stays green:
  *
  *   #1 an injected scope retrieves through the injected operations, and the
  *      stack never composes a second retrieval path behind it
@@ -283,7 +282,7 @@ test("ARCH-01C #1: an injected scope retrieves through its own operations, not a
   const taskReranker = recordingReranker()
   const stack = buildStack({ searchOperations: operations, reranker: taskReranker })
 
-  // The SAME object is what the entry publishes to retrieval-debug (ticket 14).
+  // The SAME object the entry publishes for callers that inject operations.
   assert.equal(stack.searchOperations, operations)
   const outcome = await stack
     .createSearcher(ASSISTANT_WITH_RERANK)

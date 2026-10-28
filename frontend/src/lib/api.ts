@@ -6,14 +6,34 @@ import { isPdfLike, serverUploadErrorKind } from "./importBatch"
 const API_BASE = "/api"
 
 /**
- * Ticket 01: the bearer token lives in this module for the lifetime of the
- * page. It is deliberately NOT part of any bundle or build-time constant —
- * it is obtained at runtime from the server after a sign-in.
+ * Ticket 01: the bearer token is obtained at runtime from the server after a
+ * sign-in — it is deliberately NOT part of any bundle or build-time constant.
+ * It is kept in localStorage so the gate holds for the token's whole lifetime
+ * (seven days) instead of asking for the password again on every reload; the
+ * server still decides when it expires, and a 401 clears it.
  */
-let accessToken: string | null = null
+const ACCESS_TOKEN_STORAGE_KEY = "nexusrag.accessToken"
+
+function readStoredAccessToken(): string | null {
+  try {
+    return (globalThis as { localStorage?: Storage }).localStorage?.getItem(ACCESS_TOKEN_STORAGE_KEY) ?? null
+  } catch {
+    return null
+  }
+}
+
+let accessToken: string | null = readStoredAccessToken()
 
 export function setAccessToken(token: string | null): void {
   accessToken = token
+  try {
+    const storage = (globalThis as { localStorage?: Storage }).localStorage
+    if (token) storage?.setItem(ACCESS_TOKEN_STORAGE_KEY, token)
+    else storage?.removeItem(ACCESS_TOKEN_STORAGE_KEY)
+  } catch {
+    // Storage can be unavailable (disabled/private mode); the in-memory token
+    // still carries this page's session.
+  }
 }
 
 /**
@@ -157,6 +177,11 @@ export interface IngestStatus {
   /** UT-26: activation-gate denial reason codes joined by ";" (null = active
    * or never attempted). A completed candidate can still be blocked. */
   activationBlockReason?: string | null
+  /** UT-OCR-advisory: non-blocking warnings the activation policy accepted
+   * (e.g. OCR text that was not proofread). Empty/absent on legacy rows. */
+  activationWarnings?: string[]
+  /** Policy version behind the recorded acceptance; null when none. */
+  activationPolicyVersion?: string | null
   /** UT-26: candidate pipeline state ('pending_review' = held for business
    * approval under ACTIVATION_MODE=review). */
   candidateState?: string | null
@@ -195,329 +220,6 @@ export async function fetchStatus(): Promise<StatusPayload> {
   const response = await apiFetch("/status")
   if (!response.ok) throw new Error(`HTTP ${response.status}`)
   return (await response.json()) as StatusPayload
-}
-
-// ---------------------------------------------------------------------------
-// Evaluation tasks (in-process, memory-only — ticket 04)
-// ---------------------------------------------------------------------------
-
-export interface EvaluationDatasetSummary {
-  id: string
-  name: string
-  version: string
-  description: string
-  contentDigest: string
-  caseCount: number
-  passageCount: number
-}
-
-export interface EvaluationDatasetsPayload {
-  datasets: EvaluationDatasetSummary[]
-  defaults: { chatModel: string; rerankModel: string | null; embeddingModel: string }
-  /** Ticket 11: ids a task may pick instead of the server default. */
-  allowedModels: { chat: string[]; rerank: string[] }
-  /** Ticket 28: the built-in Rerank on/off pair and the sample it runs on. */
-  comparisonAssistants?: EvaluationAssistantSnapshot[]
-  comparisonDatasetId?: string
-  maxCasesPerTask: number
-}
-
-/** Ticket 28: the immutable assistant configuration a task ran with. */
-export interface EvaluationAssistantSnapshot {
-  assistantId: string
-  version: number
-  name: string
-  configDigest: string
-  systemPrompt: string
-  rerankModelProfileId: string | null
-}
-
-export type EvaluationTaskStage =
-  | "queued"
-  | "preparing"
-  | "running"
-  | "cleaning"
-  | "completed"
-  | "completed_with_errors"
-  | "failed"
-
-export interface EvaluationRankedCandidate {
-  rank: number
-  passageId: string | null
-  documentId: string
-  chunkId: string
-  score: number
-  channels: string[]
-  relevant: boolean
-}
-
-export interface EvaluationCaseResult {
-  caseId: string
-  question: string
-  referenceAnswer: string
-  outcome: "answered" | "failed"
-  answer: string
-  terminalStatus?: string
-  error?: string
-  /**
-   * Ticket 06: how the scored ranking was produced. `dedicated_rerank` means
-   * the configured reranker scored it; `fused` means an unscored order was
-   * published (fusion, below-threshold, unavailable reranker, or a multi-query
-   * merge) — never displayed as a dedicated-rerank success.
-   */
-  ordering?: { source: "dedicated_rerank" | "fused"; reason?: string }
-  runId?: string
-  /** Ticket 27/28: the frozen model snapshot this case ran with. */
-  modelProfile?: { chatModel: string; rerankModel: string | null; embeddingProfile: string }
-  durationMs: number
-  metrics: Record<string, number | null>
-  retrievedPassageIds: string[]
-  /** Ticket 13: which generation round produced the scored context. */
-  finalContextRound?: number
-  candidates: EvaluationRankedCandidate[]
-  unmappedCandidates: number
-  /**
-   * PL-05 / PT-09: the generation-context stage, scored only from a real
-   * generation-context-v1 snapshot. `null` + an availability reason means the
-   * record cannot be judged, which is deliberately not a 0.
-   */
-  generationContextAvailability?: "measured" | "empty_ground_truth" | "missing_snapshot" | "not_generated"
-  generationContextReason?: string
-  generationContextRound?: number
-  generationContextRepresentation?: "deterministic_full" | "deterministic_partial" | "compressed"
-  generationContextTokenCount?: number
-  generationContextVersion?: string
-}
-
-export interface EvaluationTaskSummary {
-  id: string
-  dataset: {
-    id?: string
-    name: string
-    version: string
-    contentDigest: string
-    caseCount: number
-    passageCount: number
-  }
-  stage: EvaluationTaskStage
-  progress: { finished: number; total: number }
-  /** Ticket 10: answered / failed / degraded among the settled cases. */
-  counts: { answered: number; failed: number; degraded: number }
-  createdAt: string
-  startedAt?: string
-  finishedAt?: string
-}
-
-export interface EvaluationTaskDetail extends EvaluationTaskSummary {
-  config: {
-    chatModel: string
-    rerankModel: string | null
-    embeddingModel: string
-    rerankSource: string
-    /** Ticket 28: present when the task named an assistant configuration. */
-    assistant?: EvaluationAssistantSnapshot
-  }
-  cases: EvaluationCaseResult[]
-  metrics: {
-    version: string
-    /** Ticket 07/08: the answer-similarity metrics and the text rules they share. */
-    generation?: { bleuVersion: string; rougeVersion: string; textRuleVersion: string }
-    /** PL-05: the actual-generation-context stage keeps its own version stamp. */
-    context?: { version: string }
-    metrics: Record<string, { value: number | null; sampleSize: number; notApplicable: number }>
-  }
-  cleanup: { esIndex: string; esError?: string; graphProvenance: string; graphError?: string; dbClosed: boolean } | null
-  error?: string
-}
-
-export async function fetchEvaluationDatasets(): Promise<EvaluationDatasetsPayload> {
-  const response = await apiFetch("/evaluation-datasets")
-  if (!response.ok) throw new Error(`评测样例读取失败 (${response.status})`)
-  return (await response.json()) as EvaluationDatasetsPayload
-}
-
-/**
- * Built-in sample id or an inline dataset payload — exactly one of the two —
- * plus the optional per-run model ids (ticket 11). Model ids are the ONLY
- * provider setting a request may carry: no base URL, key or endpoint.
- */
-export type EvaluationTaskInput = ({ datasetId: string } | { dataset: unknown }) & {
-  chatModel?: string
-  rerankModel?: string
-  /** Ticket 28: run an immutable assistant configuration (built-in id or stored). */
-  assistantId?: string
-}
-
-/**
- * Rejected request (400/429). `issues` carries the server's per-field/per-case
- * messages so the page can point at the offending entry (ticket 05).
- */
-export class EvaluationRequestError extends Error {
-  constructor(message: string, readonly issues: string[] = [], readonly status = 0) {
-    super(message)
-    this.name = "EvaluationRequestError"
-  }
-}
-
-/**
- * Ticket 26 (EVAL-01B1): a cancel can be refused for a STATE reason — 404 when
- * the record is gone from this process, 409 when the task already settled (a
- * cancel never rewrites a result). The status is kept so the page can refresh
- * the settled record instead of showing a failure for a normal outcome.
- */
-export class EvaluationCancelError extends Error {
-  constructor(message: string, readonly status: number) {
-    super(message)
-    this.name = "EvaluationCancelError"
-  }
-}
-
-export async function createEvaluationTask(input: EvaluationTaskInput): Promise<EvaluationTaskSummary> {
-  const response = await apiFetch("/evaluations", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(input),
-  })
-  if (!response.ok) {
-    const body = (await response.json().catch(() => ({}))) as { error?: string; issues?: unknown }
-    const issues = Array.isArray(body.issues) ? body.issues.map((issue) => String(issue)) : []
-    throw new EvaluationRequestError(
-      body.error || `评测任务提交失败 (${response.status})`,
-      issues,
-      response.status
-    )
-  }
-  return (await response.json()) as EvaluationTaskSummary
-}
-
-/** Ticket 12: the evaluation records retained by this process. */
-export async function listEvaluationTasks(): Promise<EvaluationTaskSummary[]> {
-  const response = await apiFetch("/evaluations")
-  if (!response.ok) throw new Error(`评测记录读取失败 (${response.status})`)
-  const body = (await response.json()) as { tasks?: EvaluationTaskSummary[] }
-  return Array.isArray(body.tasks) ? body.tasks : []
-}
-
-/** 404 → null（任务只存在于当前服务进程，重启后不可查询）。 */
-export async function fetchEvaluationTask(id: string): Promise<EvaluationTaskDetail | null> {
-  const response = await apiFetch(`/evaluations/${encodeURIComponent(id)}`)
-  if (response.status === 404) return null
-  if (!response.ok) throw new Error(`评测任务查询失败 (${response.status})`)
-  return (await response.json()) as EvaluationTaskDetail
-}
-
-/**
- * Ticket 25 (EVAL-01A): cancel a running task. 404 → the task is gone from
- * this process; 409 → it already finished and its result stands.
- */
-export async function cancelEvaluationTask(id: string): Promise<EvaluationTaskDetail> {
-  const response = await apiFetch(`/evaluations/${encodeURIComponent(id)}/cancel`, { method: "POST" })
-  if (response.status === 404) throw new EvaluationCancelError("任务不在当前服务进程中", 404)
-  if (response.status === 409) throw new EvaluationCancelError("任务已经结束，结果不会被取消改写", 409)
-  if (!response.ok) throw new EvaluationCancelError(`取消失败 (${response.status})`, response.status)
-  return (await response.json()) as EvaluationTaskDetail
-}
-
-// ---------------------------------------------------------------------------
-// Ticket 28 (EVAL-02A): report export and comparison of two configurations
-// ---------------------------------------------------------------------------
-
-export interface EvaluationComparisonSide {
-  taskId: string
-  stage: EvaluationTaskStage
-  assistant?: EvaluationAssistantSnapshot
-  config: EvaluationTaskDetail["config"]
-  metrics: EvaluationTaskDetail["metrics"]
-}
-
-export interface EvaluationComparisonCase {
-  caseId: string
-  question: string
-  left: {
-    outcome: "answered" | "failed"
-    answer: string
-    ordering?: { source: string; reason?: string }
-    metrics: Record<string, number | null>
-  }
-  right: EvaluationComparisonCase["left"]
-}
-
-export interface EvaluationComparison {
-  formatVersion: number
-  dataset: { name: string; version: string; contentDigest: string }
-  left: EvaluationComparisonSide
-  right: EvaluationComparisonSide
-  metrics: Record<string, { left: number | null; right: number | null; delta: number | null }>
-  cases: EvaluationComparisonCase[]
-  /** True when the two configurations differ only in the rerank binding. */
-  rerankComparison: boolean
-}
-
-/**
- * Ticket 28: a settled report as JSON or CSV. The server sends it as an
- * attachment with both an ASCII and a UTF-8 filename; the latter wins.
- */
-export async function exportEvaluationTask(
-  id: string,
-  format: "json" | "csv"
-): Promise<{ filename: string; text: string }> {
-  const response = await apiFetch(`/evaluations/${encodeURIComponent(id)}/export?format=${format}`)
-  if (response.status === 404) throw new Error("任务不在当前服务进程中")
-  if (response.status === 409) throw new Error("任务尚未结束，报告还不完整")
-  if (!response.ok) throw new Error(`导出失败 (${response.status})`)
-  const disposition = response.headers.get("Content-Disposition") ?? ""
-  const utf8 = /filename\*=UTF-8''([^;]+)/i.exec(disposition)?.[1]
-  const fallback = /filename="([^"]+)"/i.exec(disposition)?.[1]
-  return {
-    filename: utf8 ? decodeURIComponent(utf8) : (fallback ?? `evaluation-${id.slice(0, 8)}.${format}`),
-    text: await response.text(),
-  }
-}
-
-/** Ticket 28: compare two settled tasks that ran the same dataset. */
-export async function compareEvaluationTasks(
-  leftTaskId: string,
-  rightTaskId: string
-): Promise<EvaluationComparison> {
-  const response = await apiFetch("/evaluations/compare", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ leftTaskId, rightTaskId }),
-  })
-  if (response.status === 404) throw new Error("参与对比的任务不在当前服务进程中")
-  if (!response.ok) {
-    const body = (await response.json().catch(() => ({}))) as { error?: string }
-    throw new EvaluationRequestError(body.error || `对比失败 (${response.status})`, [], response.status)
-  }
-  return (await response.json()) as EvaluationComparison
-}
-
-/**
- * Ticket 28: run the built-in Rerank enabled/disabled example — two tasks over
- * one dataset, differing only in the immutable rerank binding.
- */
-export async function createEvaluationComparisonExample(
-  datasetId?: string
-): Promise<{ datasetId: string; left: EvaluationTaskSummary; right: EvaluationTaskSummary }> {
-  const response = await apiFetch("/evaluations/comparison-example", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(datasetId ? { datasetId } : {}),
-  })
-  if (!response.ok) {
-    const body = (await response.json().catch(() => ({}))) as { error?: string; issues?: unknown }
-    const issues = Array.isArray(body.issues) ? body.issues.map((issue) => String(issue)) : []
-    throw new EvaluationRequestError(
-      body.error || `内置对照任务创建失败 (${response.status})`,
-      issues,
-      response.status
-    )
-  }
-  return (await response.json()) as {
-    datasetId: string
-    left: EvaluationTaskSummary
-    right: EvaluationTaskSummary
-  }
 }
 
 // ---------------------------------------------------------------------------
@@ -631,163 +333,6 @@ export async function updateFeedbackStatus(
   return (await response.json()) as FeedbackPayload
 }
 
-// ---------------------------------------------------------------------------
-// Ticket 30 (FAQ-01A): versioned FAQ entries inside one knowledge base
-// ---------------------------------------------------------------------------
-
-export type FaqEntryStatus = "active" | "disabled"
-
-export interface FaqSourcePayload {
-  title: string
-  uri: string | null
-}
-
-export interface FaqEntryVersionPayload {
-  version: number
-  question: string
-  normalizedQuestion: string
-  variants: string[]
-  answer: string
-  source: FaqSourcePayload | null
-  createdBy: string
-  createdAt: string
-}
-
-export interface FaqEntryPayload {
-  id: string
-  tenantId: string
-  knowledgeBaseId: string
-  status: FaqEntryStatus
-  currentVersion: number
-  createdAt: string
-  updatedAt: string
-  version: FaqEntryVersionPayload
-}
-
-export interface FaqCommandBody {
-  question?: string
-  answer?: string
-  variants?: string[]
-  source?: FaqSourcePayload | null
-}
-
-export interface FaqImportResultPayload {
-  imported: number
-  versioned: number
-  skipped: number
-  issues: string[]
-}
-
-/** A rejected FAQ command: 400 with per-field issues, 409 with the conflict. */
-export class FaqCommandError extends Error {
-  constructor(
-    message: string,
-    readonly issues: string[] = [],
-    readonly status = 0,
-    readonly conflict: Record<string, unknown> | null = null
-  ) {
-    super(message)
-    this.name = "FaqCommandError"
-  }
-}
-
-async function faqCommand(
-  knowledgeBaseId: string,
-  path: string,
-  method: string,
-  body?: unknown
-): Promise<Record<string, any>> {
-  const response = await apiFetch(
-    `/knowledge-bases/${encodeURIComponent(knowledgeBaseId)}/faqs${path}`,
-    {
-      method,
-      headers: { "Content-Type": "application/json" },
-      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
-    }
-  )
-  if (!response.ok) {
-    const payload = (await response.json().catch(() => ({}))) as {
-      error?: string
-      issues?: unknown
-      conflict?: Record<string, unknown>
-    }
-    const issues = Array.isArray(payload.issues) ? payload.issues.map((issue) => String(issue)) : []
-    throw new FaqCommandError(
-      payload.error ?? `FAQ 操作失败 (${response.status})`,
-      issues,
-      response.status,
-      payload.conflict ?? null
-    )
-  }
-  return (await response.json()) as Record<string, any>
-}
-
-/** Entries of one knowledge base — DISABLED entries are listed too. */
-export async function fetchFaqEntries(
-  knowledgeBaseId: string,
-  status?: FaqEntryStatus
-): Promise<FaqEntryPayload[]> {
-  const payload = await faqCommand(
-    knowledgeBaseId,
-    status ? `?status=${status}` : "",
-    "GET"
-  )
-  return Array.isArray(payload.entries) ? (payload.entries as FaqEntryPayload[]) : []
-}
-
-export async function createFaqEntry(
-  knowledgeBaseId: string,
-  body: FaqCommandBody
-): Promise<FaqEntryPayload> {
-  const payload = await faqCommand(knowledgeBaseId, "", "POST", body)
-  return payload.entry as FaqEntryPayload
-}
-
-/** An edit adds an immutable version; omitted fields keep their value. */
-export async function editFaqEntry(
-  knowledgeBaseId: string,
-  id: string,
-  body: FaqCommandBody
-): Promise<FaqEntryPayload> {
-  const payload = await faqCommand(knowledgeBaseId, `/${encodeURIComponent(id)}`, "PATCH", body)
-  return payload.entry as FaqEntryPayload
-}
-
-export async function setFaqEntryStatus(
-  knowledgeBaseId: string,
-  id: string,
-  status: FaqEntryStatus
-): Promise<FaqEntryPayload> {
-  const payload = await faqCommand(
-    knowledgeBaseId,
-    `/${encodeURIComponent(id)}/${status === "active" ? "activate" : "disable"}`,
-    "POST"
-  )
-  return payload.entry as FaqEntryPayload
-}
-
-export async function fetchFaqEntryVersions(
-  knowledgeBaseId: string,
-  id: string
-): Promise<FaqEntryVersionPayload[]> {
-  const payload = await faqCommand(
-    knowledgeBaseId,
-    `/${encodeURIComponent(id)}/versions`,
-    "GET"
-  )
-  return Array.isArray(payload.versions) ? (payload.versions as FaqEntryVersionPayload[]) : []
-}
-
-/** Row-precise import: valid rows are applied, rejected rows are reported. */
-export async function importFaqEntries(
-  knowledgeBaseId: string,
-  format: "json" | "csv",
-  content: string
-): Promise<FaqImportResultPayload> {
-  const payload = await faqCommand(knowledgeBaseId, "/import", "POST", { format, content })
-  return payload.result as FaqImportResultPayload
-}
-
 export async function fetchRunHistory(runId: string): Promise<RunHistory> {
   const response = await apiFetch(`/chat/runs/${encodeURIComponent(runId)}`)
   if (!response.ok) throw new Error(`HTTP ${response.status}`)
@@ -848,6 +393,20 @@ export async function streamChat(
   const decoder = new TextDecoder()
   let buffer = ""
   let streamDone = false
+  // Knowledge routes replay the approved reply as one burst. Notifying the
+  // store once per token re-renders the thread for every token; the answer
+  // part then mounts hundreds of milliseconds late. Coalesce consecutive
+  // deltas in a read chunk into one update — the last delta's trace event is
+  // kept, and intermediate deltas were already excluded from the trace panel.
+  let pendingDelta: SseEventData | null = null
+  let pendingToken = ""
+  const flushDelta = () => {
+    if (!pendingDelta) return
+    const data = { ...pendingDelta, token: pendingToken }
+    pendingDelta = null
+    pendingToken = ""
+    onEvent(data)
+  }
 
   const processLine = (rawLine: string) => {
     const line = rawLine.trimEnd()
@@ -858,7 +417,20 @@ export async function streamChat(
       return
     }
     try {
-      onEvent(JSON.parse(payload) as SseEventData)
+      const data = JSON.parse(payload) as SseEventData
+      const token = typeof data.token === "string" ? data.token : null
+      const isDelta =
+        token !== null &&
+        (data.event
+          ? data.event.type === "answer_delta"
+          : !data.done && !data.event)
+      if (isDelta && token !== null) {
+        pendingDelta = data
+        pendingToken += token
+        return
+      }
+      flushDelta()
+      onEvent(data)
     } catch {
       // Ignore non-JSON SSE keepalive lines.
     }
@@ -870,10 +442,12 @@ export async function streamChat(
     const lines = buffer.split(/\r?\n/)
     buffer = lines.pop() || ""
     lines.forEach(processLine)
+    flushDelta()
     if (done) break
   }
 
   if (buffer.trim()) processLine(buffer)
+  flushDelta()
 }
 
 /** UT-23: the upload's failure taxonomy. Admission rejections carry the
@@ -1493,6 +1067,9 @@ export interface DocumentCatalogEntryPayload {
   candidateState: string
   version: number
   active: boolean
+  /** Why activation was denied (";"-joined stable codes); null when active or
+   * never evaluated. The records view needs it to tell 待校验 from 历史版本. */
+  activationBlockReason: string | null
   tags: string[]
   folder: string | null
   retired: boolean
@@ -1514,6 +1091,9 @@ export interface DocumentCatalogView {
   status: string
   tag: string
   folder: string
+  /** true = only the source's active version (usable content). Omit for the
+   * management view, which keeps every version inspectable. */
+  active?: boolean
 }
 
 export async function fetchKnowledgeBaseDocuments(
@@ -1528,6 +1108,7 @@ export async function fetchKnowledgeBaseDocuments(
   if (view.status) params.set("status", view.status)
   if (view.tag) params.set("tag", view.tag)
   if (view.folder) params.set("folder", view.folder)
+  if (view.active !== undefined) params.set("active", String(view.active))
   const response = await apiFetch(
     `/knowledge-bases/${encodeURIComponent(kbId)}/documents?${params.toString()}`,
   )
@@ -1540,6 +1121,52 @@ export async function fetchKnowledgeBaseDocuments(
     pageSize: typeof body.pageSize === "number" ? body.pageSize : pageSize,
     tags: Array.isArray(body.tags) ? body.tags : [],
     folders: Array.isArray(body.folders) ? body.folders : [],
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Project logs (更多设置 → 查看日志) — administrators only
+// ---------------------------------------------------------------------------
+
+export type ProjectLogStream = "system" | "agent"
+
+export interface OpenProjectLogResult {
+  opened: boolean
+  stream: ProjectLogStream
+  file: string
+  path: string
+}
+
+/** Ask the SERVER to open its latest system/agent log with the OS default app. */
+export async function openProjectLog(
+  stream: ProjectLogStream,
+): Promise<OpenProjectLogResult> {
+  const response = await apiFetch("/logs/open", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ stream }),
+  })
+  const body = (await response.json().catch(() => null)) as
+    | (Partial<OpenProjectLogResult> & { error?: string })
+    | null
+  if (!response.ok) {
+    // A 404 WITHOUT a JSON error is the route-missing shape (an older backend
+    // process); our own 404 always carries an `error`. Name the remedy instead
+    // of showing an ambiguous "404".
+    if (response.status === 404 && !body?.error) {
+      throw new Error("日志接口未就绪（404）：请重启后端后重试")
+    }
+    throw new Error(
+      body?.error
+        ? `${body.error}（${response.status}）`
+        : `打开日志失败（${response.status}）`,
+    )
+  }
+  return {
+    opened: body?.opened === true,
+    stream,
+    file: typeof body?.file === "string" ? body.file : "",
+    path: typeof body?.path === "string" ? body.path : "",
   }
 }
 
@@ -1687,81 +1314,6 @@ export async function fetchDocumentChunk(docId: string, chunkId: string): Promis
 }
 
 // ---------------------------------------------------------------------------
-// Retrieval laboratory (ticket 15 RET-02) — read-only debug runs
-// ---------------------------------------------------------------------------
-
-export interface LabCandidatePayload {
-  rank: number
-  chunkId: string
-  documentId: string
-  title: string
-  excerpt: string
-  score: number | null
-}
-
-export interface LabStagePayload {
-  channel: string
-  ok: boolean
-  error?: string
-  elapsedMs: number
-  candidates: LabCandidatePayload[]
-}
-
-export interface LabRunPayload {
-  status: "ok" | "degraded" | "insufficient"
-  ordering: { source: "dedicated_rerank" | "fused"; reason?: string } | null
-  unavailableChannels: string[]
-  unselectedChannels?: string[]
-  degradationReasons?: string[]
-  debug: {
-    channels: LabStagePayload[]
-    fused: {
-      elapsedMs: number
-      rawCandidateCount: number
-      distinctCount: number
-      candidates: LabCandidatePayload[]
-    }
-    rerank?: {
-      applied: boolean
-      reason?: string
-      elapsedMs: number
-      candidates?: LabCandidatePayload[]
-    }
-    totalMs: number
-  } | null
-}
-
-/** A client-side timeout is its own distinct state (criterion 2). */
-export class LabTimeoutError extends Error {
-  constructor() {
-    super("检索请求超时，请稍后重试或缩小范围")
-    this.name = "LabTimeoutError"
-  }
-}
-
-const LAB_TIMEOUT_MS = 45_000
-
-export async function runRetrievalDebug(
-  query: string,
-  channels: string[],
-): Promise<LabRunPayload> {
-  const response = await apiFetch("/retrieval-debug", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ query, channels }),
-    signal: AbortSignal.timeout(LAB_TIMEOUT_MS),
-  }).catch((error: unknown) => {
-    if (error instanceof DOMException && error.name === "TimeoutError") throw new LabTimeoutError()
-    throw error
-  })
-  if (!response.ok) {
-    const body = (await response.json().catch(() => ({}))) as { error?: string }
-    throw new DocumentOperationError(body.error || `检索调试失败 (${response.status})`, response.status)
-  }
-  return (await response.json()) as LabRunPayload
-}
-
-// ---------------------------------------------------------------------------
 // Model profiles (ticket 16 MODEL-01A) — administrators only
 // ---------------------------------------------------------------------------
 
@@ -1817,6 +1369,90 @@ export async function testModelProfile(id: string): Promise<ModelProfileTestResu
   return (await response.json()) as ModelProfileTestResult
 }
 
+/** The key-less slot view: the stored API key is never sent to the browser. */
+export interface ModelProfileConfigView {
+  id: ModelProfilePayload["kind"]
+  baseUrl: string
+  model: string
+  hasApiKey: boolean
+  source: "file" | "env"
+}
+
+export async function fetchModelProfileConfig(
+  id: string,
+): Promise<ModelProfileConfigView> {
+  const response = await apiFetch(
+    `/models/profiles/${encodeURIComponent(id)}/config`,
+  )
+  if (!response.ok) {
+    throw new DocumentOperationError(
+      `模型配置读取失败 (${response.status})`,
+      response.status,
+    )
+  }
+  const body = (await response.json()) as { config: ModelProfileConfigView }
+  return body.config
+}
+
+export async function saveModelProfileConfig(
+  id: string,
+  patch: { baseUrl: string; model: string; apiKey?: string },
+): Promise<ModelProfileConfigView> {
+  const response = await apiFetch(
+    `/models/profiles/${encodeURIComponent(id)}/config`,
+    {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(patch),
+    },
+  )
+  if (!response.ok) {
+    const body = (await response.json().catch(() => ({}))) as {
+      error?: string
+      hint?: string
+    }
+    throw new DocumentOperationError(
+      body.hint
+        ? `${body.error} — ${body.hint}`
+        : body.error || `保存失败 (${response.status})`,
+      response.status,
+    )
+  }
+  const body = (await response.json()) as { config: ModelProfileConfigView }
+  return body.config
+}
+
+export type ModelDiscoveryResult =
+  | { ok: true; models: string[] }
+  | { ok: false; models: string[]; error: string; hint: string | null }
+
+export async function discoverModelProfileModels(
+  id: string,
+  probe: { baseUrl?: string; apiKey?: string },
+): Promise<ModelDiscoveryResult> {
+  const response = await apiFetch(
+    `/models/profiles/${encodeURIComponent(id)}/discover`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(probe),
+    },
+  )
+  if (!response.ok) {
+    const body = (await response.json().catch(() => ({}))) as {
+      error?: string
+      hint?: string
+    }
+    return {
+      ok: false,
+      models: [],
+      error: body.error ?? `模型检测失败 (${response.status})`,
+      hint: body.hint ?? null,
+    }
+  }
+  return (await response.json()) as ModelDiscoveryResult
+}
+
 // ---------------------------------------------------------------------------
 // Assistants workspace (ticket 18 AST-01A) — readers see safe metadata only
 // ---------------------------------------------------------------------------
@@ -1870,7 +1506,7 @@ export async function createAssistant(input: AssistantCommandInput): Promise<Ass
     const body = (await response.json().catch(() => ({}))) as { error?: string }
     throw new DocumentOperationError(body.error || `创建失败 (${response.status})`, response.status)
   }
-  return (await response.json()) as { assistant: AssistantPayload }["assistant"]
+  return ((await response.json()) as { assistant: AssistantPayload }).assistant
 }
 
 export async function editAssistant(
@@ -1886,7 +1522,7 @@ export async function editAssistant(
     const body = (await response.json().catch(() => ({}))) as { error?: string }
     throw new DocumentOperationError(body.error || `保存失败 (${response.status})`, response.status)
   }
-  return (await response.json()) as { assistant: AssistantPayload }["assistant"]
+  return ((await response.json()) as { assistant: AssistantPayload }).assistant
 }
 
 export async function archiveAssistant(id: string): Promise<AssistantPayload> {
@@ -1895,7 +1531,7 @@ export async function archiveAssistant(id: string): Promise<AssistantPayload> {
     const body = (await response.json().catch(() => ({}))) as { error?: string }
     throw new DocumentOperationError(body.error || `归档失败 (${response.status})`, response.status)
   }
-  return (await response.json()) as { assistant: AssistantPayload }["assistant"]
+  return ((await response.json()) as { assistant: AssistantPayload }).assistant
 }
 
 export async function restoreAssistant(id: string): Promise<AssistantPayload> {
@@ -1904,7 +1540,7 @@ export async function restoreAssistant(id: string): Promise<AssistantPayload> {
     const body = (await response.json().catch(() => ({}))) as { error?: string }
     throw new DocumentOperationError(body.error || `恢复失败 (${response.status})`, response.status)
   }
-  return (await response.json()) as { assistant: AssistantPayload }["assistant"]
+  return ((await response.json()) as { assistant: AssistantPayload }).assistant
 }
 
 /** Physical delete — custom assistants only; the server refuses the default with 409. */
@@ -1927,7 +1563,7 @@ export async function setAssistantSidebarVisible(id: string, visible: boolean): 
     const body = (await response.json().catch(() => ({}))) as { error?: string }
     throw new DocumentOperationError(body.error || `更新侧边栏显示失败 (${response.status})`, response.status)
   }
-  return (await response.json()) as { assistant: AssistantPayload }["assistant"]
+  return ((await response.json()) as { assistant: AssistantPayload }).assistant
 }
 
 // ---------------------------------------------------------------------------

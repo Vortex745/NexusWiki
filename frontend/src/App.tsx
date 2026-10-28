@@ -1,11 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react"
 
 import { AppShell } from "./components/AppShell"
-import {
-  Alert,
-  AlertTitle,
-  AlertDescription,
-} from "./components/primitives/alert"
+import { Alert } from "./components/arc/alert/alert"
 import { Skeleton } from "./components/arc/skeleton/skeleton"
 import { LoginScreen } from "./components/LoginScreen"
 import { AssistantsDialog } from "./components/panels/AssistantsDialog"
@@ -13,8 +9,6 @@ import {
   DocumentViewerDialog,
   type DocumentViewTarget,
 } from "./components/panels/DocumentViewerDialog"
-import { EvaluationDialog } from "./components/panels/EvaluationDialog"
-import { FaqDialog } from "./components/panels/FaqDialog"
 import { FeedbackDialog } from "./components/panels/FeedbackDialog"
 import { ImportDialog } from "./components/panels/ImportDialog"
 import { KnowledgeDialog } from "./components/panels/KnowledgeDialog"
@@ -30,10 +24,12 @@ import {
   listSessionAttachments,
   promoteSessionAttachment,
   removeSessionAttachment,
+  uploadSessionAttachment,
   type SessionAttachmentPayload,
 } from "./lib/api"
 import { knowledgeStore } from "./runtime/knowledgeStore"
 import { useTheme } from "./lib/theme"
+import { IMPORT_POLL_MS } from "./lib/constants"
 import {
   AppShellProvider,
   type AppShellActions,
@@ -77,10 +73,10 @@ function SessionGate() {
 
   if (state.status === "loading") {
     return (
-      <div className="grid min-h-dvh place-items-center bg-background">
+      <div className="grid min-h-dvh place-items-center bg-canvas">
         <div role="status" className="flex w-64 flex-col gap-3">
           <Skeleton lines={2} label="正在确认身份" />
-          <p className="text-sm text-muted-foreground">正在确认身份…</p>
+          <p className="text-sm text-faint">正在确认身份…</p>
         </div>
       </div>
     )
@@ -93,9 +89,8 @@ function SessionGate() {
   if (state.status === "error") {
     return (
       <div className="grid min-h-dvh place-items-center bg-canvas px-4">
-        <Alert variant="destructive" className="max-w-sm">
-          <AlertTitle>无法进入应用</AlertTitle>
-          <AlertDescription>{state.message}</AlertDescription>
+        <Alert tone="danger" title="无法进入应用" className="max-w-sm">
+          {state.message}
         </Alert>
       </div>
     )
@@ -129,12 +124,10 @@ function AppRoot() {
   const [importOpen, setImportOpen] = useState(false)
   // Ticket 08: import rows still owing an outcome — the sidebar 导入中 N badge.
   const [activeImportCount, setActiveImportCount] = useState(0)
-  const [evaluationOpen, setEvaluationOpen] = useState(false)
   const [knowledgeOpen, setKnowledgeOpen] = useState(false)
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [assistantsOpen, setAssistantsOpen] = useState(false)
   const [feedbackOpen, setFeedbackOpen] = useState(false)
-  const [faqsOpen, setFaqsOpen] = useState(false)
   const [documentView, setDocumentView] = useState<{
     open: boolean
     target: DocumentViewTarget | null
@@ -151,7 +144,8 @@ function AppRoot() {
   })
 
   const showToast = useCallback(
-    (text: string) => setToast({ text, key: Date.now() }),
+    (text: string, tone: "success" | "error" = "success") =>
+      setToast({ text, tone, key: Date.now() }),
     [],
   )
   const openTrace = useCallback((messageId: string) => {
@@ -167,12 +161,10 @@ function AppRoot() {
   )
   const openMemory = useCallback(() => setMemoryOpen(true), [])
   const openImport = useCallback(() => setImportOpen(true), [])
-  const openEvaluation = useCallback(() => setEvaluationOpen(true), [])
   const openKnowledge = useCallback(() => setKnowledgeOpen(true), [])
   const openSettings = useCallback(() => setSettingsOpen(true), [])
   const openAssistants = useCallback(() => setAssistantsOpen(true), [])
   const openFeedback = useCallback(() => setFeedbackOpen(true), [])
-  const openFaqs = useCallback(() => setFaqsOpen(true), [])
   const openDocument = useCallback(
     (target: DocumentViewTarget) => setDocumentView({ open: true, target }),
     [],
@@ -184,12 +176,10 @@ function AppRoot() {
       openTrace,
       openMemory,
       openImport,
-      openEvaluation,
       openKnowledge,
       openSettings,
       openAssistants,
       openFeedback,
-      openFaqs,
       openDocument,
       showToast,
     }),
@@ -198,12 +188,10 @@ function AppRoot() {
       openTrace,
       openMemory,
       openImport,
-      openEvaluation,
       openKnowledge,
       openSettings,
       openAssistants,
       openFeedback,
-      openFaqs,
       openDocument,
       showToast,
     ],
@@ -260,10 +248,43 @@ function AppRoot() {
     }
   }, [activeThreadId])
 
+  // Binary documents are extracted server-side after the upload returns, so the
+  // chips poll while any row is still parsing — the same cadence as the import
+  // queue. Nothing polls once every attachment settled.
+  const hasParsingAttachment = attachments.some(
+    (attachment) => attachment.status === "parsing",
+  )
+  useEffect(() => {
+    if (!hasParsingAttachment) return
+    const timer = setInterval(() => void refreshAttachments(), IMPORT_POLL_MS)
+    return () => clearInterval(timer)
+  }, [hasParsingAttachment, refreshAttachments])
+
   // Ticket 33 (MEM-01B): the prompt carries ONLY what the user typed —
   // long-term memories are recalled SERVER-side now (owner-scoped, traceable,
   // disableable per run), so the client no longer pastes them into the message.
   const composePrompt = useCallback((displayText: string) => displayText, [])
+
+  const handleAddAttachment = useCallback(
+    async (file: File) => {
+      const sessionId = conversationStore.getActiveThread()?.id
+      if (!sessionId) {
+        showToast("请先开始一个对话", "error")
+        return
+      }
+      try {
+        await uploadSessionAttachment(sessionId, file)
+        await refreshAttachments()
+        showToast(`已添加附件「${file.name}」`)
+      } catch (error) {
+        showToast(
+          error instanceof Error ? error.message : "附件上传失败",
+          "error",
+        )
+      }
+    },
+    [refreshAttachments, showToast],
+  )
 
   const handleRemoveAttachment = useCallback(
     async (id: string) => {
@@ -315,6 +336,7 @@ function AppRoot() {
             onCloseTrace={closeTrace}
             attachmentsProps={{
               attachments,
+              onAdd: handleAddAttachment,
               onRemove: handleRemoveAttachment,
               onPromote: handlePromoteAttachment,
             }}
@@ -327,10 +349,6 @@ function AppRoot() {
             open={importOpen}
             onClose={() => setImportOpen(false)}
             onActiveCountChange={setActiveImportCount}
-          />
-          <EvaluationDialog
-            open={evaluationOpen}
-            onClose={() => setEvaluationOpen(false)}
           />
           <KnowledgeDialog
             open={knowledgeOpen}
@@ -348,7 +366,6 @@ function AppRoot() {
             open={feedbackOpen}
             onClose={() => setFeedbackOpen(false)}
           />
-          <FaqDialog open={faqsOpen} onClose={() => setFaqsOpen(false)} />
           <DocumentViewerDialog
             open={documentView.open}
             target={documentView.target}

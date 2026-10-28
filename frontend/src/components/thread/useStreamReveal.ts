@@ -13,20 +13,26 @@ import { REVEAL_TOKEN_MS, revealTo, tokenBoundaries } from "@core/stream_reveal"
  * indistinguishable from "this is history". The caller decides that from the
  * message, which mounts while the run is still open and empty.
  *
- * The loop is deliberately not gated on the run still being open — it has to
- * keep typing after the stream closes. Text that is already complete when the
- * component mounts without `fromZero` (history, reload, a re-rendered thread)
- * starts caught up and never replays.
+ * `complete` ends the reveal with the run. A finished run never gets to type
+ * after the fact: without this, a burst reply keeps typing hundreds of
+ * milliseconds after the process steps have already settled, which reads as
+ * the answer arriving late.
  */
-export function useStreamReveal(text: string, fromZero = false): string {
+export function useStreamReveal(
+  text: string,
+  fromZero = false,
+  complete = false,
+): string {
   const targetRef = useRef(text)
-  const shownRef = useRef(fromZero ? 0 : text.length)
+  const shownRef = useRef(fromZero && !complete ? 0 : text.length)
   const boundariesRef = useRef<number[]>([])
   /** Milliseconds banked toward the next token; the frame rate is not the clock. */
   const dueRef = useRef(0)
   const lastTickRef = useRef(0)
   const frameRef = useRef<number | null>(null)
-  const [shown, setShown] = useState(() => (fromZero ? 0 : text.length))
+  const [shown, setShown] = useState(() =>
+    fromZero && !complete ? 0 : text.length,
+  )
   const boundaries = useMemo(() => tokenBoundaries(text), [text])
   targetRef.current = text
   boundariesRef.current = boundaries
@@ -38,7 +44,14 @@ export function useStreamReveal(text: string, fromZero = false): string {
       shownRef.current = text.length
       setShown(text.length)
     }
-    if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+    if (
+      complete ||
+      window.matchMedia("(prefers-reduced-motion: reduce)").matches
+    ) {
+      if (frameRef.current !== null) {
+        cancelAnimationFrame(frameRef.current)
+        frameRef.current = null
+      }
       shownRef.current = text.length
       setShown(text.length)
       return
@@ -70,7 +83,7 @@ export function useStreamReveal(text: string, fromZero = false): string {
       }
     }
     frameRef.current = requestAnimationFrame(tick)
-  }, [text])
+  }, [text, complete])
 
   useEffect(() => {
     return () => {
@@ -81,5 +94,9 @@ export function useStreamReveal(text: string, fromZero = false): string {
     }
   }, [])
 
-  return shown >= text.length ? text : text.slice(0, shown)
+  // Completion is a render-time state change. Returning the target here makes
+  // the final answer paint in the same commit as the terminal trace instead of
+  // waiting for the effect below to schedule a second render after the steps
+  // collapse.
+  return complete || shown >= text.length ? text : text.slice(0, shown)
 }

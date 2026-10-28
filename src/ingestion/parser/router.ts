@@ -1,6 +1,9 @@
 import { extname } from "node:path"
 import type { ParserType } from "../../types"
 
+/** Image formats are OCR-routed, never markitdown-routed. */
+const IMAGE_EXTENSIONS = [".bmp", ".heic", ".jpeg", ".jpg", ".png", ".tif", ".tiff"] as const
+
 const MARKITDOWN_EXTENSIONS = new Set([
   ".csv",
   ".doc",
@@ -37,6 +40,18 @@ const MARKITDOWN_MIME_TYPES = new Set([
   "text/plain",
   "text/xml",
 ])
+
+/**
+ * Every extension the router can route — the ONE format list both entry points
+ * accept: the import picker (mirrored in frontend/src/lib/constants.ts) and the
+ * conversation composer's attachment picker. A format that can be imported can
+ * also be attached to a conversation, and vice versa.
+ */
+export const SUPPORTED_DOCUMENT_EXTENSIONS: readonly string[] = [
+  ".pdf",
+  ...MARKITDOWN_EXTENSIONS,
+  ...IMAGE_EXTENSIONS,
+]
 
 const PARSER_OVERRIDES = new Set<ParserType>([
   "markitdown",
@@ -104,7 +119,7 @@ const PARSER_COMPATIBLE_CLASSES: Record<ParserType, Set<ParserFileClass>> = {
 function declaredFileClass(fileName: string, mimeType?: string): ParserFileClass | "unknown" {
   const extension = extname(fileName).toLowerCase()
   if (extension === ".pdf") return "pdf"
-  if ([".bmp", ".heic", ".jpeg", ".jpg", ".png", ".tif", ".tiff"].includes(extension)) {
+  if ((IMAGE_EXTENSIONS as readonly string[]).includes(extension)) {
     return "image"
   }
   if (MARKITDOWN_EXTENSIONS.has(extension)) return "text"
@@ -170,7 +185,7 @@ export function selectParserRoute(input: ParserSelectionInput): ParserRouteInfo 
       authoritative: false,
     }
   }
-  if ([".bmp", ".heic", ".jpeg", ".jpg", ".png", ".tif", ".tiff"].includes(extension)) {
+  if ((IMAGE_EXTENSIONS as readonly string[]).includes(extension)) {
     return {
       candidates: ["ocr-api"],
       reason: "image documents use the OCR API",

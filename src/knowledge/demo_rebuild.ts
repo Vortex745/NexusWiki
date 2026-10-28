@@ -110,9 +110,8 @@ export const DEMO_REBUILD_SQLITE_TABLES = [
 /**
  * The Elasticsearch target. Exactly one business chunk index — it is recreated
  * from code by `IngestionStoreImpl.ensureIndex()` on the next ingestion, so
- * deleting it is a data-layer action with no file loss. Dedicated evaluation
- * indices are NOT listed here: a crashed evaluation scope is released by its
- * own tool (`npm run eval:residue`), and this path must stay exact.
+ * deleting it is a data-layer action with no file loss. Legacy evaluation
+ * indices are NOT listed here, and this path must stay exact.
  */
 export const DEMO_REBUILD_ES_INDEXES = [DEFAULT_ES_CHUNK_INDEX] as const
 
@@ -267,10 +266,9 @@ export async function inventoryDemoRebuild(
 
   let neo4jProvenanceTenants: string[] = []
   try {
-    // Evaluation scopes are deliberately NOT rebuild targets — their dedicated
-    // ES index is not listed either, and a crashed scope is released by its own
-    // tool (`npm run eval:residue`). Reaching into them here would strip a live
-    // evaluation's provenance while leaving its index behind.
+    // Legacy evaluation scopes are deliberately NOT rebuild targets — their
+    // dedicated ES index is not listed either. Reaching into them here would
+    // strip provenance while leaving the index behind.
     neo4jProvenanceTenants = (await clients.graph.listProvenanceTenants()).filter(
       (tenantId) => !tenantId.startsWith(EVAL_TENANT_PREFIX)
     )

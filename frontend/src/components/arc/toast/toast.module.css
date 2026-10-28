@@ -26,6 +26,12 @@
   color: var(--success);
 }
 
+.toast[data-tone="error"] .icon {
+  border-color: color-mix(in oklab, var(--danger) 24%, var(--border));
+  background: color-mix(in oklab, var(--danger) 10%, var(--surface));
+  color: var(--danger);
+}
+
 .frame {
   display: block;
   min-width: 0;

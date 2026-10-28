@@ -110,6 +110,19 @@ export interface DocumentVersionInfo {
 }
 
 /**
+ * The policy's acceptance of a passed gate, stored alongside (never inside)
+ * the raw proofs. The content proof keeps its own pending_review fact; this
+ * record only says which policy accepted which non-blocking warnings, against
+ * which expected manifest.
+ */
+export interface ActivationAcceptance {
+  policyVersion: string
+  warningCodes: string[]
+  expectedChunksSha256: string | null
+  evaluatedAt: string
+}
+
+/**
  * Ticket 11 (DOC-01A): one catalog row — document metadata without content.
  * Tags/folder come from the metadata JSON (`$.tags` / `$.folder`).
  */
@@ -125,6 +138,10 @@ export interface DocumentCatalogEntry {
   candidateState: string
   version: number
   active: boolean
+  /** Why activation was denied (stable reason codes, ";"-joined); null when
+   * the row is active, legacy, or was never evaluated. Lets the catalog tell
+   * an integrity hold apart from a superseded version without a second read. */
+  activationBlockReason: string | null
   tags: string[]
   folder: string | null
   /** Ticket 12 (DOC-01B): the owning source is retired — no operations. */
@@ -141,6 +158,9 @@ export interface DocumentCatalogQuery {
   status?: string
   tag?: string
   folder?: string
+  /** Only rows the source's active pointer holds (true) — the usable content.
+   * false asks for versions that are NOT active. Absent = every version. */
+  active?: boolean
   /**
    * The viewer's groups. Mirrors the retrieval ACL (graph_acl.ts): the group
    * filter only applies when the viewer HAS groups; a zero-group viewer (or
@@ -545,11 +565,75 @@ export class DocumentRepo {
 
   /**
    * Record the joint activation evidence for a candidate. Called by the
-   * integrity producers (UT-15 content proof, UT-16 index proof) once they
-   * exist; nothing in the current pipeline writes it, so every activation
-   * attempt fails closed.
+   * integrity producers (UT-15 content proof, UT-16 index proof).
+   *
+   * A producer write regenerates the proofs for THIS run, so any prior
+   * activation acceptance is stale by definition and is dropped here — a new
+   * product never inherits the old version's policy acceptance.
    */
   setCandidateEvidence(docId: string, evidence: Record<string, unknown>): void {
+    const fresh = { ...evidence }
+    delete fresh.activationAcceptance
+    this.writeCandidateEvidence(docId, fresh)
+  }
+
+  /**
+   * Record the policy's acceptance fact after the active pointer actually
+   * moved to (or already pointed at) this version. Merges into the existing
+   * evidence JSON; never rewrites contentProof/indexProof.
+   */
+  recordActivationAcceptance(
+    docId: string,
+    input: Omit<ActivationAcceptance, "expectedChunksSha256">
+  ): void {
+    const current = this.getCandidateEvidence(docId)
+    if (current === null || typeof current !== "object" || Array.isArray(current)) return
+    const record = current as Record<string, unknown>
+    const contentProof = record.contentProof
+    const bindings =
+      contentProof !== null && typeof contentProof === "object" && !Array.isArray(contentProof)
+        ? (contentProof as Record<string, unknown>).bindings
+        : null
+    const digest =
+      bindings !== null && typeof bindings === "object" && !Array.isArray(bindings)
+        ? (bindings as Record<string, unknown>).expectedChunksSha256
+        : null
+    this.writeCandidateEvidence(docId, {
+      ...record,
+      activationAcceptance: {
+        policyVersion: input.policyVersion,
+        warningCodes: [...input.warningCodes],
+        expectedChunksSha256: typeof digest === "string" ? digest : null,
+        evaluatedAt: input.evaluatedAt,
+      } satisfies ActivationAcceptance,
+    })
+  }
+
+  /** The recorded acceptance fact, or null for legacy/absent/unreadable rows. */
+  getActivationAcceptance(docId: string): ActivationAcceptance | null {
+    const evidence = this.getCandidateEvidence(docId)
+    if (evidence === null || typeof evidence !== "object" || Array.isArray(evidence)) return null
+    const raw = (evidence as Record<string, unknown>).activationAcceptance
+    if (raw === null || typeof raw !== "object" || Array.isArray(raw)) return null
+    const record = raw as Record<string, unknown>
+    if (
+      typeof record.policyVersion !== "string" ||
+      !Array.isArray(record.warningCodes) ||
+      !record.warningCodes.every((code): code is string => typeof code === "string") ||
+      typeof record.evaluatedAt !== "string"
+    ) {
+      return null
+    }
+    return {
+      policyVersion: record.policyVersion,
+      warningCodes: record.warningCodes,
+      expectedChunksSha256:
+        typeof record.expectedChunksSha256 === "string" ? record.expectedChunksSha256 : null,
+      evaluatedAt: record.evaluatedAt,
+    }
+  }
+
+  private writeCandidateEvidence(docId: string, evidence: Record<string, unknown>): void {
     this.db.prepare(
       `UPDATE documents SET candidate_evidence = ?, updated_at = ?
        WHERE doc_id = ?`
@@ -712,6 +796,14 @@ export class DocumentRepo {
       conditions.push("json_extract(d.metadata, '$.folder') = ?")
       params.push(query.folder)
     }
+    // The active filter is a correlated EXISTS (not the page query's LEFT
+    // JOIN) so the COUNT query — which has no join — applies the same rule.
+    if (query.active !== undefined) {
+      const pointer = `EXISTS (SELECT 1 FROM sources active_src
+        WHERE active_src.source_id = d.source_id
+          AND active_src.active_doc_id = d.doc_id)`
+      conditions.push(query.active ? pointer : `NOT ${pointer}`)
+    }
     // Group visibility mirrors the retrieval ACL: the filter only applies
     // when the viewer HAS groups; zero-group viewers and admins see all
     // same-tenant rows.
@@ -738,7 +830,8 @@ export class DocumentRepo {
     const rows = this.db
       .prepare(
         `SELECT d.doc_id, d.source_id, d.title, d.source, d.file_name, d.mime_type, d.status,
-                d.candidate_state, d.version, d.metadata, d.created_at, d.updated_at,
+                d.candidate_state, d.activation_block_reason, d.version, d.metadata,
+                d.created_at, d.updated_at,
                 (s.active_doc_id = d.doc_id) AS is_active, s.lifecycle_state
          FROM documents d
          LEFT JOIN sources s ON s.source_id = d.source_id
@@ -755,6 +848,7 @@ export class DocumentRepo {
       mime_type: string | null
       status: string
       candidate_state: string
+      activation_block_reason: string | null
       version: number
       metadata: string
       created_at: string
@@ -778,6 +872,7 @@ export class DocumentRepo {
         candidateState: row.candidate_state,
         version: row.version,
         active: row.is_active === 1,
+        activationBlockReason: row.activation_block_reason,
         tags,
         folder: typeof metadata.folder === "string" && metadata.folder !== "" ? metadata.folder : null,
         retired: row.lifecycle_state === "retired",

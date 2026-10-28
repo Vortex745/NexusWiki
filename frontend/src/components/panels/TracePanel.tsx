@@ -1,9 +1,9 @@
 import { useEffect, useRef, useState } from "react"
-import { X } from "lucide-react"
+import { X } from "../ui/icons"
 import { useConversation } from "../../conversation/useConversation"
 import { useMediaQuery } from "../../lib/hooks"
-import { Button } from "../primitives/button"
-import { Tabs, TabsList, TabsTrigger, TabsContent } from "../primitives/tabs"
+import { Button } from "../ui/Button"
+import { Tabs, TabsList, TabsTrigger, TabsContent } from "../arc/tabs/tabs"
 import { Drawer, DrawerContent } from "../arc/drawer/drawer"
 import { EmptyState } from "../ui/Controls"
 import { TraceSteps } from "./TraceSteps"
@@ -128,7 +128,7 @@ export function TracePanel({
     <aside
       data-material="evidence-panel"
       aria-label="回答来源与执行链路"
-      className="w-88 min-w-0 shrink-0 border-l bg-card xl:w-96"
+      className="w-88 min-w-0 shrink-0 border-l bg-surface xl:w-96"
     >
       {body(true)}
     </aside>

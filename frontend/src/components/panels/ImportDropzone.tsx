@@ -1,4 +1,4 @@
-import { Button as UiButton } from "@/components/primitives/button"
+import { Button as UiButton } from "@/components/ui/Button"
 import { useRef, useState } from "react"
 
 import {
@@ -14,18 +14,17 @@ import {
   type PickedFile,
   type PickedFolder,
 } from "../../lib/importBatch"
-import { cn } from "../../lib/cn"
-import { Upload } from "../ui/icons"
+import { FileDropzone } from "../arc/file-dropzone/file-dropzone"
+import { FolderOpen } from "../ui/icons"
 import { Icon } from "../ui/Icon"
 
 /**
- * The import dropzone (ticket 02): the dashed affordance is a REAL drop
- * target — files and whole directories drag in, unsupported entries are
- * filtered with a visible skip count, and the two pick buttons feed the same
- * `onPick` callback so behavior depends on what was given, never on the
- * entry point. Browser entry trees are mapped onto the pure `FolderNode`
- * model so the flattening/filtering logic stays in `lib/importBatch` and
- * covered by node:test.
+ * The import dropzone (ticket 02): the arc FileDropzone is the visible target,
+ * while this wrapper keeps the behaviour the importer needs on top of it —
+ * directory drags are expanded through `lib/importBatch`, the folder picker
+ * feeds the same `onPick` callback, and unsupported entries are filtered with
+ * a visible skip count. Picks never stay in the arc component's own list: the
+ * import queue is the single list of record, so every pick remounts it empty.
  */
 
 export interface DropzonePick {
@@ -37,7 +36,15 @@ export interface DropzonePick {
   skipped: number
 }
 
-type Phase = "idle" | "over" | "scanning"
+type Phase = "idle" | "scanning"
+
+const FORMAT_SUMMARY = IMPORT_FORMAT_GROUPS.map(
+  (group) => `${group.label}：${group.items}`,
+).join("；")
+
+const LIMIT_NOTE = `单个 ≤ ${Math.round(
+  IMPORT_MAX_FILE_BYTES / 1024 / 1024,
+)}MB · 建议单次 ≤ ${IMPORT_MAX_FILES_HINT} 个 · 自动过滤不支持的文件`
 
 /** readEntries pages; keep calling until it returns an empty batch. */
 function readDirectoryEntries(
@@ -98,41 +105,64 @@ export function ImportDropzone({
   onPick: (pick: DropzonePick) => void
 }) {
   const [phase, setPhase] = useState<Phase>("idle")
-  const dragDepth = useRef(0)
-  const fileInputRef = useRef<HTMLInputElement>(null)
+  // Bumped after every pick so the arc dropzone mounts with an empty list.
+  const [epoch, setEpoch] = useState(0)
   const folderInputRef = useRef<HTMLInputElement>(null)
 
-  const handleDrop = (event: React.DragEvent) => {
-    event.preventDefault()
-    dragDepth.current = 0
-    setPhase("idle")
-    const dataTransfer = event.dataTransfer
-    if (!dataTransfer) return
+  const commitPick = (pick: DropzonePick) => {
+    onPick(pick)
+    setEpoch((value) => value + 1)
+  }
 
-    // Entries must be pulled SYNCHRONOUSLY — the list dies with the event.
-    const entries = Array.from(dataTransfer.items ?? [])
+  const handleFiles = (files: File[]) => {
+    const { files: picked, skipped } = partitionLooseFiles(
+      files.map((file) => ({ file })),
+    )
+    commitPick({ files: picked, folders: [], skipped })
+  }
+
+  /** The arc component's native input would filter by accept and show its own
+   * English copy; the pick is handled here instead so unsupported entries
+   * still reach the Chinese skip count. */
+  const handleFileInputChange = (
+    event: React.ChangeEvent<HTMLInputElement>,
+  ) => {
+    const selected = Array.from(event.target.files ?? [])
+    event.target.value = ""
+    event.stopPropagation()
+    handleFiles(selected)
+  }
+
+  /** Drops bypass the arc dropzone's own handler — entries must be read
+   * synchronously here, and a plain-file drop still needs the Chinese skip
+   * count. Stopping the drop also leaves the arc target dragging, so each
+   * drop remounts it. */
+  const handleDropCapture = (event: React.DragEvent) => {
+    const transfer = event.dataTransfer
+    if (!transfer) return
+    const entries = Array.from(transfer.items ?? [])
       .map((item) =>
         typeof item.webkitGetAsEntry === "function"
           ? item.webkitGetAsEntry()
           : null,
       )
       .filter((entry): entry is FileSystemEntry => Boolean(entry))
-    // Plain-file fallback, captured before the transfer is cleared below.
-    const fallbackFiles = Array.from(dataTransfer.files ?? [])
-    // Drop data is cleared once captured so a re-drop of the same payload
-    // always fires a fresh change/drop cycle.
-    dataTransfer.clearData()
+    const fallbackFiles = Array.from(transfer.files ?? [])
 
-    if (entries.length === 0) {
-      // No entry API (or plain OS shortcut drag): files only.
-      const { files, skipped } = partitionLooseFiles(
-        fallbackFiles.map((file) => ({ file })),
-      )
-      onPick({ files, folders: [], skipped })
+    event.preventDefault()
+    event.stopPropagation()
+    // Drop data is cleared once the entries were captured so a re-drop of the
+    // same payload always fires a fresh cycle.
+    transfer.clearData()
+
+    if (!entries.some((entry) => entry.isDirectory)) {
+      handleFiles(fallbackFiles)
       return
     }
 
     setPhase("scanning")
+    setEpoch((value) => value + 1)
+
     void (async () => {
       const files: PickedFile[] = []
       const folders: PickedFolder[] = []
@@ -160,19 +190,8 @@ export function ImportDropzone({
       } finally {
         setPhase("idle")
       }
-      onPick({ files, folders, skipped })
+      commitPick({ files, folders, skipped })
     })()
-  }
-
-  const handleLooseInputChange = (
-    event: React.ChangeEvent<HTMLInputElement>,
-  ) => {
-    const selected = Array.from(event.target.files ?? [])
-    event.target.value = ""
-    const { files, skipped } = partitionLooseFiles(
-      selected.map((file) => ({ file })),
-    )
-    onPick({ files, folders: [], skipped })
   }
 
   const handleFolderInputChange = (
@@ -195,7 +214,7 @@ export function ImportDropzone({
           file.name,
       })),
     )
-    onPick({
+    commitPick({
       files: [],
       folders: [{ name: rootName, files, skipped }],
       skipped,
@@ -204,81 +223,51 @@ export function ImportDropzone({
 
   const acceptedTypes = Array.from(IMPORT_FILE_EXTENSIONS).join(",")
 
+  const label =
+    phase === "scanning"
+      ? "正在扫描文件夹…"
+      : filesDisabled
+        ? "选择文件前请先选择知识库"
+        : "拖入文件或文件夹，或点击选择文件"
+
   return (
-    <div
-      onDragEnter={(event) => {
-        event.preventDefault()
-        dragDepth.current += 1
-        setPhase("over")
-      }}
-      onDragOver={(event) => event.preventDefault()}
-      onDragLeave={() => {
-        dragDepth.current = Math.max(0, dragDepth.current - 1)
-        if (dragDepth.current === 0) setPhase("idle")
-      }}
-      onDrop={handleDrop}
-      className={cn(
-        "flex flex-col items-center justify-center rounded-[14px] border border-dashed px-4 py-6 text-center transition-colors",
-        phase === "over"
-          ? "border-brand bg-brand-subtle"
-          : "border-line bg-surface-subtle",
-      )}
-    >
-      <Icon
-        icon={Upload}
-        className={cn(
-          "mb-2 size-8",
-          phase === "over" ? "text-brand" : "text-muted-foreground/50",
-        )}
-      />
-      <h3 className="text-xs font-semibold text-ink">
-        {phase === "scanning"
-          ? "正在扫描文件夹…"
-          : "拖入文件或文件夹，或点击下方按钮选择"}
-      </h3>
-      <div className="mt-1.5 flex flex-col gap-0.5 text-[11px] leading-4 text-muted-foreground/70">
-        {IMPORT_FORMAT_GROUPS.map((group) => (
-          <p key={group.label}>
-            <span className="font-medium text-muted-foreground">
-              {group.label}：
-            </span>
-            {group.items}
-          </p>
-        ))}
-        <p className="pt-0.5 text-faint">
-          单个 ≤ {Math.round(IMPORT_MAX_FILE_BYTES / 1024 / 1024)}MB · 建议单次
-          ≤ {IMPORT_MAX_FILES_HINT} 个 · 自动过滤不支持的文件
-        </p>
+    <div className="flex flex-col gap-1.5" onDropCapture={handleDropCapture}>
+      <div
+        onClickCapture={(event) => {
+          if (!filesDisabled) return
+          // Only the file path needs a target base; folders keep working.
+          event.preventDefault()
+          event.stopPropagation()
+          onPick({ files: [], folders: [], skipped: 0 })
+        }}
+        onChangeCapture={handleFileInputChange}
+      >
+        <FileDropzone
+          key={epoch}
+          multiple
+          accept={acceptedTypes}
+          // The import queue owns admission and format filtering; the arc
+          // component must not cap the batch or reject files on its own.
+          maxFiles={Number.MAX_SAFE_INTEGER}
+          label={label}
+          dropLabel="松开以添加文件或文件夹"
+          description={FORMAT_SUMMARY}
+          note={LIMIT_NOTE}
+          onFilesChange={handleFiles}
+        />
       </div>
-      <div className="mt-3 flex flex-wrap items-center justify-center gap-2">
-        <UiButton
-          variant="default"
-          size="sm"
-          type="button"
-          disabled={filesDisabled}
-          onClick={() => fileInputRef.current?.click()}
-          className="inline-flex h-8 items-center justify-center px-3.5 disabled:opacity-50"
-        >
-          选择文件
-        </UiButton>
+      <div className="flex justify-center">
         <UiButton
           variant="outline"
           size="sm"
           type="button"
           onClick={() => folderInputRef.current?.click()}
-          className="inline-flex h-8 items-center justify-center px-3.5"
+          className="inline-flex h-8 items-center justify-center gap-1.5 px-3.5"
         >
+          <Icon icon={FolderOpen} className="size-4" />
           选择文件夹
         </UiButton>
       </div>
-      <input
-        ref={fileInputRef}
-        type="file"
-        className="sr-only"
-        multiple
-        accept={acceptedTypes}
-        onChange={handleLooseInputChange}
-      />
       <input
         ref={folderInputRef}
         type="file"

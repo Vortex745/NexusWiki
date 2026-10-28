@@ -2,13 +2,16 @@
  * Ticket 16 (MODEL-01A) — the model-profile HTTP API and connectivity tests.
  *
  * Focus: admin-only surface, no credential material in any payload, PATCH
- * validation, protocol-specific probes with actionable errors, and the
- * evaluation selection gate refusing a disabled profile.
+ * validation, and protocol-specific probes with actionable errors.
  */
 
 import assert from "node:assert/strict"
 import test from "node:test"
+import http from "node:http"
 import type { AddressInfo } from "node:net"
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
+import { tmpdir } from "node:os"
+import { join } from "node:path"
 import express, { type RequestHandler } from "express"
 import type OpenAI from "openai"
 
@@ -16,7 +19,6 @@ import type { AppConfig } from "../config"
 import { openDb } from "../ingestion/tracking/db"
 import { ModelProfileRegistry } from "../models/profiles"
 import { createModelProfilesRouter } from "./model_profiles"
-import { EvaluationService } from "../evaluation/service"
 import type { AccessContext } from "../access/context"
 
 const BASE_CONFIG: AppConfig = {
@@ -364,51 +366,240 @@ test("an unknown profile id refuses the probe with 404", async () => {
   }
 })
 
-test("the evaluation gate refuses a rerank override while the profile is disabled", () => {
-  const config = configFor({ rerankApiKey: "sk-rerank-test" })
-  const registry = new ModelProfileRegistry(openDb(":memory:"), config as never)
-  registry.setEnabled("rerank", false)
-  const service = new EvaluationService({
-    config: config as never,
-    clients: {} as never,
-    createResources: () => ({}) as never,
-    allowedChatModels: ["any-model"],
-    allowedRerankModels: ["bge-reranker-v2-m3", "other-rerank"],
-    createReranker: () => ({}) as never,
-    modelProfileGate: registry,
-  })
-  assert.throws(
-    () =>
-      service.createTask(
-        { datasetId: "refund-single-case", rerankModel: "other-rerank" },
-        { tenantId: "t", subjectId: "u" }
-      ),
-    (error: Error & { issues?: string[] }) => {
-      assert.match(error.message, /rerank model profile is disabled/)
-      assert.deepEqual(error.issues, ["rerankModel"])
-      return true
+test("the settings workspace saves a slot into .env and probes the saved values", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "model-settings-"))
+  const envPath = join(dir, ".env")
+  // The file carries only the key at first, so the slot's URL and model still
+  // read as boot config until the settings form saves them.
+  await writeFile(envPath, "OPENAI_API_KEY=sk-boot\n# keep me\n", "utf8")
+  // A local OpenAI-compatible provider stands in for the saved endpoint.
+  const provider = http.createServer((req, res) => {
+    const json = (status: number, body: unknown) => {
+      res.writeHead(status, { "content-type": "application/json" })
+      res.end(JSON.stringify(body))
     }
+    const rejected = req.headers.authorization !== "Bearer sk-saved"
+    if (req.url === "/v1/models") {
+      if (rejected) return json(401, { error: { message: "nope" } })
+      return json(200, { object: "list", data: [{ id: "saved-b" }, { id: "saved-a" }] })
+    }
+    if (req.url === "/v1/chat/completions") {
+      if (rejected) return json(401, { error: { message: "nope" } })
+      let raw = ""
+      req.on("data", (chunk) => (raw += chunk))
+      req.on("end", () =>
+        json(200, {
+          id: "completion",
+          object: "chat.completion",
+          created: 0,
+          model: JSON.parse(raw || "{}").model,
+          choices: [
+            { index: 0, message: { role: "assistant", content: "pong" }, finish_reason: "stop" },
+          ],
+        })
+      )
+      return
+    }
+    json(404, { error: { message: "not found" } })
+  })
+  await new Promise<void>((resolve) => provider.listen(0, "127.0.0.1", () => resolve()))
+  const baseUrl = `http://127.0.0.1:${(provider.address() as AddressInfo).port}/v1`
+
+  const config = configFor()
+  const registry = new ModelProfileRegistry(
+    openDb(":memory:"),
+    config as never,
+    envPath
   )
-  // Enabling the profile admits the same override; disabling chat rejects its
-  // override too.
-  registry.setEnabled("rerank", true)
-  registry.setEnabled("chat", false)
-  assert.throws(
-    () =>
-      service.createTask(
-        { datasetId: "refund-single-case", chatModel: "any-model" },
-        { tenantId: "t", subjectId: "u" }
-      ),
-    /chat model profile is disabled/
+  const app = express()
+  app.use(express.json())
+  app.use(identity({ scopes: ["admin"] }))
+  app.use(
+    "/api",
+    createModelProfilesRouter({
+      registry,
+      config,
+      // A saved slot must probe with its own credentials, never the boot client.
+      clients: {
+        chatClient: fakeOpenAI({
+          chat: {
+            completions: {
+              create: async () => {
+                throw new Error("the boot client must not probe a saved slot")
+              },
+            },
+          },
+        }),
+        embeddingClient: fakeOpenAI({}),
+      },
+    })
   )
-  registry.setEnabled("chat", true)
-  // The gate passes once enabled: the same override is accepted (no throw —
-  // the task runs in the background against the stubbed resources).
-  assert.doesNotThrow(() =>
-    service.createTask(
-      { datasetId: "refund-single-case", rerankModel: "other-rerank" },
-      { tenantId: "t", subjectId: "u" }
-    )
+  const admin = await listen(app)
+
+  try {
+    const before = (await (
+      await fetch(`${admin.base}/api/models/profiles/chat/config`)
+    ).json()) as { config: { baseUrl: string; source: string } }
+    assert.equal(before.config.baseUrl, config.openaiBaseUrl)
+    assert.equal(before.config.source, "env")
+
+    const saved = await fetch(`${admin.base}/api/models/profiles/chat/config`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ baseUrl, model: "saved-a", apiKey: "sk-saved" }),
+    })
+    assert.equal(saved.status, 200)
+    const savedBody = await saved.json()
+    assert.equal((savedBody as { config: { source: string } }).config.source, "file")
+    assert.ok(!JSON.stringify(savedBody).includes("sk-saved"))
+
+    const envText = await readFile(envPath, "utf8")
+    assert.ok(envText.includes("OPENAI_API_KEY=sk-saved"))
+    assert.ok(envText.includes("OPENAI_CHAT_MODEL=saved-a"))
+    assert.ok(envText.includes("# keep me"))
+
+    const listed = (await (
+      await fetch(`${admin.base}/api/models/profiles`)
+    ).json()) as { profiles: Array<{ id: string; model: string; baseUrlHost: string }> }
+    const chat = listed.profiles.find((profile) => profile.id === "chat")
+    assert.equal(chat?.model, "saved-a")
+    assert.ok((chat?.baseUrlHost ?? "").startsWith("127.0.0.1"))
+
+    const discovered = (await (
+      await fetch(`${admin.base}/api/models/profiles/chat/discover`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({}),
+      })
+    ).json()) as { ok: boolean; models: string[] }
+    assert.equal(discovered.ok, true)
+    assert.deepEqual(discovered.models, ["saved-a", "saved-b"])
+
+    const probed = (await (
+      await fetch(`${admin.base}/api/models/profiles/chat/test`, { method: "POST" })
+    ).json()) as { ok: boolean; error: string | null }
+    assert.equal(probed.ok, true)
+
+    // Saving without a key keeps the stored credential.
+    await fetch(`${admin.base}/api/models/profiles/chat/config`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ baseUrl, model: "saved-b" }),
+    })
+    assert.ok((await readFile(envPath, "utf8")).includes("OPENAI_API_KEY=sk-saved"))
+  } finally {
+    await admin.close()
+    provider.closeAllConnections?.()
+    provider.close()
+    await rm(dir, { recursive: true, force: true })
+  }
+})
+
+test("rerank discovery keeps only the models the provider publishes as rerankers", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "model-rerank-"))
+  const envPath = join(dir, ".env")
+  await writeFile(envPath, "# keep me\n", "utf8")
+  const provider = http.createServer((req, res) => {
+    const json = (status: number, body: unknown) => {
+      res.writeHead(status, { "content-type": "application/json" })
+      res.end(JSON.stringify(body))
+    }
+    if (req.url === "/v1/models") {
+      if (req.headers.authorization !== "Bearer sk-rerank") {
+        return json(401, { error: { message: "nope" } })
+      }
+      return json(200, {
+        object: "list",
+        data: [
+          { id: "glm-4.6" },
+          { id: "Qwen/Qwen3-Reranker-8B" },
+          { id: "BAAI/bge-reranker-v2-m3" },
+        ],
+      })
+    }
+    json(404, { error: { message: "not found" } })
+  })
+  await new Promise<void>((resolve) => provider.listen(0, "127.0.0.1", () => resolve()))
+  const baseUrl = `http://127.0.0.1:${(provider.address() as AddressInfo).port}/v1`
+
+  const config = configFor()
+  const registry = new ModelProfileRegistry(openDb(":memory:"), config as never, envPath)
+  const app = express()
+  app.use(express.json())
+  app.use(identity({ scopes: ["admin"] }))
+  app.use(
+    "/api",
+    createModelProfilesRouter({
+      registry,
+      config,
+      clients: { chatClient: fakeOpenAI({}), embeddingClient: fakeOpenAI({}) },
+    })
   )
-  void service.shutdown({ timeoutMs: 1000 })
+  const admin = await listen(app)
+
+  try {
+    const saved = await fetch(`${admin.base}/api/models/profiles/rerank/config`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ baseUrl, model: "BAAI/bge-reranker-v2-m3", apiKey: "sk-rerank" }),
+    })
+    assert.equal(saved.status, 200)
+
+    const discovered = (await (
+      await fetch(`${admin.base}/api/models/profiles/rerank/discover`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({}),
+      })
+    ).json()) as { ok: boolean; models: string[] }
+    assert.equal(discovered.ok, true)
+    assert.deepEqual(discovered.models, ["BAAI/bge-reranker-v2-m3", "Qwen/Qwen3-Reranker-8B"])
+  } finally {
+    await admin.close()
+    provider.closeAllConnections?.()
+    provider.close()
+    await rm(dir, { recursive: true, force: true })
+  }
+})
+
+test("the settings routes refuse malformed values, a read-only server and an unknown slot", async () => {
+  const config = configFor()
+  const registry = new ModelProfileRegistry(openDb(":memory:"), config as never)
+  const app = express()
+  app.use(express.json())
+  app.use(identity({ scopes: ["admin"] }))
+  app.use("/api", createModelProfilesRouter({
+    registry,
+    config,
+    clients: { chatClient: fakeOpenAI({}), embeddingClient: fakeOpenAI({}) },
+  }))
+  const admin = await listen(app)
+  const put = (body: unknown) =>
+    fetch(`${admin.base}/api/models/profiles/chat/config`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    })
+
+  try {
+    assert.equal((await put({ baseUrl: "ftp://chat.example.com", model: "m" })).status, 400)
+    assert.equal((await put({ baseUrl: "https://chat.example.com/v1", model: "  " })).status, 400)
+    const readOnly = await put({ baseUrl: "https://chat.example.com/v1", model: "m", apiKey: "k" })
+    assert.equal(readOnly.status, 400)
+    assert.match(((await readOnly.json()) as { error: string }).error, /read-only/)
+    const rerankDiscover = (await (
+      await fetch(`${admin.base}/api/models/profiles/rerank/discover`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({}),
+      })
+    ).json()) as { ok: boolean; models: string[] }
+    // The slot now probes like the others; without a credential it reports
+    // that instead of the old protocol refusal.
+    assert.equal(rerankDiscover.ok, false)
+    assert.deepEqual(rerankDiscover.models, [])
+    assert.equal((await fetch(`${admin.base}/api/models/profiles/nope/config`)).status, 404)
+  } finally {
+    await admin.close()
+  }
 })

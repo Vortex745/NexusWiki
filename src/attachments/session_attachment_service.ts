@@ -7,11 +7,12 @@
  *    in total. Every file is reported on individually (accepted / rejected
  *    with a typed reason), so a batch never fails as a whole because one
  *    file is too big.
- * 2. PARSING. Supported text documents are decoded and chunked in-process
- *    with the SAME chunker the ingestion pipeline uses. Binary parser routes
- *    (marker/mineru/markitdown) stay out of the chat path: they need external
- *    executables, and an attachment is a temporary convenience, not an
- *    import. Promotion is where the full ingestion pipeline runs.
+ * 2. PARSING. Every format the import accepts is accepted here too. Plain
+ *    text is decoded in-process with the SAME chunker the ingestion pipeline
+ *    uses; binary documents (PDF/images/Office/…) run through the SAME parser
+ *    routes the import pipeline selects, in the background, because those
+ *    parsers need external executables or the OCR API and an upload must not
+ *    hang on them. Promotion is where the full ingestion pipeline runs.
  * 3. ISOLATION. Every read and write is scoped to the exact
  *    (sessionId, tenantId, subjectId) triple. A session can only ever
  *    retrieve and cite its OWN attachments.
@@ -27,12 +28,17 @@ import { extname } from "node:path"
 
 import type { DB } from "../ingestion/tracking/db"
 import { RecursiveChunker } from "../ingestion/chunker/chunker"
+import { selectParserRoute, SUPPORTED_DOCUMENT_EXTENSIONS } from "../ingestion/parser"
+import {
+  createConfiguredParser,
+  createIngestionLifecycle,
+  type ParserResolver,
+} from "../ingestion/pipeline"
 import {
   SameNameIntentRequiredError,
   type IngestionLifecycle,
   type IngestionSubmission,
 } from "../ingestion/lifecycle"
-import { createIngestionLifecycle } from "../ingestion/pipeline"
 import type { Document, RetrievalResult } from "../types"
 import type { AttachmentSearchOperations, AttachmentSearchRequest } from "../types/retrieval"
 import {
@@ -44,8 +50,15 @@ export const MAX_ATTACHMENTS_PER_SESSION = 5
 export const MAX_ATTACHMENT_BYTES = 20 * 1024 * 1024
 export const MAX_SESSION_ATTACHMENT_BYTES = 50 * 1024 * 1024
 
-/** The supported set is the composer's historical one: text-like documents. */
-export const SUPPORTED_ATTACHMENT_EXTENSIONS = [".txt", ".md", ".markdown", ".json", ".csv"] as const
+/**
+ * The composer accepts exactly what the import accepts — the router's own
+ * format list. `.txt/.md/.markdown/.json/.csv` keep an in-process text decode;
+ * every other extension is extracted by the import parser route.
+ */
+export const SUPPORTED_ATTACHMENT_EXTENSIONS = SUPPORTED_DOCUMENT_EXTENSIONS
+
+/** Formats decoded in-process; everything else needs the import parsers. */
+const DECODED_TEXT_EXTENSIONS = new Set([".txt", ".md", ".markdown", ".json", ".csv"])
 
 /** The channel asks for the same top-k the knowledge channels use. */
 const ATTACHMENT_TOP_K = 20
@@ -89,12 +102,15 @@ export class AttachmentNotPromotableError extends Error {
 export interface SessionAttachmentServiceOptions {
   /** Test/assembly seam: the SAME ingestion lifecycle the import path uses. */
   lifecycle?: IngestionLifecycle
+  /** Test/assembly seam: the SAME parser factory the import pipeline uses. */
+  parserFor?: ParserResolver
   now?: () => Date
 }
 
 export class SessionAttachmentService implements AttachmentSearchOperations {
   private readonly store: SqliteSessionAttachmentStore
   private readonly lifecycle: IngestionLifecycle
+  private readonly parserFor: ParserResolver
   private readonly now: () => Date
   /** Serializes limit accounting across concurrent uploads (one process). */
   private submitQueue: Promise<void> = Promise.resolve()
@@ -102,6 +118,7 @@ export class SessionAttachmentService implements AttachmentSearchOperations {
   constructor(db: DB, options: SessionAttachmentServiceOptions = {}) {
     this.store = new SqliteSessionAttachmentStore(db)
     this.lifecycle = options.lifecycle ?? createIngestionLifecycle(db)
+    this.parserFor = options.parserFor ?? createConfiguredParser
     this.now = options.now ?? (() => new Date())
   }
 
@@ -146,12 +163,40 @@ export class SessionAttachmentService implements AttachmentSearchOperations {
         outcomes.push({ name: file.name, ok: false, error: rejection })
         continue
       }
-      const attachment = await this.parseOne(sessionId, tenantId, subjectId, file)
-      outcomes.push({ name: file.name, ok: true, attachment })
-      if (attachment.status !== "failed") {
-        liveCount += 1
-        liveBytes += attachment.bytes
+      const id = `att-${randomUUID()}`
+      this.store.insert({
+        id,
+        sessionId,
+        tenantId,
+        subjectId,
+        name: file.name,
+        mimeType: file.mimeType ?? null,
+        bytes: file.content.length,
+        // The text lands once extraction finishes; the row is observable as
+        // `parsing` from this insert on.
+        content: "",
+        // Ticket 21: keep the uploaded bytes so a promotion re-submits the
+        // original file, not a re-encode of the decoded text.
+        rawContent: file.content,
+        now: this.now().toISOString(),
+      })
+      liveCount += 1
+      liveBytes += file.content.length
+      if (DECODED_TEXT_EXTENSIONS.has(extname(file.name).toLowerCase())) {
+        // Text decodes in microseconds — awaiting keeps the ready row in the
+        // upload response, as it always was.
+        await this.runParse(id, sessionId, tenantId, subjectId, file.name, () => decodeText(file.content))
+      } else {
+        // Binary documents run through the import parsers (python/markitdown/
+        // OCR): they must not hold the upload request open, so the row settles
+        // in the background and the composer polls its status.
+        void this.runParse(id, sessionId, tenantId, subjectId, file.name, () => this.extractText(file, id))
       }
+      outcomes.push({
+        name: file.name,
+        ok: true,
+        attachment: this.store.get(id, sessionId, tenantId, subjectId) as SessionAttachment,
+      })
     }
     return outcomes
   }
@@ -313,7 +358,7 @@ export class SessionAttachmentService implements AttachmentSearchOperations {
     if (!(SUPPORTED_ATTACHMENT_EXTENSIONS as readonly string[]).includes(extension)) {
       return {
         kind: "unsupported_type",
-        message: `${file.name}: supported attachment types are ${SUPPORTED_ATTACHMENT_EXTENSIONS.join(", ")}`,
+        message: `${file.name}: unsupported file type; attachments accept the same document formats as import`,
       }
     }
     if (file.content.length === 0) {
@@ -341,35 +386,23 @@ export class SessionAttachmentService implements AttachmentSearchOperations {
   }
 
   /**
-   * Parse one accepted file. The row exists as "parsing" before the work
+   * Settle one accepted file. The row exists as "parsing" before the work
    * starts and is settled to "ready" or "failed", so a client polling the
    * session sees which file is being worked on and why one failed instead of
    * a silent gap in the list.
    */
-  private async parseOne(
+  private async runParse(
+    id: string,
     sessionId: string,
     tenantId: string,
     subjectId: string,
-    file: AttachmentFile
-  ): Promise<SessionAttachment> {
-    const id = `att-${randomUUID()}`
-    const content = decodeText(file.content)
-    this.store.insert({
-      id,
-      sessionId,
-      tenantId,
-      subjectId,
-      name: file.name,
-      mimeType: file.mimeType ?? null,
-      bytes: file.content.length,
-      content,
-      // Ticket 21: keep the uploaded bytes so a promotion re-submits the
-      // original file, not a re-encode of the decoded text.
-      rawContent: file.content,
-      now: this.now().toISOString(),
-    })
+    name: string,
+    extract: () => string | Promise<string>
+  ): Promise<void> {
     try {
-      const chunks = await chunkText(id, file.name, content)
+      const content = await extract()
+      this.store.setContent(id, sessionId, tenantId, subjectId, content, this.now().toISOString())
+      const chunks = await chunkText(id, name, content)
       this.store.saveChunks(id, sessionId, tenantId, chunks)
       this.store.markStatus(id, sessionId, tenantId, subjectId, "ready", {
         now: this.now().toISOString(),
@@ -382,7 +415,30 @@ export class SessionAttachmentService implements AttachmentSearchOperations {
         now: this.now().toISOString(),
       })
     }
-    return this.store.get(id, sessionId, tenantId, subjectId) as SessionAttachment
+  }
+
+  /**
+   * The binary branch: the import router names the parser, the import parser
+   * factory builds it, and its blocks become this attachment's text. The
+   * route can refuse a type the picker allowed (unconfirmable/masquerading
+   * bytes), so a refusal is reported on the row like any parse failure.
+   */
+  private async extractText(file: AttachmentFile, documentId: string): Promise<string> {
+    const route = selectParserRoute({
+      fileName: file.name,
+      ...(file.mimeType ? { mimeType: file.mimeType } : {}),
+    })
+    const blocks = await this.parserFor(route.candidates[0]).parse({
+      content: file.content,
+      fileName: file.name,
+      ...(file.mimeType ? { mimeType: file.mimeType } : {}),
+      documentId,
+    })
+    const text = blocks.map((block) => block.text).join("\n\n")
+    if (!text.trim()) {
+      throw new Error(`${file.name}: the ${route.candidates[0]} parser produced no text`)
+    }
+    return text
   }
 }
 

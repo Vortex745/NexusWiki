@@ -56,6 +56,11 @@ export interface LocalOidcServerOptions {
    * so any local process could ask it for an admin token directly.
    */
   tokenAuth?: string
+  /**
+   * Lifetime of issued tokens in seconds. Defaults to one hour; the demo
+   * issuer overrides it so its sign-in gate stays open for seven days.
+   */
+  tokenTtlSeconds?: number
 }
 
 export interface IssueTokenClaims {
@@ -84,6 +89,7 @@ export class LocalOidcServer {
   private readonly requestedPort: number
   private readonly tokenClaimsResolver?: (body: unknown) => IssueTokenClaims | null
   private readonly tokenAuth?: string
+  private readonly tokenTtlSeconds: number
   private server: Server | null = null
   private actualPort: number = 0
 
@@ -98,6 +104,7 @@ export class LocalOidcServer {
     this.requestedPort = options.port ?? 0
     this.tokenClaimsResolver = options.tokenClaimsResolver
     this.tokenAuth = options.tokenAuth
+    this.tokenTtlSeconds = options.tokenTtlSeconds ?? 3600
 
     const { privateKey, publicKey } = generateKeyPairSync("rsa", {
       modulusLength: 2048,
@@ -209,7 +216,8 @@ export class LocalOidcServer {
   /**
    * Issue a signed JWT with the given claims.
    *
-   * Defaults: iss = this.issuer, aud = this.audience, exp = now + 1h, iat = now.
+   * Defaults: iss = this.issuer, aud = this.audience,
+   * exp = now + tokenTtlSeconds (1h unless configured), iat = now.
    * Override any of these by passing them in `claims`.
    */
   issueToken(claims: IssueTokenClaims): string {
@@ -218,7 +226,7 @@ export class LocalOidcServer {
       iss: this.issuer,
       aud: this.audience,
       iat: now,
-      exp: now + 3600, // 1 hour
+      exp: now + this.tokenTtlSeconds,
       ...claims,
     }
 

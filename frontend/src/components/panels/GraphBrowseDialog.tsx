@@ -1,12 +1,9 @@
-import { Button as UiButton } from "@/components/primitives/button"
+import { Button as UiButton } from "@/components/ui/Button"
 import { SearchField } from "../arc/search-field/search-field"
-import { Alert, AlertDescription } from "@/components/primitives/alert"
-import { PanelDialog } from "../ui/Dialog"
-import { DialogTitle } from "../primitives/dialog"
-import { Network, X } from "../ui/icons"
+import { Alert } from "@/components/arc/alert/alert"
+import { PanelBody, PanelDialog } from "../ui/Dialog"
 import { useEffect, useState } from "react"
 
-import { Icon } from "../ui/Icon"
 import {
   fetchGraphEntities,
   fetchGraphRelations,
@@ -121,32 +118,10 @@ export function GraphBrowseDialog({
       open={open}
       onClose={onClose}
       titleId="graph-browse-title"
-      className="grid grid-rows-[auto_auto_minmax(0,1fr)] sm:max-w-3xl"
+      title={`图谱浏览${knowledgeBase ? ` · ${knowledgeBase.name}` : ""}`}
+      className="sm:max-w-3xl"
     >
-      <div className="flex h-13 flex-none items-center justify-between border-b border-line px-5 max-md:px-4">
-        <div className="flex min-w-0 items-center gap-2">
-          <Icon
-            icon={Network}
-            className="size-4 flex-none text-muted-foreground"
-          />
-          <DialogTitle id="graph-browse-title" className="truncate">
-            图谱浏览{knowledgeBase ? ` · ${knowledgeBase.name}` : ""}
-          </DialogTitle>
-        </div>
-        <UiButton
-          variant="ghost"
-          size="icon-sm"
-          type="button"
-          onClick={onClose}
-          aria-label="关闭图谱浏览"
-          title="关闭"
-          className="grid size-7 flex-none place-items-center"
-        >
-          <Icon data-icon="inline-start" icon={X} />
-        </UiButton>
-      </div>
-
-      <div className="flex min-h-0 flex-col overflow-y-auto px-5 py-4 max-md:px-4">
+      <PanelBody>
         <form
           className="flex flex-none items-center gap-2"
           onSubmit={(event) => {
@@ -180,14 +155,14 @@ export function GraphBrowseDialog({
         </form>
 
         {error ? (
-          <Alert variant="destructive" role="alert" className="mt-3 border p-3">
-            <AlertDescription>{error}</AlertDescription>
+          <Alert tone="danger" title="发生错误" className="mt-3 border p-3">
+            {error}
           </Alert>
         ) : null}
 
         {/* Entity list */}
         {entities.length === 0 && loading === "idle" && !error ? (
-          <p className="mt-4 rounded-[14px] border border-line bg-surface-subtle p-3 text-xs text-muted-foreground">
+          <p className="mt-4 rounded-[14px] border border-line bg-surface-subtle p-3 text-xs text-faint">
             {query
               ? "没有匹配的实体（空结果是正常结果，不是故障）。"
               : "输入关键词检索该知识库图谱中的实体。"}
@@ -210,11 +185,11 @@ export function GraphBrowseDialog({
                 >
                   <span className="font-medium">{entity.name}</span>
                   {entity.type ? (
-                    <span className="ml-1.5 rounded bg-surface-subtle px-1 text-[10px] text-muted-foreground">
+                    <span className="ml-1.5 rounded bg-surface-subtle px-1 text-[10px] text-faint">
                       {entity.type}
                     </span>
                   ) : null}
-                  <span className="ml-1.5 font-mono text-[10px] text-muted-foreground/70">
+                  <span className="ml-1.5 font-mono text-[10px] text-faint/70">
                     {entity.relationCount} 条关系
                   </span>
                 </UiButton>
@@ -240,15 +215,15 @@ export function GraphBrowseDialog({
         {/* Relations of the selected entity */}
         {selected ? (
           <div className="mt-4">
-            <p className="text-[10px] font-medium text-muted-foreground">
+            <p className="text-[10px] font-medium text-faint">
               「{selected.name}」的关系（仅显示本知识库范围内可授权的关系）
             </p>
             {loading === "relations" && relations.length === 0 ? (
-              <p className="mt-2 text-xs text-muted-foreground/70">
+              <p className="mt-2 text-xs text-faint/70">
                 正在读取关系…
               </p>
             ) : relations.length === 0 ? (
-              <p className="mt-2 rounded-[14px] border border-line bg-surface-subtle p-3 text-xs text-muted-foreground">
+              <p className="mt-2 rounded-[14px] border border-line bg-surface-subtle p-3 text-xs text-faint">
                 该实体在本知识库内没有可显示的关系（共享同名实体的其他库关系不会出现）。
               </p>
             ) : (
@@ -269,7 +244,7 @@ export function GraphBrowseDialog({
                         {relation.targetName}
                       </span>
                       <span
-                        className="font-mono text-[10px] text-muted-foreground/70"
+                        className="font-mono text-[10px] text-faint/70"
                         title="关系权重"
                       >
                         w={relation.weight.toFixed(2)}
@@ -296,7 +271,7 @@ export function GraphBrowseDialog({
                           <span
                             key={`${item.documentId}\0${item.chunkId}`}
                             title="该溯源记录无法解析到当前授权范围内的文档版本"
-                            className="rounded bg-surface-subtle px-1.5 py-0.5 text-[10px] text-muted-foreground/70"
+                            className="rounded bg-surface-subtle px-1.5 py-0.5 text-[10px] text-faint/70"
                           >
                             溯源不可用
                           </span>
@@ -323,7 +298,7 @@ export function GraphBrowseDialog({
             )}
           </div>
         ) : null}
-      </div>
+      </PanelBody>
     </PanelDialog>
   )
 }

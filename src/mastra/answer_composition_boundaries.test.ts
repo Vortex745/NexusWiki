@@ -445,28 +445,6 @@ test("ARCH-01C #6: production search operations are composed in exactly one plac
   )
 })
 
-test("ARCH-01C #2: retrieval-debug shares chat's operations and deliberately carries no optional channel", () => {
-  assert.match(
-    sourceOf("src/index.ts"),
-    /searchOperations:\s*sharedAnswerEntry\.searchOperations/,
-    "the debug route is handed the SAME operations object the shared entry publishes"
-  )
-  const debug = sourceOf("src/api/retrieval_debug.ts")
-  assert.match(
-    debug,
-    /new SearcherImpl\(searchOperations\)/,
-    "the debug searcher is built from the operations alone"
-  )
-  // Pinned divergence, not a bug to fix: unifying it would change what
-  // /api/retrieval-debug returns, which ticket 47 puts out of scope. That the
-  // channels DO reach chat's searcher is proven in answer_retrieval_stack.test.ts.
-  assert.equal(
-    /AttachmentSearchOperations|faqEvidence|WebEvidence|attachments/.test(debug),
-    false,
-    "the debug run has no attachment, FAQ or Web evidence channel"
-  )
-})
-
 // ---------------------------------------------------------------------------
 // Ticket 53 (ARCH-01F) — the cutover is closed: the entry keeps the six
 // responsibilities a caller's contract is made of, and everything about HOW a

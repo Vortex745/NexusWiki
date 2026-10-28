@@ -177,6 +177,71 @@ test("management routes authenticate before handlers and retain handler scope ch
   }
 })
 
+test("document viewer reads the caller's tenant from the mounted access middleware", async () => {
+  // Ticket 13 (DOC-02): /api/documents had no identity middleware mount, so
+  // res.locals.accessContext was empty and the handler fell back to the
+  // single-tenant context — every demo-tenant document answered 404.
+  const db = openDb(":memory:")
+  const { DocumentRepo } = await import("../ingestion/tracking/doc_repo")
+  const repo = new DocumentRepo(db)
+  const source = repo.createSource({
+    sourceId: "source-doc-scope",
+    sourceKey: "key-doc-scope",
+    kind: "submission",
+    uri: "scope",
+    namespace: "test",
+    tenantId: "demo",
+    allowedGroups: [],
+    knowledgeBaseId: "kb-demo",
+  })
+  repo.insert({
+    docId: "doc-demo-scope",
+    sourceId: source.sourceId,
+    contentHash: "hash",
+    version: 1,
+    title: "demo doc",
+    source: "api",
+    content: "body",
+    tenantId: "demo",
+    allowedGroups: [],
+    knowledgeBaseId: "kb-demo",
+  })
+
+  let context: AccessContext | null = null
+  const adapter: IdentityAdapter = { resolve: async () => context }
+  const accessMiddleware = createAccessMiddleware({
+    mode: "enforced",
+    adapter,
+    requiredScope: "chat",
+  })
+  const app = createApp({ db, accessMiddleware, eventsSource: stubEventsSource() })
+  const { server, port } = await listen(app)
+  try {
+    const anonymous = await fetch(`http://127.0.0.1:${port}/api/documents/doc-demo-scope`)
+    assert.equal(anonymous.status, 401, "the document route must reject a missing identity")
+
+    context = {
+      tenantId: "demo",
+      subjectId: "demo-admin",
+      groups: ["demo-admins"],
+      scopes: ["chat"],
+    }
+    const allowed = await fetch(`http://127.0.0.1:${port}/api/documents/doc-demo-scope`)
+    assert.equal(
+      allowed.status,
+      200,
+      "a document in the caller's tenant must resolve instead of falling back to single-tenant",
+    )
+
+    context = { tenantId: "other", subjectId: "user-1", groups: [], scopes: ["chat"] }
+    const foreign = await fetch(`http://127.0.0.1:${port}/api/documents/doc-demo-scope`)
+    assert.equal(foreign.status, 404, "another tenant's document stays an indistinguishable 404")
+  } finally {
+    server.close()
+    db.close()
+  }
+})
+
 test("business chunk citation routes use configured physical index for exact and sibling reads", async () => {
   const db = openDb(":memory:")
   const {DocumentRepo} = await import("../ingestion/tracking/doc_repo")

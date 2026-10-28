@@ -8,19 +8,19 @@ import {
 import type { IconProps } from "./Icon"
 import { Icon } from "./Icon"
 import { cn } from "../../lib/cn"
-import { Button as ShadcnButton } from "../primitives/button"
-import { Input } from "../primitives/input"
-import { Textarea } from "../primitives/textarea"
+import { Button as UiButton } from "./Button"
+import { Input } from "../arc/input/input"
+import { Textarea } from "../arc/textarea/textarea"
 import {
   Field as ShadcnField,
   FieldGroup,
   FieldLabel,
   FieldDescription,
-} from "../primitives/field"
+} from "./field"
 import { Select as ArcSelect } from "../arc/select/select"
 import { Checkbox as ArcCheckbox } from "../arc/checkbox/checkbox"
 import { EmptyState as ArcEmptyState } from "../arc/empty-state/empty-state"
-import { Badge } from "../primitives/badge"
+import { Badge } from "../arc/badge/badge"
 
 /** Compatibility props keep existing business handlers intact during the UI migration. */
 export function Button({
@@ -33,12 +33,12 @@ export function Button({
   ...rest
 }: React.ComponentProps<"button"> & {
   tone?: "primary" | "neutral" | "danger"
-  size?: "sm" | "md"
+  size?: "sm" | "md" | "lg"
   full?: boolean
   icon?: IconProps["icon"]
 }) {
   return (
-    <ShadcnButton
+    <UiButton
       type="button"
       variant={
         tone === "primary"
@@ -47,13 +47,13 @@ export function Button({
             ? "destructive"
             : "outline"
       }
-      size={size === "sm" ? "sm" : "default"}
+      size={size === "sm" ? "sm" : size === "lg" ? "lg" : "default"}
       className={cn(full && "w-full", className)}
       {...rest}
     >
       {icon ? <Icon icon={icon} data-icon="inline-start" /> : null}
       {children}
-    </ShadcnButton>
+    </UiButton>
   )
 }
 
@@ -137,6 +137,7 @@ export function Select({
   wrapperClassName,
   disabled,
   size = "md",
+  hideSelected,
   id,
   name,
   required,
@@ -147,6 +148,8 @@ export function Select({
 }: Omit<React.SelectHTMLAttributes<HTMLSelectElement>, "size"> & {
   wrapperClassName?: string
   size?: "sm" | "md"
+  /** Opt-in: the popup lists alternatives only (the trigger keeps the value). */
+  hideSelected?: boolean
 }) {
   const entries = flattenOptions(children)
   // Prefix every value so the real empty-string choice remains selectable in Radix.
@@ -175,6 +178,7 @@ export function Select({
         className={cn("w-full", className)}
         style={{ minHeight: size === "sm" ? 36 : 44 }}
         options={options}
+        hideSelected={hideSelected}
         value={value === undefined ? undefined : encode(value)}
         defaultValue={
           defaultValue === undefined ? undefined : encode(defaultValue)
@@ -243,16 +247,7 @@ export function StatusBadge({
   children: ReactNode
 }) {
   return (
-    <Badge
-      title={title}
-      variant={
-        tone === "danger"
-          ? "destructive"
-          : tone === "success"
-            ? "default"
-            : "secondary"
-      }
-    >
+    <Badge tone={tone === "danger" ? "danger" : "neutral"} title={title}>
       {children}
     </Badge>
   )

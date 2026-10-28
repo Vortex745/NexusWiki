@@ -31,6 +31,12 @@ export interface DemoOidcIssuerOptions {
   audience: string
 }
 
+/**
+ * How long a demo sign-in stays valid: seven days. The gate is meant to keep
+ * the app behind a password, not to make the operator retype it every hour.
+ */
+export const DEMO_TOKEN_TTL_SECONDS = 7 * 24 * 60 * 60
+
 export interface DemoOidcIssuerHandle {
   /** Issuer URL, including the bound port. */
   issuer: string
@@ -73,6 +79,7 @@ export async function startDemoOidcIssuer(
     kid: "demo-key",
     tokenClaimsResolver: presetClaims,
     tokenAuth,
+    tokenTtlSeconds: DEMO_TOKEN_TTL_SECONDS,
   })
   await server.start()
   return {

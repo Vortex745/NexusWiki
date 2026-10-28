@@ -102,7 +102,32 @@ test("an upload is listed with its parse status, usage and the session limits", 
       maxFiles: 5,
       maxFileBytes: 20 * 1024 * 1024,
       maxSessionBytes: 50 * 1024 * 1024,
-      supportedExtensions: [".txt", ".md", ".markdown", ".json", ".csv"],
+      supportedExtensions: [
+        ".pdf",
+        ".csv",
+        ".doc",
+        ".docx",
+        ".epub",
+        ".htm",
+        ".html",
+        ".json",
+        ".md",
+        ".markdown",
+        ".ppt",
+        ".pptx",
+        ".rtf",
+        ".txt",
+        ".xls",
+        ".xlsx",
+        ".xml",
+        ".bmp",
+        ".heic",
+        ".jpeg",
+        ".jpg",
+        ".png",
+        ".tif",
+        ".tiff",
+      ],
     } as never)
     assert.equal(payload.usage.live, 1)
     assert.equal(payload.usage.bytes, Buffer.byteLength("# 政策\n退款三个工作日"))
@@ -139,7 +164,7 @@ test("limits and unsupported types answer per file, not as a failed batch", asyn
     assert.equal(sixth.status, 400)
     assert.equal((sixth.body.error as { kind?: string }).kind, "count")
 
-    const unsupported = await upload(base, "sess-limits", "scan.pdf", "%PDF-1.4")
+    const unsupported = await upload(base, "sess-limits", "archive.zip", "PK")
     assert.equal(unsupported.status, 415)
     assert.equal((unsupported.body.error as { kind?: string }).kind, "unsupported_type")
 

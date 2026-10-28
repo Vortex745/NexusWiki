@@ -8,18 +8,21 @@
  *   rerank    → RERANK_API_KEY / RERANK_BASE_URL / RERANK_MODEL
  *
  * The registry exposes only non-secret metadata (model id, host, dimensions,
- * configured/enabled flags). Keys and full URLs never leave the server, and
- * the registry NEVER writes environment files — the only mutable state is the
- * `enabled` toggle persisted in SQLite (`model_profiles`), which governs
- * whether a profile may be SELECTED through raw request values (evaluation
- * model overrides today; assistant bindings in ticket 18).
+ * configured/enabled flags). Keys never leave the server: the settings
+ * workspace may WRITE provider credentials into the server environment file
+ * (`.env`, through `saveConfig`) and read back a key-less view, but no
+ * response ever carries a key.
  *
- * `configured` is derived live from the credential slot, so removing a key on
- * restart disables selection regardless of the persisted toggle.
+ * `credentials(id)` resolves a slot field-by-field — the environment file
+ * wins over the boot config — so detection and probes see a save right away.
+ * The answer pipeline reads `.env` at startup (dotenv), so a saved slot
+ * becomes the process's actual provider on the next start. `configured` is
+ * derived from the resolved key.
  */
 
 import type OpenAI from "openai"
 import type { AppConfig } from "../config"
+import { readEnvValuesSync, writeEnvValues } from "../config/env_file"
 import type { DB } from "../ingestion/tracking/db"
 
 export type ModelProfileId = "chat" | "embedding" | "rerank"
@@ -41,6 +44,51 @@ export interface ModelProfile {
   enabled: boolean
   /** enabled AND configured — the gate raw request values must pass. */
   selectable: boolean
+}
+
+/** Server-side resolution of one slot: override first, environment second. */
+export interface ModelProfileCredentials {
+  apiKey: string
+  baseUrl: string
+  model: string
+}
+
+/**
+ * What the settings workspace may read back about a slot. The key itself is
+ * write-only: the browser learns whether one is stored, never its value.
+ */
+export interface ModelProfileConfigView {
+  id: ModelProfileId
+  baseUrl: string
+  model: string
+  hasApiKey: boolean
+  /** "file" when the environment file carries this slot's values. */
+  source: "file" | "env"
+}
+
+/**
+ * A save from the settings workspace. The base URL and model are written
+ * verbatim; an omitted API key keeps the stored one (the form never receives
+ * it back, so a blank field must not erase it).
+ */
+export interface ModelProfileConfigSave {
+  baseUrl: string
+  model: string
+  apiKey?: string
+}
+
+/** Environment-file keys behind each slot. */
+export const SLOT_ENV_KEYS: Record<
+  ModelProfileId,
+  { apiKey: string; baseUrl: string; model: string }
+> = {
+  chat: { apiKey: "OPENAI_API_KEY", baseUrl: "OPENAI_BASE_URL", model: "OPENAI_CHAT_MODEL" },
+  embedding: {
+    apiKey: "EMBEDDING_API_KEY",
+    baseUrl: "EMBEDDING_BASE_URL",
+    model: "EMBEDDING_MODEL",
+  },
+  rerank: { apiKey: "RERANK_API_KEY", baseUrl: "RERANK_BASE_URL", model: "RERANK_MODEL" },
 }
 
 export class ModelProfileError extends Error {
@@ -72,7 +120,13 @@ export interface ModelProfileGate {
 export class ModelProfileRegistry implements ModelProfileGate {
   constructor(
     private readonly db: DB,
-    private readonly config: AppConfig
+    private readonly config: AppConfig,
+    /**
+     * The server environment file. Omitted in tests so nothing touches disk;
+     * production passes it so a save is visible to detection/probes before
+     * the next restart picks it up through dotenv.
+     */
+    private readonly envPath?: string
   ) {
     this.seed()
   }
@@ -95,10 +149,92 @@ export class ModelProfileRegistry implements ModelProfileGate {
     seedAll()
   }
 
-  /** Chat/embedding keys are required by loadConfig; rerank's is optional. */
+  /** A slot is configured when its resolved key (override or env) is present. */
   private isConfigured(id: ModelProfileId): boolean {
-    if (id === "rerank") return this.config.rerankApiKey.trim().length > 0
-    return true
+    return this.credentials(id).apiKey.length > 0
+  }
+
+  private envFileValues(): Map<string, string> {
+    if (!this.envPath) return new Map()
+    try {
+      return readEnvValuesSync(this.envPath)
+    } catch {
+      // An unreadable file must not take the settings workspace down; the
+      // boot config still describes what this process calls.
+      return new Map()
+    }
+  }
+
+  private envSlot(id: ModelProfileId): ModelProfileCredentials {
+    const cfg = this.config
+    if (id === "embedding") {
+      return { apiKey: cfg.embeddingApiKey, baseUrl: cfg.embeddingBaseUrl, model: cfg.embeddingModel }
+    }
+    if (id === "rerank") {
+      return { apiKey: cfg.rerankApiKey, baseUrl: cfg.rerankBaseUrl, model: cfg.rerankModel }
+    }
+    return { apiKey: cfg.openaiApiKey, baseUrl: cfg.openaiBaseUrl, model: cfg.openaiChatModel }
+  }
+
+  /**
+   * Effective credentials for one slot: the environment file wins per field,
+   * so a save is visible to detection/probes immediately; the boot config
+   * covers keys the file does not carry.
+   */
+  credentials(id: ModelProfileId): ModelProfileCredentials {
+    const env = this.envSlot(id)
+    const file = this.envFileValues()
+    const keys = SLOT_ENV_KEYS[id]
+    return {
+      apiKey: (file.get(keys.apiKey) ?? env.apiKey).trim(),
+      baseUrl: (file.get(keys.baseUrl) ?? env.baseUrl).trim(),
+      model: (file.get(keys.model) ?? env.model).trim(),
+    }
+  }
+
+  /** The key-less view the settings workspace renders its form from. */
+  configView(id: ModelProfileId): ModelProfileConfigView {
+    const creds = this.credentials(id)
+    const keys = SLOT_ENV_KEYS[id]
+    const file = this.envFileValues()
+    return {
+      id,
+      baseUrl: creds.baseUrl,
+      model: creds.model,
+      hasApiKey: creds.apiKey.length > 0,
+      source: file.has(keys.baseUrl) || file.has(keys.model) ? "file" : "env",
+    }
+  }
+
+  /**
+   * Persist a slot into the environment file. This is the ONLY write path for
+   * model credentials; the running process keeps its boot config until the
+   * next start, while probes read the file and therefore verify the saved
+   * values right away. Validation lives in the HTTP layer; the saved key is
+   * never returned.
+   */
+  async saveConfig(
+    id: string,
+    save: ModelProfileConfigSave
+  ): Promise<ModelProfileConfigView> {
+    if (!(PROFILE_IDS as readonly string[]).includes(id)) {
+      throw new ModelProfileError(`unknown model profile "${id}"`, 404)
+    }
+    if (!this.envPath) {
+      throw new ModelProfileError(
+        `the ${id} profile is read-only on this server`,
+        400,
+        "No writable environment file is configured (ENV_FILE)."
+      )
+    }
+    const keys = SLOT_ENV_KEYS[id as ModelProfileId]
+    const entries: Record<string, string> = {
+      [keys.baseUrl]: save.baseUrl,
+      [keys.model]: save.model,
+    }
+    if (save.apiKey !== undefined) entries[keys.apiKey] = save.apiKey
+    await writeEnvValues(this.envPath, entries)
+    return this.configView(id as ModelProfileId)
   }
 
   private persistedEnabled(id: ModelProfileId): boolean {
@@ -110,24 +246,14 @@ export class ModelProfileRegistry implements ModelProfileGate {
 
   list(): ModelProfile[] {
     return PROFILE_IDS.map((id) => {
-      const configured = this.isConfigured(id)
+      const creds = this.credentials(id)
+      const configured = creds.apiKey.length > 0
       const enabled = this.persistedEnabled(id)
-      const chatClientBase =
-        id === "embedding"
-          ? this.config.embeddingBaseUrl
-          : id === "rerank"
-            ? this.config.rerankBaseUrl
-            : this.config.openaiBaseUrl
       return {
         id,
         kind: id,
-        model:
-          id === "embedding"
-            ? this.config.embeddingModel
-            : id === "rerank"
-              ? this.config.rerankModel
-              : this.config.openaiChatModel,
-        baseUrlHost: hostOf(chatClientBase),
+        model: creds.model,
+        baseUrlHost: hostOf(creds.baseUrl),
         ...(id === "embedding" ? { dimensions: this.config.embeddingDimensions } : {}),
         configured,
         enabled,
@@ -161,7 +287,7 @@ export class ModelProfileRegistry implements ModelProfileGate {
       throw new ModelProfileError(
         `the ${id} profile has no credentials configured`,
         400,
-        `Set ${envVar} in the server environment and restart, then enable it here.`
+        `Save credentials for this profile on its settings card (or set ${envVar}), then enable it.`
       )
     }
     this.db

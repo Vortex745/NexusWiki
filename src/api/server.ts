@@ -26,12 +26,7 @@ import { SqliteCandidateReviewStore } from "../knowledge/candidate_review_store"
 import { RetirementServiceImpl } from "../knowledge/retirement"
 import { createSourceGovernanceRouter } from "./source_governance"
 import { createStatusRouter } from "./status"
-import { createEvaluationsRouter } from "./evaluations"
-import type { AccessContext } from "../access/context"
-import { evalAssistantConfigDigest } from "../evaluation/assistant_snapshots"
 import { createSessionRouter, type DemoAuthOptions } from "./session"
-import { EvaluationService } from "../evaluation/service"
-import { createDedicatedReranker } from "../retrieval/search/dedicated_reranker"
 import {
   createRetrievalScopeResolver,
   type RetrievalScopeResolver,
@@ -58,8 +53,8 @@ import { createWikiRouter } from "./wiki"
 import { WikiAgent } from "../wiki/agent"
 import { createSyncDataSourcesRouter } from "./sync_data_sources"
 import { ActiveVersionRepository } from "../ingestion/tracking/active_version_repo"
-import { createRetrievalDebugRouter } from "./retrieval_debug"
 import { createModelProfilesRouter } from "./model_profiles"
+import { createLogsRouter } from "./logs"
 import { createDemoConfigRouter } from "./demo_config"
 import { createAssistantsRouter } from "./assistants"
 import { createConversationsRouter } from "./conversations"
@@ -68,9 +63,6 @@ import { createCapabilitiesRouter } from "./capabilities"
 import { createMemorySuggestionsRouter } from "./memory_suggestions"
 import { LongTermMemoryStore } from "../memory/long_term_memory_store"
 import { MemorySuggestionStore } from "../memory/memory_suggestion_store"
-import { createFaqEntriesRouter } from "./faq_entries"
-import { FaqEntryServiceImpl } from "../faq/faq_entry_service"
-import { SqliteFaqEntryRepo } from "../faq/faq_entry_repo"
 import { createAttachmentsRouter } from "./attachments"
 import { SqliteConversationHistoryStore } from "../answer/conversation_history_store"
 import {
@@ -106,11 +98,6 @@ export function createApp(options: {
    */
   tracing?: TracingRuntime
   accessMiddleware?: RequestHandler
-  /**
-   * Eval refactor Ticket 04: in-process evaluation service. Mounted only when
-   * provided (tests exercising unrelated routes do not need it).
-   */
-  evaluationService?: EvaluationService
   /**
    * P5.2: Ingestion access middleware. Mounted on /api/ingest routes so the
    * same identity context enforced at the chat gate is also enforced before
@@ -150,12 +137,6 @@ export function createApp(options: {
    * the knowledge-base service when omitted.
    */
   knowledgeBaseFolders?: KnowledgeBaseFolderService
-  /**
-   * Ticket 14 (RET-01): the shared SearchOperations behind the retrieval-debug
-   * endpoint. startServer receives chat's own operations (single retrieval
-   * configuration); absent in bare createApp() mounts → the endpoint 503s.
-   */
-  searchOperations?: import("../retrieval/search/searcher").SearchOperations
   eventsSource: AnswerEventsSource
   // Optional runtime surfaces for the /api/status endpoint.
   // When omitted (e.g. tests), the status route is not mounted.
@@ -163,6 +144,11 @@ export function createApp(options: {
   config?: import("../config").AppConfig
   /** Ticket 16 (MODEL-01A): built-in model profiles; omitted → routes not mounted. */
   modelProfiles?: import("../models/profiles").ModelProfileRegistry
+  /**
+   * The writable `.env` behind the model settings workspace. Omitted in tests
+   * so profile metadata stays derived from the injected config.
+   */
+  envFilePath?: string
   /** Ticket 18 (AST-01A): assistant workspace service; omitted → routes not mounted. */
   assistants?: import("../assistants/assistant_service").AssistantService
   /** Ticket 20 (CONV-01A): server-owned conversation history; omitted → routes not mounted. */
@@ -264,6 +250,10 @@ export function createApp(options: {
     // knowledge-base workspace — browsing is for every authenticated member,
     // and the admin commands re-check the admin scope in-handler.
     app.use("/api/knowledge-bases", options.accessMiddleware)
+    // Ticket 13 (DOC-02): the document viewer reads tenant/group scope from
+    // res.locals.accessContext. Without this mount the handler silently fell
+    // back to the single-tenant context and every non-default tenant 404'd.
+    app.use("/api/documents", options.accessMiddleware)
     // Knowledge-base folders: the same chat-scope identity gate. The move route
     // (/api/knowledge-bases/:id/folder) is already covered by the prefix above.
     app.use("/api/knowledge-base-folders", options.accessMiddleware)
@@ -271,9 +261,6 @@ export function createApp(options: {
     // same chat-scope gate as the rest of the workspace. The list/create routes
     // sit under /api/knowledge-bases and are already covered above.
     app.use("/api/document-folders", options.accessMiddleware)
-    // Ticket 14 (RET-01): the retrieval-debug run is an authorized read —
-    // same chat scope, same identity that constrains the channels.
-    app.use("/api/retrieval-debug", options.accessMiddleware)
     // Ticket 18 (AST-01A): the assistant workspace — browsing is for every
     // authenticated member (group visibility applies), admin commands
     // re-check the admin scope in-handler.
@@ -299,16 +286,6 @@ export function createApp(options: {
     )
   )
 
-  // Ticket 14 (RET-01): the read-only retrieval-debug run. Built from the
-  // SHARED search operations (same clients + reranker as chat) and the SAME
-  // scope resolver; absent operations (bare mounts) → 503.
-  app.use(
-    "/api",
-    createRetrievalDebugRouter({
-      searchOperations: options.searchOperations,
-      retrievalScopeResolver: options.retrievalScopeResolver,
-    })
-  )
   // Ticket 08 (KB-04) + Ticket 11 (DOC-01A): ONE knowledge-base service shared
   // by the workspace routes and the document catalog (and, in startServer, by
   // the retrieval-scope resolver).
@@ -400,19 +377,6 @@ export function createApp(options: {
         : {}),
     })
   )
-  // Ticket 30 (FAQ-01A): the FAQ management surface. Mounted only when the
-  // server wires a knowledge-base resolver — the SAME resolver the chat path
-  // uses, so an unknown knowledge base is a 404 and an archived one a 409
-  // before any entry is read or written.
-  if (options.retrievalScopeResolver) {
-    app.use(
-      "/api",
-      createFaqEntriesRouter({
-        faqEntries: new FaqEntryServiceImpl({ repo: new SqliteFaqEntryRepo(db) }),
-        scopeResolver: options.retrievalScopeResolver,
-      })
-    )
-  }
   // Wiki pages are generated asynchronously after source activation. The
   // router owns browsing and administration; the worker owns generation.
   app.use(
@@ -438,10 +402,6 @@ export function createApp(options: {
   if (options.managementAccessMiddleware) {
     app.use("/api/handoffs", options.managementAccessMiddleware)
     app.use("/api/sources", options.managementAccessMiddleware)
-    // Ticket 04: evaluation tasks are identity-scoped like every other
-    // management surface; the handler keeps its own admin check.
-    app.use("/api/evaluations", options.managementAccessMiddleware)
-    app.use("/api/evaluation-datasets", options.managementAccessMiddleware)
     // Ticket 29 (EVAL-02B): the feedback review surface is identity-scoped; the
     // handler enforces review-or-admin (a reader must not browse it).
     app.use("/api/feedback", options.managementAccessMiddleware)
@@ -451,52 +411,20 @@ export function createApp(options: {
     // Ticket 35: capability introspection is deployment state — same
     // identity-only gate as the session surface.
     app.use("/api/capabilities", options.managementAccessMiddleware)
+    // Model settings can now write provider credentials into `.env`; in
+    // enforced mode the slot must resolve a real identity before the admin
+    // check reads its scopes. Single-tenant mode leaves the middleware off
+    // and keeps the router's deterministic fallback.
+    app.use("/api/models/profiles", options.managementAccessMiddleware)
+    // Log files are server-host internals: identity first, then the router's
+    // own admin check. The opener never accepts a client path.
+    app.use("/api/logs", options.managementAccessMiddleware)
   }
+  app.use("/api", createLogsRouter())
   // Ticket 01: identity session + demo sign-in. /api/auth/* is deliberately
   // outside the identity middleware — you cannot be required to authenticate
   // in order to authenticate.
   app.use("/api", createSessionRouter(options.demoAuth ? { demoAuth: options.demoAuth } : {}))
-  if (options.evaluationService) {
-    app.use(
-      "/api",
-      createEvaluationsRouter(options.evaluationService, {
-        // Ticket 28 (EVAL-02A): a stored assistant version resolves into the
-        // immutable snapshot an evaluation task runs with. It is the SAME
-        // version the chat path runs (prompt + rerank binding, pinned by
-        // version), and the digest covers exactly those execution fields.
-        ...(options.assistants
-          ? {
-              resolveAssistant: (
-                context: AccessContext,
-                assistantId: string,
-                version: unknown
-              ) => {
-                const service = options.assistants!
-                const assistant = service.get(assistantId, context.tenantId)
-                if (!assistant) return null
-                if (assistant.status === "archived") return "archived"
-                const wanted =
-                  typeof version === "number" ? version : assistant.currentVersion
-                const stored = service.getVersion(assistantId, context.tenantId, wanted)
-                if (!stored) return null
-                return {
-                  assistantId,
-                  version: stored.version,
-                  name: assistant.name,
-                  configDigest: evalAssistantConfigDigest({
-                    systemPrompt: stored.config.systemPrompt,
-                    rerankModelProfileId: stored.config.rerankModelProfileId,
-                  }),
-                  systemPrompt: stored.config.systemPrompt,
-                  rerankModelProfileId: stored.config.rerankModelProfileId,
-                  toolPolicy: stored.config.toolPolicy,
-                }
-              },
-            }
-          : {}),
-      })
-    )
-  }
   // Ticket 09 P5: mount the Handoff HTTP API (spec §8 L1549-1552).
   // POST /chat/runs/:runId/handoff is covered by the /api/chat access middleware
   // mount above (chat scope) since the path starts with /chat. GET/PATCH /handoffs
@@ -653,8 +581,6 @@ export async function startServer(
   /** Ticket 01: enables the local demo sign-in when the demo issuer is running. */
   options: {
     demoAuth?: DemoAuthOptions
-    /** Ticket 14 (RET-01): chat's shared search operations for the debug run. */
-    searchOperations?: import("../retrieval/search/searcher").SearchOperations
     /**
      * Ticket 22 (ATT-01): the SAME session attachment service the shared
      * answer entry reads its attachment channel from — one instance, so a
@@ -686,12 +612,14 @@ export async function startServer(
      * composition root stays the only place that knows the vendor.
      */
     tracing?: TracingRuntime
+    /**
+     * The writable `.env` for the model settings workspace; omitted in tests.
+     */
+    envFilePath?: string
   } = {}
 ): Promise<{
   server: Server
   processRuntime: ProcessRuntime
-  /** Ticket 14: exposed so the shutdown controller can release eval scopes. */
-  evaluationService: EvaluationService
   /** LO-03: the runtime logger, so shutdown can flush it last. */
   logger: Logger
   /** LO-05: the tracing runtime, so shutdown can flush and bound it last. */
@@ -746,47 +674,13 @@ export async function startServer(
   // without the field resolves to its tenant's default knowledge base, and an
   // unknown or cross-tenant id is refused (404) before any run starts.
   const retrievalScopeResolver = createRetrievalScopeResolver(knowledgeBaseService)
-  // Ticket 04: the evaluation service shares the production clients but owns
-  // its per-task isolated scopes, in-memory task registry, and the dedicated
-  // reranker built from RERANK_* config (the same adapter normal chat uses).
   // Ticket 16 (MODEL-01A): the built-in profile registry seeds its toggle rows
-  // and gates raw model selections (evaluation overrides today).
-  const modelProfiles = new ModelProfileRegistry(processRuntime.db, config)
-  const reranker = createDedicatedReranker({
-    baseUrl: config.rerankBaseUrl,
-    apiKey: config.rerankApiKey,
-    model: config.rerankModel,
-    timeoutMs: config.rerankTimeoutMs,
-    maxDocumentChars: config.rerankMaxDocumentChars,
-    tracing,
-  })
-  const evaluationService = new EvaluationService({
+  // and gates raw model selections.
+  const modelProfiles = new ModelProfileRegistry(
+    processRuntime.db,
     config,
-    tracing,
-    clients: {
-      es: processRuntime.elasticsearch,
-      chatClient: processRuntime.chatClient,
-      embeddingClient: processRuntime.embeddingClient,
-      graphDriver: processRuntime.neo4jDriver,
-    },
-    ...(reranker ? { reranker } : {}),
-    // Ticket 11: a task may only pick models the operator listed; the rerank
-    // override reuses the same dedicated adapter as normal chat.
-    allowedChatModels: config.evalAllowedChatModels ?? [],
-    allowedRerankModels: config.evalAllowedRerankModels ?? [],
-    createReranker: (model) =>
-      createDedicatedReranker({
-        baseUrl: config.rerankBaseUrl,
-        apiKey: config.rerankApiKey,
-        model,
-        timeoutMs: config.rerankTimeoutMs,
-        maxDocumentChars: config.rerankMaxDocumentChars,
-        tracing,
-      }),
-    // Ticket 16 (MODEL-01A): a disabled or unknown profile can never be
-    // selected through raw request values, whatever the allowlists say.
-    modelProfileGate: modelProfiles,
-  })
+    options.envFilePath
+  )
   // Ticket 18 (AST-01A): the assistant workspace shares the production
   // knowledge-base service and profile registry for binding validation.
   const assistants = new AssistantService(processRuntime.db, knowledgeBaseService, {
@@ -812,12 +706,9 @@ export async function startServer(
     sessionBinder,
     retrievalScopeResolver,
     knowledgeBaseService,
-    // Ticket 14 (RET-01): the debug run shares chat's retrieval configuration.
-    ...(options.searchOperations ? { searchOperations: options.searchOperations } : {}),
     eventsSource,
     processRuntime,
     config,
-    evaluationService,
     modelProfiles,
     assistants,
     // Ticket 20 (CONV-01A): server-owned conversation directories + history.
@@ -840,5 +731,5 @@ export async function startServer(
       resolve(s)
     })
   })
-  return { server, processRuntime, evaluationService, logger, tracing }
+  return { server, processRuntime, logger, tracing }
 }

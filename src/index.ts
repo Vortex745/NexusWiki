@@ -3,6 +3,7 @@ import { createAnswerRuntime } from "./answer/runtime"
 import { startConversationGc } from "./answer/conversation_gc"
 import { SqliteConversationStore } from "./answer/conversation_store"
 import { loadConfig } from "./config"
+import { defaultEnvFilePath } from "./config/env_file"
 import {
   validateAccessMode,
   SINGLE_TENANT_TENANT,
@@ -169,17 +170,15 @@ async function main() {
   // retrieval, Critic/Replan, observer fanout, budgets). Normal chat wires
   // it through the Mastra runtime boundary into the HTTP server — the
   // single injection point passed to `startServer` (T07 §3.4
-  // single-publisher invariant). Evaluation will reuse the same entry with
-  // injected isolated repositories and observers.
+  // single-publisher invariant).
   // Ticket 22 (ATT-01): ONE attachment service for the whole process — the
   // upload routes write it and the answer runs read it. Session-scoped, so a
   // run can only ever retrieve the attachments of its own conversation.
   const attachments = createSessionAttachmentService(answerRuntime.processRuntime.db)
 
   // Ticket 31 (FAQ-01B): ONE FAQ service for the answer path — exact matches
-  // answer directly, fuzzy matches join retrieval as evidence. Shares the
-  // process db with the management routes' own instance; both read the same
-  // versioned rows.
+  // answer directly, fuzzy matches join retrieval as evidence. Rows are
+  // versioned in the process db and seeded with the demo dataset.
   const faqService = new FaqEntryServiceImpl({
     repo: new SqliteFaqEntryRepo(answerRuntime.processRuntime.db),
   })
@@ -217,8 +216,8 @@ async function main() {
     suggestions: suggestionStore,
     // Ticket 36 (WEB-01): the web-evidence channel — safe URL reads of the
     // user's own pasted links + optional configured Tavily search (server-
-    // side key). Runs only when the composition wires it, so evaluation
-    // scopes and probes never touch the network.
+    // side key). Runs only when the composition wires it, so probes never
+    // touch the network.
     web: createWebEvidenceOperations({
       ...(cfg.tavilyApiKey ? { tavilyApiKey: cfg.tavilyApiKey } : {}),
     }),
@@ -233,10 +232,9 @@ async function main() {
   const {
     server,
     processRuntime,
-    evaluationService,
     logger: runtimeLogger,
   } = await startServer(
-    3001,
+    Number(process.env.API_PORT ?? 3001),
     mastraBoundary.eventsSource,
     identityAdapter,
     {
@@ -249,15 +247,15 @@ async function main() {
       logger: logs.system,
       // LF-07: Answer run metadata goes to the Agent file only (never stdout).
       agentLogger: logs.agent,
-      // Ticket 14 (RET-01): the retrieval-debug endpoint shares chat's search
-      // operations (same clients + reranker) — no second retrieval config.
-      searchOperations: sharedAnswerEntry.searchOperations,
       // Ticket 22 (ATT-01): the routes and the runs share ONE instance.
       attachments,
       // Ticket 35 (TOOL-01B): the MCP capability invocation seam.
       ...(sharedAnswerEntry.mcp ? { mcpCapabilities: sharedAnswerEntry.mcp } : {}),
       // LO-06: the single tracing runtime built above.
       tracing: tracingRuntime,
+      // Model settings saves write provider credentials here; detection and
+      // probes read it immediately, the pipeline picks it up on next start.
+      envFilePath: defaultEnvFilePath(),
     }
   )
   const worker = startWorker({
@@ -328,28 +326,6 @@ async function main() {
     // runtime.close). Shutdown order: runtime (ProcessRuntime's Neo4j) → driver
     // (graph singleton) → db. This is the single authoritative close path.
     driver: { close: closeDriver },
-    // Ticket 14: release evaluation scopes (dedicated index + graph
-    // provenance) before the shared ES/Neo4j clients close. Honest about
-    // leftovers: the log names what was released and whether the wait ran out,
-    // and points at the scoped residue tool for a hard kill.
-    evaluations: {
-      shutdown: async () => {
-        const report = await evaluationService.shutdown()
-        console.log(
-          `[shutdown] evaluation tasks cancelled: ${report.cancelledTaskIds.length}, cleanup budget exhausted: ${report.timedOut}`
-        )
-        for (const release of report.releases) {
-          console.log(
-            `[shutdown]   ${release.taskId} stage=${release.stage} cleanup=${JSON.stringify(release.cleanup)}`
-          )
-        }
-        if (report.timedOut) {
-          console.warn(
-            "[shutdown] evaluation cleanup did not finish in time — residue may remain; after restart run: npm run eval:residue -- --delete"
-          )
-        }
-      },
-    },
   })
   installSignalHandlers(shutdownController)
 }

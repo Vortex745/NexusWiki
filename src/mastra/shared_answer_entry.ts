@@ -164,10 +164,8 @@ export interface SharedAnswerEntry {
   eventsSource: SharedAnswerEventsSource
   /**
    * Ticket 14 (RET-01): the SAME search operations chat uses (same clients,
-   * same dedicated reranker) — the retrieval-debug endpoint builds its
-   * Searcher from this so debug and chat share configuration and
-   * implementation. Stateless beyond its clients; a new SearcherImpl per run
-   * is exactly what the chat runners do.
+   * same dedicated reranker). Stateless beyond its clients; a new SearcherImpl
+   * per run is exactly what the chat runners do.
    */
   searchOperations: SearchOperations
   /**

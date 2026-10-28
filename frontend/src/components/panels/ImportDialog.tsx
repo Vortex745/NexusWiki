@@ -1,12 +1,11 @@
-import { Field as FormField, FieldLabel } from "@/components/primitives/field"
+import { Field as FormField, FieldLabel } from "@/components/ui/field"
 import SegmentedControl from "../arc/segmented-control/segmented-control"
-import { Input } from "@/components/primitives/input"
+import { Input } from "@/components/arc/input/input"
 import { NumberField } from "../arc/number-field/number-field"
-import { Button as UiButton } from "@/components/primitives/button"
+import { Button as UiButton } from "@/components/ui/Button"
 import { Select as UiSelect } from "@/components/ui/Controls"
+import { InlineMessage } from "../ui/containers"
 import { PanelDialog } from "../ui/Dialog"
-import { DialogTitle } from "../primitives/dialog"
-import { Database, X } from "../ui/icons"
 import { useCallback, useEffect, useRef, useState } from "react"
 
 import {
@@ -54,12 +53,27 @@ import { knowledgeStore, useKnowledgeBases } from "../../runtime/knowledgeStore"
 import { useSignedInSession } from "../../runtime/SessionContext"
 import { Icon } from "../ui/Icon"
 import {
+  Ban,
+  CircleCheck,
+  CircleX,
+  Clock,
+  Eye,
+  History,
+  LoaderCircle,
+  RefreshCw,
+  ShieldAlert,
+  Trash2,
+} from "../ui/icons"
+import {
   deriveIngestProgress,
+  deriveRecordView,
   describeActivationReasons,
+  describeActivationWarnings,
   describeAllowedOperations,
   initialImportProgress,
   type ImportProgress as Progress,
   type ImportStatus,
+  type RecordDisplayState,
   type UploadProgress,
 } from "../../lib/ingestProgress"
 import {
@@ -122,9 +136,17 @@ interface ImportItem {
   processingStartedAt?: number
   lastProgressAt?: number
   timeoutWarned?: boolean
+  /** Terminal rows leave the queue after the read window and live on in the
+   * records tab; the flag keeps them out of the queue panel. */
+  folded?: boolean
+  foldedAt?: number
 }
 
 const IMPORT_STALL_MS = 5 * 60_000
+/** A settled row — success, failure, cancellation or a human-review hold —
+ * stays readable this long, then folds into the records tab. The queue never
+ * accumulates finished outcomes. */
+const TERMINAL_ROW_VISIBLE_MS = 5_000
 /** The pre-check catalog read is bounded: 5 pages × 100 rows, aligned with the
  * ≤500-per-batch hint; past the cap (or on error) the import proceeds and the
  * server's 409 is the safety net. */
@@ -152,7 +174,57 @@ function statusBadgeClass(status: ImportStatus): string {
   if (status === "failed") return "bg-danger-subtle text-danger"
   if (status === "pending_review" || status === "business_review")
     return "bg-warning-subtle text-warning"
-  return "bg-surface text-muted-foreground"
+  return "bg-surface text-faint"
+}
+
+/** Record badge treatment per DERIVED record state. Green is reserved for
+ * rows the active pointer adopted; holds and legacy rows never read as ✅. */
+function recordBadgeClass(state: RecordDisplayState): string {
+  if (state === "adopted") return "bg-success-subtle text-success"
+  if (state === "failed") return "bg-danger-subtle text-danger"
+  if (state === "pending_review" || state === "business_review")
+    return "bg-warning-subtle text-warning"
+  if (state === "cancelled") return "bg-warning-subtle text-warning"
+  return "bg-surface text-faint"
+}
+
+function recordIcon(state: RecordDisplayState) {
+  if (state === "adopted") return CircleCheck
+  if (state === "pending_review") return ShieldAlert
+  if (state === "business_review") return Clock
+  if (state === "inactive") return History
+  if (state === "failed") return CircleX
+  if (state === "cancelled") return Ban
+  return LoaderCircle
+}
+
+function recordIconClass(state: RecordDisplayState): string {
+  if (state === "adopted") return "text-success"
+  if (state === "pending_review" || state === "business_review")
+    return "text-warning"
+  if (state === "inactive") return "text-faint"
+  if (state === "failed") return "text-danger"
+  if (state === "cancelled") return "text-warning"
+  return "animate-spin text-brand"
+}
+
+/** Session-tray rows only ever settle into one of the three outcomes. */
+function trayStatusIcon(status: ImportStatus) {
+  if (status === "completed") return CircleCheck
+  if (status === "cancelled") return Ban
+  return CircleX
+}
+
+function formatRecordedAt(value: string): string {
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return value
+  return date.toLocaleString("zh-CN", {
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  })
 }
 
 function createId(prefix: string): string {
@@ -237,7 +309,12 @@ export function ImportDialog({
   const [parser, setParser] = useState("")
   const [tagsText, setTagsText] = useState("")
 
-  const [tab, setTab] = useState<"local" | "url">("local")
+  const [tab, setTab] = useState<"local" | "url" | "records">("local")
+  const [records, setRecords] = useState<DocumentCatalogEntryPayload[]>([])
+  const [recordsStatus, setRecordsStatus] = useState<
+    "idle" | "loading" | "ready" | "error"
+  >("idle")
+  const [recordsError, setRecordsError] = useState<string | null>(null)
   const [urlMode, setUrlMode] = useState<"single" | "sitemap">("single")
   const [url, setUrl] = useState("")
   const [maxPages, setMaxPages] = useState(50)
@@ -282,6 +359,34 @@ export function ImportDialog({
   useEffect(() => {
     if (open) void knowledgeStore.refresh()
   }, [open])
+
+  // The upload records are the server's own catalog rows (the queue above is
+  // session-local): they survive a dialog close, a reload, and a device switch.
+  const loadRecords = useCallback(async () => {
+    if (!knowledgeBaseId) {
+      setRecords([])
+      setRecordsStatus("idle")
+      return
+    }
+    setRecordsStatus("loading")
+    setRecordsError(null)
+    try {
+      const body = await fetchKnowledgeBaseDocuments(
+        knowledgeBaseId,
+        { page: 1, status: "", tag: "", folder: "" },
+        50,
+      )
+      setRecords(body.documents)
+      setRecordsStatus("ready")
+    } catch (reason) {
+      setRecordsError(errorMessageOf(reason))
+      setRecordsStatus("error")
+    }
+  }, [knowledgeBaseId])
+
+  useEffect(() => {
+    if (open && tab === "records") void loadRecords()
+  }, [open, tab, loadRecords])
 
   useEffect(() => {
     onActiveCountChange?.(countActiveImports(queue))
@@ -336,13 +441,54 @@ export function ImportDialog({
     [],
   )
 
+  // A settled row stays readable for a short window, then folds out of the
+  // queue into the 上传记录 tab — server-known documents live in the catalog,
+  // session-only outcomes (a rejected upload) live in the session tray.
+  const hideTimers = useRef(new Map<string, number>())
+  const scheduleHide = useCallback(
+    (id: string) => {
+      if (hideTimers.current.has(id)) return
+      const timer = window.setTimeout(() => {
+        hideTimers.current.delete(id)
+        mutateQueue((current) =>
+          current.map((item) =>
+            item.id === id && !item.folded
+              ? { ...item, folded: true, foldedAt: Date.now() }
+              : item,
+          ),
+        )
+        // The row is only "moved" once the records list shows it.
+        if (tab === "records") void loadRecords()
+      }, TERMINAL_ROW_VISIBLE_MS)
+      hideTimers.current.set(id, timer)
+    },
+    [mutateQueue, tab, loadRecords],
+  )
+  const cancelHide = useCallback((id: string) => {
+    const timer = hideTimers.current.get(id)
+    if (timer === undefined) return
+    window.clearTimeout(timer)
+    hideTimers.current.delete(id)
+  }, [])
+
   const updateItem = useCallback(
     (id: string, patch: Partial<ImportItem>) => {
       mutateQueue((current) =>
         current.map((item) => (item.id === id ? { ...item, ...patch } : item)),
       )
+      // Every terminal outcome — including the two human-review holds — gets
+      // the same 5s read window, then folds into 上传记录 where its own state
+      // (待校验 / 待审中) is rendered from the server row.
+      if (
+        patch.status &&
+        (IMPORT_TERMINAL_STATUSES as readonly ImportStatus[]).includes(
+          patch.status,
+        )
+      )
+        scheduleHide(id)
+      else if (patch.status) cancelHide(id)
     },
-    [mutateQueue],
+    [mutateQueue, scheduleHide, cancelHide],
   )
 
   const appendQueue = useCallback(
@@ -350,6 +496,15 @@ export function ImportDialog({
       mutateQueue((current) => [...current, ...items])
     },
     [mutateQueue],
+  )
+
+  useEffect(
+    () => () => {
+      for (const timer of hideTimers.current.values())
+        window.clearTimeout(timer)
+      hideTimers.current.clear()
+    },
+    [],
   )
 
   /** Registers a wave in BOTH the state and its ref: workers read the ref in
@@ -391,13 +546,16 @@ export function ImportDialog({
         (item) => item.status === "cancelled",
       ).length
       // UT-26: review holds are terminal for polling but not "success" — they
-      // get their own bucket in the summary line.
-      const held = queueRef.current.filter(
-        (item) =>
-          item.status === "pending_review" || item.status === "business_review",
+      // get their own bucket in the summary line. Integrity holds and business
+      // approval holds are separate: only the former is a content anomaly.
+      const integrityHeld = queueRef.current.filter(
+        (item) => item.status === "pending_review",
+      ).length
+      const businessHeld = queueRef.current.filter(
+        (item) => item.status === "business_review",
       ).length
       showToast(
-        `处理结束：${completed} 成功${failed ? `，${failed} 失败` : ""}${cancelled ? `，${cancelled} 已取消` : ""}${held ? `，${held} 待确认` : ""}`,
+        `处理结束：${completed} 成功${integrityHeld ? `，${integrityHeld} 待校验` : ""}${businessHeld ? `，${businessHeld} 待审` : ""}${failed ? `，${failed} 失败` : ""}${cancelled ? `，${cancelled} 已取消` : ""}`,
       )
       if (completed > 0) onIngested?.()
     }
@@ -988,6 +1146,7 @@ export function ImportDialog({
       }
       updateItem(item.id, {
         status: "queued",
+        folded: false,
         error: null,
         errorKind: null,
         errorDetected: null,
@@ -1027,6 +1186,7 @@ export function ImportDialog({
           }
           updateItem(item.id, {
             status: "pending",
+            folded: false,
             error: null,
             errorKind: null,
             errorDetected: null,
@@ -1262,9 +1422,13 @@ export function ImportDialog({
 
   const baseOptions = (
     <>
-      <option value="">
-        {baseStatus === "loading" ? "正在加载…" : "请选择知识库"}
-      </option>
+      {/* The placeholder is a CHOICE only while nothing is chosen; once a base
+          is selected it would render as a second, contradictory value. */}
+      {!knowledgeBaseId ? (
+        <option value="">
+          {baseStatus === "loading" ? "正在加载…" : "请选择知识库"}
+        </option>
+      ) : null}
       {folders.map((folder) => (
         <optgroup key={folder.id} label={folder.name}>
           {bases
@@ -1316,46 +1480,52 @@ export function ImportDialog({
     </div>
   )
 
-  const completedCount = queue.filter(
+  const visibleQueue = queue.filter((item) => !item.folded)
+  const completedCount = visibleQueue.filter(
     (item) => item.status === "completed",
   ).length
-  const failedCount = queue.filter((item) => item.status === "failed").length
-  const cancelledCount = queue.filter(
+  const failedCount = visibleQueue.filter(
+    (item) => item.status === "failed",
+  ).length
+  const cancelledCount = visibleQueue.filter(
     (item) => item.status === "cancelled",
   ).length
+  const pendingReviewCount = visibleQueue.filter(
+    (item) => item.status === "pending_review",
+  ).length
+
+  /** UT-27: resume is admin-only and only when the server's allowed
+   * operations include a fix-then-retry command. */
+  const canResumeItem = (item: ImportItem): boolean =>
+    Boolean(item.docId) &&
+    item.status === "failed" &&
+    canCreate &&
+    (item.progress?.outcome?.allowedOperations ?? []).some((operation) =>
+      operation.endsWith("_then_retry"),
+    )
+
+  // Session tray: folded outcomes the server catalog can never show (a
+  // rejected upload owns no document) plus folded failures whose only remedy
+  // (resume) the catalog row does not carry.
+  const trayItems = queue.filter(
+    (item) =>
+      item.folded &&
+      (!item.docId || (item.status === "failed" && canResumeItem(item))),
+  )
 
   return (
     <PanelDialog
       open={open}
       onClose={onClose}
       titleId="import-title"
-      className="flex flex-col sm:max-w-[640px] h-[min(760px,calc(100dvh-64px))]"
+      title="导入知识库文档"
+      className="sm:max-w-[640px] h-[min(760px,calc(100dvh-64px))]"
     >
-      <div className="flex h-13 flex-none items-center justify-between border-b border-line px-5 max-md:px-4">
-        <div className="flex items-center gap-2">
-          <Icon icon={Database} className="size-4 text-muted-foreground" />
-          <DialogTitle id="import-title" className="">
-            导入知识库文档
-          </DialogTitle>
-        </div>
-        <UiButton
-          variant="ghost"
-          size="icon-sm"
-          type="button"
-          onClick={onClose}
-          aria-label="关闭"
-          title="关闭"
-          className="grid size-7 flex-none place-items-center"
-        >
-          <Icon data-icon="inline-start" icon={X} />
-        </UiButton>
-      </div>
-
       <div className="flex-none border-b border-line px-5 py-3 max-md:px-4">
         {baseStatus === "ready" && bases.length === 0 ? (
           <div className="rounded-[14px] border border-dashed border-line bg-surface-subtle px-4 py-4 text-center">
             <p className="text-xs font-medium text-ink">暂无知识库</p>
-            <p className="mt-0.5 text-[11px] text-muted-foreground/70">
+            <p className="mt-0.5 text-[11px] text-faint/70">
               创建一个知识库后即可导入文档
             </p>
             {canCreate ? (
@@ -1404,6 +1574,7 @@ export function ImportDialog({
               value={knowledgeBaseId}
               onChange={(event) => setKnowledgeBaseId(event.target.value)}
               disabled={creating}
+              hideSelected
               className="mt-1.5 h-9 w-full border px-2"
             >
               {baseOptions}
@@ -1444,6 +1615,7 @@ export function ImportDialog({
                     setPendingCategoryName("")
                     setDocumentFolderId(value === "__pending__" ? "" : value)
                   }}
+                  hideSelected
                   disabled={
                     !knowledgeBaseId || documentFoldersStatus === "loading"
                   }
@@ -1478,10 +1650,13 @@ export function ImportDialog({
         <SegmentedControl
           label="导入方式"
           value={tab}
-          onValueChange={(value) => setTab(value as "local" | "url")}
+          onValueChange={(value) =>
+            setTab(value as "local" | "url" | "records")
+          }
           options={[
             { value: "local", label: "本地文档" },
             { value: "url", label: "在线网页 (URL)" },
+            { value: "records", label: "上传记录" },
           ]}
         />
       </div>
@@ -1504,7 +1679,7 @@ export function ImportDialog({
             onTagsChange={setTagsText}
           />
         </section>
-      ) : (
+      ) : tab === "url" ? (
         <section
           className="flex min-h-0 flex-1 flex-col overflow-y-auto px-5 py-5 max-md:px-4"
           role="tabpanel"
@@ -1539,7 +1714,7 @@ export function ImportDialog({
                 }
                 className="h-10 w-full border px-3.5"
               />
-              <p className="text-[11px] text-muted-foreground/70">
+              <p className="text-[11px] text-faint/70">
                 不支持需要登录或依赖 JS 渲染的页面（SPA
                 可能抓不到正文）；Sitemap 最多抓取 200 页
               </p>
@@ -1578,18 +1753,207 @@ export function ImportDialog({
             </UiButton>
           </div>
         </section>
+      ) : (
+        <section
+          className="flex min-h-0 flex-1 flex-col overflow-y-auto px-5 py-4 max-md:px-4"
+          role="tabpanel"
+        >
+          <div className="mb-3 flex items-start justify-between gap-3">
+            <div className="min-w-0">
+              <p className="flex items-center gap-1.5 text-[13px] font-medium text-ink">
+                <Icon icon={History} className="size-4 flex-none text-faint" />
+                上传记录
+              </p>
+              <p className="mt-0.5 text-[11px] text-faint/70">
+                {knowledgeBaseId
+                  ? "当前知识库最近 50 条导入，已上传的文档可随时查看"
+                  : "先在顶部选择目标知识库"}
+              </p>
+            </div>
+            <UiButton
+              variant="ghost"
+              size="sm"
+              type="button"
+              onClick={() => void loadRecords()}
+              disabled={!knowledgeBaseId || recordsStatus === "loading"}
+              className="shrink-0 gap-1.5"
+            >
+              <Icon
+                icon={RefreshCw}
+                className={cn(
+                  "size-3.5",
+                  recordsStatus === "loading" && "animate-spin",
+                )}
+              />
+              刷新
+            </UiButton>
+          </div>
+          {trayItems.length > 0 ? (
+            <div className="mb-3">
+              <p className="mb-1.5 text-[11px] font-medium text-faint">
+                本次会话 · {trayItems.length} 项
+              </p>
+              <ul className="flex flex-col gap-1.5">
+                {trayItems.map((item) => {
+                  const errorView = item.error
+                    ? describeImportError(item.error, {
+                        kind: item.errorKind,
+                        detected: item.errorDetected,
+                        acceptedByServer: Boolean(item.docId),
+                      })
+                    : null
+                  return (
+                    <li
+                      key={item.id}
+                      className="flex items-center gap-2.5 rounded-[10px] border border-line bg-surface-subtle px-3 py-2"
+                    >
+                      <Icon
+                        icon={trayStatusIcon(item.status)}
+                        className={cn(
+                          "size-4 flex-none",
+                          item.status === "completed"
+                            ? "text-success"
+                            : item.status === "failed"
+                              ? "text-danger"
+                              : "text-warning",
+                        )}
+                      />
+                      <span className="min-w-0 flex-1">
+                        <span
+                          className="block truncate text-xs font-medium text-ink"
+                          title={item.filePath}
+                        >
+                          {item.fileName}
+                        </span>
+                        <span className="block truncate text-[11px] text-faint/70">
+                          {item.foldedAt
+                            ? formatRecordedAt(
+                                new Date(item.foldedAt).toISOString(),
+                              )
+                            : ""}
+                          {errorView ? ` · ${errorView.text}` : ""}
+                        </span>
+                      </span>
+                      {retryDecision(item).retryable ? (
+                        <UiButton
+                          variant="ghost"
+                          size="sm"
+                          type="button"
+                          onClick={() => retryItem(item)}
+                          className="px-1.5 py-0.5"
+                        >
+                          重试
+                        </UiButton>
+                      ) : null}
+                      {canResumeItem(item) ? (
+                        <UiButton
+                          variant="ghost"
+                          size="sm"
+                          type="button"
+                          onClick={() => resumeItem(item)}
+                          title="用服务端保留的原件重新处理，同一文档与任务"
+                          className="px-1.5 py-0.5"
+                        >
+                          恢复
+                        </UiButton>
+                      ) : null}
+                      {errorView?.kind === "conflict" ? (
+                        <UiButton
+                          variant="ghost"
+                          size="sm"
+                          type="button"
+                          onClick={() => void viewConflictDocument(item)}
+                          className="px-1.5 py-0.5"
+                        >
+                          查看文档
+                        </UiButton>
+                      ) : null}
+                      <span
+                        className={cn(
+                          "flex-none rounded-full px-2 py-0.5 text-[10px] font-medium",
+                          statusBadgeClass(item.status),
+                        )}
+                      >
+                        {STATUS_TEXT[item.status]}
+                      </span>
+                    </li>
+                  )
+                })}
+              </ul>
+            </div>
+          ) : null}
+          {!knowledgeBaseId ? (
+            <InlineMessage>请先选择目标知识库。</InlineMessage>
+          ) : recordsStatus === "error" ? (
+            <InlineMessage>上传记录读取失败：{recordsError}</InlineMessage>
+          ) : recordsStatus === "loading" || recordsStatus === "idle" ? (
+            <InlineMessage>正在读取上传记录…</InlineMessage>
+          ) : records.length === 0 ? (
+            <InlineMessage>这个知识库还没有上传记录。</InlineMessage>
+          ) : (
+            <ul className="flex flex-col gap-1.5">
+              {records.map((record) => {
+                // ✅ is the ACTIVE version only — a completed-but-unactivated
+                // candidate renders its hold (待校验 / 待审中), never success.
+                const view = deriveRecordView(record)
+                return (
+                  <li key={record.docId}>
+                    <button
+                      type="button"
+                      onClick={() => openDocument({ documentId: record.docId })}
+                      title={`查看「${record.title}」`}
+                      className="group flex w-full items-center gap-2.5 rounded-[10px] border border-line bg-surface-subtle px-3 py-2 text-left transition-colors hover:bg-surface-muted"
+                    >
+                      <Icon
+                        icon={recordIcon(view.state)}
+                        className={cn(
+                          "size-4 flex-none",
+                          recordIconClass(view.state),
+                        )}
+                      />
+                      <span className="min-w-0 flex-1">
+                        <span className="block truncate text-xs font-medium text-ink">
+                          {record.title}
+                        </span>
+                        <span className="block truncate text-[11px] text-faint/70">
+                          {formatRecordedAt(record.createdAt)} ·{" "}
+                          {record.folder ?? "不归类"}
+                          {record.retired ? " · 已归档" : ""}
+                        </span>
+                      </span>
+                      <span
+                        className={cn(
+                          "flex-none rounded-full px-2 py-0.5 text-[10px] font-medium",
+                          recordBadgeClass(view.state),
+                        )}
+                      >
+                        {view.label}
+                      </span>
+                      <Icon
+                        icon={Eye}
+                        className="size-3.5 flex-none text-faint opacity-0 transition-opacity group-hover:opacity-100 group-focus-visible:opacity-100"
+                      />
+                    </button>
+                  </li>
+                )
+              })}
+            </ul>
+          )}
+        </section>
       )}
 
-      {open && queue.length > 0 ? (
+      {open && visibleQueue.length > 0 ? (
         <div className="max-h-52 flex-none overflow-y-auto border-t border-line px-5 py-3 max-md:px-4">
           <ol className="flex min-w-0 flex-col gap-2.5">
             {waves.map((wave) => {
-              const waveItems = queue.filter((item) => item.waveId === wave.id)
+              const waveItems = visibleQueue.filter(
+                (item) => item.waveId === wave.id,
+              )
               if (waveItems.length === 0) return null
               return (
                 <li key={wave.id}>
                   <p
-                    className="mb-1 truncate text-[11px] font-medium text-muted-foreground"
+                    className="mb-1 truncate text-[11px] font-medium text-faint"
                     title={wave.label}
                   >
                     {wave.label}
@@ -1621,13 +1985,7 @@ export function ImportDialog({
                       // the server's allowed operations include a resume
                       // command (configure/fix-input-then-retry). Auto-retry
                       // rows (wait_for_auto_retry) wait instead.
-                      const canResume =
-                        Boolean(item.docId) &&
-                        item.status === "failed" &&
-                        canCreate &&
-                        (item.progress?.outcome?.allowedOperations ?? []).some(
-                          (operation) => operation.endsWith("_then_retry"),
-                        )
+                      const canResume = canResumeItem(item)
                       // UT-26: structured end-state details — reasons and
                       // allowed operations come from the backend's own fields.
                       // Ticket 26: failed rows report evidence-backed reasons
@@ -1684,7 +2042,7 @@ export function ImportDialog({
                                   {errorView.text}
                                 </div>
                               ) : item.size > 0 ? (
-                                <div className="text-[11px] text-muted-foreground/70">
+                                <div className="text-[11px] text-faint/70">
                                   {formatBytes(item.size)}
                                 </div>
                               ) : null}
@@ -1717,8 +2075,19 @@ export function ImportDialog({
                                 </div>
                               ) : null}
                               {outcome?.oldVersionUsable ? (
-                                <div className="truncate text-[11px] text-muted-foreground/70">
+                                <div className="truncate text-[11px] text-faint/70">
                                   现有版本仍可正常使用
+                                </div>
+                              ) : null}
+                              {outcome?.state === "completed" &&
+                              outcome.activationWarnings.length > 0 ? (
+                                <div
+                                  className="truncate text-[11px] text-faint/70"
+                                  title={outcome.activationWarnings.join("；")}
+                                >
+                                  {describeActivationWarnings(
+                                    outcome.activationWarnings,
+                                  ).join("；")}
                                 </div>
                               ) : null}
                             </div>
@@ -1835,8 +2204,9 @@ export function ImportDialog({
                                           documentId: item.docId as string,
                                         })
                                       }
-                                      className="px-1.5 py-0.5"
+                                      className="gap-1 px-1.5 py-0.5"
                                     >
+                                      <Icon icon={Eye} className="size-3.5" />
                                       查看
                                     </UiButton>
                                     <UiButton
@@ -1846,8 +2216,9 @@ export function ImportDialog({
                                       onClick={() =>
                                         setConfirmingDeleteId(item.id)
                                       }
-                                      className="px-1.5 py-0.5"
+                                      className="gap-1 px-1.5 py-0.5"
                                     >
+                                      <Icon icon={Trash2} className="size-3.5" />
                                       删除
                                     </UiButton>
                                   </>
@@ -1901,14 +2272,20 @@ export function ImportDialog({
             })}
           </ol>
           <div
-            className="mt-2 flex items-center justify-between border-t border-line pt-2 text-[11px] text-muted-foreground"
+            className="mt-2 flex items-center justify-between border-t border-line pt-2 text-[11px] text-faint"
             aria-live="polite"
           >
             <span>
-              {completedCount} 成功 · {failedCount} 失败 · {cancelledCount}{" "}
-              已取消
+              {[
+                `${completedCount} 成功`,
+                `${failedCount} 失败`,
+                `${cancelledCount} 已取消`,
+                pendingReviewCount > 0 ? `${pendingReviewCount} 待校验` : null,
+              ]
+                .filter(Boolean)
+                .join(" · ")}
             </span>
-            <span>{queue.length} 项</span>
+            <span>{visibleQueue.length} 项</span>
           </div>
         </div>
       ) : null}

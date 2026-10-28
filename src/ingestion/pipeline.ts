@@ -90,7 +90,12 @@ interface ChunkStoreStageResult {
   metrics: ChunkStoreMetrics | null
 }
 
-function configuredParser(type: ParserType): Parser {
+/**
+ * The production parser for one route. Exported because the conversation
+ * attachment path parses binary documents with the SAME parser instances the
+ * import pipeline uses — one format list, one extraction behavior.
+ */
+export function createConfiguredParser(type: ParserType): Parser {
   const config = loadConfig()
   // UT-10: the faithful TXT path decodes in-process — no runtime to configure.
   if (type === "direct-txt") {
@@ -235,7 +240,7 @@ export class PipelineStageRunner implements IngestionStageRunner {
 
   constructor(
     private db: DB,
-    private resolveParser: ParserResolver = configuredParser,
+    private resolveParser: ParserResolver = createConfiguredParser,
     store?: IngestionStoreImpl,
     wikifier?: WikifierLike,
     options?: PipelineStageRunnerOptions
@@ -930,7 +935,7 @@ export function createIngestionLifecycle(
   }
   return new IngestionLifecycle(
     db,
-    options?.stageRunner ?? new PipelineStageRunner(db, configuredParser, undefined, undefined, { qualityGate }),
+    options?.stageRunner ?? new PipelineStageRunner(db, createConfiguredParser, undefined, undefined, { qualityGate }),
     options?.now ?? (() => new Date()),
     cfg.activationMode,
     undefined,

@@ -1,7 +1,7 @@
 import { ExpandableCard } from "../arc/expandable-card/expandable-card"
-import { Field as FormField, FieldLabel } from "@/components/primitives/field"
+import { Field as FormField, FieldLabel } from "@/components/ui/field"
 import { Select as UiSelect } from "@/components/ui/Controls"
-import { Input } from "@/components/primitives/input"
+import { Input } from "@/components/arc/input/input"
 import { IMPORT_PARSER_OPTIONS } from "../../lib/constants"
 
 export function ImportAdvancedOptions({
@@ -29,6 +29,7 @@ export function ImportAdvancedOptions({
             id="import-parser"
             value={parser}
             onChange={(event) => onParserChange(event.target.value)}
+            hideSelected
             className="h-8 w-full border px-2"
           >
             {IMPORT_PARSER_OPTIONS.map((option) => (
@@ -37,7 +38,7 @@ export function ImportAdvancedOptions({
               </option>
             ))}
           </UiSelect>
-          <p className="text-[11px] text-muted-foreground/70">
+          <p className="text-[11px] text-faint/70">
             默认提取 PDF 文字层；扫描件请选择 OCR API
           </p>
         </FormField>

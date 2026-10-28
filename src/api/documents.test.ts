@@ -218,6 +218,72 @@ test("Ticket 11: filters by status, tag and folder, with facets over the visible
   }
 })
 
+test("Ticket 11: catalog rows expose adoption and the activation hold reason", async () => {
+  const setup = buildApp()
+  try {
+    setup.service.ensureDefault("demo")
+    const kb = setup.service.create("demo", "Docs")
+    const held = seed(setup, { knowledgeBaseId: kb.id, title: "Held", status: "completed" })
+    setup.repo.recordActivationBlock(held, "activation_content_proof_pending_review")
+    const adopted = seed(setup, {
+      knowledgeBaseId: kb.id,
+      title: "Adopted",
+      status: "completed",
+      activate: true,
+    })
+
+    const { server, port } = await listen(setup.app)
+    try {
+      const body = await request(port, `/knowledge-bases/${kb.id}/documents`)
+      const rows = body.json?.documents as Array<Record<string, unknown>>
+      const heldRow = rows.find((row) => row.docId === held)
+      const adoptedRow = rows.find((row) => row.docId === adopted)
+      // A completed candidate the gate denied is NOT adopted: the record read
+      // needs the reason to render 待校验 instead of ✅.
+      assert.equal(heldRow?.activationBlockReason, "activation_content_proof_pending_review")
+      assert.equal(heldRow?.active, false)
+      assert.equal(adoptedRow?.activationBlockReason, null)
+      assert.equal(adoptedRow?.active, true)
+    } finally {
+      server.close()
+    }
+  } finally {
+    setup.db.close()
+  }
+})
+
+test("Ticket 11: the active filter returns only the usable version and a matching total", async () => {
+  const setup = buildApp()
+  try {
+    setup.service.ensureDefault("demo")
+    const kb = setup.service.create("demo", "Docs")
+    seed(setup, { knowledgeBaseId: kb.id, title: "Active", status: "completed", activate: true })
+    seed(setup, { knowledgeBaseId: kb.id, title: "Failed", status: "failed" })
+    seed(setup, { knowledgeBaseId: kb.id, title: "Held", status: "completed" })
+
+    const { server, port } = await listen(setup.app)
+    try {
+      const usable = await request(port, `/knowledge-bases/${kb.id}/documents?active=true`)
+      assert.equal(usable.status, 200)
+      // The sidebar tree filters server-side: the failed and held candidates
+      // are not "documents the base can answer from", and the total must not
+      // count them either.
+      assert.equal(usable.json?.total, 1)
+      assert.deepEqual(
+        (usable.json?.documents as Array<{ title: string }>).map((doc) => doc.title),
+        ["Active"],
+      )
+      const inactive = await request(port, `/knowledge-bases/${kb.id}/documents?active=false`)
+      assert.equal(inactive.json?.total, 2)
+      assert.equal((await request(port, `/knowledge-bases/${kb.id}/documents?active=bogus`)).status, 400)
+    } finally {
+      server.close()
+    }
+  } finally {
+    setup.db.close()
+  }
+})
+
 test("A deleted (retired) document leaves the catalog: rows, total and facets", async () => {
   const setup = buildApp({ scopes: ["chat", "admin"] })
   try {

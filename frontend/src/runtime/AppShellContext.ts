@@ -10,7 +10,6 @@ export interface AppShellActions {
   openTrace: (messageId: string) => void
   openMemory: () => void
   openImport: () => void
-  openEvaluation: () => void
   /** Ticket 08 (KB-04): the knowledge-base workspace (admin). */
   openKnowledge: () => void
   /** Ticket 16 (MODEL-01A): the model-profile settings workspace (admin). */
@@ -19,11 +18,9 @@ export interface AppShellActions {
   openAssistants: () => void
   /** Ticket 29 (EVAL-02B): the answer-feedback review surface (review/admin). */
   openFeedback: () => void
-  /** Ticket 30 (FAQ-01A): the versioned FAQ workspace (admin). */
-  openFaqs: () => void
   /** Ticket 13 (DOC-02): the exact document version behind a citation/row. */
   openDocument: (target: DocumentViewTarget) => void
-  showToast: (message: string) => void
+  showToast: (message: string, tone?: "success" | "error") => void
 }
 
 /** Shell STATE alongside the actions: projections the sidebar renders. */
@@ -39,12 +36,10 @@ const AppShellContext = createContext<AppShellActions & AppShellState>({
   openTrace: noop,
   openMemory: noop,
   openImport: noop,
-  openEvaluation: noop,
   openKnowledge: noop,
   openSettings: noop,
   openAssistants: noop,
   openFeedback: noop,
-  openFaqs: noop,
   openDocument: noop,
   showToast: noop,
 })

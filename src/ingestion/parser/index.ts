@@ -43,7 +43,7 @@ export { OcrApiParser } from "./ocr_api"
 export type { OcrApiParserOptions } from "./ocr_api"
 export type { TextDecodeProvenance } from "./direct_text"
 export type { BoundedProcessInput } from "./process"
-export { isParserOverride, selectParser, selectParserRoute } from "./router"
+export { isParserOverride, selectParser, selectParserRoute, SUPPORTED_DOCUMENT_EXTENSIONS } from "./router"
 export type {
   ParserDecision,
   ParserRouteInfo,

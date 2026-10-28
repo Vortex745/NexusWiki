@@ -142,7 +142,14 @@ class KnowledgeStore {
   }
 
   refresh = async (): Promise<void> => {
-    this.invalidate({ status: "loading", error: null })
+    // A command resync re-reads a roster that is already on screen. Announcing
+    // "loading" there would unmount every list rendered from this store (the
+    // manage dialog's toolbar and rows, the sidebar tree) and swap it for the
+    // loading copy, so the surface blinks after each save. Only a read with
+    // nothing to show owns the loading state.
+    if (this.snapshot.status !== "ready") {
+      this.invalidate({ status: "loading", error: null })
+    }
     try {
       const [knowledgeBases, folders] = await Promise.all([
         fetchKnowledgeBases(),

@@ -13,7 +13,7 @@ export function BranchPicker({ className }: { className?: string }) {
     <BranchPickerPrimitive.Root
       hideWhenSingleBranch
       className={cn(
-        "inline-flex items-center text-xs text-muted-foreground",
+        "inline-flex items-center text-xs text-faint",
         className,
       )}
     >

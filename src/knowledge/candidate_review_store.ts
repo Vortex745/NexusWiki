@@ -1,6 +1,6 @@
 import type { DB } from "../ingestion/tracking/db"
 import { DocumentRepo } from "../ingestion/tracking/doc_repo"
-import { evaluateActivationGate } from "../ingestion/activation_gate"
+import { ACTIVATION_POLICY_VERSION, evaluateActivationGate } from "../ingestion/activation_gate"
 import { WikiStore } from "../wiki/store"
 import type {
   DocumentCandidateState,
@@ -255,6 +255,15 @@ export class SqliteCandidateReviewStore implements CandidateReviewStore {
         this.documentRepo.activate(docId)
         this.documentRepo.clearActivationBlock(docId)
         const afterActive = this.getActiveDocId(existing.source_id)
+        if (afterActive === docId) {
+          // Same acceptance fact as the automatic path: only an active pointer
+          // to THIS version records the policy decision.
+          this.documentRepo.recordActivationAcceptance(docId, {
+            policyVersion: gate.policyVersion ?? ACTIVATION_POLICY_VERSION,
+            warningCodes: gate.warningCodes,
+            evaluatedAt: reviewedAt,
+          })
+        }
         activatedAsActive = afterActive === docId && beforeActive !== docId
         if (activatedAsActive) {
           const document = this.documentRepo.get(docId)

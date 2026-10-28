@@ -23,6 +23,10 @@ export interface SelectProps extends Omit<ComponentPropsWithoutRef<typeof Select
   id?: string;
   className?: string;
   options: SelectOption[];
+  /** The trigger already shows the current value; hide that same row from the
+   * popup so the list only offers ALTERNATIVES. A single-option list keeps its
+   * row so the popup is never empty. */
+  hideSelected?: boolean;
   style?: CSSProperties;
   title?: string;
   "aria-label"?: string;
@@ -40,7 +44,7 @@ const valueRoll: Variants = {
 const valueFade: Variants = { enter: { opacity: 0 }, center: { opacity: 1, y: 0, filter: "blur(0px)", transition: { duration: motionTokens.duration.instant } }, exit: { opacity: 0, transition: { duration: motionTokens.duration.instant } } };
 
 export const Select = forwardRef<HTMLButtonElement, SelectProps>(function Select(
-  { label, description, placeholder = "Select an option", options, id, className, style, title, disabled, onValueChange, "aria-label": ariaLabel, "aria-labelledby": ariaLabelledBy, "aria-invalid": ariaInvalid, ...rootProps },
+  { label, description, placeholder = "Select an option", options, id, className, style, title, disabled, hideSelected, onValueChange, "aria-label": ariaLabel, "aria-labelledby": ariaLabelledBy, "aria-invalid": ariaInvalid, ...rootProps },
   ref,
 ) {
   const generatedId = useId();
@@ -60,6 +64,11 @@ export const Select = forwardRef<HTMLButtonElement, SelectProps>(function Select
     if (!previous || previous.label !== option.group) optionGroups.push({ label: option.group, items: [option] });
     else previous.items.push(option);
   }
+  const visibleGroups = hideSelected && options.length > 1
+    ? optionGroups
+        .map((group) => ({ ...group, items: group.items.filter((option) => option.value !== currentValue) }))
+        .filter((group) => group.items.length > 0)
+    : optionGroups;
 
   return (
     <div className={styles.field}>
@@ -76,8 +85,9 @@ export const Select = forwardRef<HTMLButtonElement, SelectProps>(function Select
           style={style}
           className={[styles.trigger, className].filter(Boolean).join(" ")}
         >
-          {/* Radix keeps the real value for assistive tech; the visible copy below animates between values. */}
-          <span className={styles.srOnly}><SelectPrimitive.Value placeholder={placeholder} /></span>
+          {/* Radix keeps the real value for assistive tech; the visible copy below animates between values. Hidden-from-list selections still announce
+              their label because the text is supplied explicitly. */}
+          <span className={styles.srOnly}><SelectPrimitive.Value placeholder={placeholder}>{shown}</SelectPrimitive.Value></span>
           <span className={styles.valueText} aria-hidden="true">
             <AnimatePresence initial={false} custom={direction}>
               <motion.span key={currentValue ? `value-${currentValue}` : "placeholder"} data-placeholder={currentValue ? undefined : ""} custom={direction} variants={reduceMotion ? valueFade : valueRoll} initial="enter" animate="center" exit="exit">{shown}</motion.span>
@@ -93,7 +103,7 @@ export const Select = forwardRef<HTMLButtonElement, SelectProps>(function Select
               <ChevronUp size={16} strokeWidth={1.75} aria-hidden="true" />
             </SelectPrimitive.ScrollUpButton>
             <SelectPrimitive.Viewport className={styles.viewport}>
-              {optionGroups.map((group, groupIndex) => {
+              {visibleGroups.map((group, groupIndex) => {
                 const items = group.items.map((option) => <SelectPrimitive.Item key={option.value} value={option.value} disabled={option.disabled} className={styles.item}>
                   <SelectPrimitive.ItemText>{option.label}</SelectPrimitive.ItemText>
                   <SelectPrimitive.ItemIndicator className={styles.indicator}>

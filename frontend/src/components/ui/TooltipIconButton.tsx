@@ -1,5 +1,5 @@
 import { forwardRef, type ButtonHTMLAttributes, type ReactNode } from "react"
-import { Button } from "../primitives/button"
+import { Button } from "../ui/Button"
 import { Tooltip } from "../arc/tooltip/tooltip"
 
 export interface TooltipIconButtonProps

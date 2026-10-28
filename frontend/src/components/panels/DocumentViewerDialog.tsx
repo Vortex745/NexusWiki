@@ -2,16 +2,18 @@ import {
   Collapsible,
   CollapsibleTrigger,
   CollapsibleContent,
-} from "../primitives/collapsible"
-import { Button as DisclosureButton } from "../primitives/button"
-import { Button as UiButton } from "@/components/primitives/button"
-import { Alert, AlertDescription } from "@/components/primitives/alert"
+} from "../ui/collapsible"
+import { Button as DisclosureButton } from "../ui/Button"
+import { Button as UiButton } from "@/components/ui/Button"
+import { Alert } from "@/components/arc/alert/alert"
 import { SearchField } from "../arc/search-field/search-field"
 import { PanelDialog } from "../ui/Dialog"
-import { DialogTitle } from "../primitives/dialog"
-import { Tabs, TabsList, TabsTrigger, TabsContent } from "../primitives/tabs"
-import { BookOpen, ChevronRight, FileText, X } from "../ui/icons"
-import { useEffect, useMemo, useState } from "react"
+import { InlineMessage } from "../ui/containers"
+import { Tabs, TabsList, TabsTrigger, TabsContent } from "../arc/tabs/tabs"
+import { BookOpen, ChevronRight, FileText } from "../ui/icons"
+import { useEffect, useMemo, useState, type ComponentPropsWithoutRef } from "react"
+import ReactMarkdown from "react-markdown"
+import remarkGfm from "remark-gfm"
 
 import { Icon } from "../ui/Icon"
 import {
@@ -83,7 +85,7 @@ function SectionTree({
           <>
             <span className="min-w-0 flex-1 break-words">{node.title}</span>
             {section?.pageStart != null ? (
-              <span className="flex-none pt-0.5 text-[11px] tabular-nums text-muted-foreground">
+              <span className="flex-none pt-0.5 text-[11px] tabular-nums text-faint">
                 {section.pageEnd != null &&
                 section.pageEnd !== section.pageStart
                   ? `${section.pageStart}-${section.pageEnd} 页`
@@ -120,7 +122,7 @@ function SectionTree({
                 </CollapsibleContent>
               </Collapsible>
             ) : (
-              <div className="flex items-start gap-3 px-2 py-2 pl-8 text-[13px] leading-6 text-muted-foreground">
+              <div className="flex items-start gap-3 px-2 py-2 pl-8 text-[13px] leading-6 text-faint">
                 {label}
               </div>
             )}
@@ -143,6 +145,23 @@ function SectionTree({
 export interface DocumentViewTarget {
   documentId: string
   chunkId?: string
+}
+
+const MARKDOWN_COMPONENTS = {
+  a: ({ href, children, ...rest }: ComponentPropsWithoutRef<"a">) => (
+    <a href={href} target="_blank" rel="noopener noreferrer" {...rest}>
+      {children}
+    </a>
+  ),
+  img: ({ src, alt, ...rest }: ComponentPropsWithoutRef<"img">) => (
+    <img
+      src={src}
+      alt={alt ?? ""}
+      loading="lazy"
+      className="my-3 max-w-full rounded-lg border border-line"
+      {...rest}
+    />
+  ),
 }
 
 export function DocumentViewerDialog({
@@ -264,90 +283,63 @@ export function DocumentViewerDialog({
       open={open && Boolean(target)}
       onClose={onClose}
       titleId="document-viewer-title"
-      className="grid grid-rows-[auto_auto_minmax(0,1fr)] sm:max-w-3xl"
+      title={document ? document.title : "文档版本"}
+      className="h-[min(760px,calc(100dvh-64px))] sm:max-w-3xl"
     >
-      <div className="flex min-h-15 flex-none items-center justify-between gap-4 border-b border-line px-6 py-3 max-md:px-4">
-        <div className="flex min-w-0 items-center gap-2">
-          <Icon
-            icon={BookOpen}
-            className="size-4 flex-none text-muted-foreground"
-          />
-          <DialogTitle
-            id="document-viewer-title"
-            className="min-w-0 break-words leading-6"
-          >
-            {document ? document.title : "文档版本"}
-          </DialogTitle>
-        </div>
-        <UiButton
-          variant="ghost"
-          size="icon-sm"
-          type="button"
-          onClick={onClose}
-          aria-label="关闭文档"
-          title="关闭"
-          className="grid size-7 flex-none place-items-center"
-        >
-          <Icon data-icon="inline-start" icon={X} />
-        </UiButton>
-      </div>
-
-      <div className="flex min-h-0 min-w-0 flex-col overflow-hidden">
+      <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
         {status === "loading" || status === "idle" ? (
-          <p className="px-1 py-6 text-center text-xs text-muted-foreground">
-            正在加载文档…
-          </p>
+          <InlineMessage>正在加载文档…</InlineMessage>
         ) : status === "error" ? (
-          <Alert variant="destructive" role="alert" className="m-4 border p-3">
-            <AlertDescription>
+          <Alert tone="danger" title="发生错误" className="m-4 border p-3">
+
               <p className="text-xs text-danger">{error}</p>
-            </AlertDescription>
+
           </Alert>
         ) : document ? (
           <Tabs
             value={view}
             onValueChange={(value) => setView(value as "text" | "sections")}
+            panelMotion="morph"
             className="flex min-h-0 flex-1 flex-col gap-0"
           >
-            <div className="flex flex-none flex-wrap items-center gap-x-3 gap-y-1 px-6 py-3 text-xs leading-5 text-muted-foreground max-md:px-4">
+            <div className="flex flex-none items-center gap-3 border-b border-line px-6 py-2.5 max-md:px-4">
               <span
                 title={document.mimeType}
-                className="min-w-0 break-all font-medium text-ink"
+                className="min-w-0 truncate text-xs text-faint"
               >
                 {document.mimeType === "application/pdf"
                   ? "PDF"
                   : document.mimeType}
               </span>
-              <span className="border-l border-line pl-3">
-                版本 {document.version}
-              </span>
-              <span className={document.active ? "text-brand" : undefined}>
-                {document.active ? "当前版本" : "历史版本"}
-              </span>
-              {document.retired ? <span>已删除</span> : null}
+              {document.retired ? (
+                <span className="flex-none text-xs text-faint">已删除</span>
+              ) : null}
+              <div className="ml-auto flex-none">
+                <TabsList aria-label="文档视图">
+                  <TabsTrigger
+                    value="text"
+                    aria-label="文本预览"
+                    title="文本预览"
+                    className="min-w-9 px-2.5"
+                  >
+                    <Icon icon={FileText} className="size-4" />
+                  </TabsTrigger>
+                  <TabsTrigger
+                    value="sections"
+                    aria-label="目录"
+                    title="目录"
+                    className="min-w-9 px-2.5"
+                  >
+                    <Icon icon={BookOpen} className="size-4" />
+                  </TabsTrigger>
+                </TabsList>
+              </div>
             </div>
-
-            <TabsList aria-label="文档视图" className="mx-4 shrink-0">
-              {(["text", "sections"] as const).map((tab) => (
-                <TabsTrigger key={tab} value={tab}>
-                  <Icon
-                    data-icon="inline-start"
-                    icon={tab === "text" ? FileText : BookOpen}
-                  />
-                  {tab === "text" ? "文本预览" : "目录"}
-                  {tab === "sections" ? (
-                    <span className="text-[11px] font-normal tabular-nums text-muted-foreground">
-                      {detail?.sections.length ?? 0}
-                    </span>
-                  ) : null}
-                </TabsTrigger>
-              ))}
-            </TabsList>
 
             <TabsContent
               value="text"
               tabIndex={0}
-              className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-8 py-6 focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-brand max-md:px-5 max-md:py-5"
+              className="scrollbar-hidden min-h-0 flex-1 overflow-y-auto overscroll-contain px-8 py-6 focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-brand max-md:px-5 max-md:py-5"
             >
               <div className="mx-auto max-w-[68ch]">
                 {chunkTarget ? (
@@ -360,13 +352,13 @@ export function DocumentViewerDialog({
                       引用段落
                     </h3>
                     {location ? (
-                      <p className="mb-3 break-words text-xs leading-6 text-muted-foreground">
+                      <p className="mb-3 break-words text-xs leading-6 text-faint">
                         {location}
                       </p>
                     ) : null}
                     {chunkError ? (
-                      <Alert variant="destructive" role="alert" className="">
-                        <AlertDescription>{chunkError}</AlertDescription>
+                      <Alert tone="danger" title="发生错误" className="">
+                        {chunkError}
                       </Alert>
                     ) : chunk ? (
                       <>
@@ -375,7 +367,7 @@ export function DocumentViewerDialog({
                         </p>
                         {chunk.neighbors.length > 0 ? (
                           <div className="mt-2.5 flex flex-col gap-1">
-                            <p className="text-[10px] font-medium text-muted-foreground">
+                            <p className="text-[10px] font-medium text-faint">
                               相邻段落
                             </p>
                             {chunk.neighbors.map((neighbor) => (
@@ -402,7 +394,7 @@ export function DocumentViewerDialog({
                         ) : null}
                       </>
                     ) : (
-                      <p className="text-xs text-muted-foreground">
+                      <p className="text-xs text-faint">
                         正在加载引用段落…
                       </p>
                     )}
@@ -410,18 +402,21 @@ export function DocumentViewerDialog({
                 ) : null}
 
                 {preview?.available ? (
-                  <div className="whitespace-pre-wrap break-words text-sm leading-7 text-ink">
-                    {preview.text}
+                  <div className="markdown-body break-words">
+                    <ReactMarkdown
+                      remarkPlugins={[remarkGfm]}
+                      components={MARKDOWN_COMPONENTS}
+                    >
+                      {preview.text ?? ""}
+                    </ReactMarkdown>
                   </div>
                 ) : (
-                  <Alert
-                    variant="destructive"
-                    role="alert"
+                  <Alert tone="danger" title="发生错误"
                     className="py-8 text-center leading-7"
                   >
-                    <AlertDescription>
+
                       {preview?.reason ?? "该版本的文本内容不可用。"}
-                    </AlertDescription>
+
                   </Alert>
                 )}
               </div>
@@ -443,7 +438,7 @@ export function DocumentViewerDialog({
               <div
                 tabIndex={0}
                 aria-label="章节目录"
-                className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-4 pb-5 focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-brand max-md:px-3"
+                className="scrollbar-hidden min-h-0 flex-1 overflow-y-auto overscroll-contain px-4 pb-5 focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-brand max-md:px-3"
               >
                 {sections.length ? (
                   <SectionTree
@@ -452,7 +447,7 @@ export function DocumentViewerDialog({
                     expanded={Boolean(query)}
                   />
                 ) : (
-                  <p className="py-8 text-center text-sm text-muted-foreground">
+                  <p className="py-8 text-center text-sm text-faint">
                     {query ? "没有匹配的章节" : "暂无章节目录"}
                   </p>
                 )}

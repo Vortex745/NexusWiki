@@ -3,7 +3,7 @@ import {
   type AnswerProcessInput,
 } from "@core/answer_process"
 import { useState } from "react"
-import { Check, CircleAlert, Minus, Sparkles, Square } from "lucide-react"
+import { CircleCheck, CircleX, Minus } from "../ui/icons"
 import {
   Trace,
   TraceCollapsible,
@@ -13,9 +13,11 @@ import {
   TraceIcon,
   TraceTitle,
   TraceDescription,
-} from "../primitives/trace"
-import { Button } from "../primitives/button"
-import { Separator } from "../primitives/separator"
+} from "../chat/trace"
+import { Button } from "../ui/Button"
+import { Separator } from "../ui/Separator"
+import { DashRing } from "./DashRing"
+
 interface AnswerProcessProps extends AnswerProcessInput {
   onReferenceClick: (referenceId: string) => void
 }
@@ -28,6 +30,13 @@ const LABELS: Record<string, string> = {
   incomplete: "未完成",
   recorded: "已记录",
 }
+const HEADER_LABELS: Record<string, string> = {
+  running: "正在思考中",
+  completed: "回答已完成",
+  cancelled: "回答已停止",
+  incomplete: "回答未完成",
+  recorded: "回答已记录",
+}
 export function AnswerProcess({
   onReferenceClick,
   ...input
@@ -35,6 +44,8 @@ export function AnswerProcess({
   const process = projectAnswerProcess(input)
   const [expandedOverride, setExpandedOverride] = useState<boolean | null>(null)
   const expanded = expandedOverride ?? process.status === "running"
+  const running = process.status === "running"
+  const headerLabel = HEADER_LABELS[process.status] ?? process.statusLabel
   if (!process.visible) return null
   return (
     <div
@@ -44,20 +55,20 @@ export function AnswerProcess({
     >
       <TraceCollapsible open={expanded} onOpenChange={setExpandedOverride}>
         <TraceCollapsibleTrigger>
-          <TraceLine
-            status={process.status === "running" ? "running" : undefined}
-          >
-            <TraceIcon>
-              <Sparkles />
-            </TraceIcon>
-            <TraceTitle>回答过程 · {process.statusLabel}</TraceTitle>
+          <TraceLine>
+            <TraceTitle
+              className={running ? "t-shimmer" : undefined}
+              data-text={running ? headerLabel : undefined}
+            >
+              {headerLabel}
+            </TraceTitle>
           </TraceLine>
         </TraceCollapsibleTrigger>
         <p
+          className="sr-only"
           role="status"
           aria-live="polite"
           aria-atomic="true"
-          className="mt-1 text-xs text-muted-foreground"
         >
           {process.currentLabel}
         </p>
@@ -66,12 +77,12 @@ export function AnswerProcess({
             {process.steps.map((step) => {
               const StatusIcon =
                 step.status === "completed"
-                  ? Check
-                  : step.status === "failed" || step.status === "incomplete"
-                    ? CircleAlert
-                    : step.status === "cancelled"
-                      ? Square
-                      : Minus
+                  ? CircleCheck
+                  : step.status === "failed" ||
+                      step.status === "incomplete" ||
+                      step.status === "cancelled"
+                    ? CircleX
+                    : Minus
               return (
                 <div
                   key={step.key}
@@ -80,16 +91,14 @@ export function AnswerProcess({
                   className="flex min-w-0 flex-col gap-1"
                 >
                   <TraceLine
-                    status={
-                      step.status === "running"
-                        ? "running"
-                        : step.status === "failed"
-                          ? "error"
-                          : undefined
-                    }
+                    status={step.status === "failed" ? "error" : undefined}
                   >
                     <TraceIcon>
-                      <StatusIcon />
+                      {step.status === "running" ? (
+                        <DashRing className="text-ink" />
+                      ) : (
+                        <StatusIcon />
+                      )}
                     </TraceIcon>
                     <TraceTitle>{step.label}</TraceTitle>
                     <TraceDescription>

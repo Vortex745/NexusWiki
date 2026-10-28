@@ -17,6 +17,8 @@ type IngestStatus = {
   task: Pick<IngestionTask, "status" | "failCount" | "nextAttemptAt"> | null
   spanTree: IngestSpanNode[]
   activationBlockReason?: string | null
+  activationWarnings?: string[]
+  activationPolicyVersion?: string | null
   candidateState?: string | null
   documentVersion?: { version: number; contentHash: string; active: boolean }
   failure?: {
@@ -38,7 +40,7 @@ function loadFrontendModule(path: string): any {
   return exports
 }
 
-const { deriveIngestProgress, initialImportProgress, buildImportSteps, estimateUploadRemainingMs, estimateImportRemainingMs, describeActivationReasons, describeAllowedOperations } = loadFrontendModule("frontend/src/lib/ingestProgress.ts")
+const { deriveIngestProgress, deriveRecordView, initialImportProgress, buildImportSteps, estimateUploadRemainingMs, estimateImportRemainingMs, describeActivationReasons, describeActivationWarnings, describeAllowedOperations } = loadFrontendModule("frontend/src/lib/ingestProgress.ts")
 const constants = loadFrontendModule("frontend/src/lib/constants.ts")
 // Ticket 27: the failure-copy decision layer is production logic too — same
 // reason as importBatch below, hand-mocking it drifted once already.
@@ -172,38 +174,55 @@ test("knowledge-base creation reads the API envelope", async () => {
 })
 
 test("knowledge import offers both document files and a folder", () => {
-  const path = join(__dirname, "../../frontend/src/components/panels/ImportDropzone.tsx")
-  const source = ts.createSourceFile(path, readFileSync(path, "utf8"), ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX)
-  const fileInputs: ts.JsxSelfClosingElement[] = []
+  const componentPath = join(__dirname, "../../frontend/src/components/panels/ImportDropzone.tsx")
+  const source = ts.createSourceFile(componentPath, readFileSync(componentPath, "utf8"), ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX)
 
-  function visit(node: ts.Node): void {
-    if (ts.isJsxSelfClosingElement(node) && node.tagName.getText(source) === "input") {
-      const type = node.attributes.properties.find(
-        (property): property is ts.JsxAttribute =>
-          ts.isJsxAttribute(property) && property.name.getText(source) === "type",
-      )
-      if (type?.initializer && ts.isStringLiteral(type.initializer) && type.initializer.text === "file") {
-        fileInputs.push(node)
-      }
+  const collect = (root: ts.SourceFile, tag: string) => {
+    const found: ts.JsxSelfClosingElement[] = []
+    const visit = (node: ts.Node): void => {
+      if (ts.isJsxSelfClosingElement(node) && node.tagName.getText(root) === tag) found.push(node)
+      ts.forEachChild(node, visit)
     }
-    ts.forEachChild(node, visit)
+    visit(root)
+    return found
   }
-  visit(source)
-
-  assert.equal(fileInputs.length, 2, "show a file picker as well as the existing folder picker")
-  const folderInputs = fileInputs.filter((input) =>
-    input.attributes.properties.some(
-      (property) => ts.isJsxAttribute(property) && property.name.getText(source) === "webkitdirectory",
-    ),
-  )
-  assert.equal(folderInputs.length, 1, "only the folder picker should use directory mode")
-  for (const input of fileInputs) {
-    const attributes = input.attributes.properties
+  const attributesOf = (node: ts.JsxSelfClosingElement, root: ts.SourceFile) =>
+    node.attributes.properties
       .filter((property): property is ts.JsxAttribute => ts.isJsxAttribute(property))
-      .map((property) => property.name.getText(source))
-    assert.ok(attributes.includes("multiple"), "both pickers should support batch import")
-    assert.ok(attributes.includes("accept"), "both pickers should declare supported document types")
+      .map((property) => property.name.getText(root))
+  const isFileInput = (node: ts.JsxSelfClosingElement, root: ts.SourceFile) => {
+    const type = node.attributes.properties.find(
+      (property): property is ts.JsxAttribute =>
+        ts.isJsxAttribute(property) && property.name.getText(root) === "type",
+    )
+    return Boolean(
+      type?.initializer &&
+        ts.isStringLiteral(type.initializer) &&
+        type.initializer.text === "file",
+    )
   }
+
+  const folderInputs = collect(source, "input").filter((input) => isFileInput(input, source))
+  assert.equal(folderInputs.length, 1, "the folder picker keeps its own directory input")
+  const folderAttributes = attributesOf(folderInputs[0], source)
+  assert.ok(folderAttributes.includes("webkitdirectory"), "only the folder picker should use directory mode")
+  assert.ok(folderAttributes.includes("multiple"), "the folder picker should support batch import")
+  assert.ok(folderAttributes.includes("accept"), "the folder picker should declare supported document types")
+
+  const dropzones = collect(source, "FileDropzone")
+  assert.equal(dropzones.length, 1, "the file picker is the shared arc dropzone")
+  const dropzoneAttributes = attributesOf(dropzones[0], source)
+  assert.ok(dropzoneAttributes.includes("multiple"), "the file picker should support batch import")
+  assert.ok(dropzoneAttributes.includes("accept"), "the file picker should declare supported document types")
+
+  // The shared component owns the native input; it must forward both props.
+  const arcPath = join(__dirname, "../../frontend/src/components/arc/file-dropzone/file-dropzone.tsx")
+  const arcSource = ts.createSourceFile(arcPath, readFileSync(arcPath, "utf8"), ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX)
+  const arcInputs = collect(arcSource, "input").filter((input) => isFileInput(input, arcSource))
+  assert.equal(arcInputs.length, 1, "the arc dropzone renders the file input")
+  const arcAttributes = attributesOf(arcInputs[0], arcSource)
+  assert.ok(arcAttributes.includes("multiple"), "the arc file input should support batch import")
+  assert.ok(arcAttributes.includes("accept"), "the arc file input should forward the accepted types")
 })
 
 function stage(name: string, status: IngestSpanNode["span"]["status"], id = 1): IngestSpanNode {
@@ -341,6 +360,7 @@ function dialogHarness() {
   const uploadedTos: Array<string | null> = []
   const parkedUploads: Array<() => void> = []
   let catalogHold = false
+  let catalogEntries: Array<Record<string, unknown>> = []
   const parkedCatalog: Array<{ resolve: (value: unknown) => void; reject: (error: Error) => void }> = []
   let resumeCalls = 0
   let resumeHold = false
@@ -357,6 +377,10 @@ function dialogHarness() {
   let scopes: string[] = ["ingest"]
   const toasts: string[] = []
   const timers = new Map<number, () => Promise<void>>()
+  // Auto-hide timers (completed rows) are a different clock from the poll:
+  // keep them separate so existing timer assertions stay meaningful.
+  const hideTimers = new Map<number, () => void>()
+  let hideSeq = 0
   const react = {
     useState(initial: unknown) {
       const index = cursor++
@@ -375,12 +399,21 @@ function dialogHarness() {
     window: {
       setInterval(callback: () => Promise<void>) { timers.set(1, callback); return 1 },
       clearInterval(id: number) { timers.delete(id) },
+      setTimeout(callback: () => void) { const id = ++hideSeq; hideTimers.set(id, callback); return id },
+      clearTimeout(id: number) { hideTimers.delete(id) },
     },
       require(name: string) {
       // UI primitives are inert host nodes; the real dialog's business hooks and transport stay under test.
       if (name.includes("/primitives/")) return { Button:"button", Input:"input", Textarea:"textarea", DialogTitle:"h2", RadioGroup:"radiogroup", RadioGroupItem:"radio", ToggleGroup:"group", ToggleGroupItem:"button", Alert:"alert", AlertDescription:"description", FieldSet:"fieldset", FieldLegend:"legend" }
+      if (name.endsWith("/arc/alert/alert")) return { Alert: "alert" }
+      if (name.endsWith("/arc/input/input")) return { Input: "input" }
+      if (name.endsWith("/arc/segmented-control/segmented-control")) return { default: "segmented-control" }
+      if (name.endsWith("/arc/number-field/number-field")) return { NumberField: "number-field" }
+      if (name.endsWith("/ui/field")) return { Field: "field", FieldLabel: "label" }
+      if (name.endsWith("/ui/Button")) return { Button: "button" }
       if (name.endsWith("/Controls")) return {Button:"button",Select:"select",TextInput:"input",TextArea:"textarea",Field:"field",Checkbox:"checkbox",EmptyState:"empty",StatusBadge:"badge"}
-      if (name.endsWith("/Dialog")) return {Dialog:"dialog",PanelDialog:"dialog"}
+      if (name.endsWith("/Dialog")) return {Dialog:"dialog",PanelDialog:"dialog",PanelDialogTitle:"h2"}
+      if (name.endsWith("/containers")) return { InlineMessage: "inline-message" }
       if (name === "react") return react
       if (name === "react/jsx-runtime") return { jsx: (type: unknown, props: unknown) => ({ type, props }), jsxs: (type: unknown, props: unknown) => ({ type, props }) }
       if (name.endsWith("/api")) return {
@@ -437,7 +470,7 @@ function dialogHarness() {
           if (catalogHold) {
             return new Promise((resolve, reject) => parkedCatalog.push({ resolve, reject }))
           }
-          return { documents: [], total: 0, page: 1, pageSize: 100, tags: [], folders: [] }
+          return { documents: catalogEntries, total: catalogEntries.length, page: 1, pageSize: 100, tags: [], folders: [] }
         },
         async createKnowledgeBase() { throw new Error("not expected in this test") },
         // UT-28: the server's cancellation confirmation.
@@ -476,10 +509,10 @@ function dialogHarness() {
       if (name.endsWith("/SessionContext")) return { useSignedInSession: () => ({ scopes }) }
       if (name.endsWith("/constants")) return constants
       if (name.endsWith("/cn")) return { cn: (...parts: unknown[]) => parts.filter(Boolean).join(" ") }
-      if (name.endsWith("/ingestProgress")) return { deriveIngestProgress, initialImportProgress, describeActivationReasons, describeAllowedOperations }
+      if (name.endsWith("/ingestProgress")) return { deriveIngestProgress, deriveRecordView, initialImportProgress, describeActivationReasons, describeActivationWarnings, describeAllowedOperations }
       if (name.endsWith("/qualityReasons")) return qualityReasons
       if (name.endsWith("/AppShellContext")) return { useAppShell: () => ({ showToast: (message: string) => toasts.push(message) }) }
-      if (name.endsWith("/icons")) return { Database: {}, X: {} }
+      if (name.endsWith("/icons")) return { Database: {}, X: {}, Eye: {}, Trash2: {}, History: {}, RefreshCw: {}, CircleCheck: {}, CircleAlert: {}, CircleX: {}, LoaderCircle: {}, Ban: {}, Clock: {}, ShieldAlert: {} }
       if (name.endsWith("/Icon")) return { Icon: "icon" }
       if (name === "./ImportProgress") return { ImportProgress: "import-progress" }
       if (name === "./ImportDropzone") return { ImportDropzone: "import-dropzone" }
@@ -579,6 +612,26 @@ function dialogHarness() {
       for (const parked of parkedStatus.splice(0)) parked.resolve(status)
     },
     firePoll() { for (const callback of timers.values()) void callback() },
+    /** Run the completed-row auto-hide timers (the 5s read window). */
+    fireCompletedHide() {
+      const callbacks = [...hideTimers.values()]
+      hideTimers.clear()
+      for (const callback of callbacks) callback()
+    },
+    /** Switch the dialog to the 上传记录 segment (the session tray lives there). */
+    showRecords() {
+      const control = find(
+        render(),
+        (node) =>
+          node.type === "segmented-control" && node.props?.label === "导入方式",
+      )
+      assert.ok(control, "the import method segmented control rendered")
+      control.props.onValueChange("records")
+    },
+    /** The server catalog the records tab reads on refresh. */
+    setCatalogEntries(entries: Array<Record<string, unknown>>) {
+      catalogEntries = entries
+    },
     toasts, timers, get refreshed() { return refreshed }, get uploadedTo() { return uploadedTo },
     get uploadCalls() { return uploadCalls }, get uploadedTos() { return [...uploadedTos] },
     get maxInFlight() { return maxInFlight },
@@ -602,6 +655,36 @@ test("dialog polls processing stages and notifies completion only after a termin
   assert.equal(host.timers.size, 0)
   assert.equal(host.toasts.length, 1)
   assert.equal(host.refreshed, 1)
+})
+
+test("a completed row folds into the upload records tab after the read window", async () => {
+  const host = dialogHarness()
+  await host.upload()
+  const complete = payload()
+  complete.task!.status = "completed"
+  complete.documentStatus = "completed"
+  await host.poll(complete)
+  assert.equal(host.hasText("test.pdf"), true, "the completed row stays readable briefly")
+  host.fireCompletedHide()
+  await settle()
+  assert.equal(host.hasText("test.pdf"), false, "after the window the row folds into the records tab")
+})
+
+test("a rejected upload folds out of the queue and keeps its retry in the session tray", async () => {
+  const host = dialogHarness()
+  host.failNextUpload()
+  await host.upload()
+  assert.equal(host.hasButton("重试"), true, "the failed row offers retry while visible")
+  host.fireCompletedHide()
+  await settle()
+  assert.equal(host.hasText("test.pdf"), false, "the failed row leaves the queue after the read window")
+  host.showRecords()
+  assert.equal(host.hasText("本次会话"), true, "the session tray heads the records tab")
+  assert.equal(host.hasText("test.pdf"), true, "the rejected upload is filed into the records tab")
+  assert.equal(host.hasButton("重试"), true, "the tray keeps the retry action")
+  host.clickButton("重试")
+  await settle()
+  assert.equal(host.uploadCalls, 2, "retry from the tray re-uploads the held file")
 })
 
 test("a status query failure preserves progress and recovers on a later successful poll", async () => {
@@ -761,6 +844,8 @@ test("UT-26: a gate-blocked candidate renders as 待校验 with reasons and the 
   // A gate denial is NOT completion — no 100 percent, no success copy.
   assert.equal(progress.status, "pending_review")
   assert.match(progress.summary, /待校验/)
+  assert.match(progress.summary, /尚未启用/)
+  assert.doesNotMatch(progress.summary, /未替换现有版本/)
   assert.notEqual(progress.percent, 100)
   assert.equal(progress.outcome?.state, "pending_review")
   // The module runs in a VM realm: compare arrays structurally via JSON.
@@ -834,6 +919,107 @@ test("UT-26: the row shows the 待校验 badge, the reason copy and the old-vers
   assert.equal(host.hasText("内容完整性待校验"), true, "the human-readable reason renders")
   assert.equal(host.hasText("现有版本仍可正常使用"), true, "the old-version note renders")
   assert.equal(host.hasText("重试"), false, "no meaningless retry on an unproven candidate")
+})
+
+test("UT-31: 上传记录 only reads ✅ when the active pointer holds the version", () => {
+  const base = {
+    status: "completed" as const,
+    candidateState: "approved",
+    active: true,
+    activationBlockReason: null,
+  }
+  const adopted = deriveRecordView(base)
+  assert.equal(adopted.state, "adopted")
+  assert.equal(adopted.label, "已完成")
+  // A completed candidate with a recorded gate denial is 待校验, never ✅.
+  const held = deriveRecordView({
+    ...base,
+    active: false,
+    activationBlockReason: "activation_content_proof_pending_review",
+  })
+  assert.equal(held.state, "pending_review")
+  assert.equal(held.label, "待校验")
+  // Business approval hold.
+  const business = deriveRecordView({ ...base, active: false, candidateState: "pending_review" })
+  assert.equal(business.state, "business_review")
+  assert.equal(business.label, "待审中")
+  // Failure is the ❌ state; an in-flight row spins.
+  assert.equal(deriveRecordView({ ...base, status: "failed", active: false }).state, "failed")
+  assert.equal(deriveRecordView({ ...base, status: "pending", active: false }).state, "processing")
+  // Completed but not active and not held: an older/never-enabled version is
+  // neither ✅ nor a failure.
+  const inactive = deriveRecordView({ ...base, active: false })
+  assert.equal(inactive.state, "inactive")
+  assert.equal(inactive.label, "非活动版本")
+})
+
+test("UT-31: a review-held row folds after the read window and records 待校验", async () => {
+  const host = dialogHarness()
+  await host.upload()
+  const blocked = payload(allDone())
+  blocked.documentStatus = "completed"
+  blocked.task = { status: "completed", failCount: 0, nextAttemptAt: null }
+  blocked.activationBlockReason = "activation_content_proof_pending_review"
+  blocked.documentVersion = { version: 1, contentHash: "hash", active: false }
+  await host.poll(blocked)
+  assert.equal(host.progress().progress.status, "pending_review")
+  assert.equal(host.hasText("待校验"), true, "the held row still shows its live state")
+
+  host.fireCompletedHide()
+  await settle()
+  assert.equal(host.hasText("test.pdf"), false, "the held row folds after the 5s read window")
+
+  host.setCatalogEntries([{
+    docId: "doc-1",
+    sourceId: "src-1",
+    title: "test.pdf",
+    source: "api",
+    fileName: "test.pdf",
+    mimeType: "application/pdf",
+    status: "completed",
+    candidateState: "approved",
+    version: 1,
+    active: false,
+    activationBlockReason: "activation_content_proof_pending_review",
+    tags: [],
+    folder: null,
+    retired: false,
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+  }])
+  host.showRecords()
+  host.clickButton("刷新")
+  await settle()
+  assert.equal(host.hasText("test.pdf"), true, "the row is filed into the server catalog")
+  assert.equal(host.hasText("待校验"), true, "the record keeps the hold state")
+  assert.equal(host.hasText("已完成"), false, "a held candidate never renders as ✅")
+})
+
+test("OCR 软提示完成行计成功，并显示未逐字核对的提示", async () => {
+  const ocr = payload(allDone())
+  ocr.documentStatus = "completed"
+  ocr.task = { status: "completed", failCount: 0, nextAttemptAt: null }
+  ocr.documentVersion = { version: 1, contentHash: "hash", active: true }
+  ocr.activationWarnings = ["structural_risk: ocr_content_unverified"]
+  ocr.activationPolicyVersion = "ocr-advisory-v1"
+
+  const progress = deriveIngestProgress(ocr)
+  assert.equal(progress.status, "completed")
+  assert.equal(progress.percent, 100)
+  assert.equal(progress.outcome?.state, "completed")
+  assert.equal(
+    JSON.stringify(progress.outcome?.activationWarnings),
+    JSON.stringify(["structural_risk: ocr_content_unverified"]),
+  )
+  assert.equal(progress.outcome?.activationPolicyVersion, "ocr-advisory-v1")
+  assert.equal(progress.outcome?.oldVersionUsable, false)
+
+  const host = dialogHarness()
+  await host.upload()
+  await host.poll(ocr)
+  assert.equal(host.progress().progress.status, "completed")
+  assert.equal(host.hasText("已完成"), true)
+  assert.equal(host.hasText("来自 OCR，未逐字核对"), true)
 })
 
 // ---------------------------------------------------------------------------

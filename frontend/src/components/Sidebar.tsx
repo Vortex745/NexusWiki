@@ -1,34 +1,33 @@
-import { Sidebar as ShadcnSidebar, useSidebar } from "./primitives/sidebar"
-import { Button as UiButton } from "@/components/primitives/button"
-import { Input } from "@/components/primitives/input"
-import { SearchField } from "./arc/search-field/search-field"
+import { SidebarShell as ShadcnSidebar, useSidebar } from "./ui/sidebar-shell"
+import { Button as ArcButton } from "./arc/button/button"
+import { Checkbox } from "./arc/checkbox/checkbox"
+import { RadioGroup } from "./arc/radio-group/radio-group"
+import { ThemeSwitch } from "./arc/theme-switch/theme-switch"
+import { Button as UiButton } from "@/components/ui/Button"
+import { Input } from "@/components/arc/input/input"
+import { ExpandingSearch } from "./arc/expanding-search/expanding-search"
 import {
-  Brain,
-  BookOpen,
+  Bot,
   Check,
   ChevronDown,
   ChevronRight,
-  ClipboardCheck,
   FileText,
-  FlaskConical,
   Folder,
   FolderOpen,
   LayoutGrid,
   MessageSquareWarning,
   Minus,
-  Moon,
   Network,
   PanelLeft,
   PanelLeftClose,
   Pencil,
   Plus,
   Search,
-  Sun,
   Trash2,
   Upload,
   X,
 } from "./ui/icons"
-import { useEffect, useRef, useState } from "react"
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react"
 import type { IconProps, SwapIconProps } from "./ui/Icon"
 
 import { useConversation } from "../conversation/useConversation"
@@ -49,13 +48,11 @@ import {
 } from "../lib/api"
 import { useSlidingHighlight } from "../lib/useSlidingHighlight"
 import { knowledgeStore, useKnowledgeBases } from "../runtime/knowledgeStore"
-import { useMemoryApi } from "../runtime/MemoryContext"
 import { useSignedInSession } from "../runtime/SessionContext"
 import { DocumentsDialog } from "./panels/DocumentsDialog"
-import { Dialog } from "./ui/Dialog"
+import { ConfirmDialog } from "./ui/Dialog"
 import { Button } from "./ui/Controls"
 import { GraphBrowseDialog } from "./panels/GraphBrowseDialog"
-import { LaboratoryDialog } from "./panels/LaboratoryDialog"
 import { Icon, SwapIcon } from "./ui/Icon"
 
 function ThreadRow({
@@ -80,22 +77,24 @@ function ThreadRow({
         "group/thread relative z-10 flex h-8.5 w-full items-center rounded-[8px] transition-colors",
       )}
     >
-      <UiButton
-        variant="ghost"
-        size="icon-sm"
+      {/* A plain button, not the Arc one: its label slot centres the text, so
+          short titles drift to the middle and long ones overflow instead of
+          ellipsizing. pr-11 keeps the title 14px clear of the hover-only
+          delete button (right-1.5 + size-6) and truncates right there. */}
+      <button
         type="button"
-        title={title}
+        title={title || "新对话"}
         aria-current={active ? "page" : undefined}
         onClick={() => conversationStore.switchThread(id)}
         className={cn(
-          // pr-9 reserves the hover-only delete button's slot (right-1.5 + size-6)
-          // plus a 6px breath so the title never slides under it.
-          "min-w-0 flex-1 justify-start overflow-hidden pl-12 pr-9 text-left",
-          collapsed && "px-0 text-center",
+          "flex h-7 min-w-0 flex-1 items-center overflow-hidden rounded-[8px] pr-11 pl-3 text-left text-[0.8rem] font-medium leading-[1.4] text-[color:var(--text-secondary)] transition-colors hover:bg-surface-muted hover:text-ink active:bg-surface-muted active:text-ink",
+          collapsed && "justify-center px-0 text-center",
         )}
       >
-        <span className="sidebar-copy block truncate">{title || "新对话"}</span>
-      </UiButton>
+        <span className="sidebar-copy block min-w-0 truncate">
+          {title || "新对话"}
+        </span>
+      </button>
       {!collapsed ? (
         <UiButton
           variant="destructive"
@@ -122,6 +121,7 @@ function SidebarButton({
   ariaControls,
   active = false,
   collapsed = false,
+  variant = "ghost",
 }: {
   /** A single glyph, or a state pair to spring between. */
   icon: IconProps["icon"] | SwapIconProps
@@ -132,30 +132,38 @@ function SidebarButton({
   ariaControls?: string
   active?: boolean
   collapsed?: boolean
+  variant?: "primary" | "secondary" | "ghost" | "danger"
 }) {
   return (
-    <UiButton
-      variant="ghost"
-      size="sm"
-      type="button"
-      onClick={onClick}
-      aria-expanded={ariaExpanded}
-      aria-controls={ariaControls}
-      aria-pressed={active || undefined}
-      title={collapsed ? label : undefined}
-      className={cn(
-        "flex h-8.5 w-full items-center gap-2 text-left active:scale-[0.98]",
-        collapsed ? "justify-center px-0" : "px-3",
-      )}
-    >
-      {"from" in icon ? (
-        <SwapIcon data-icon="inline-start" {...icon} />
-      ) : (
-        <Icon data-icon="inline-start" icon={icon} />
-      )}
-      <span className="sidebar-copy min-w-0 truncate">{label}</span>
-      <span className="sidebar-copy ml-auto shrink-0">{trailing}</span>
-    </UiButton>
+    <div className="relative w-full">
+      <ArcButton
+        variant={variant}
+        size="sm"
+        type="button"
+        onClick={onClick}
+        aria-expanded={ariaExpanded}
+        aria-controls={ariaControls}
+        aria-pressed={active || undefined}
+        title={collapsed ? label : undefined}
+        className={cn(
+          "w-full text-left",
+          collapsed ? "justify-center px-0" : "justify-start",
+          !collapsed && trailing ? "pr-9" : "",
+        )}
+      >
+        {"from" in icon ? (
+          <SwapIcon data-icon="inline-start" {...icon} />
+        ) : (
+          <Icon data-icon="inline-start" icon={icon} />
+        )}
+        <span className="sidebar-copy min-w-0 truncate">{label}</span>
+      </ArcButton>
+      {trailing && !collapsed ? (
+        <span className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2">
+          {trailing}
+        </span>
+      ) : null}
+    </div>
   )
 }
 
@@ -196,9 +204,11 @@ function KnowledgeBaseRow({
     setLoading(true)
     setError(null)
     try {
+      // This tree is the knowledge the base can actually answer from: a failed
+      // or unactivated upload owns no active version and must not appear.
       const result = await fetchKnowledgeBaseDocuments(
         base.id,
-        { page: 1, status: "", tag: "", folder: "" },
+        { page: 1, status: "", tag: "", folder: "", active: true },
         10,
       )
       setDocuments(result.documents)
@@ -209,48 +219,43 @@ function KnowledgeBaseRow({
       setLoading(false)
     }
   }
+  const selectId = `kb-select-${base.id}`
+  const nameId = `kb-name-${base.id}`
   return (
     <li className="group/kb relative">
-      <UiButton
-        variant="ghost"
-        size="icon-sm"
-        type="button"
-        onClick={() => void toggleDocuments()}
-        aria-expanded={expanded}
-        aria-label={`${expanded ? "收起" : "展开"}「${base.name}」的文档`}
-        className="absolute left-0 top-1 grid size-6 place-items-center"
-      >
-        <Icon
-          data-icon="inline-start"
-          icon={ChevronRight}
-          className={cn(" transition-transform", expanded && "rotate-90")}
-        />
-      </UiButton>
-      <UiButton
-        variant="ghost"
-        size="sm"
-        type="button"
-        onClick={() => onToggle(base.id)}
-        title={selected ? "取消选择（回到默认知识库）" : "选入新对话的检索范围"}
-        aria-pressed={selected}
-        className={cn(
-          // pr-16 keeps the truncate edge clear of the two hover-only
-          // action buttons parked at right-1.5/right-8.5.
-          "flex h-8.5 w-full items-center justify-start gap-2 pl-6 pr-16 text-left active:scale-[0.98]",
-        )}
-      >
-        <span
-          className={cn(
-            "grid size-4 flex-none place-items-center rounded-[6px] border transition-colors",
-            selected
-              ? "border-primary bg-primary text-on-primary"
-              : "border-line bg-transparent",
-          )}
+      <div className="flex min-h-8.5 items-center gap-1.5 pr-16">
+        <UiButton
+          variant="ghost"
+          size="icon-sm"
+          type="button"
+          onClick={() => void toggleDocuments()}
+          aria-expanded={expanded}
+          aria-controls={`kb-docs-${base.id}`}
+          aria-label={`${expanded ? "收起" : "展开"}「${base.name}」的文档`}
+          className="grid size-6 flex-none place-items-center"
         >
-          {selected ? <Icon data-icon="inline-start" icon={Check} /> : null}
-        </span>
-        <span className="truncate">{base.name}</span>
-      </UiButton>
+          <Icon
+            data-icon="inline-start"
+            icon={ChevronRight}
+            className={cn(" transition-transform", expanded && "rotate-90")}
+          />
+        </UiButton>
+        <Checkbox
+          id={selectId}
+          aria-labelledby={nameId}
+          checked={selected}
+          onCheckedChange={() => onToggle(base.id)}
+          className="size-7 flex-none"
+        />
+        <label
+          id={nameId}
+          htmlFor={selectId}
+          title={selected ? "取消选择（回到默认知识库）" : "选入新对话的检索范围"}
+          className="min-w-0 flex-1 cursor-pointer truncate text-left text-[0.8rem] text-ink"
+        >
+          {base.name}
+        </label>
+      </div>
       <UiButton
         variant="ghost"
         size="icon-sm"
@@ -271,52 +276,67 @@ function KnowledgeBaseRow({
       >
         <Icon data-icon="inline-start" icon={Network} />
       </UiButton>
-      {expanded ? (
-        <ul className="ml-5 border-l border-line pl-2 text-[11px] text-muted-foreground">
-          {loading ? (
-            <li className="py-1">正在读取文档…</li>
-          ) : error ? (
-            <li className="py-1 text-danger">{error}</li>
-          ) : documents.length === 0 ? (
-            <li className="py-1">暂无文档</li>
-          ) : (
-            documents.map((doc) => (
-              <li key={doc.docId}>
+      {/* Kept mounted so the fold animates both ways; the grid-track collapse
+          lives in index.css, and `inert` keeps clipped rows out of the tab
+          order while closed. */}
+      <div
+        id={`kb-docs-${base.id}`}
+        className="sidebar-folder-tree"
+        data-open={expanded ? "true" : "false"}
+        inert={!expanded}
+      >
+        <div>
+          <ul className="kb-doc-list ml-5 border-l border-line pl-2 text-[11px] text-faint">
+            {loading ? (
+              <li className="py-1">正在读取文档…</li>
+            ) : error ? (
+              <li className="py-1 text-danger">{error}</li>
+            ) : documents.length === 0 ? (
+              <li className="py-1">暂无文档</li>
+            ) : (
+              documents.map((doc, index) => (
+                <li
+                  key={doc.docId}
+                  style={
+                    {
+                      "--kb-doc-index": index,
+                    } as React.CSSProperties
+                  }
+                >
+                  <button
+                    type="button"
+                    onClick={() => openDocument({ documentId: doc.docId })}
+                    title={doc.title}
+                    className="flex h-7 w-full min-w-0 items-center gap-1.5 rounded-lg px-1 text-left text-[11px] text-faint transition-colors hover:bg-surface-muted hover:text-ink"
+                  >
+                    <Icon
+                      data-icon="inline-start"
+                      icon={FileText}
+                      className="size-4 flex-none"
+                    />
+                    <span className="min-w-0 flex-1 truncate">
+                      {doc.title || doc.fileName || doc.docId}
+                    </span>
+                  </button>
+                </li>
+              ))
+            )}
+            {total > documents.length ? (
+              <li>
                 <UiButton
                   variant="ghost"
                   size="sm"
                   type="button"
-                  onClick={() => openDocument({ documentId: doc.docId })}
-                  title={doc.title}
-                  className="flex h-7 w-full items-center gap-1.5 px-1 text-left"
+                  onClick={() => onBrowseDocs(base)}
+                  className="justify-start px-1 py-1 text-left hover:underline"
                 >
-                  <Icon
-                    data-icon="inline-start"
-                    icon={FileText}
-                    className=" flex-none"
-                  />
-                  <span className="min-w-0 truncate">
-                    {doc.title || doc.fileName || doc.docId}
-                  </span>
+                  查看全部 {total} 篇
                 </UiButton>
               </li>
-            ))
-          )}
-          {total > documents.length ? (
-            <li>
-              <UiButton
-                variant="ghost"
-                size="sm"
-                type="button"
-                onClick={() => onBrowseDocs(base)}
-                className="py-1 hover:underline"
-              >
-                查看全部 {total} 篇
-              </UiButton>
-            </li>
-          ) : null}
-        </ul>
-      ) : null}
+            ) : null}
+          </ul>
+        </div>
+      </div>
     </li>
   )
 }
@@ -485,7 +505,7 @@ function FolderRow({
             "grid size-4 flex-none place-items-center rounded-[6px] border transition-colors",
             selection === "none"
               ? "border-line bg-transparent"
-              : "border-primary bg-primary text-on-primary",
+              : "border-accent bg-accent-subtle text-on-primary",
           )}
         >
           {selection === "all" ? (
@@ -500,7 +520,7 @@ function FolderRow({
           className=" flex-none opacity-70"
         />
         <span className="truncate">{name}</span>
-        <span className="ml-auto flex-none font-mono text-[10px] text-muted-foreground/70">
+        <span className="ml-auto flex-none font-mono text-[10px] text-faint/70">
           {memberCount}
         </span>
       </UiButton>
@@ -576,32 +596,15 @@ function KnowledgeSelector() {
   // selected base); an explicit click then wins. Deriving the default instead of
   // seeding it keeps the async list load from needing an effect.
   const [openFolders, setOpenFolders] = useState<Record<string, boolean>>({})
-  // Filing knowledge bases into directories is the same admin door the bases
-  // themselves sit behind; deleting one only releases its members, so the
-  // confirm is a guard against a mis-click rather than a data-loss warning.
+  // Renaming/deleting directories is the same admin door the bases themselves
+  // sit behind; deleting one only releases its members, so the confirm is a
+  // guard against a mis-click rather than a data-loss warning.
   const canManageFolders =
     useSignedInSession()?.scopes.includes("admin") ?? false
-  const [newFolderName, setNewFolderName] = useState("")
-  const [creatingFolder, setCreatingFolder] = useState(false)
   const [folderToDelete, setFolderToDelete] = useState<{
     id: string
     name: string
   } | null>(null)
-
-  const createKbFolder = async () => {
-    const name = newFolderName.trim()
-    if (!name) return
-    setCreatingFolder(true)
-    try {
-      await knowledgeStore.createFolder(name)
-      setNewFolderName("")
-      showToast(`已创建知识库分类「${name}」`)
-    } catch (error) {
-      showToast(error instanceof Error ? error.message : "分类创建失败")
-    } finally {
-      setCreatingFolder(false)
-    }
-  }
 
   const membersOf = (folderId: string) =>
     bases.filter((base) => base.folderId === folderId)
@@ -633,7 +636,7 @@ function KnowledgeSelector() {
           "flex h-7 w-full items-center justify-between pl-[3px] pr-1 text-left",
         )}
       >
-        <span>知识库</span>
+        <span className="font-semibold">知识库</span>
         <Icon
           data-icon="inline-end"
           icon={ChevronDown}
@@ -651,7 +654,7 @@ function KnowledgeSelector() {
       >
         <div>
           {status === "loading" || (status === "idle" && bases.length === 0) ? (
-            <p className="px-3 py-2 text-xs text-muted-foreground/70">
+            <p className="px-3 py-2 text-xs text-faint/70">
               正在加载知识库…
             </p>
           ) : status === "error" ? (
@@ -668,7 +671,7 @@ function KnowledgeSelector() {
               </UiButton>
             </div>
           ) : bases.length === 0 && folders.length === 0 ? (
-            <p className="px-3 py-2 text-xs text-muted-foreground/70">
+            <p className="px-3 py-2 text-xs text-faint/70">
               暂无可用知识库
             </p>
           ) : (
@@ -720,7 +723,7 @@ function KnowledgeSelector() {
                       <div>
                         <ul className="ml-4 mt-0.5 flex flex-col gap-0.5 border-l border-line pl-1">
                           {members.length === 0 ? (
-                            <li className="px-2 py-1 text-[11px] text-muted-foreground">
+                            <li className="px-2 py-1 text-[11px] text-faint">
                               暂无知识库
                             </li>
                           ) : null}
@@ -757,40 +760,10 @@ function KnowledgeSelector() {
                   </div>
                 )
               })}
-              {canManageFolders ? (
-                <div className="mt-1 flex items-center gap-1 px-1">
-                  <Input
-                    aria-label="新知识库分类名称"
-                    value={newFolderName}
-                    disabled={creatingFolder}
-                    onChange={(event) => setNewFolderName(event.target.value)}
-                    onKeyDown={(event) => {
-                      if (event.key === "Enter") {
-                        event.preventDefault()
-                        void createKbFolder()
-                      }
-                    }}
-                    placeholder="新分类名称"
-                    className="h-7 min-w-0 flex-1 border px-2"
-                  />
-                  <UiButton
-                    variant="ghost"
-                    size="icon-sm"
-                    type="button"
-                    onClick={() => void createKbFolder()}
-                    disabled={creatingFolder || !newFolderName.trim()}
-                    title="创建知识库分类"
-                    aria-label="创建知识库分类"
-                    className="grid size-6 flex-none place-items-center disabled:opacity-50"
-                  >
-                    <Icon data-icon="inline-start" icon={Plus} />
-                  </UiButton>
-                </div>
-              ) : null}
               {ungrouped.length > 0 ? (
                 <>
                   {folders.length > 0 ? (
-                    <p className="px-3 pt-1.5 text-[10px] text-muted-foreground/60">
+                    <p className="px-3 pt-1.5 text-[10px] text-faint/60">
                       未分类
                     </p>
                   ) : null}
@@ -821,7 +794,7 @@ function KnowledgeSelector() {
               ) : null}
             </>
           )}
-          <p className="px-3 pt-1 text-[10px] leading-relaxed text-muted-foreground/60">
+          <p className="px-3 pt-1 text-[10px] leading-relaxed text-faint/60">
             {selectedIds.length > 0
               ? `新对话将检索选中的 ${selectedIds.length} 个知识库`
               : "未选择时检索默认知识库"}
@@ -839,7 +812,7 @@ function KnowledgeSelector() {
         knowledgeBase={browsingGraph}
         onClose={() => setBrowsingGraph(null)}
       />
-      <Dialog
+      <ConfirmDialog
         open={folderToDelete !== null}
         onClose={() => setFolderToDelete(null)}
         title={
@@ -848,44 +821,30 @@ function KnowledgeSelector() {
             : "删除知识库分类"
         }
         titleId="sidebar-kb-folder-delete-title"
-        icon={Trash2}
-        tier="confirm"
+        confirmLabel="确认删除"
+        confirmDisabled={folderToDelete === null}
+        onConfirm={async () => {
+          if (!folderToDelete) return
+          const target = folderToDelete
+          try {
+            await knowledgeStore.deleteFolder(target.id)
+            showToast(`已删除知识库分类「${target.name}」`)
+          } catch (error) {
+            showToast(folderCommandFailure(error, "分类删除失败"))
+          } finally {
+            setFolderToDelete(null)
+          }
+        }}
       >
-        <div className="flex flex-col gap-2 text-xs leading-relaxed text-muted-foreground">
-          <p>
-            这个分类下有
-            {folderToDelete
-              ? ` ${membersOf(folderToDelete.id).length} `
-              : " 0 "}
-            个知识库。删除分类只解除归组：知识库本身、它们的内容和已选检索范围都不受影响，只是回到未分类。
-          </p>
-          <p>要连文档一起删的是知识库本身或文档分类，这里不会碰它们。</p>
-        </div>
-        <div className="flex justify-end gap-2">
-          <Button size="sm" onClick={() => setFolderToDelete(null)}>
-            取消
-          </Button>
-          <Button
-            size="sm"
-            tone="danger"
-            disabled={folderToDelete === null}
-            onClick={async () => {
-              if (!folderToDelete) return
-              const target = folderToDelete
-              try {
-                await knowledgeStore.deleteFolder(target.id)
-                showToast(`已删除知识库分类「${target.name}」`)
-              } catch (error) {
-                showToast(folderCommandFailure(error, "分类删除失败"))
-              } finally {
-                setFolderToDelete(null)
-              }
-            }}
-          >
-            确认删除
-          </Button>
-        </div>
-      </Dialog>
+        <p>
+          这个分类下有
+          {folderToDelete
+            ? ` ${membersOf(folderToDelete.id).length} `
+            : " 0 "}
+          个知识库。删除分类只解除归组：知识库本身、它们的内容和已选检索范围都不受影响，只是回到未分类。
+        </p>
+        <p>要连文档一起删的是知识库本身或文档分类，这里不会碰它们。</p>
+      </ConfirmDialog>
     </div>
   )
 }
@@ -899,28 +858,19 @@ interface SidebarProps {
 }
 
 /**
- * Ticket 19 (AST-01B): the assistant selector. One assistant runs each new
- * chat; the server resolves prompt/scope/tool/rerank from its stored version.
- * Empty selection = the legacy default path. The list shows the server-side
- * group-visible assistants for this session's role.
+ * Ticket 19 (AST-01B): experts are the stored assistants. One expert's system
+ * prompt shapes each new chat; the server resolves the rest from its stored
+ * version. Empty selection = the legacy default path.
  */
 function AssistantSelector() {
   const { status, assistants, selectedId, error } = useAssistants()
   const { showToast } = useAppShell()
-  const [hovered, setHovered] = useState<number | null>(null)
-  const [focused, setFocused] = useState<number | null>(null)
+  const [open, setOpen] = useState(true)
   useEffect(() => {
     assistantStore.ensureLoaded()
   }, [])
-  // The default entry is row 0 so the highlight has one index space to work in;
-  // it used to be a hand-copied `<li>` above the mapped ones. The server-seeded
-  // default assistant (assistant-default-*) IS that entry — it runs the same
-  // legacy path as the null selection, so mapping it again would paint a second
-  // 默认助手 row. Admin curation (sidebar-visible flag) hides unchecked
-  // assistants; a payload without the flag still shows, matching the
-  // pre-column behavior.
   const rows: { id: string | null; name: string }[] = [
-    { id: null, name: "默认助手" },
+    { id: null, name: "默认专家" },
     ...assistants
       .filter(
         (assistant) =>
@@ -930,96 +880,68 @@ function AssistantSelector() {
       )
       .map((assistant) => ({ id: assistant.id, name: assistant.name })),
   ]
-  const selectedIndex = rows.findIndex((row) => row.id === selectedId)
-  const { registerRow, box } = useSlidingHighlight(
-    hovered ?? focused ?? (selectedIndex >= 0 ? selectedIndex : null),
-  )
+  const options = rows.map((row) => ({
+    value: row.id ?? "__default__",
+    label: row.name,
+  }))
+  const value = selectedId ?? "__default__"
+  const pick = (next: string) => {
+    if (next === value) return
+    const row = rows.find(
+      (candidate) => (candidate.id ?? "__default__") === next,
+    )
+    if (!row) return
+    assistantStore.select(row.id)
+    showToast(row.id === null ? "已切换到默认专家" : `已切换到「${row.name}」`)
+  }
   return (
-    <div className="mt-4">
-      <div className="flex items-center justify-between px-1 text-[11px] font-semibold text-muted-foreground">
-        <span>助手</span>
-      </div>
-      {status === "loading" ||
-      (status === "idle" && assistants.length === 0) ? (
-        <p className="px-3 py-2 text-xs text-muted-foreground/70">
-          正在加载助手…
-        </p>
-      ) : status === "error" ? (
-        <p className="px-3 py-2 text-xs text-danger">助手读取失败</p>
-      ) : (
-        <ul
-          className="relative mt-1 flex flex-col gap-0.5"
-          onPointerLeave={() => setHovered(null)}
+    <div>
+      {/* Sticky, so the fold control survives however far the list scrolls. The
+          fieldset keeps its legend for the accessible name; this is the visible
+          title. */}
+      <div className="sticky top-0 z-20 bg-surface pt-4">
+        <button
+          type="button"
+          onClick={() => setOpen((current) => !current)}
+          aria-expanded={open}
+          aria-controls="expert-picker"
+          title={open ? "折叠专家" : "展开专家"}
+          className="flex h-7 w-full items-center gap-1 pr-1 pl-[3px] text-left text-[0.8rem] font-semibold text-[color:var(--text-secondary)] transition-colors hover:text-ink"
         >
-          {/* Sits behind the row text (`inset-x-0` before `relative z-10` rows) and
-              travels instead of each row repainting its own fill. It only shows once
-              the pointer or the keyboard is actually on the list; at rest it parks on
-              the selected row so the first appearance never slides in from the top. */}
-          <span
-            aria-hidden
-            className="t-row-glider pointer-events-none absolute inset-x-0 rounded-full bg-surface-subtle"
-            style={{
-              top: box?.top ?? 0,
-              height: box?.height ?? 0,
-              opacity: box && (hovered !== null || focused !== null) ? 1 : 0,
-              transition: `top 220ms var(--ease-out), height 220ms var(--ease-out), opacity 150ms var(--ease-out)`,
-            }}
+          <span>专家</span>
+          <Icon
+            icon={ChevronDown}
+            className={cn(
+              "transition-transform duration-200",
+              open && "rotate-180",
+            )}
           />
-          {rows.map((row, index) => {
-            const selected = row.id === selectedId
-            return (
-              <li key={row.id ?? "default"}>
-                <UiButton
-                  variant="ghost"
-                  size="sm"
-                  type="button"
-                  ref={registerRow(index)}
-                  onClick={() => {
-                    // Re-clicking the active row is a no-op — no toast noise.
-                    if (row.id === selectedId) return
-                    assistantStore.select(row.id)
-                    showToast(
-                      row.id === null
-                        ? "已切换到默认助手"
-                        : `已切换到「${row.name}」`,
-                    )
-                  }}
-                  onPointerEnter={() => setHovered(index)}
-                  onFocus={() => setFocused(index)}
-                  onBlur={() =>
-                    setFocused((current) =>
-                      current === index ? null : current,
-                    )
-                  }
-                  title={
-                    row.id === null
-                      ? "使用默认助手（不加任何额外设定）"
-                      : `新对话将由「${row.name}」接答`
-                  }
-                  aria-pressed={selected}
-                  className={cn(
-                    "relative z-10 flex h-8.5 w-full items-center justify-start gap-2 pl-6 pr-3 text-left active:scale-[0.98]",
-                  )}
-                >
-                  <span
-                    className={cn(
-                      "grid size-4 flex-none place-items-center rounded-full border transition-colors",
-                      selected
-                        ? "border-primary"
-                        : "border-line bg-transparent",
-                    )}
-                  >
-                    {selected ? (
-                      <span className="size-2 rounded-full bg-primary" />
-                    ) : null}
-                  </span>
-                  <span className="truncate">{row.name}</span>
-                </UiButton>
-              </li>
-            )
-          })}
-        </ul>
-      )}
+        </button>
+      </div>
+      <div
+        id="expert-picker"
+        className="sidebar-disclosure"
+        data-open={open ? "true" : "false"}
+        inert={!open}
+      >
+        <div>
+          {status === "loading" ||
+          (status === "idle" && assistants.length === 0) ? (
+            <p className="px-3 py-2 text-xs text-faint/70">正在加载专家…</p>
+          ) : status === "error" ? (
+            <p className="px-3 py-2 text-xs text-danger">专家读取失败</p>
+          ) : (
+            <div className="expert-radio">
+              <RadioGroup
+                label="专家"
+                options={options}
+                value={value}
+                onValueChange={pick}
+              />
+            </div>
+          )}
+        </div>
+      </div>
     </div>
   )
 }
@@ -1080,10 +1002,9 @@ function ImportHistoryButton() {
 }
 
 /**
- * A row inside the workspace panel. Deliberately not SidebarButton: that one
- * hard-codes h-8.5 / rounded-[8px] / px-3, and `cn` here is a plain join with no
- * tailwind-merge, so appending `h-8` after `h-8.5` would lose to Tailwind's
- * ascending source order rather than override it.
+ * A workspace action row. Separate from SidebarButton because it carries the
+ * secondary-emphasis row, a right-aligned status marker and a permission-based
+ * disabled state; SidebarButton owns the rail-level disclosure actions.
  */
 function WorkspaceItem({
   icon,
@@ -1101,50 +1022,33 @@ function WorkspaceItem({
   trailing?: React.ReactNode
   disabledReason?: string
 }) {
-  return (
-    <UiButton
-      variant="ghost"
-      size="sm"
-      type="button"
-      disabled={Boolean(disabledReason)}
-      onClick={disabledReason ? undefined : onClick}
-      title={disabledReason ? hint + "（" + disabledReason + "）" : hint}
-      className="flex h-8 w-full items-center justify-start gap-2.5 px-2.5 text-left active:scale-[0.98]"
-    >
-      <Icon data-icon="inline-start" icon={icon} />
-      <span className="min-w-0 truncate">{label}</span>
-      {disabledReason ? (
-        <span className="ml-auto shrink-0 text-[10px] text-muted-foreground">
-          {disabledReason}
-        </span>
-      ) : trailing}
-    </UiButton>
+  const marker = disabledReason ? (
+    <span className="text-[10px] text-faint">{disabledReason}</span>
+  ) : (
+    trailing
   )
-}
-
-/** One raised block in the recessed panel; the shared `aria-labelledby` target. */
-function WorkspaceSection({
-  id,
-  title,
-  children,
-}: {
-  id: string
-  title: string
-  children: React.ReactNode
-}) {
   return (
-    <div
-      role="group"
-      aria-labelledby={id}
-      className="workspace-section rounded-[14px] bg-surface p-0.5"
-    >
-      <p
-        id={id}
-        className="px-3.5 pt-1.5 pb-0.5 text-[10px] font-medium leading-4 text-muted-foreground"
+    <div className="relative w-full">
+      <ArcButton
+        variant="secondary"
+        size="sm"
+        type="button"
+        disabled={Boolean(disabledReason)}
+        onClick={disabledReason ? undefined : onClick}
+        title={disabledReason ? hint + "（" + disabledReason + "）" : hint}
+        className={cn(
+          "w-full justify-start text-left",
+          marker ? "pr-20" : "",
+        )}
       >
-        {title}
-      </p>
-      {children}
+        <Icon data-icon="inline-start" icon={icon} />
+        <span className="min-w-0 truncate">{label}</span>
+      </ArcButton>
+      {marker ? (
+        <span className="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2">
+          {marker}
+        </span>
+      ) : null}
     </div>
   )
 }
@@ -1157,16 +1061,14 @@ function WorkspaceSection({
 function WorkspaceMenu({ collapsed = false }: { collapsed?: boolean }) {
   const {
     openImport,
-    openEvaluation,
     openFeedback,
-    openFaqs,
+    openAssistants,
     activeImportCount,
   } = useAppShell()
   const scopes = useSignedInSession()?.scopes ?? []
   const canIngest = scopes.includes("ingest")
   const canAdmin = scopes.includes("admin")
   const [expanded, setExpanded] = useState(false)
-  const [laboratoryOpen, setLaboratoryOpen] = useState(false)
   const rootRef = useRef<HTMLDivElement>(null)
 
   // The panel is inline, so it only goes away when someone asks for the chat
@@ -1201,6 +1103,7 @@ function WorkspaceMenu({ collapsed = false }: { collapsed?: boolean }) {
       <SidebarButton
         icon={LayoutGrid}
         label="工作区"
+        variant="secondary"
         collapsed={collapsed}
         ariaExpanded={panelOpen}
         ariaControls="workspace-menu"
@@ -1231,104 +1134,83 @@ function WorkspaceMenu({ collapsed = false }: { collapsed?: boolean }) {
         <div>
           <div
             id="workspace-menu"
-            className="mx-1 flex flex-col gap-1 rounded-[20px] border border-line bg-surface-subtle p-1"
+            className="mx-1 flex flex-col gap-2 rounded-[20px] border border-line bg-surface-subtle p-1.5"
           >
-            <WorkspaceSection id="workspace-section-data" title="数据">
-              <WorkspaceItem
-                icon={Upload}
-                label="导入文档"
-                hint="上传文件或网页，切分后写入知识库"
-                disabledReason={canIngest ? undefined : "需导入权限"}
-                onClick={() => openModule(openImport)}
-                trailing={
-                  activeImportCount > 0 ? (
-                    <span
-                      aria-label={`导入中 ${activeImportCount} 项`}
-                      title={`导入中 ${activeImportCount} 项，点击查看`}
-                      className="ml-auto flex-none rounded-full bg-primary px-1.5 py-0.5 text-[10px] font-medium leading-none text-on-primary"
-                    >
-                      {activeImportCount}
-                    </span>
-                  ) : undefined
-                }
-              />
-              <WorkspaceItem
-                icon={BookOpen}
-                label="标准问答"
-                hint="维护版本化 FAQ，逐行导入自动校验"
-                disabledReason={canIngest || canAdmin ? undefined : "需维护权限"}
-                onClick={() => openModule(openFaqs)}
-              />
-            </WorkspaceSection>
-
-            <WorkspaceSection id="workspace-section-analysis" title="分析">
-              <WorkspaceItem
-                icon={FlaskConical}
-                label="检索实验室"
-                hint="单条查询试跑，对比召回与重排的结果"
-                onClick={() => {
-                  openModule(() => setLaboratoryOpen(true))
-                }}
-              />
-              <WorkspaceItem
-                icon={ClipboardCheck}
-                label="运行评测"
-                hint="用数据集批量打分，看答案质量的变化"
-                disabledReason={canAdmin ? undefined : "需管理员权限"}
-                onClick={() => openModule(openEvaluation)}
-              />
-              <WorkspaceItem
-                icon={MessageSquareWarning}
-                label="反馈审阅"
-                hint="处理用户标记出来的坏答案"
-                disabledReason={canAdmin ? undefined : "需管理员权限"}
-                onClick={() => openModule(openFeedback)}
-              />
-            </WorkspaceSection>
+            <WorkspaceItem
+              icon={Upload}
+              label="导入文档"
+              hint="上传文件或网页，切分后写入知识库"
+              disabledReason={canIngest ? undefined : "需导入权限"}
+              onClick={() => openModule(openImport)}
+              trailing={
+                activeImportCount > 0 ? (
+                  <span
+                    aria-label={`导入中 ${activeImportCount} 项`}
+                    title={`导入中 ${activeImportCount} 项，点击查看`}
+                    className="ml-auto flex-none rounded-full bg-accent-subtle px-1.5 py-0.5 text-[10px] font-medium leading-none text-on-primary"
+                  >
+                    {activeImportCount}
+                  </span>
+                ) : undefined
+              }
+            />
+            <WorkspaceItem
+              icon={MessageSquareWarning}
+              label="反馈审阅"
+              hint="处理用户标记出来的坏答案"
+              disabledReason={canAdmin ? undefined : "需管理员权限"}
+              onClick={() => openModule(openFeedback)}
+            />
+            <WorkspaceItem
+              icon={Bot}
+              label="专家"
+              hint="用系统提示词定义回答风格与性格"
+              disabledReason={canAdmin ? undefined : "需管理员权限"}
+              onClick={() => openModule(openAssistants)}
+            />
           </div>
         </div>
       </div>
-      <LaboratoryDialog
-        open={laboratoryOpen}
-        onClose={() => setLaboratoryOpen(false)}
-      />
     </div>
   )
 }
 
 export function Sidebar({ collapsed, isDark, onToggleTheme }: SidebarProps) {
   const { toggleSidebar } = useSidebar()
-  const { openMemory } = useAppShell()
-  const { memories } = useMemoryApi()
   const { threads, activeThreadId } = useConversation()
-  const [chatSearchOpen, setChatSearchOpen] = useState(false)
-  const [chatQuery, setChatQuery] = useState("")
-  const chatSearchInputRef = useRef<HTMLInputElement>(null)
 
   // Ticket 08 (KB-04): load the knowledge-base list once per sign-in.
   useEffect(() => {
     knowledgeStore.ensureLoaded()
   }, [])
 
-  useEffect(() => {
-    if (collapsed) {
-      setChatSearchOpen(false)
-      setChatQuery("")
+  const searchLaneRef = useRef<HTMLDivElement>(null)
+  // Cap the results panel to the space under the field, so it never runs past
+  // the sidebar's bottom edge (and never gives the sidebar scroll of its own).
+  useLayoutEffect(() => {
+    const lane = searchLaneRef.current
+    const recent = lane?.parentElement?.parentElement
+    if (!lane || !recent) return
+    const update = () => {
+      const space = window.innerHeight - lane.getBoundingClientRect().bottom - 24
+      lane.style.setProperty("--es-panel-max", `${Math.max(120, space)}px`)
+    }
+    update()
+    const observer =
+      typeof ResizeObserver === "undefined" ? null : new ResizeObserver(update)
+    observer?.observe(recent)
+    window.addEventListener("resize", update)
+    return () => {
+      observer?.disconnect()
+      window.removeEventListener("resize", update)
     }
   }, [collapsed])
 
-  useEffect(() => {
-    if (!chatSearchOpen) return
-    const frame = requestAnimationFrame(() =>
-      chatSearchInputRef.current?.focus(),
-    )
-    return () => cancelAnimationFrame(frame)
-  }, [chatSearchOpen])
-
-  const visibleThreads = threads.filter((thread) =>
-    thread.title.toLowerCase().includes(chatQuery.trim().toLowerCase()),
+  const searchItems = useMemo(
+    () => threads.map((thread) => ({ id: thread.id, title: thread.title || "新对话" })),
+    [threads],
   )
-  const activeThreadIndex = visibleThreads.findIndex(
+  const activeThreadIndex = threads.findIndex(
     (thread) => thread.id === activeThreadId,
   )
   const { registerRow, box } = useSlidingHighlight(
@@ -1337,7 +1219,7 @@ export function Sidebar({ collapsed, isDark, onToggleTheme }: SidebarProps) {
 
   return (
     <>
-      <ShadcnSidebar collapsible="icon" aria-label="工作区导航">
+      <ShadcnSidebar aria-label="工作区导航">
         <div
           data-collapsed={collapsed ? "true" : "false"}
           className="sidebar-shell flex h-full min-h-0 flex-col overflow-x-hidden px-3 py-3"
@@ -1373,195 +1255,137 @@ export function Sidebar({ collapsed, isDark, onToggleTheme }: SidebarProps) {
             </div>
 
             {/* Primary actions */}
-            <div className="sidebar-primary flex flex-col gap-1">
-              <UiButton
-                variant="ghost"
+            <div className="sidebar-primary flex flex-col gap-2">
+              <ArcButton
+                variant="primary"
                 size="sm"
                 type="button"
                 title={collapsed ? "新建对话" : undefined}
                 onClick={() => conversationStore.newThread()}
                 className={cn(
-                  "flex h-9 w-full items-center gap-2 text-left active:scale-[0.98]",
-                  collapsed ? "justify-center px-0" : "px-3",
-                  "",
+                  "w-full text-left",
+                  collapsed ? "justify-center px-0" : "justify-start",
                 )}
               >
                 <Icon data-icon="inline-start" icon={Plus} />
                 <span className="sidebar-copy min-w-0 truncate">新建对话</span>
-              </UiButton>
+              </ArcButton>
               <WorkspaceMenu collapsed={collapsed} />
-              <SidebarButton
-                icon={{ from: Moon, to: Sun, at: isDark }}
+              <ThemeSwitch
+                theme={isDark ? "dark" : "light"}
                 label={isDark ? "切换浅色模式" : "切换深色模式"}
-                onClick={onToggleTheme}
-                collapsed={collapsed}
+                text={isDark ? "切换浅色模式" : "切换深色模式"}
+                iconOnly={collapsed}
+                onThemeChange={() => onToggleTheme()}
+                className={cn(
+                  collapsed ? "mx-auto" : "w-full justify-start",
+                )}
               />
             </div>
 
             {/* Ticket 08 (KB-04): workspace knowledge-base selector */}
-            <div className="sidebar-module">
+            <div className="sidebar-module sidebar-module-scroll sidebar-module-shrink">
               <KnowledgeSelector />
             </div>
 
-            {/* Ticket 19 (AST-01B): the assistant selector for new chats */}
-            <div className="sidebar-module">
+            {/* Ticket 19 (AST-01B): the expert selector for new chats. The
+                bottom padding keeps the selected row's border off the module's
+                scroll edge — flush against it, fractional font metrics clip
+                the 1px bottom border at non-100% display scaling. */}
+            <div className="sidebar-module sidebar-module-scroll pb-0.5">
               <AssistantSelector />
             </div>
 
             {/* Recent chats */}
             <div
               className={cn(
-                "sidebar-recent scrollbar-hidden mt-4 min-h-0 flex-1 overflow-x-hidden overflow-y-auto",
+                "sidebar-recent mt-4 flex min-h-0 flex-1 flex-col",
                 collapsed && "mt-3",
               )}
             >
+              {/* The search lane lives outside the list's scroll box: the
+                  results panel is absolutely positioned under the field and
+                  must not be clipped by the list. */}
               <div
                 className={cn(
-                  "sidebar-search-row relative mb-1 h-8",
+                  "sidebar-search-row relative mb-1 h-9 shrink-0",
                   collapsed && "justify-center",
                 )}
               >
-                <span className="sidebar-copy sidebar-search-label absolute inset-0 flex items-center px-1 text-[11px] font-semibold text-muted-foreground">
+                <span className="sidebar-copy sidebar-search-label absolute inset-0 flex items-center px-1 font-semibold">
                   最近对话
                 </span>
                 {!collapsed ? (
-                  <div className="absolute inset-y-0 right-0 flex items-center gap-1">
-                    {threads.length > 0 ? <ImportHistoryButton /> : null}
-                    <UiButton
-                      variant="ghost"
-                      size="icon-sm"
-                      type="button"
-                      aria-label={
-                        chatSearchOpen ? "关闭历史搜索" : "搜索历史对话"
-                      }
-                      title={chatSearchOpen ? "关闭历史搜索" : "搜索历史对话"}
-                      onClick={() => {
-                        setChatSearchOpen((current) => !current)
-                        if (chatSearchOpen) setChatQuery("")
-                      }}
-                      className="grid size-7 place-items-center active:scale-[0.96]"
+                  <>
+                    {threads.length > 0 ? (
+                      <div className="absolute inset-y-0 right-12 flex items-center">
+                        <ImportHistoryButton />
+                      </div>
+                    ) : null}
+                    {/* Above the thread rows (z-10): the results panel has to
+                        paint over the list it overlaps, not under it. */}
+                    <div
+                      ref={searchLaneRef}
+                      className="sidebar-search-lane pointer-events-none absolute inset-0 z-20"
                     >
-                      {chatSearchOpen ? (
-                        <Icon data-icon="inline-start" icon={X} />
-                      ) : (
-                        <Icon data-icon="inline-start" icon={Search} />
-                      )}
-                    </UiButton>
-                  </div>
+                      <ExpandingSearch
+                        label="搜索历史对话"
+                        placeholder="搜索对话"
+                        items={searchItems}
+                        onSelect={(item) =>
+                          conversationStore.switchThread(item.id)
+                        }
+                        emptyTitle="没有找到“{query}”的对话"
+                        emptyHint="换个关键词，或直接新建对话。"
+                      />
+                    </div>
+                  </>
                 ) : (
                   <UiButton
                     variant="ghost"
                     size="sm"
                     type="button"
-                    aria-label="展开侧栏并搜索历史对话"
-                    title="展开侧栏并搜索历史对话"
-                    onClick={() => {
-                      conversationStore.toggleSidebar()
-                      setChatSearchOpen(true)
-                    }}
+                    aria-label="展开侧栏"
+                    title="展开侧栏"
+                    onClick={() => conversationStore.toggleSidebar()}
                     className="absolute inset-0 grid place-items-center active:scale-[0.96]"
                   >
                     <Icon data-icon="inline-start" icon={Search} />
                   </UiButton>
                 )}
-                <div
-                  className={cn(
-                    "sidebar-search-field absolute inset-y-0 right-0 flex items-center gap-1.5 rounded-[8px] bg-surface-subtle px-2 text-muted-foreground",
-                    chatSearchOpen && "sidebar-search-field-open",
-                  )}
-                >
-                  <div className="min-w-0 flex-1">
-                    <SearchField
-                      ref={chatSearchInputRef}
-                      value={chatQuery}
-                      onValueChange={setChatQuery}
-                      onKeyDown={(event) => {
-                        if (event.key === "Escape") {
-                          setChatSearchOpen(false)
-                          setChatQuery("")
-                        }
-                      }}
-                      placeholder="搜索对话"
-                      aria-label="搜索历史对话"
-                      clearLabel="清空历史搜索"
-                      tabIndex={chatSearchOpen && !collapsed ? 0 : -1}
-                    />
-                  </div>
-                  <UiButton
-                    variant="ghost"
-                    size="icon-sm"
-                    type="button"
-                    aria-label="关闭历史搜索"
-                    tabIndex={chatSearchOpen && !collapsed ? 0 : -1}
-                    onClick={() => {
-                      setChatSearchOpen(false)
-                      setChatQuery("")
+              </div>
+              <div className="scrollbar-hidden min-h-0 flex-1 overflow-x-hidden overflow-y-auto">
+                <div className="relative flex flex-col gap-0.5">
+                  <span
+                    aria-hidden
+                    className="t-row-glider pointer-events-none absolute inset-x-0 rounded-[8px] bg-surface-subtle"
+                    style={{
+                      top: box?.top ?? 0,
+                      height: box?.height ?? 0,
+                      opacity: box ? 1 : 0,
+                      transition:
+                        "top 220ms var(--ease-out), height 220ms var(--ease-out), opacity 150ms var(--ease-out)",
                     }}
-                    className="grid size-6 shrink-0 place-items-center"
-                  >
-                    <Icon data-icon="inline-start" icon={X} />
-                  </UiButton>
-                </div>
-              </div>
-              <div className="relative flex flex-col gap-0.5">
-                <span
-                  aria-hidden
-                  className="t-row-glider pointer-events-none absolute inset-x-0 rounded-[8px] bg-surface-subtle"
-                  style={{
-                    top: box?.top ?? 0,
-                    height: box?.height ?? 0,
-                    opacity: box ? 1 : 0,
-                    transition:
-                      "top 220ms var(--ease-out), height 220ms var(--ease-out), opacity 150ms var(--ease-out)",
-                  }}
-                />
-                {visibleThreads.length === 0 ? (
-                  <p className="sidebar-copy px-2.5 py-2 text-xs text-muted-foreground/70">
-                    {chatQuery ? "没有匹配的对话" : "暂无历史对话"}
-                  </p>
-                ) : collapsed ? null : (
-                  visibleThreads.map((thread, index) => (
-                    <ThreadRow
-                      key={thread.id}
-                      id={thread.id}
-                      title={thread.title}
-                      active={thread.id === activeThreadId}
-                      collapsed={collapsed}
-                      index={index}
-                      registerRow={registerRow}
-                    />
-                  ))
-                )}
-              </div>
-            </div>
-
-            {/* Utility zone */}
-            <div className="mt-3 flex flex-col gap-1 border-t border-line pt-2">
-              <UiButton
-                variant="ghost"
-                size="sm"
-                type="button"
-                onClick={openMemory}
-                title="查看并管理会话记忆"
-                className={cn(
-                  "flex h-8.5 w-full items-center px-3",
-                  collapsed ? "justify-center px-0" : "justify-between",
-                )}
-              >
-                <div className="flex items-center gap-2">
-                  <Icon
-                    data-icon="inline-start"
-                    icon={Brain}
-                    className=" text-muted-foreground"
                   />
-                  <span className="sidebar-copy min-w-0 truncate">
-                    上下文记忆
-                  </span>
+                  {threads.length === 0 ? (
+                    <p className="sidebar-copy px-2.5 py-2 text-xs text-faint/70">
+                      暂无历史对话
+                    </p>
+                  ) : collapsed ? null : (
+                    threads.map((thread, index) => (
+                      <ThreadRow
+                        key={thread.id}
+                        id={thread.id}
+                        title={thread.title}
+                        active={thread.id === activeThreadId}
+                        collapsed={collapsed}
+                        index={index}
+                        registerRow={registerRow}
+                      />
+                    ))
+                  )}
                 </div>
-                <span className="sidebar-copy rounded-full border border-line bg-surface-subtle px-2 py-0.5 font-mono text-[10px] font-medium text-muted-foreground">
-                  {memories.length} 条
-                </span>
-              </UiButton>
+              </div>
             </div>
           </div>
         </div>

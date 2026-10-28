@@ -48,6 +48,16 @@ const file = (name: string, content: string | Buffer, mimeType?: string) => ({
   content: Buffer.isBuffer(content) ? content : Buffer.from(content, "utf8"),
 })
 
+/** Background extraction settles after the upload; poll the row like a client. */
+async function waitFor(check: () => boolean, timeoutMs = 1_000): Promise<void> {
+  const started = Date.now()
+  while (Date.now() - started < timeoutMs) {
+    if (check()) return
+    await new Promise((resolve) => setTimeout(resolve, 10))
+  }
+  throw new Error("condition was not met in time")
+}
+
 test("limits: five files, 20 MB each and 50 MB per session, reported per file", async () => {
   const { service } = buildService()
 
@@ -90,11 +100,49 @@ test("limits: five files, 20 MB each and 50 MB per session, reported per file", 
 
   // Unsupported types and empty files are refused with their own reason.
   const types = await service.submit("sess-types", "t1", "alice", [
-    file("scan.pdf", "%PDF-1.4"),
+    file("archive.zip", Buffer.from("PK\u0003\u0004")),
     file("empty.txt", ""),
   ])
   assert.equal(!types[0].ok && types[0].error.kind, "unsupported_type")
   assert.equal(!types[1].ok && types[1].error.kind, "empty")
+})
+
+test("a binary document is extracted through the import parser in the background", async () => {
+  const db = openDb(":memory:")
+  const lifecycle = createIngestionLifecycle(db, { stageRunner: fakeStageRunner(), activationMode: "auto" })
+  const service = new SessionAttachmentService(db, {
+    lifecycle,
+    // The same seam the import pipeline injects — no external executable runs.
+    parserFor: () => ({
+      type: "builtin-pdf" as const,
+      parse: async () => [
+        {
+          id: "block-1",
+          index: 0,
+          type: "paragraph" as const,
+          text: "扫描件正文：退款将在三个工作日内原路退回。",
+          sectionPath: [],
+          metadata: {},
+          provenance: { parser: "builtin-pdf" as const, adapter: "script" as const },
+        },
+      ],
+    }),
+  })
+
+  const [outcome] = await service.submit("sess-pdf", "t1", "alice", [
+    file("scan.pdf", Buffer.from("%PDF-1.4")),
+  ])
+  assert.equal(outcome.ok, true)
+  // The upload does not wait for the parser; the row is observable as parsing.
+  assert.equal(outcome.ok && outcome.attachment.status, "parsing")
+  const attachmentId = outcome.ok ? outcome.attachment.id : ""
+  await waitFor(() => service.get(attachmentId, "sess-pdf", "t1", "alice")?.status === "ready")
+
+  const hits = await service.search({
+    sessionId: "sess-pdf", tenantId: "t1", subjectId: "alice", query: "退款", limit: 20,
+  })
+  assert.ok(hits.length >= 1)
+  assert.match(hits[0].chunk.content, /退款/)
 })
 
 test("isolation: a session only ever sees its own attachments", async () => {

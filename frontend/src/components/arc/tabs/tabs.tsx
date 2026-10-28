@@ -10,10 +10,10 @@ import { motionTokens } from "../lib/motion-tokens";
 import styles from "./tabs.module.css";
 
 type RootProps = ComponentPropsWithoutRef<typeof TabsPrimitive.Root>;
-/** `direction` is +1 when the new tab sits after the old one; `panelHeightRef` holds the visible panel height so the next panel can morph from it; `leavingRectRef` pins the outgoing panel where it was on screen. */
-const TabsContext = createContext<{ active: string; layoutId: string; direction: number; panelHeightRef: RefObject<number | null>; leavingRectRef: RefObject<DOMRect | null> }>({ active: "", layoutId: "tabs", direction: 1, panelHeightRef: { current: null }, leavingRectRef: { current: null } });
+/** `panelMotion` selects the panel transition: `slide` keeps the original directional slide, `morph` crossfades with a small blur (the confirm-morph face change). */
+const TabsContext = createContext<{ active: string; layoutId: string; direction: number; panelMotion: "slide" | "morph"; panelHeightRef: RefObject<number | null>; leavingRectRef: RefObject<DOMRect | null> }>({ active: "", layoutId: "tabs", direction: 1, panelMotion: "slide", panelHeightRef: { current: null }, leavingRectRef: { current: null } });
 
-export function Tabs({ value, defaultValue, onValueChange, className, ...props }: RootProps) {
+export function Tabs({ value, defaultValue, onValueChange, className, panelMotion = "slide", ...props }: RootProps & { panelMotion?: "slide" | "morph" }) {
   const [internal, setInternal] = useState(defaultValue ?? "");
   const [direction, setDirection] = useState(1);
   const active = value ?? internal;
@@ -29,7 +29,7 @@ export function Tabs({ value, defaultValue, onValueChange, className, ...props }
     if (from >= 0 && to >= 0 && from !== to) setDirection(to > from ? 1 : -1);
     if (value === undefined) setInternal(next); onValueChange?.(next);
   }
-  return <TabsContext.Provider value={{ active, layoutId, direction, panelHeightRef, leavingRectRef }}><LayoutGroup id={layoutId}><TabsPrimitive.Root {...props} ref={root} className={[styles.root, className].filter(Boolean).join(" ")} value={active} onValueChange={handleChange}/></LayoutGroup></TabsContext.Provider>;
+  return <TabsContext.Provider value={{ active, layoutId, direction, panelMotion, panelHeightRef, leavingRectRef }}><LayoutGroup id={layoutId}><TabsPrimitive.Root {...props} ref={root} className={[styles.root, className].filter(Boolean).join(" ")} value={active} onValueChange={handleChange}/></LayoutGroup></TabsContext.Provider>;
 }
 
 export function TabsList({ className, ...props }: ComponentPropsWithoutRef<typeof TabsPrimitive.List>) {
@@ -104,8 +104,22 @@ const panelFade: Variants = {
   exit: { opacity: 0, x: 0, transition: { duration: .1 } },
 };
 
+/** The confirm-morph face change applied to a panel: no travel, just a blur that clears as the incoming content lands. */
+const panelMorph: Variants = {
+  enter: { opacity: 0, y: 4, filter: `blur(${motionTokens.blur.soft}px)` },
+  center: {
+    opacity: 1, y: 0, filter: "blur(0px)",
+    transition: {
+      opacity: { duration: .26, ease: [...motionTokens.ease.enter] },
+      filter: { duration: .3, ease: [...motionTokens.ease.enter] },
+      y: motionTokens.spring.smooth,
+    },
+  },
+  exit: { opacity: 0, filter: `blur(${motionTokens.blur.subtle}px)`, transition: { duration: motionTokens.duration.instant, ease: [...motionTokens.ease.standard] } },
+};
+
 export function TabsContent({ className, value, forceMount, children, ...props }: ComponentPropsWithoutRef<typeof TabsPrimitive.Content>) {
-  const { active, direction, panelHeightRef, leavingRectRef } = useContext(TabsContext);
+  const { active, direction, panelMotion: panelTransition, panelHeightRef, leavingRectRef } = useContext(TabsContext);
   const reduced = useReducedMotion();
   const panel = useRef<HTMLDivElement>(null);
   const selected = active === value;
@@ -133,7 +147,7 @@ export function TabsContent({ className, value, forceMount, children, ...props }
   if (forceMount) return <TabsPrimitive.Content {...props} value={value} forceMount className={classes}>{children}</TabsPrimitive.Content>;
   return <AnimatePresence initial={false} mode="popLayout" custom={direction}>
     {selected && <TabsPrimitive.Content {...props} key={value} value={value} forceMount asChild>
-      <motion.div ref={panel} className={classes} custom={direction} variants={reduced ? panelFade : panelMotion} initial="enter" animate="center" exit="exit">{children}</motion.div>
+      <motion.div ref={panel} className={classes} custom={direction} variants={reduced ? panelFade : panelTransition === "morph" ? panelMorph : panelMotion} initial="enter" animate="center" exit="exit">{children}</motion.div>
     </TabsPrimitive.Content>}
   </AnimatePresence>;
 }

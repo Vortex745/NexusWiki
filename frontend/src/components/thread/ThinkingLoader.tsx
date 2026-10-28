@@ -107,7 +107,7 @@ export function ThinkingLoader({
       </span>
       <span
         aria-hidden
-        className="font-mono text-xs text-muted-foreground tabular-nums"
+        className="font-mono text-xs text-faint tabular-nums"
       >
         {elapsed}
       </span>

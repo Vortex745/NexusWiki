@@ -1,4 +1,4 @@
-import { Button as UiButton } from "@/components/primitives/button"
+import { Button as UiButton } from "@/components/ui/Button"
 import { useMemo } from "react"
 import ReactMarkdown from "react-markdown"
 import remarkGfm from "remark-gfm"

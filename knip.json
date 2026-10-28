@@ -8,8 +8,12 @@
     "frontend/src/**/*.test.ts",
     "scripts/**/*.ts"
   ],
-  "project": ["src/**/*", "frontend/src/**/*", "scripts/**/*"],
-  "ignoreDependencies": ["lucide"],
+  "project": [
+    "src/**/*",
+    "frontend/src/**/*",
+    "scripts/**/*"
+  ],
+  "ignoreDependencies": [],
   "ignore": [
     "src/api/models.ts",
     "src/mastra/stop_conditions.ts",

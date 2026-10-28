@@ -27,6 +27,7 @@ export interface DialogContentProps extends ComponentPropsWithoutRef<typeof Dial
   titleId?: string;
   description?: string;
   closeLabel?: string;
+  headerStyle?: CSSProperties;
   bodyStyle?: CSSProperties;
   children: ReactNode;
 }
@@ -42,7 +43,7 @@ function SwapText({ text }: { text: string }) {
   </AnimatePresence>;
 }
 
-export function DialogContent({ title, titleId, description, closeLabel = "Close dialog", bodyStyle, children, className, onPointerDownOutside, ...props }: DialogContentProps) {
+export function DialogContent({ title, titleId, description, closeLabel = "Close dialog", headerStyle, bodyStyle, children, className, onPointerDownOutside, ...props }: DialogContentProps) {
   const open = useContext(OpenContext);
   const reduced = useReducedMotion();
   // When the open state last changed. Radix waits for the click before treating a press as outside, and a press on the trigger
@@ -55,7 +56,7 @@ export function DialogContent({ title, titleId, description, closeLabel = "Close
   };
   const classes = [styles.content, className].filter(Boolean).join(" ");
   const inner = <>
-    <div className={styles.header}><div><DialogPrimitive.Title id={titleId} className={styles.title}><SwapText text={title}/></DialogPrimitive.Title>{description ? <DialogPrimitive.Description className={styles.description}><SwapText text={description}/></DialogPrimitive.Description> : null}</div><DialogPrimitive.Close className={styles.close} aria-label={closeLabel}><X size={16} strokeWidth={1.75} aria-hidden="true"/></DialogPrimitive.Close></div>
+    <div className={styles.header} style={headerStyle}><div><DialogPrimitive.Title id={titleId} className={styles.title}><SwapText text={title}/></DialogPrimitive.Title>{description ? <DialogPrimitive.Description className={styles.description}><SwapText text={description}/></DialogPrimitive.Description> : null}</div><DialogPrimitive.Close className={styles.close} aria-label={closeLabel}><X size={16} strokeWidth={1.75} aria-hidden="true"/></DialogPrimitive.Close></div>
     <div className={styles.body} style={bodyStyle}>{children}</div>
   </>;
   // Under a bare Radix root the open state is unknown here, so CSS keyframes keyed off data-state animate the layers instead.

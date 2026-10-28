@@ -31,6 +31,10 @@ import {
   SqliteCandidateReviewStore,
   type ReviewResult,
 } from "./candidate_review_store"
+import {
+  ACTIVATION_POLICY_VERSION,
+  ACTIVATION_WARNING_OCR_CONTENT_UNVERIFIED,
+} from "../ingestion/activation_gate"
 
 interface SetupDocArgs {
   docId: string
@@ -566,6 +570,54 @@ test("C4: an approval hands its trace to the wiki job it enqueues", () => {
       trace_span_id: trace.spanId,
       trace_sampled: 1,
     }, "the wiki job continues the reviewing request")
+  } finally {
+    db.close()
+  }
+})
+
+test("OCR 软提示：人工批准与自动路径记录同一接受事实", () => {
+  const db = openDb(":memory:")
+  try {
+    setupDoc(db, {
+      docId: "doc-ocr-approve",
+      sourceId: "src-ocr-approve",
+      candidateState: "pending_review",
+      activationOrder: 1,
+    })
+    db.prepare(
+      "UPDATE documents SET candidate_evidence = ? WHERE doc_id = ?"
+    ).run(
+      JSON.stringify({
+        schemaVersion: 1,
+        contentProof: {
+          verdict: "pending_review",
+          reasonCodes: [ACTIVATION_WARNING_OCR_CONTENT_UNVERIFIED],
+          bindings: { expectedChunksSha256: "digest-ocr-approve", expectedChunkCount: 1 },
+        },
+        indexProof: {
+          verdict: "pass",
+          reasonCodes: [],
+          manifestSha256: "digest-ocr-approve",
+          searchVisibleCount: 1,
+        },
+      }),
+      "doc-ocr-approve"
+    )
+
+    const repo = new DocumentRepo(db)
+    const store = new SqliteCandidateReviewStore(db, repo)
+    const result = store.review("doc-ocr-approve", "default", "approve", "业务批准", "reviewer-1")
+
+    assert.equal(result?.activatedAsActive, true, "唯一软提示且索引通过 → 批准即可激活")
+    assert.equal(getActiveDocId(db, "src-ocr-approve"), "doc-ocr-approve")
+    const acceptance = repo.getActivationAcceptance("doc-ocr-approve")
+    assert.equal(acceptance?.policyVersion, ACTIVATION_POLICY_VERSION)
+    assert.deepEqual(acceptance?.warningCodes, [ACTIVATION_WARNING_OCR_CONTENT_UNVERIFIED])
+    assert.equal(acceptance?.expectedChunksSha256, "digest-ocr-approve")
+    const evidence = repo.getCandidateEvidence("doc-ocr-approve") as {
+      contentProof: { verdict: string }
+    }
+    assert.equal(evidence.contentProof.verdict, "pending_review", "批准不伪造内容 pass")
   } finally {
     db.close()
   }

@@ -12,7 +12,9 @@
   --neutral-9: oklch(34% 0 0);
   --neutral-10: oklch(23% 0 0);
   --neutral-11: oklch(15% 0 0);
-  --background: var(--neutral-0);
+  /* App canvas sits a hair below pure white, so white cards, menus and the
+     sidebar still read as raised against it. */
+  --background: #fcfcfc;
   --surface: var(--neutral-0);
   --surface-raised: var(--neutral-0);
   --surface-muted: var(--neutral-2);

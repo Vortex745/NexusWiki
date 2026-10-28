@@ -10,10 +10,9 @@ import type { RetrievalScope } from "../types/retrieval_scope"
 
 /**
  * Ticket 14 (RET-01): the ONE HTTP mapping for the server-side knowledge-scope
- * resolution — chat (ticket 05) and the retrieval-debug run (this ticket) must
- * answer identically: 404 for an unknown or cross-tenant id, 409 for an
- * archived base, 400 for a malformed selection. Returns the resolved scope, or
- * null when the error response has been sent.
+ * resolution — every caller must answer identically: 404 for an unknown or
+ * cross-tenant id, 409 for an archived base, 400 for a malformed selection.
+ * Returns the resolved scope, or null when the error response has been sent.
  */
 export function resolveScopeOrRespond(
   res: Response,

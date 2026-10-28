@@ -17,13 +17,13 @@ export default defineConfig({
     },
   },
   server: {
-    port: 3000,
+    port: Number(process.env.VITE_PORT ?? 3000),
     strictPort: false,
     proxy: {
       // 127.0.0.1, not "localhost": Node resolves localhost to ::1 first and
       // the proxy then hangs against the IPv4-only backend (UT-31 finding).
       "/api": {
-        target: "http://127.0.0.1:3001",
+        target: process.env.API_PROXY_TARGET ?? "http://127.0.0.1:3001",
         changeOrigin: true,
       },
     },

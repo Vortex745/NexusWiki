@@ -2,24 +2,22 @@ import {
   Collapsible,
   CollapsibleTrigger,
   CollapsibleContent,
-} from "../primitives/collapsible"
-import { Button as DisclosureButton } from "../primitives/button"
-import { Tabs, TabsList, TabsTrigger } from "../primitives/tabs"
-import { Switch } from "../primitives/switch"
-import { Field as FormField, FieldLabel } from "@/components/primitives/field"
-import { Button as UiButton } from "@/components/primitives/button"
-import { Alert, AlertDescription } from "@/components/primitives/alert"
-import { Textarea } from "@/components/primitives/textarea"
-import { Input } from "@/components/primitives/input"
+} from "../ui/collapsible"
+import { Button as DisclosureButton } from "../ui/Button"
+import { Tabs, TabsList, TabsTrigger } from "../arc/tabs/tabs"
+import { Switch } from "../arc/switch/switch"
+import { Field as FormField, FieldLabel } from "@/components/ui/field"
+import { Button as UiButton } from "@/components/ui/Button"
+import { Alert } from "@/components/arc/alert/alert"
+import { Textarea } from "@/components/arc/textarea/textarea"
+import { Input } from "@/components/arc/input/input"
 import { SearchField } from "../arc/search-field/search-field"
-import { PanelDialog } from "../ui/Dialog"
-import { DialogTitle } from "../primitives/dialog"
+import { ConfirmDialog, PanelDialog } from "../ui/Dialog"
 import { useCallback, useEffect, useRef, useState } from "react"
 import ReactMarkdown from "react-markdown"
 import remarkGfm from "remark-gfm"
 import {
   Archive,
-  BookOpen,
   Check,
   ChevronLeft,
   ChevronRight,
@@ -31,7 +29,6 @@ import {
   X,
 } from "../ui/icons"
 import { Icon } from "../ui/Icon"
-import { Dialog } from "../ui/Dialog"
 import { Button, Select, TextInput } from "../ui/Controls"
 import { useAppShell } from "../../runtime/AppShellContext"
 import {
@@ -56,7 +53,7 @@ const TABS: Array<{ id: View; label: string }> = [
 ]
 
 const iconButton =
-  "grid size-8 flex-none place-items-center rounded-md text-muted-foreground hover:bg-surface-subtle hover:text-ink disabled:opacity-40"
+  "grid size-8 flex-none place-items-center rounded-md text-faint hover:bg-surface-subtle hover:text-ink disabled:opacity-40"
 const command =
   "inline-flex h-8 items-center gap-1.5 rounded-md border border-line px-2.5 text-xs text-ink hover:bg-surface-subtle disabled:opacity-40"
 const field =
@@ -313,15 +310,12 @@ export function WikiDialog({
       open={open}
       onClose={onClose}
       titleId="wiki-title"
-      className="flex flex-col sm:max-w-6xl"
+      title={`${knowledgeBase?.name ?? "知识库"} / Wiki`}
+      className="sm:max-w-6xl"
     >
-      <header className="flex min-h-14 flex-none items-center gap-3 border-b border-line px-4">
-        <Icon icon={BookOpen} className="size-4 text-brand" />
-        <DialogTitle id="wiki-title" className="min-w-0 flex-1 truncate">
-          {knowledgeBase?.name ?? "知识库"} / Wiki
-        </DialogTitle>
+      <div className="flex min-h-12 flex-none items-center justify-end gap-3 border-b border-line px-4">
         {canAdmin ? (
-          <label className="flex cursor-pointer items-center gap-2 text-xs text-muted-foreground">
+          <label className="flex cursor-pointer items-center gap-2 text-xs text-faint">
             <Switch
               checked={enabled}
               disabled={busy || !kbId}
@@ -347,55 +341,33 @@ export function WikiDialog({
         >
           <Icon data-icon="inline-start" icon={RefreshCw} />
         </UiButton>
-        <UiButton
-          variant="ghost"
-          size="sm"
-          type="button"
-          className={iconButton}
-          title="关闭"
-          aria-label="关闭"
-          onClick={onClose}
-        >
-          <Icon data-icon="inline-start" icon={X} />
-        </UiButton>
-      </header>
+      </div>
 
       {/* Folder rename replaces the OS prompt (unstylable, no transition): the
           nested confirm-tier dialog gets the shared top-layer transitions. */}
-      <Dialog
+      <ConfirmDialog
         open={renaming !== null}
         onClose={() => setRenaming(null)}
         title="重命名目录"
         titleId="wiki-folder-rename-title"
-        icon={Pencil}
-        tier="confirm"
+        confirmLabel="重命名"
+        confirmTone="primary"
+        onConfirm={() => commitRename()}
+        busy={busy}
+        confirmDisabled={!renameValue.trim()}
       >
-        <div className="flex flex-col gap-2 text-xs leading-relaxed text-muted-foreground">
-          <TextInput
-            value={renameValue}
-            maxLength={64}
-            aria-label="目录名称"
-            placeholder="目录名称"
-            onChange={(event) => setRenameValue(event.target.value)}
-            onKeyDown={(event) => {
-              if (event.key === "Enter") commitRename()
-            }}
-          />
-          <p>输入新的目录名称，子目录与页面归属保持不变。</p>
-        </div>
-        <div className="flex justify-end gap-2">
-          <Button size="sm" disabled={busy} onClick={() => setRenaming(null)}>
-            取消
-          </Button>
-          <Button
-            size="sm"
-            disabled={busy || !renameValue.trim()}
-            onClick={() => commitRename()}
-          >
-            重命名
-          </Button>
-        </div>
-      </Dialog>
+        <TextInput
+          value={renameValue}
+          maxLength={64}
+          aria-label="目录名称"
+          placeholder="目录名称"
+          onChange={(event) => setRenameValue(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === "Enter") commitRename()
+          }}
+        />
+        <p>输入新的目录名称，子目录与页面归属保持不变。</p>
+      </ConfirmDialog>
 
       <Tabs
         value={view}
@@ -416,12 +388,10 @@ export function WikiDialog({
         </TabsList>
       </Tabs>
       {error ? (
-        <Alert
-          variant="destructive"
-          role="alert"
+        <Alert tone="danger" title="发生错误"
           className="border-b px-4 py-2"
         >
-          <AlertDescription>{error}</AlertDescription>
+          {error}
         </Alert>
       ) : null}
 
@@ -459,7 +429,7 @@ export function WikiDialog({
               </UiButton>
             </form>
             {busy ? (
-              <p role="status" className="text-xs text-muted-foreground">
+              <p role="status" className="text-xs text-faint">
                 处理中
               </p>
             ) : null}
@@ -471,7 +441,7 @@ export function WikiDialog({
               </div>
             ) : null}
             {agentCalls.length ? (
-              <ul className="divide-y divide-line text-xs text-muted-foreground">
+              <ul className="divide-y divide-line text-xs text-faint">
                 {agentCalls.map((call, index) => (
                   <li key={index} className="flex justify-between py-2">
                     <span>{call.tool}</span>
@@ -523,11 +493,11 @@ export function WikiDialog({
             </div>
             <div className="min-h-0 flex-1 overflow-y-auto p-2">
               {pagesLoading ? (
-                <p role="status" className="p-3 text-xs text-muted-foreground">
+                <p role="status" className="p-3 text-xs text-faint">
                   加载中
                 </p>
               ) : pages.length === 0 ? (
-                <p className="p-3 text-xs text-muted-foreground">暂无页面</p>
+                <p className="p-3 text-xs text-faint">暂无页面</p>
               ) : null}
               {published.map((page) => (
                 <UiButton
@@ -541,14 +511,14 @@ export function WikiDialog({
                   <span className="w-full truncate text-xs font-medium">
                     {page.title}
                   </span>
-                  <span className="mt-0.5 w-full truncate text-[11px] text-muted-foreground">
+                  <span className="mt-0.5 w-full truncate text-[11px] text-faint">
                     {page.pageType} · v{page.version} · {page.sourceRefs.length}{" "}
                     来源
                   </span>
                 </UiButton>
               ))}
               {archived.length ? (
-                <p className="px-2.5 py-2 text-[11px] text-muted-foreground">
+                <p className="px-2.5 py-2 text-[11px] text-faint">
                   未发布 / 已归档
                 </p>
               ) : null}
@@ -565,7 +535,7 @@ export function WikiDialog({
                 </UiButton>
               ))}
             </div>
-            <div className="flex h-11 flex-none items-center justify-between border-t border-line px-3 text-xs text-muted-foreground">
+            <div className="flex h-11 flex-none items-center justify-between border-t border-line px-3 text-xs text-faint">
               <span>
                 {total
                   ? `${offset + 1}-${Math.min(offset + 50, total)} / ${total}`
@@ -686,7 +656,7 @@ export function WikiDialog({
                     <h3 className="break-words text-lg font-semibold">
                       {selected.title}
                     </h3>
-                    <p className="mt-1 break-all text-[11px] text-muted-foreground">
+                    <p className="mt-1 break-all text-[11px] text-faint">
                       {selected.slug} · v{selected.version} · {selected.status}
                     </p>
                   </div>
@@ -742,7 +712,7 @@ export function WikiDialog({
                         合并更新
                       </UiButton>
                     </div>
-                    <p className="mt-1 text-muted-foreground">
+                    <p className="mt-1 text-faint">
                       {proposal.sourceRefs.length} 份来源 ·{" "}
                       {proposal.chunkRefs.length} 个切片
                     </p>
@@ -817,13 +787,13 @@ export function WikiDialog({
                         </span>
                       </UiButton>
                     ))}
-                    <span className="self-center text-[11px] text-muted-foreground">
+                    <span className="self-center text-[11px] text-faint">
                       {selected.chunkRefs.length} 个引用切片
                     </span>
                   </div>
                   <FormField className="mt-4 flex flex-wrap items-center gap-2">
                     <FieldLabel
-                      className="text-xs text-muted-foreground"
+                      className="text-xs text-faint"
                       htmlFor="wiki-page-folder"
                     >
                       目录
@@ -863,7 +833,7 @@ export function WikiDialog({
                           key={revision.version}
                           className="flex items-center gap-2 py-1"
                         >
-                          <span className="flex-1 text-muted-foreground">
+                          <span className="flex-1 text-faint">
                             v{revision.version} · {revision.editSource} ·{" "}
                             {new Date(revision.createdAt).toLocaleString()}
                           </span>
@@ -928,7 +898,7 @@ export function WikiDialog({
                 ) : null}
               </article>
             ) : (
-              <div className="grid h-full place-items-center text-xs text-muted-foreground">
+              <div className="grid h-full place-items-center text-xs text-faint">
                 选择一个页面
               </div>
             )}
@@ -974,7 +944,7 @@ export function WikiDialog({
                   className="flex items-center gap-3 py-2 text-xs"
                 >
                   <span className="min-w-0 flex-1 truncate">{folder.name}</span>
-                  <span className="text-muted-foreground">
+                  <span className="text-faint">
                     {
                       indexPages.filter((page) => page.folderId === folder.id)
                         .length
@@ -1025,7 +995,7 @@ export function WikiDialog({
       {view === "graph" ? (
         <main className="min-h-0 flex-1 overflow-y-auto p-5">
           <div className="mx-auto max-w-3xl">
-            <div className="flex items-center gap-2 text-xs text-muted-foreground">
+            <div className="flex items-center gap-2 text-xs text-faint">
               <Icon icon={Network} className="size-4" />
               {graph.nodes.length} 页面 · {graph.edges.length} 链接
             </div>
@@ -1041,7 +1011,7 @@ export function WikiDialog({
                   >
                     {page.title}
                   </UiButton>
-                  <div className="mt-1 flex flex-wrap gap-2 text-[11px] text-muted-foreground">
+                  <div className="mt-1 flex flex-wrap gap-2 text-[11px] text-faint">
                     {graph.edges.some((edge) => edge.source === page.slug) ? (
                       graph.edges
                         .filter((edge) => edge.source === page.slug)
@@ -1095,18 +1065,18 @@ export function WikiDialog({
                   key={job.id}
                   className="flex flex-wrap items-center gap-2 py-2"
                 >
-                  <span className="w-16 text-muted-foreground">#{job.id}</span>
+                  <span className="w-16 text-faint">#{job.id}</span>
                   <span className="w-14">
                     {job.op === "ingest" ? "生成" : "撤回"}
                   </span>
-                  <span className="min-w-0 flex-1 truncate font-mono text-[11px] text-muted-foreground">
+                  <span className="min-w-0 flex-1 truncate font-mono text-[11px] text-faint">
                     {job.documentId}
                   </span>
                   <span
                     className={
                       job.status === "failed"
                         ? "text-danger"
-                        : "text-muted-foreground"
+                        : "text-faint"
                     }
                   >
                     {job.status}
@@ -1162,7 +1132,7 @@ export function WikiDialog({
                     >
                       {finding.slug}
                     </UiButton>
-                    <span className="text-muted-foreground">
+                    <span className="text-faint">
                       {finding.kind}
                       {finding.target ? ` · ${finding.target}` : ""}
                     </span>
@@ -1182,7 +1152,7 @@ export function WikiDialog({
                     <span className="min-w-0 flex-1 break-words">
                       {issue.message}
                     </span>
-                    <span className="text-muted-foreground">
+                    <span className="text-faint">
                       {issue.status}
                     </span>
                     {issue.status === "open" ? (

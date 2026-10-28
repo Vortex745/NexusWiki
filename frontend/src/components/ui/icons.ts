@@ -1,56 +1,74 @@
-// One seam between the app and reicon: every glyph the UI draws is picked here,
-// under the names the call sites already use, so the mapping is reviewable in
-// one screen. Direct `reicon/icons/*` imports (not the barrel) keep every
-// unchosen glyph out of the bundle.
+// One seam between the app and lucide-react: every glyph the app's own UI
+// draws is picked here, under lucide's canonical names and grouped by
+// purpose, so the mapping is reviewable in one screen. The arc/* library
+// components keep their own direct lucide-react imports. Named imports keep
+// every unchosen glyph out of the bundle.
 //
-// reicon's Outline weight is drawn two ways: most glyphs fill their paths
-// (`fill="currentColor"`), a minority stroke them and carry their own
-// `stroke-width="1.5"`. Both declare their paint per element, so nothing here
-// needs a global stroke default — see styles/index.css.
-export { Archive } from "reicon/icons/Archive"
-export { ArchiveUp as ArchiveRestore } from "reicon/icons/ArchiveUp"
-export { ArrowDown } from "reicon/icons/ArrowDown"
-export { Chart as BarChart3 } from "reicon/icons/Chart"
-export { BookOpen } from "reicon/icons/BookOpen"
-export { Check } from "reicon/icons/Check"
-export { ChevronDown } from "reicon/icons/ChevronDown"
-export { ChevronLeft } from "reicon/icons/ChevronLeft"
-export { ChevronRight } from "reicon/icons/ChevronRight"
-export { CloseCircle as CircleX } from "reicon/icons/CloseCircle"
-export { CheckCircle as CircleCheck } from "reicon/icons/CheckCircle"
-export { Copy } from "reicon/icons/Copy"
-export { Database } from "reicon/icons/Database"
-export { DiagramTree as Network } from "reicon/icons/DiagramTree"
-export { Edit as Pencil } from "reicon/icons/Edit"
-export { FileText } from "reicon/icons/FileText"
-export { Folder } from "reicon/icons/Folder"
-export { FolderOpen } from "reicon/icons/FolderOpen"
-export { Flask as FlaskConical } from "reicon/icons/Flask"
-export { Grid as LayoutGrid } from "reicon/icons/Grid"
-export { HardDrive as Brain } from "reicon/icons/HardDrive"
-export { HelpCircle } from "reicon/icons/HelpCircle"
-export { Menu } from "reicon/icons/Menu"
-export { Minus } from "reicon/icons/Minus"
-export { Moon } from "reicon/icons/Moon"
-export { Notebook as NotebookPen } from "reicon/icons/Notebook"
-export { Plus } from "reicon/icons/Plus"
-export { Refresh as RefreshCw } from "reicon/icons/Refresh"
-export { Search } from "reicon/icons/Search"
-export { Send as SendHorizontal } from "reicon/icons/Send"
-export { Settings } from "reicon/icons/Settings"
-export { Share as Share2 } from "reicon/icons/Share"
-export { ShieldCheck } from "reicon/icons/ShieldCheck"
-export { Sidebar as PanelLeftClose } from "reicon/icons/Sidebar"
-export { SidebarLeft as PanelLeft } from "reicon/icons/SidebarLeft"
-export { Sparkles } from "reicon/icons/Sparkles"
-export { Stop as Square } from "reicon/icons/Stop"
-export { Sun } from "reicon/icons/Sun"
-export { ThumbsDown } from "reicon/icons/ThumbsDown"
-export { ThumbsUp } from "reicon/icons/ThumbsUp"
-export { Trash2 } from "reicon/icons/Trash2"
-export { AlertSquare as MessageSquareWarning } from "reicon/icons/AlertSquare"
-export { Cpu as Bot } from "reicon/icons/Cpu"
-export { X } from "reicon/icons/X"
-export { Plug as PlugZap } from "reicon/icons/Plug"
-export { ClipboardCheck } from "reicon/icons/ClipboardCheck"
-export { Upload } from "reicon/icons/Upload"
+// Lucide glyphs carry their paint (stroke="currentColor", round caps) on
+// their own root svg, so nothing here needs a global paint default — see
+// styles/index.css.
+
+// -- Navigation & layout ----------------------------------------------------
+export { ArrowDown } from "lucide-react"
+export { ChevronDown } from "lucide-react"
+export { ChevronLeft } from "lucide-react"
+export { ChevronRight } from "lucide-react"
+export { PanelLeft } from "lucide-react"
+export { PanelLeftClose } from "lucide-react"
+
+// -- Status & feedback ------------------------------------------------------
+export { Ban } from "lucide-react"
+export { Check } from "lucide-react"
+export { Circle } from "lucide-react"
+export { CircleAlert } from "lucide-react"
+export { CircleCheck } from "lucide-react"
+export { CircleQuestionMark } from "lucide-react"
+export { CircleX } from "lucide-react"
+export { Clock } from "lucide-react"
+export { History } from "lucide-react"
+export { LoaderCircle } from "lucide-react"
+export { Minus } from "lucide-react"
+export { Plus } from "lucide-react"
+export { MessageSquareWarning } from "lucide-react"
+export { ShieldAlert } from "lucide-react"
+export { X } from "lucide-react"
+
+// -- Actions ----------------------------------------------------------------
+export { ClipboardCheck } from "lucide-react"
+export { Copy } from "lucide-react"
+export { Eye } from "lucide-react"
+export { Pencil } from "lucide-react"
+export { RefreshCw } from "lucide-react"
+export { ScrollText } from "lucide-react"
+export { Search } from "lucide-react"
+export { ArrowUp } from "lucide-react"
+export { ArrowUpDown } from "lucide-react"
+export { SendHorizontal } from "lucide-react"
+export { Square } from "lucide-react"
+export { Trash2 } from "lucide-react"
+export { ThumbsDown } from "lucide-react"
+export { ThumbsUp } from "lucide-react"
+export { Upload } from "lucide-react"
+
+// -- Theme & app chrome -----------------------------------------------------
+export { Moon } from "lucide-react"
+export { Settings } from "lucide-react"
+export { Sparkles } from "lucide-react"
+export { Sun } from "lucide-react"
+
+// -- Domain glyphs ----------------------------------------------------------
+export { Archive } from "lucide-react"
+export { ArchiveRestore } from "lucide-react"
+export { BookOpen } from "lucide-react"
+export { Bot } from "lucide-react"
+export { Brain } from "lucide-react"
+export { ChartColumn } from "lucide-react"
+export { Database } from "lucide-react"
+export { FileText } from "lucide-react"
+export { FlaskConical } from "lucide-react"
+export { Folder } from "lucide-react"
+export { FolderOpen } from "lucide-react"
+export { LayoutGrid } from "lucide-react"
+export { Network } from "lucide-react"
+export { NotebookPen } from "lucide-react"
+export { PlugZap } from "lucide-react"

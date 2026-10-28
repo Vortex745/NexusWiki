@@ -6,9 +6,7 @@ import test from "node:test"
 /**
  * Eval refactor Ticket 16 — the old RAGAS read entry is gone.
  *
- * The product evaluation surface is the in-process evaluation API
- * (`/api/evaluations`, owned by the page's 运行评测 entry). The file-backed
- * `/api/observability/ragas` route, its client and its
+ * The file-backed `/api/observability/ragas` route, its client and its
  * `./data/ragas-latest.json` fallback must not come back, and the removal must
  * not have taken the neighbouring surfaces with it.
  *
@@ -56,7 +54,7 @@ test("the switch kept the neighbouring API surfaces mounted", () => {
     "rawIngestRouter",
     "createStatusRouter",
     "createSourceGovernanceRouter",
-    "createEvaluationsRouter",
+    "createDocumentsRouter",
   ]) {
     assert.ok(server.includes(mount), `${mount} is still wired after the switch`)
   }
