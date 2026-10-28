@@ -1,0 +1,52 @@
+{
+  "updatedAt": "2026-10-28T15:28:31.638Z",
+  "integrationBranch": "codex/confirmed-bug-fixes",
+  "baseline": "57dbc29459adac5ef737556a1542c9be5e707f0c",
+  "status": "in_progress",
+  "tickets": [
+    {
+      "id": "BF-01",
+      "status": "ready",
+      "implementationStatus": "not_started",
+      "verificationStatus": "not_run",
+      "blockedBy": [],
+      "resolution": null
+    },
+    {
+      "id": "BF-02",
+      "status": "ready",
+      "implementationStatus": "not_started",
+      "verificationStatus": "not_run",
+      "blockedBy": [],
+      "resolution": null
+    },
+    {
+      "id": "BF-03",
+      "status": "ready",
+      "implementationStatus": "not_started",
+      "verificationStatus": "not_run",
+      "blockedBy": [],
+      "resolution": null
+    },
+    {
+      "id": "BF-04",
+      "status": "ready",
+      "implementationStatus": "not_started",
+      "verificationStatus": "not_run",
+      "blockedBy": [],
+      "resolution": null
+    },
+    {
+      "id": "BF-05",
+      "status": "ready",
+      "implementationStatus": "not_started",
+      "verificationStatus": "not_run",
+      "blockedBy": [],
+      "resolution": null
+    }
+  ],
+  "aggregateGate": {
+    "id": "G-BF",
+    "status": "not_run"
+  }
+}

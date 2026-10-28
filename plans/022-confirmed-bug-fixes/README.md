@@ -1,8 +1,8 @@
-# 5 个已复现 Bug：修复计划草案
+# 5 个已复现 Bug：已批准来源规格
 
-日期：2026-10-28（Asia/Shanghai）。源码基线：HEAD bbedc95 + 审查时工作树。当前状态：draft；业务 implementationStatus：not_started；修复验收：not_run。
+日期：2026-10-28（Asia/Shanghai）。源码基线：HEAD bbedc95 + 审查时工作树。当前状态：approved_source。实时实施与验收状态以正式本地队列为准。
 
-本目录是可审阅的来源规格，尚未发布执行票。测试边界确认后，按项目惯例发布至本地 issue tracker 的 .scratch/confirmed-bug-fix-tickets/，标签 ready-for-agent，实施初始状态 not_started。发布本身不启动实施，也不派发现有 UT/PT/LO/DR 队列。
+本目录保留需求和来源规格。用户于 2026-10-28 调用 implement-spec 要求完成全部五票，已确认既定边界并授权实施。唯一执行队列：[confirmed-bug-fix-tickets](../../.scratch/confirmed-bug-fix-tickets/README.md)，标签 ready-for-agent；不派发现有 UT/PT/LO/DR 队列。
 
 ## 修复范围和成功标准
 
@@ -26,7 +26,7 @@
 
 所有票的 blockedBy 均为空。编号与推荐顺序不增加技术依赖；共享文件协调不伪装成前置功能。确认并发布后，五票都满足依赖条件，领取时优先 P1。
 
-## 待确认的测试边界
+## 已确认的测试边界
 
 | 边界 | 责任票 | 主要测试方式 | 可观察结果 |
 | --- | --- | --- | --- |
@@ -37,7 +37,7 @@
 
 优先使用现有最高可观察入口；外部模型、DocReader 和索引适配器受控。局部 SQL/normalizer 测试只补充诊断，不代替主行为回归。无需新建测试专用业务接口。
 
-确认状态：awaiting_user_confirmation。待确认的是上述边界是否符合预期；已授权的计划整理已完成。依 to-spec 的明确步骤，确认前不把草案标成已发布或 ready-for-agent。
+确认状态：confirmed_by_implementation_request。用户明确要求实施已展示的五票，继续沿用 S1–S4，不重复请求确认。
 
 ## 实施与验收规则
 

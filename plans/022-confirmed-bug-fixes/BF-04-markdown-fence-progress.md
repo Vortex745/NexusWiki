@@ -1,6 +1,6 @@
 # BF-04：特殊代码围栏不再导致整份 PDF 解析失败
 
-优先级：P2。状态：draft；implementationStatus：not_started。拟用标签：ready-for-agent。功能依赖：无。测试边界待用户确认。
+优先级：P2。状态：approved_source。实施与验收状态以正式本地队列为准。标签：ready-for-agent。功能依赖：无。测试边界已确认。
 
 ## Problem Statement
 

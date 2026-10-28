@@ -1,6 +1,6 @@
 # BF-01：退役文档立即退出所有知识检索
 
-优先级：P1。状态：draft；implementationStatus：not_started。拟用标签：ready-for-agent。功能依赖：无。测试边界待用户确认。
+优先级：P1。状态：approved_source。实施与验收状态以正式本地队列为准。标签：ready-for-agent。功能依赖：无。测试边界已确认。
 
 ## Problem Statement
 

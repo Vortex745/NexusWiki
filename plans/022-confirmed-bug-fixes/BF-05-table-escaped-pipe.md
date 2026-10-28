@@ -1,6 +1,6 @@
 # BF-05：表格末格的转义竖线保留为真实单元格内容
 
-优先级：P2。状态：draft；implementationStatus：not_started。拟用标签：ready-for-agent。功能依赖：无。测试边界待用户确认。
+优先级：P2。状态：approved_source。实施与验收状态以正式本地队列为准。标签：ready-for-agent。功能依赖：无。测试边界已确认。
 
 ## Problem Statement
 
