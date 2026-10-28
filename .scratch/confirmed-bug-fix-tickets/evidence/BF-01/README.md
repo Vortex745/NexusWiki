@@ -10,6 +10,7 @@ The human implementation instruction confirms S1–S4. The agreed BF-01 seam is 
 
 - Before any edit, `git merge-base HEAD codex/confirmed-bug-fixes` and `git rev-parse codex/confirmed-bug-fixes` both returned `98846175afef3dad15005169cbb55493456eb423`; the branch was clean.
 - The integration branch subsequently gained baseline documentation/evidence only. `git merge --no-edit codex/confirmed-bug-fixes` fast-forwarded this branch to `ef02c84eb26e9e6c75b1cdf045f6e4d8b0a59980`; see `integration-sync.log`. The affected tests were rerun after synchronization.
+- After implementation commit `f6a43499181e348b9debed0bfda90af6a6185d8e`, the final synchronization also merged integration tip `33a21bde9e11ea6b9e363385182c1ae12a03ad81` (BF-02/BF-04) without conflicts. Merge commit `fad9d05e4e3d37eb20be8f8f32bc124ebbdacb3e` has that integration tip as its second parent. All 232 affected tests and the full TypeScript build passed again on the merged source; see `affected-tests-after-merge.tap` and `build-after-merge.log`.
 - Product edits are two predicates: the existing active-version read and PageIndex's existing active-version subquery now require `lifecycle_state = 'active'`. The retained active pointer/history and async cleanup protocol remain intact.
 - This adds no database statement, per-hit read, schema change, external call, dependency, background task or in-flight cancellation protocol. Existing unconfigured/evaluation behavior is unchanged.
 - No original checkout writes, business database use, real provider calls, deployment or dependency changes were performed.
@@ -54,4 +55,4 @@ npm run build
 git diff --cached --check
 ```
 
-Outputs: `affected-tests.tap` (232/232), `build.log` (exit 0), and `diff-check.log` (exit 0). The newly added regression file is explicitly included in the test command. Original sequential reproduction and inputs remain documented in `plans/022-confirmed-bug-fixes/evidence.md`; the durable new tests do not depend on temporary audit scripts.
+Outputs before the final integration merge: `affected-tests.tap` (232/232), `build.log` (exit 0). Final merged-source verification: `affected-tests-after-merge.tap` (232/232, 0 skipped), `build-after-merge.log` (exit 0), and `diff-check.log` (exit 0). The newly added regression file is explicitly included in the test command. Original sequential reproduction and inputs remain documented in `plans/022-confirmed-bug-fixes/evidence.md`; the durable new tests do not depend on temporary audit scripts.
