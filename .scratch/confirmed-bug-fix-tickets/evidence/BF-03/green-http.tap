@@ -1,0 +1,42 @@
+TAP version 13
+# (node:59028) ExperimentalWarning: localStorage is not available because --localstorage-file was not provided.
+# (Use `node --trace-warnings ...` to show where the warning was created)
+# Subtest: editing a clarification branch sends only the replacement question to real dispatch
+ok 1 - editing a clarification branch sends only the replacement question to real dispatch
+  ---
+  duration_ms: 156.9864
+  type: 'test'
+  ...
+# Subtest: regenerating a clarification replaces display history without doubling the pending question
+ok 2 - regenerating a clarification replaces display history without doubling the pending question
+  ---
+  duration_ms: 44.8792
+  type: 'test'
+  ...
+# Subtest: an ordinary clarification answer still combines the pending question with its supplement
+ok 3 - an ordinary clarification answer still combines the pending question with its supplement
+  ---
+  duration_ms: 43.4697
+  type: 'test'
+  ...
+# Subtest: Bearer other-subject cannot truncate another owner's pending branch
+ok 4 - Bearer other-subject cannot truncate another owner's pending branch
+  ---
+  duration_ms: 47.7668
+  type: 'test'
+  ...
+# Subtest: Bearer other-tenant cannot truncate another owner's pending branch
+ok 5 - Bearer other-tenant cannot truncate another owner's pending branch
+  ---
+  duration_ms: 39.9927
+  type: 'test'
+  ...
+1..5
+# tests 5
+# suites 0
+# pass 5
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 5632.5645

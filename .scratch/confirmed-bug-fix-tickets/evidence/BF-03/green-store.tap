@@ -1,0 +1,46 @@
+TAP version 13
+# Subtest: truncate from clears current pending while preserving anchor inclusion, counts and summary rules
+ok 1 - truncate from clears current pending while preserving anchor inclusion, counts and summary rules
+  ---
+  duration_ms: 195.0687
+  type: 'test'
+  ...
+# Subtest: an unknown truncate-from anchor leaves validated, displayed, pending and summary state unchanged
+ok 2 - an unknown truncate-from anchor leaves validated, displayed, pending and summary state unchanged
+  ---
+  duration_ms: 16.3343
+  type: 'test'
+  ...
+# Subtest: truncate after clears current pending while preserving anchor inclusion, counts and summary rules
+ok 3 - truncate after clears current pending while preserving anchor inclusion, counts and summary rules
+  ---
+  duration_ms: 21.463
+  type: 'test'
+  ...
+# Subtest: an unknown truncate-after anchor leaves validated, displayed, pending and summary state unchanged
+ok 4 - an unknown truncate-after anchor leaves validated, displayed, pending and summary state unchanged
+  ---
+  duration_ms: 18.8919
+  type: 'test'
+  ...
+# Subtest: branch pending cleanup is restricted to the selected session and tenant
+ok 5 - branch pending cleanup is restricted to the selected session and tenant
+  ---
+  duration_ms: 16.4869
+  type: 'test'
+  ...
+# Subtest: pending cleanup failure rolls back the same branch transaction
+ok 6 - pending cleanup failure rolls back the same branch transaction
+  ---
+  duration_ms: 27.6946
+  type: 'test'
+  ...
+1..6
+# tests 6
+# suites 0
+# pass 6
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 1976.4965
