@@ -58,7 +58,7 @@ test("Ticket 18 #1a: auto mode — ingest reaches completed + active=true under 
   }
 })
 
-test("Ticket 18 #1b: review mode — ingest reaches completed + pending_review (NOT yet active)", async () => {
+test("Ticket 18 #1b: review mode is ignored — ingest completes and activates", async () => {
   const fixture = createIngestionFixture({
     revision: REVISION_A,
     activationMode: "review",
@@ -67,7 +67,7 @@ test("Ticket 18 #1b: review mode — ingest reaches completed + pending_review (
   try {
     const submission = fixture.ingestBounded({
       title: "Review Policy",
-      content: "Pending human review.",
+      content: "Technical completion activates.",
     })
 
     const result = await fixture.lifecycle.runNext()
@@ -75,19 +75,19 @@ test("Ticket 18 #1b: review mode — ingest reaches completed + pending_review (
 
     const status = fixture.lifecycle.getStatus(submission.docId)
     assert.equal(status?.documentStatus, "completed")
-    assert.equal(status?.documentVersion.active, false, "review mode MUST NOT auto-activate")
+    assert.equal(status?.documentVersion.active, true)
+    assert.equal(status?.activationBlockReason, null)
 
-    // Verify the candidate is pending_review via the CandidateReviewStore
     const reviewStore = new SqliteCandidateReviewStore(fixture.db, new DocumentRepo(fixture.db))
     const candidate = reviewStore.getCandidate(submission.docId, fixture.tenantId)
-    assert.equal(candidate?.candidateState, "pending_review")
+    assert.equal(candidate?.candidateState, "approved")
     assert.equal(candidate?.tenantId, fixture.tenantId)
   } finally {
     await fixture.cleanup()
   }
 })
 
-test("Ticket 18+UT-04 #1c: review mode — human approve records the decision but the gate keeps the candidate inactive", async () => {
+test("Ticket 18+UT-04 #1c: review mode approve is an idempotent no-op after auto-activation", async () => {
   const fixture = createIngestionFixture({
     revision: REVISION_A,
     activationMode: "review",
@@ -96,7 +96,7 @@ test("Ticket 18+UT-04 #1c: review mode — human approve records the decision bu
   try {
     const submission = fixture.ingestBounded({
       title: "Approval Flow",
-      content: "Awaiting approval.",
+      content: "Already active.",
     })
     await fixture.lifecycle.runNext()
 
@@ -109,17 +109,13 @@ test("Ticket 18+UT-04 #1c: review mode — human approve records the decision bu
       "looks good",
     )
 
-    assert.ok(reviewResult, "review() must return a result for an existing pending_review doc")
+    assert.ok(reviewResult, "review() must return a result for an existing doc")
     assert.equal(reviewResult!.candidateState, "approved")
-    assert.equal(
-      reviewResult!.activatedAsActive,
-      false,
-      "Ticket UT-04: approval cannot bypass the joint activation gate",
-    )
+    assert.equal(reviewResult!.activatedAsActive, false)
 
     const status = fixture.lifecycle.getStatus(submission.docId)
-    assert.equal(status?.documentVersion.active, false, "no evidence → approve MUST NOT activate")
-    assert.ok(status?.activationBlockReason)
+    assert.equal(status?.documentVersion.active, true)
+    assert.equal(status?.activationBlockReason, null)
   } finally {
     await fixture.cleanup()
   }

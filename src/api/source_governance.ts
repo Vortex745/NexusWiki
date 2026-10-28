@@ -1,14 +1,11 @@
 import { Router, type Request, type Response } from "express"
 import { singleTenantAccessContext, type AccessContext } from "../access/context"
 import type { DB } from "../ingestion/tracking/db"
-import type { CandidateReviewStore } from "../knowledge/candidate_review_store"
-import { InvalidReviewConflictError } from "../knowledge/candidate_review_store"
 import type { RetirementService } from "../knowledge/retirement"
 import type { SourceLifecycleStore } from "../knowledge/source_lifecycle_store"
 import { taskTraceFromScope } from "../tracing/contract"
 import { requestScope } from "../tracing/express"
 import type {
-  ReviewDecision,
   SourceLifecycleState,
   SourceStatusSummary,
   SourceTombstone,
@@ -45,8 +42,6 @@ const CLEANUP_OPS_LIST = [
   "cleanup_pageindex",
   "cleanup_images",
 ] as const
-
-const VALID_DECISIONS: readonly ReviewDecision[] = ["approve", "reject"]
 
 function resolveContext(res: Response): AccessContext {
   return (res.locals.accessContext as AccessContext | undefined) ?? singleTenantAccessContext()
@@ -93,11 +88,6 @@ export function validateReason(reason: unknown, res: Response): reason is string
     return false
   }
   return true
-}
-
-interface ReviewRequestBody {
-  decision?: ReviewDecision
-  reason?: string
 }
 
 interface RetireRequestBody {
@@ -202,61 +192,31 @@ function computeStatusSummary(
 
 interface SourceGovernanceRouterDeps {
   db: DB
-  candidateReviewStore: CandidateReviewStore
   retirementService: RetirementService
   lifecycleStore: SourceLifecycleStore
 }
 
 export function createSourceGovernanceRouter(deps: SourceGovernanceRouterDeps): Router {
   const router = Router()
-  const { db, candidateReviewStore, retirementService, lifecycleStore } = deps
+  const { db, retirementService, lifecycleStore } = deps
 
-  // POST /api/ingest/:docId/review — review scope (spec L1580)
+  // POST /api/ingest/:docId/review — retired workflow.
   router.post("/ingest/:docId/review", (req: Request, res: Response) => {
     const ctx = resolveContext(res)
     if (!requireReviewOrAdmin(ctx, res)) return
 
     const docId = String(req.params.docId)
-    const body = req.body as ReviewRequestBody | undefined
-
-    if (!body?.decision || !VALID_DECISIONS.includes(body.decision)) {
-      res.status(400).json({ error: "invalid or missing decision", decision: body?.decision })
+    const owned = db.prepare(
+      "SELECT 1 FROM documents WHERE doc_id = ? AND tenant_id = ?"
+    ).get(docId, ctx.tenantId)
+    if (!owned) {
+      res.status(404).json({ error: "document not found" })
       return
     }
-    if (!validateReason(body.reason, res)) return
-
-    // Actor from ctx.subjectId — prevents spoofing via body.actor
-    // (spec types/governance.ts L101-103)
-    const actor = ctx.subjectId
-
-    try {
-      const result = candidateReviewStore.review(
-        docId,
-        ctx.tenantId,
-        body.decision,
-        body.reason,
-        actor,
-        // C4: an approval can enqueue a wiki rebuild; it belongs to THIS trace.
-        taskTraceFromScope(requestScope(res))
-      )
-      if (!result) {
-        // Cross-tenant or non-existent — 404 (never reveal existence)
-        res.status(404).json({ error: "document not found" })
-        return
-      }
-      res.status(200).json(result)
-    } catch (err) {
-      if (err instanceof InvalidReviewConflictError) {
-        res.status(409).json({
-          error: "conflicting review decision",
-          docId: err.docId,
-          currentCandidateState: err.currentCandidateState,
-          requestedDecision: err.requestedDecision,
-        })
-        return
-      }
-      throw err
-    }
+    res.status(410).json({
+      error: "review_workflow_retired",
+      message: "The review workflow is retired; reprocess the document to create a new technical-completion candidate.",
+    })
   })
 
   // POST /api/sources/:sourceId/retire — admin scope (spec L1581)

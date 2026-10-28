@@ -25,7 +25,6 @@ import express from "express"
 import type { Request, Response, NextFunction } from "express"
 import { createSourceGovernanceRouter } from "./source_governance"
 import { SqliteSourceLifecycleStore } from "../knowledge/source_lifecycle_store"
-import { SqliteCandidateReviewStore } from "../knowledge/candidate_review_store"
 import { RetirementServiceImpl } from "../knowledge/retirement"
 import { DocumentRepo } from "../ingestion/tracking/doc_repo"
 import { TaskRepo } from "../ingestion/tracking/task_repo"
@@ -104,7 +103,6 @@ function buildApp(options: BuildAppOptions = {}) {
   const db = openDb(":memory:")
   const documentRepo = new DocumentRepo(db)
   const lifecycleStore = new SqliteSourceLifecycleStore(db)
-  const candidateReviewStore = new SqliteCandidateReviewStore(db, documentRepo)
   const taskRepo = new TaskRepo(db)
   const retirementService = new RetirementServiceImpl(db, lifecycleStore, taskRepo)
   app.use(express.json())
@@ -115,12 +113,11 @@ function buildApp(options: BuildAppOptions = {}) {
     "/api",
     createSourceGovernanceRouter({
       db,
-      candidateReviewStore,
       retirementService,
       lifecycleStore,
     })
   )
-  return { app, db, documentRepo, lifecycleStore, candidateReviewStore, retirementService }
+  return { app, db, documentRepo, lifecycleStore, retirementService }
 }
 
 async function listen(app: express.Express) {
@@ -197,125 +194,35 @@ function scopedMiddleware(scopes: Scope[]): (req: Request, res: Response, next: 
 // POST /api/ingest/:docId/review — review scope (spec L1580)
 // ─────────────────────────────────────────────────────────────────────────────
 
-test("POST /review: approve pending_review → 200 + ReviewResult with approved state", async () => {
+test("POST /review: retired workflow returns 410 after auth and never mutates the candidate", async () => {
   const { app, db } = buildApp()
   setupSource(db, { sourceId: "src-1", docId: "doc-1", candidateState: "pending_review" })
+  const before = db.prepare(
+    "SELECT candidate_state, reviewed_by, reviewed_at, review_reason FROM documents WHERE doc_id = ?"
+  ).get("doc-1")
   const { server, port } = await listen(app)
   try {
     const res = await postReview(port, "doc-1", { decision: "approve", reason: "LGTM" })
-    assert.equal(res.status, 200)
-    assert.equal(res.json!.candidateState, "approved")
-    // Bare-router mode (no middleware) → singleTenantAccessContext.subjectId = "local"
-    assert.equal(res.json!.reviewedBy, "local")
-    assert.equal(res.json!.reviewReason, "LGTM")
+    assert.equal(res.status, 410)
+    assert.equal(res.json!.error, "review_workflow_retired")
+    assert.match(String(res.json!.message), /reprocess/i)
+    const after = db.prepare(
+      "SELECT candidate_state, reviewed_by, reviewed_at, review_reason FROM documents WHERE doc_id = ?"
+    ).get("doc-1")
+    assert.deepEqual(after, before, "410 must not write review fields")
   } finally {
     server.close()
   }
 })
 
-test("POST /review: reject pending_review → 200 + ReviewResult with rejected state", async () => {
+test("POST /review: body validation is gone; an invalid body still returns 410", async () => {
   const { app, db } = buildApp()
   setupSource(db, { sourceId: "src-2", docId: "doc-2", candidateState: "pending_review" })
   const { server, port } = await listen(app)
   try {
-    const res = await postReview(port, "doc-2", { decision: "reject", reason: "stale" })
-    assert.equal(res.status, 200)
-    assert.equal(res.json!.candidateState, "rejected")
-    assert.equal(res.json!.reviewReason, "stale")
-  } finally {
-    server.close()
-  }
-})
-
-test("POST /review: actor comes from ctx.subjectId, NOT body.actor (anti-spoofing)", async () => {
-  const { app, db } = buildApp({ middleware: multiTenantMiddleware })
-  setupSource(db, { sourceId: "src-3", docId: "doc-3", tenantId: "tenant-a", candidateState: "pending_review" })
-  const { server, port } = await listen(app)
-  try {
-    // Body includes a malicious actor field — must be ignored
-    const res = await postReview(
-      port,
-      "doc-3",
-      { decision: "approve", reason: "ok", actor: "spoofed-actor" },
-      { "x-test-tenant": "tenant-a" }
-    )
-    assert.equal(res.status, 200)
-    assert.equal(res.json!.reviewedBy, "user-tenant-a")  // NOT "spoofed-actor"
-  } finally {
-    server.close()
-  }
-})
-
-test("POST /review: idempotent re-approve on approved → 200 (preserves FIRST review's fields)", async () => {
-  const { app, db } = buildApp()
-  setupSource(db, {
-    sourceId: "src-4",
-    docId: "doc-4",
-    candidateState: "approved",
-    reviewedBy: "first@example.com",
-    reviewedAt: "2026-07-18T09:00:00.000Z",
-    reviewReason: "first review",
-  })
-  const { server, port } = await listen(app)
-  try {
-    const res = await postReview(port, "doc-4", { decision: "approve", reason: "second" })
-    assert.equal(res.status, 200)
-    assert.equal(res.json!.candidateState, "approved")
-    assert.equal(res.json!.reviewedBy, "first@example.com")  // preserved
-    assert.equal(res.json!.reviewReason, "first review")  // preserved
-  } finally {
-    server.close()
-  }
-})
-
-test("POST /review: conflicting decision (approve on rejected) → 409", async () => {
-  const { app, db } = buildApp()
-  setupSource(db, { sourceId: "src-5", docId: "doc-5", candidateState: "rejected" })
-  const { server, port } = await listen(app)
-  try {
-    const res = await postReview(port, "doc-5", { decision: "approve", reason: "retry" })
-    assert.equal(res.status, 409)
-    assert.equal(res.json!.error, "conflicting review decision")
-    assert.equal(res.json!.currentCandidateState, "rejected")
-    assert.equal(res.json!.requestedDecision, "approve")
-  } finally {
-    server.close()
-  }
-})
-
-test("POST /review: 400 for invalid decision", async () => {
-  const { app, db } = buildApp()
-  setupSource(db, { sourceId: "src-6", docId: "doc-6", candidateState: "pending_review" })
-  const { server, port } = await listen(app)
-  try {
-    const res = await postReview(port, "doc-6", { decision: "maybe", reason: "x" })
-    assert.equal(res.status, 400)
-    assert.equal(res.json!.error, "invalid or missing decision")
-  } finally {
-    server.close()
-  }
-})
-
-test("POST /review: 400 for missing reason", async () => {
-  const { app, db } = buildApp()
-  setupSource(db, { sourceId: "src-7", docId: "doc-7", candidateState: "pending_review" })
-  const { server, port } = await listen(app)
-  try {
-    const res = await postReview(port, "doc-7", { decision: "approve" })
-    assert.equal(res.status, 400)
-    assert.equal(res.json!.error, "reason must be a non-empty string (max 1000 chars)")
-  } finally {
-    server.close()
-  }
-})
-
-test("POST /review: 400 for reason > 1000 chars", async () => {
-  const { app, db } = buildApp()
-  setupSource(db, { sourceId: "src-8", docId: "doc-8", candidateState: "pending_review" })
-  const { server, port } = await listen(app)
-  try {
-    const res = await postReview(port, "doc-8", { decision: "approve", reason: "x".repeat(1001) })
-    assert.equal(res.status, 400)
+    const res = await postReview(port, "doc-2", { decision: "maybe" })
+    assert.equal(res.status, 410)
+    assert.equal(res.json!.error, "review_workflow_retired")
   } finally {
     server.close()
   }
@@ -338,7 +245,6 @@ test("POST /review: 404 for cross-tenant doc (never reveals existence)", async (
   setupSource(db, { sourceId: "src-9", docId: "doc-9", tenantId: "tenant-a", candidateState: "pending_review" })
   const { server, port } = await listen(app)
   try {
-    // Doc exists for tenant-a but we ask as tenant-b → 404
     const res = await postReview(
       port,
       "doc-9",
@@ -352,7 +258,7 @@ test("POST /review: 404 for cross-tenant doc (never reveals existence)", async (
 })
 
 test("POST /review: 403 for missing review scope", async () => {
-  const { app, db } = buildApp({ middleware: scopedMiddleware(["chat"]) })  // no review/admin
+  const { app, db } = buildApp({ middleware: scopedMiddleware(["chat"]) })
   setupSource(db, { sourceId: "src-10", docId: "doc-10", candidateState: "pending_review" })
   const { server, port } = await listen(app)
   try {

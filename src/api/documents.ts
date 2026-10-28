@@ -2,6 +2,7 @@ import { Router, type Request, type Response } from "express"
 import type { Client } from "@elastic/elasticsearch"
 import type { AccessContext } from "../access/context"
 import { singleTenantAccessContext } from "../access/context"
+import { readProcessingPolicy } from "../ingestion/lifecycle"
 import type { DocumentRepo, DocumentCatalogPage } from "../ingestion/tracking/doc_repo"
 import type { ExtractionEvidenceRepository } from "../ingestion/tracking/extraction_evidence_repo"
 import type { PageIndexRepository } from "../ingestion/tracking/page_index_repo"
@@ -202,6 +203,7 @@ export function createDocumentsRouter(options: {
     }
     const version = documentRepo.getVersionInfo(docId)
     const operational = documentRepo.getOperationalState(docId)
+    const processingPolicy = readProcessingPolicy(doc.metadata)
     const retired = documentRepo.getSourceLifecycleState(doc.sourceId) === "retired"
     const sections = pageIndexRepo.getNodesByDocument(docId).map((node) => ({
       nodeId: node.nodeId,
@@ -220,7 +222,10 @@ export function createDocumentsRouter(options: {
         fileName: doc.fileName ?? null,
         mimeType: doc.mimeType ?? "text/plain",
         status: operational?.status ?? "pending",
-        candidateState: operational?.candidateState ?? "approved",
+        processingPolicy,
+        candidateState: processingPolicy === "weknora-technical-v1"
+          ? null
+          : operational?.candidateState ?? "approved",
         version: doc.version,
         active: version?.active ?? false,
         retired,

@@ -48,6 +48,16 @@ const RUNNING_ABORT_CONTROLLERS = new Map<string, AbortController>()
 
 export type IngestionStageName = (typeof INGESTION_STAGE_NAMES)[number]
 
+export function readProcessingPolicy(metadata: Record<string, unknown> | undefined): string | null {
+  const system = metadata?.system
+  if (!system || typeof system !== "object" || Array.isArray(system)) return null
+  const policy = (system as Record<string, unknown>).ingestionPolicy
+  if (typeof policy === "string") return policy
+  if (!policy || typeof policy !== "object" || Array.isArray(policy)) return null
+  const version = (policy as Record<string, unknown>).version
+  return typeof version === "string" ? version : null
+}
+
 function recordPolicyCompletion(docRepo: DocumentRepo, docId: string, completedAt: Date): void {
   const document = docRepo.get(docId)
   if (!document) return
@@ -189,6 +199,8 @@ export interface IngestionStatus {
    * which records gate denials.
    */
   candidateState: string | null
+  /** Server-owned policy marker for this import (null for legacy rows). */
+  processingPolicy: string | null
   /**
    * Ticket UT-07/UT-08: machine-readable failure classification (category,
    * stable reason code, allowed operations) recorded when a run failed.
@@ -580,6 +592,8 @@ export class IngestionLifecycle {
     const documentVersion = this.docRepo.getVersionInfo(docId)
     if (!documentVersion) return null
     const activationAcceptance = this.docRepo.getActivationAcceptance(docId)
+    const document = this.docRepo.get(docId)
+    const processingPolicy = readProcessingPolicy(document?.metadata)
 
     return {
       docId,
@@ -591,8 +605,11 @@ export class IngestionLifecycle {
       activationBlockReason: this.docRepo.getActivationBlockReason(docId),
       activationWarnings: activationAcceptance?.warningCodes ?? [],
       activationPolicyVersion: activationAcceptance?.policyVersion ?? null,
-      candidateState: this.docRepo.getOperationalState(docId)?.candidateState ?? null,
-      failure: readFailureRecord(this.docRepo.get(docId)),
+      candidateState: processingPolicy === "weknora-technical-v1"
+        ? null
+        : this.docRepo.getOperationalState(docId)?.candidateState ?? null,
+      processingPolicy,
+      failure: readFailureRecord(document),
     }
   }
 

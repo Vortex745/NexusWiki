@@ -1563,3 +1563,46 @@ test("Ticket 12 DOC-01B: retry and reprocess reuse the lifecycle and are admin+t
     rmSync(directory, { recursive: true, force: true })
   }
 })
+
+test("ingest status exposes processingPolicy and nulls candidateState for the new policy", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "kefu-rag-api-policy-"))
+  process.env.OPENAI_API_KEY = process.env.OPENAI_API_KEY || "test-key"
+  process.env.SQLITE_PATH = join(directory, "ingestion.db")
+  const server = createApp({
+    eventsSource,
+    ingestAccessMiddleware: tenantAccessMiddleware,
+  }).listen(0)
+  try {
+    await new Promise<void>((resolve) => server.once("listening", resolve))
+    const address = server.address()
+    assert.ok(address && typeof address === "object")
+    const submittedResponse = await fetch(`http://127.0.0.1:${address.port}/api/ingest`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        title: "Policy",
+        content: "processing policy content",
+        sourceIdentity: { kind: "file", uriOrExternalId: "C:/knowledge/policy.txt", namespace: "upload" },
+      }),
+    })
+    assert.equal(submittedResponse.status, 200)
+    const submitted = await submittedResponse.json() as { docId: string }
+    new DocumentRepo(openDb()).updateMetadata(submitted.docId, {
+      system: { ingestionPolicy: { version: "weknora-technical-v1" } },
+    })
+
+    const statusResponse = await fetch(
+      `http://127.0.0.1:${address.port}/api/ingest/${submitted.docId}/status`,
+      { headers: { "x-test-tenant": "tenant-a" } }
+    )
+    assert.equal(statusResponse.status, 200)
+    const status = await statusResponse.json() as Record<string, unknown>
+    assert.equal(status.processingPolicy, "weknora-technical-v1")
+    assert.equal(status.candidateState, null)
+  } finally {
+    await new Promise<void>((resolve, reject) => {
+      server.close((error) => error ? reject(error) : resolve())
+    })
+    rmSync(directory, { recursive: true, force: true })
+  }
+})

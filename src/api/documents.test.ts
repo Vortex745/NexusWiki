@@ -555,3 +555,33 @@ test("Ticket 13 DOC-02: chunk views carry metadata and neighbors; retired stays 
     setup.db.close()
   }
 })
+
+test("document detail exposes processingPolicy and nulls candidateState for the new policy", async () => {
+  const setup = buildApp()
+  try {
+    const docId = seed(setup, {
+      title: "DocReader document",
+      status: "completed",
+      metadata: { system: { ingestionPolicy: { version: "weknora-technical-v1" } } },
+    })
+    const legacyId = seed(setup, { title: "Legacy document", status: "completed" })
+    const { server, port } = await listen(setup.app)
+    try {
+      const current = await request(port, `/documents/${docId}`)
+      assert.equal(current.status, 200)
+      const document = current.json?.document as Record<string, unknown>
+      assert.equal(document.processingPolicy, "weknora-technical-v1")
+      assert.equal(document.candidateState, null)
+
+      const legacy = await request(port, `/documents/${legacyId}`)
+      assert.equal(legacy.status, 200)
+      const legacyDocument = legacy.json?.document as Record<string, unknown>
+      assert.equal(legacyDocument.processingPolicy, null)
+      assert.equal(legacyDocument.candidateState, "approved")
+    } finally {
+      server.close()
+    }
+  } finally {
+    setup.db.close()
+  }
+})

@@ -22,7 +22,6 @@ import { DocumentRepo } from "../ingestion/tracking/doc_repo"
 import { PageIndexRepository } from "../ingestion/tracking/page_index_repo"
 import { TaskRepo } from "../ingestion/tracking/task_repo"
 import { SqliteSourceLifecycleStore } from "../knowledge/source_lifecycle_store"
-import { SqliteCandidateReviewStore } from "../knowledge/candidate_review_store"
 import { RetirementServiceImpl } from "../knowledge/retirement"
 import { createSourceGovernanceRouter } from "./source_governance"
 import { createStatusRouter } from "./status"
@@ -186,13 +185,11 @@ export function createApp(options: {
       sessionDirectories.getSessionLock(sessionId, tenantId, subjectId) !== null,
   })
   // Ticket 11 P5: Source governance wiring — DocumentRepo + TaskRepo are
-  // shared with the ingestion pipeline (DocumentRepo.activate is reused by
-  // CandidateReviewStore; TaskRepo is reused by RetirementService for
-  // idempotent cleanup enqueue per spec L1577).
+  // shared with the ingestion pipeline (TaskRepo is reused by
+  // RetirementService for idempotent cleanup enqueue per spec L1577).
   const documentRepo = new DocumentRepo(db)
   const taskRepo = new TaskRepo(db)
   const sourceLifecycleStore = new SqliteSourceLifecycleStore(db)
-  const candidateReviewStore = new SqliteCandidateReviewStore(db, documentRepo)
   const retirementService = new RetirementServiceImpl(db, sourceLifecycleStore, taskRepo)
   const imageAssetPath = resolve(
     options.imageAssetPath ?? process.env.IMAGE_ASSET_PATH ?? "./data/image-assets"
@@ -454,7 +451,6 @@ export function createApp(options: {
     "/api",
     createSourceGovernanceRouter({
       db,
-      candidateReviewStore,
       retirementService,
       lifecycleStore: sourceLifecycleStore,
     })
