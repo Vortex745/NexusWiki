@@ -1,16 +1,18 @@
 {
-  "updatedAt": "2026-10-28T15:53:27.013Z",
+  "updatedAt": "2026-10-28T15:58:09.754Z",
   "integrationBranch": "codex/confirmed-bug-fixes",
   "baseline": "57dbc29459adac5ef737556a1542c9be5e707f0c",
   "status": "in_progress",
   "tickets": [
     {
       "id": "BF-01",
-      "status": "in_progress",
-      "implementationStatus": "in_progress",
-      "verificationStatus": "not_run",
+      "status": "implemented",
+      "implementationStatus": "completed",
+      "verificationStatus": "passed_ticket_gates",
       "blockedBy": [],
-      "resolution": null
+      "resolution": null,
+      "mergeCommit": "3a0dc345035a5575cbe89a1e4cf029d6caf1bc7c",
+      "evidence": "evidence/BF-01/README.md"
     },
     {
       "id": "BF-02",
