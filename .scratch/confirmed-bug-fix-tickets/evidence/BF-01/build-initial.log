@@ -1,0 +1,14 @@
+npm notice run kefu-rag-main@1.0.0 build
+npm notice run tsc
+src/retrieval/search/searcher.retirement.test.ts(33,7): error TS18048: 'query' is possibly 'undefined'.
+src/retrieval/search/searcher.retirement.test.ts(33,41): error TS18048: 'query' is possibly 'undefined'.
+src/retrieval/search/searcher.retirement.test.ts(34,7): error TS18048: 'query' is possibly 'undefined'.
+src/retrieval/search/searcher.retirement.test.ts(34,42): error TS18048: 'query' is possibly 'undefined'.
+src/retrieval/search/searcher.retirement.test.ts(37,101): error TS2345: Argument of type 'unknown' is not assignable to parameter of type 'FieldValue'.
+src/retrieval/search/searcher.retirement.test.ts(39,7): error TS18048: 'query' is possibly 'undefined'.
+src/retrieval/search/searcher.retirement.test.ts(40,26): error TS18048: 'query' is possibly 'undefined'.
+src/retrieval/search/searcher.retirement.test.ts(43,7): error TS18048: 'query' is possibly 'undefined'.
+src/retrieval/search/searcher.retirement.test.ts(43,42): error TS18048: 'query' is possibly 'undefined'.
+src/retrieval/search/searcher.retirement.test.ts(47,7): error TS18048: 'query' is possibly 'undefined'.
+src/retrieval/search/searcher.retirement.test.ts(48,70): error TS18048: 'query' is possibly 'undefined'.
+src/retrieval/search/searcher.retirement.test.ts(119,5): error TS2741: Property 'model' is missing in type '{ rerank(_query: string, results: RetrievalResult[]): Promise<RetrievalResult[]>; }' but required in type 'Reranker'.
