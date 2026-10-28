@@ -8,6 +8,7 @@ import type { IngestionStageName, StageExecution } from "./lifecycle"
 import type { IngestionStoreImpl } from "./storage"
 import { openDb } from "./tracking"
 import { DocumentRepo } from "./tracking/doc_repo"
+import { ExtractionEvidenceRepository } from "./tracking/extraction_evidence_repo"
 
 class StopAfterChunk extends Error {}
 
@@ -158,6 +159,60 @@ test("a parser failure still leaves its selection and reason in document metadat
       selected: "markitdown",
       reason: "extension .docx is supported by MarkItDown",
     })
+  } finally {
+    db.close()
+  }
+})
+
+test("WD-02-AC04: a normalization failure still leaves the raw extraction evidence", async () => {
+  const db = openDb(":memory:")
+  const documents = new DocumentRepo(db)
+  documents.insert({
+    docId: "doc-normalize-fail",
+    sourceId: "source-normalize-fail",
+    contentHash: "hash",
+    version: 1,
+    title: "Scanned policy",
+    source: "scan.pdf",
+    content: "",
+    rawContent: Buffer.from("%PDF-1.4 broken"),
+    fileName: "scan.pdf",
+    mimeType: "application/pdf",
+  })
+  const raw = JSON.stringify({
+    schemaVersion: 1,
+    pageCount: 1,
+    markdown: "# Scanned policy",
+    warnings: ["ocr_content_unverified"],
+  })
+  const parser = {
+    type: "docreader-pdf",
+    async parseRaw() {
+      return raw
+    },
+    normalizeRaw() {
+      throw new Error("malformed source_blocks")
+    },
+  } as unknown as Parser
+  const runner = new PipelineStageRunner(db, () => parser)
+  try {
+    await assert.rejects(
+      runner.run(documents.get("doc-normalize-fail") as Document, {
+        signal: new AbortController().signal,
+        executionId: "test-execution",
+        async runStage(_name, _input, operation) {
+          return operation()
+        },
+      }),
+      /malformed source_blocks/,
+    )
+    const evidence = new ExtractionEvidenceRepository(db).get("doc-normalize-fail", 1)
+    assert.ok(evidence, "the raw row must be durable even when normalization fails")
+    assert.equal(evidence.artifact.rawExtraction, raw)
+    assert.deepEqual(evidence.artifact.warnings, ["ocr_content_unverified"])
+    assert.equal(evidence.artifact.pageCount, 1)
+    assert.deepEqual(evidence.artifact.pages, [], "un-normalized blocks yield no page evidence")
+    assert.equal(evidence.valid, true)
   } finally {
     db.close()
   }

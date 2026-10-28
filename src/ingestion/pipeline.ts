@@ -405,17 +405,65 @@ export class PipelineStageRunner implements IngestionStageRunner {
               // UT-09 truth seam: capture the RAW extraction (pre-cleaning)
               // for the durable evidence record; normalization happens on
               // the exact same output — nothing is parsed twice.
-              rawExtraction = await parser.parseRaw({
+              const raw = await parser.parseRaw({
                 content: document.rawContent,
                 fileName: document.fileName ?? document.title,
                 mimeType: document.mimeType ?? undefined,
                 signal: execution.signal,
               })
-              try {
-                blocks = parser.normalizeRaw(rawExtraction, document.id)
-              } catch (error) {
-                throw error
+              rawExtraction = raw
+              usedParser = reuseCandidate
+              usedParserInstance = parser
+
+              // WD-02-AC04: persist the raw envelope BEFORE normalization.
+              // A normalization failure must still leave the exact bytes on
+              // record, otherwise a paid extraction is lost with the error.
+              const provenance =
+                typeof parser.extractionProvenance === "function"
+                  ? parser.extractionProvenance()
+                  : null
+              let warnings = provenance?.warnings ?? []
+              let pageCount: number | null = null
+              if (reuseCandidate === "builtin-pdf" || reuseCandidate === "ocr-api" || reuseCandidate === "docreader-pdf") {
+                try {
+                  const rawJson = JSON.parse(raw) as {
+                    warnings?: unknown
+                    pageCount?: unknown
+                  }
+                  if (Array.isArray(rawJson.warnings)) {
+                    warnings = rawJson.warnings.filter(
+                      (warning): warning is string => typeof warning === "string"
+                    )
+                  }
+                  if (Number.isInteger(rawJson.pageCount)) {
+                    pageCount = rawJson.pageCount as number
+                  }
+                } catch {
+                  // The raw payload is whatever the parser produced; an
+                  // unparsable envelope leaves warnings/pageCount empty.
+                }
               }
+              const rawExtractionSha256 = createHash("sha256")
+                .update(Buffer.from(raw, "utf8"))
+                .digest("hex")
+              const recordEvidence = (pages: NormalizedBlock[] | null): void => {
+                new ExtractionEvidenceRepository(this.db).record({
+                  docId: document.id,
+                  version: document.version,
+                  schemaVersion: EXTRACTION_EVIDENCE_SCHEMA_VERSION,
+                  parserType: reuseCandidate,
+                  parserConfigVersion: parserConfigFingerprint(reuseCandidate, parserRoute),
+                  rawExtraction: raw,
+                  rawExtractionSha256,
+                  warnings,
+                  pages: pages ? buildPageEvidence(pages, pageCount, warnings) : [],
+                  pageCount,
+                  completedAt: new Date().toISOString(),
+                })
+              }
+              recordEvidence(null)
+              blocks = parser.normalizeRaw(raw, document.id)
+              recordEvidence(blocks)
             } else {
               rawExtraction = null
               blocks = await parser.parse({
@@ -435,59 +483,15 @@ export class PipelineStageRunner implements IngestionStageRunner {
             )
           }
 
-          // Ticket UT-09: persist the durable extraction evidence — the RAW
-          // extraction (pre-cleaning), its own hash, the parser configuration
-          // fingerprint and per-page coverage — before any cleaning runs, so a
-          // reviewer can audit the exact bytes the parser produced even after
-          // a restart. Parsers without a raw seam (mineru) leave no evidence
-          // row: absent capability is never fabricated. Coverage warnings come
-          // from the extraction payload itself (builtin-pdf emits them), decode
-          // warnings from the parser's own extraction provenance (UT-10).
+          // Ticket UT-09: the evidence row was written above for parsers with
+          // a raw seam (mineru has none and leaves no row — absent capability
+          // is never fabricated). The raw hash still travels with the chunk
+          // stage so reuse can bind to the exact bytes.
           let stageRawExtractionSha256: string | null = null
           if (rawExtraction !== null) {
             stageRawExtractionSha256 = createHash("sha256")
               .update(Buffer.from(rawExtraction, "utf8"))
               .digest("hex")
-            if (!reusedExtraction) {
-              const provenance =
-                typeof usedParserInstance?.extractionProvenance === "function"
-                  ? usedParserInstance.extractionProvenance()
-                  : null
-              let warnings = provenance?.warnings ?? []
-              let pageCount: number | null = null
-              if (usedParser === "builtin-pdf" || usedParser === "ocr-api" || usedParser === "docreader-pdf") {
-                try {
-                  const rawJson = JSON.parse(rawExtraction) as {
-                    warnings?: unknown
-                    pageCount?: unknown
-                  }
-                  if (Array.isArray(rawJson.warnings)) {
-                    warnings = rawJson.warnings.filter(
-                      (warning): warning is string => typeof warning === "string"
-                    )
-                  }
-                  if (Number.isInteger(rawJson.pageCount)) {
-                    pageCount = rawJson.pageCount as number
-                  }
-                } catch {
-                  // normalizeRaw already validated this exact JSON; a re-parse
-                  // failure cannot happen for a successfully normalized payload.
-                }
-              }
-              new ExtractionEvidenceRepository(this.db).record({
-                docId: document.id,
-                version: document.version,
-                schemaVersion: EXTRACTION_EVIDENCE_SCHEMA_VERSION,
-                parserType: usedParser,
-                parserConfigVersion: parserConfigFingerprint(usedParser, parserRoute),
-                rawExtraction,
-                rawExtractionSha256: stageRawExtractionSha256,
-                warnings,
-                pages: buildPageEvidence(blocks, pageCount, warnings),
-                pageCount,
-                completedAt: new Date().toISOString(),
-              })
-            }
           }
 
           const parsedDocument: Document = {
