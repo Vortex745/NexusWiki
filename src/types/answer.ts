@@ -99,6 +99,28 @@ export interface AnswerDegradation {
   reason?: AnswerDegradationReason
 }
 
+/**
+ * The native GLM reasoning-effort levels this product exposes. The values are
+ * the provider's own parameter values — never a product-invented scale.
+ */
+export type ReasoningEffort = "low" | "high" | "max"
+
+/**
+ * What the RUNNING endpoint/model declares about reasoning effort, resolved
+ * once from the composition config and frozen. `supported` means the exact
+ * endpoint/model pair is declared compatible — never that the provider is
+ * healthy right now.
+ */
+export interface ReasoningCapability {
+  supported: boolean
+  /** `low, high, max` when supported; empty when not. */
+  levels: readonly ReasoningEffort[]
+  /** `max` when supported (a new page's default); null when not. */
+  defaultEffort: ReasoningEffort | null
+  /** The model id this capability was resolved for; null on a bare router. */
+  model: string | null
+}
+
 export interface AnswerRunResult {
   runId: string
   status: AnswerTerminalStatus
@@ -115,6 +137,13 @@ export interface AnswerRunResult {
    * callers that predate the field.
    */
   modelProfile?: AnswerModelProfileSnapshot
+  /**
+   * The reasoning effort THIS RUN explicitly requested. It records the request,
+   * not consumed reasoning tokens and not proof that the provider executed
+   * that depth. Absent for requests that omitted the field (old clients and
+   * histories keep their exact old shape — nothing is backfilled).
+   */
+  requestedReasoningEffort?: ReasoningEffort
   /**
    * T12 (spec issue #12 criterion #1): LLM token usage from the rolling-
    * summary step (when a Summarizer is wired and summarization was

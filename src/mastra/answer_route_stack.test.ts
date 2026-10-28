@@ -57,6 +57,8 @@ const config: AppConfig = {
   demoOidcPort: 3900,
   demoOidcAudience: "nexusrag-demo",
   demoOidcPassword: "",
+  adminLoginId: "admin",
+  adminLoginPassword: "",
   activationMode: "auto",
   conversationTtlDays: 30,
   conversationGcIntervalMs: 86_400_000,
@@ -169,5 +171,203 @@ test("Clef route stack uses the configured provider once and preserves its trace
   } finally {
     globalThis.fetch = previousFetch
     db.close()
+  }
+})
+
+// ---------------------------------------------------------------------------
+// Reasoning effort: BOTH knowledge draft closures must forward the run's
+// frozen choice into the real generation call, and no other collaborator
+// (router, tool selector, critic, planner, contextualizer) may grow the field.
+// ---------------------------------------------------------------------------
+
+interface ChatCall {
+  stream: boolean
+  reasoning: unknown
+  system: string
+}
+
+function makeScriptedChat(route: "simple" | "complex"): {
+  client: OpenAI
+  calls: ChatCall[]
+} {
+  const calls: ChatCall[] = []
+  let loopStep = 0
+  const create = async (params: {
+    messages: Array<{ role: string; content: string }>
+    stream?: boolean
+    reasoning_effort?: unknown
+  }) => {
+    const system =
+      params.messages.find((message) => message.role === "system")?.content ?? ""
+    const lastUser =
+      [...params.messages].reverse().find((message) => message.role === "user")?.content ?? ""
+    calls.push({
+      stream: params.stream === true,
+      reasoning: params.reasoning_effort,
+      system: system.slice(0, 40),
+    })
+    if (system.includes("Classify the query")) {
+      return { choices: [{ message: { content: route } }] }
+    }
+    if (system.includes("retrieval strategy selector")) {
+      return { choices: [{ message: {} }] }
+    }
+    if (system.includes("You are a retrieval planner")) {
+      loopStep += 1
+      return {
+        choices: [{
+          message: {
+            tool_calls: [{
+              id: `call-${loopStep}`,
+              type: "function",
+              function: {
+                name: loopStep === 1 ? "semantic_lexical_hybrid" : "stop_loop",
+                arguments: JSON.stringify(
+                  loopStep === 1 ? { query: "退货政策" } : { reason: "evidence-sufficient" }
+                ),
+              },
+            }],
+          },
+        }],
+      }
+    }
+    if (system.includes("You are a critic")) {
+      return {
+        choices: [{
+          message: {
+            content: JSON.stringify({
+              schemaVersion: 1,
+              passed: true,
+              hallucination: false,
+              completeness: true,
+            }),
+          },
+        }],
+      }
+    }
+    if (system.includes("你是智能客服助手")) {
+      const cited = lastUser.match(/\[cite:(ev_[a-f0-9]+)\]/)?.[1]
+      const reply = cited
+        ? `知识库确认：可以在 14 天内退货。[cite:${cited}]`
+        : "知识库确认。"
+      if (params.stream) {
+        async function* tokenStream() {
+          yield { choices: [{ delta: { content: reply.slice(0, 6) } }] }
+          yield { choices: [{ delta: { content: reply.slice(6) } }] }
+        }
+        return tokenStream()
+      }
+      return { choices: [{ message: { content: reply } }] }
+    }
+    const followUp = lastUser.split("当前追问：").pop() ?? lastUser
+    return { choices: [{ message: { content: followUp } }] }
+  }
+  return { client: { chat: { completions: { create } } } as unknown as OpenAI, calls }
+}
+
+function retrievalOutcome() {
+  return {
+    status: "ok" as const,
+    results: [{
+      chunk: {
+        id: "chunk-1",
+        documentId: "doc-1",
+        content: "退货窗口为 14 天。",
+        childrenIds: [],
+        metadata: {},
+      },
+      score: 0.9,
+      source: "vector" as const,
+      wikilinks: [],
+    }],
+    unavailableChannels: [],
+  }
+}
+
+function conversationStoreDouble(): ConversationStore {
+  return {
+    saveValidatedTurn: () => {},
+    savePendingClarification: () => {},
+    loadConversationMemory: () => ({
+      totalValidatedTurnCount: 0,
+      oldestRecentTurnId: null,
+      summary: null,
+      summarizedThroughTurnId: null,
+      recentTurns: [],
+    }),
+    loadOlderTurnsForSummarization: () => [],
+    saveRollingSummary: () => {},
+    consumePendingClarification: () => null,
+  } as unknown as ConversationStore
+}
+
+async function runKnowledgeRoute(route: "simple" | "complex", effort?: "high" | "max") {
+  const chat = makeScriptedChat(route)
+  const db = openDb(":memory:")
+  try {
+    const stack = await createAnswerRouteStack({
+      config,
+      answerModelClient: chat.client,
+      db,
+      createSearcher: (() => ({ search: async () => retrievalOutcome() })) as never,
+      conversationStore: conversationStoreDouble(),
+      handoffStore: {} as HandoffStore,
+      streamDirectReply: async function* () {
+        yield "unused"
+      },
+    })
+    const output = await stack.runner({
+      message: "退货政策是什么？",
+      runId: `run-stack-${route}`,
+      sessionId: `sess-stack-${route}`,
+      signal: new AbortController().signal,
+      accessContext: { tenantId: "default", subjectId: "test", groups: [], scopes: ["chat"] },
+      ...(effort ? { reasoningEffort: effort } : {}),
+    })
+    return { output, calls: chat.calls }
+  } finally {
+    db.close()
+  }
+}
+
+function draftCalls(calls: ChatCall[]): ChatCall[] {
+  return calls.filter((call) => call.stream === true)
+}
+
+test("the simple draft closure forwards the run's reasoning effort and nothing else grows it", async () => {
+  const withEffort = await runKnowledgeRoute("simple", "high")
+  assert.equal(withEffort.output.status, "completed")
+  const drafts = draftCalls(withEffort.calls)
+  assert.equal(drafts.length, 1, "the simple route generated exactly one draft")
+  assert.equal(drafts[0].reasoning, "high")
+  const others = withEffort.calls.filter((call) => call.stream !== true)
+  assert.ok(others.length >= 3, "router, tool selector and critic all ran")
+  for (const call of others) {
+    assert.equal("reasoning" in call && call.reasoning !== undefined, false,
+      `a non-generation collaborator received reasoning_effort: ${call.system}`)
+  }
+})
+
+test("the complex draft closure forwards the run's reasoning effort and nothing else grows it", async () => {
+  const withEffort = await runKnowledgeRoute("complex", "max")
+  assert.equal(withEffort.output.status, "completed", JSON.stringify(withEffort.output.degradation))
+  const drafts = draftCalls(withEffort.calls)
+  assert.equal(drafts.length, 1, "the complex route generated exactly one draft")
+  assert.equal(drafts[0].reasoning, "max")
+  const others = withEffort.calls.filter((call) => call.stream !== true)
+  assert.ok(others.length >= 3, "router, loop controller and critic all ran")
+  for (const call of others) {
+    assert.equal("reasoning" in call && call.reasoning !== undefined, false,
+      `a non-generation collaborator received reasoning_effort: ${call.system}`)
+  }
+})
+
+test("an omitted reasoning effort reaches neither draft closure", async () => {
+  const simple = await runKnowledgeRoute("simple")
+  const complex = await runKnowledgeRoute("complex")
+  assert.equal(simple.output.status, "completed")
+  assert.equal(complex.output.status, "completed", JSON.stringify(complex.output.degradation))
+  for (const call of [...simple.calls, ...complex.calls]) {
+    assert.equal(call.reasoning, undefined, "no request may invent a reasoning effort")
   }
 })

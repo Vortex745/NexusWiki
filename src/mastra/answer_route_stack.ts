@@ -190,8 +190,8 @@ export async function createAnswerRouteStack(
     assembler: new ContextAssemblerImpl(),
     validator: new ValidatorImpl(chatClient, cfg.openaiChatModel),
     replanner: new RePlannerImpl(),
-    streamAnswerDraft: (messages: AgentMessage[], signal: AbortSignal) =>
-      answerModel.stream(messages, signal),
+    streamAnswerDraft: (messages: AgentMessage[], signal: AbortSignal, options) =>
+      answerModel.stream(messages, signal, options),
     toolSelector: new ToolSelectorImpl(chatClient, cfg.openaiChatModel),
     conversationStore,
     contextualizer,
@@ -245,8 +245,8 @@ export async function createAnswerRouteStack(
     assembler: new ContextAssemblerImpl(),
     validator: new ValidatorImpl(chatClient, cfg.openaiChatModel),
     replanner: new RePlannerImpl(),
-    streamAnswerDraft: (messages: AgentMessage[], signal: AbortSignal) =>
-      answerModel.stream(messages, signal),
+    streamAnswerDraft: (messages: AgentMessage[], signal: AbortSignal, options) =>
+      answerModel.stream(messages, signal, options),
     planner,
     complexLoopController,
     // Ticket 34 (TOOL-01A): the schema-validated tool boundary.

@@ -72,6 +72,8 @@ const config: AppConfig = {
   demoOidcPort: 3900,
   demoOidcAudience: "nexusrag-demo",
   demoOidcPassword: "",
+  adminLoginId: "admin",
+  adminLoginPassword: "",
   activationMode: "auto",
   conversationTtlDays: 30,
   conversationGcIntervalMs: 86_400_000,
@@ -590,8 +592,12 @@ test("ARCH-01A #1: the shared entry exposes exactly the documented public surfac
       traceObserver: { onEvent: () => {} },
       streamDirectReply: DIRECT_REPLY,
     })
-    // `eventsSource` + `searchOperations`, and `mcp` only when MCP is live.
-    assert.deepEqual(Object.keys(entry).sort(), ["eventsSource", "searchOperations"])
+    // `eventsSource` + `searchOperations` + the frozen reasoning capability,
+    // and `mcp` only when MCP is live.
+    assert.deepEqual(
+      Object.keys(entry).sort(),
+      ["eventsSource", "reasoningCapability", "searchOperations"]
+    )
     assert.equal(typeof entry.eventsSource, "function")
     assert.equal(typeof entry.searchOperations.rerank, "function")
     // The surface is the whole contract: a new public field on the entry would
@@ -1355,6 +1361,239 @@ test("ARCH-01A #5: the reranker resolves independently of injected search operat
       terminals(events)[0].result.modelProfile?.rerankModel,
       "injected-rerank-model"
     )
+  } finally {
+    await answerRuntime.processRuntime.close()
+  }
+})
+
+// ---------------------------------------------------------------------------
+// Reasoning effort (RE-03): the capability is resolved from the SAME config at
+// composition time and frozen; every business terminal records what the run
+// requested; concurrent sessions never cross their values; nothing rewrites
+// the shared config or the frozen model snapshot.
+// ---------------------------------------------------------------------------
+
+const OFFICIAL_REASONING_ENDPOINT = "https://open.bigmodel.cn/api/paas/v4"
+
+test("RE-03: the capability is normalized from the composed config and deep-frozen", async () => {
+  const cfg: AppConfig = {
+    ...config,
+    openaiBaseUrl: `  ${OFFICIAL_REASONING_ENDPOINT}/  `,
+    openaiChatModel: "  glm-5.3-flash  ",
+  }
+  const chat = makeChatClient({ route: "direct" })
+  const answerRuntime = createAnswerRuntime(cfg, clientFactory(chat))
+  try {
+    const entry = await createSharedAnswerEntry({
+      config: cfg,
+      answerRuntime,
+      conversationStore: fakeConversationStore(),
+      handoffStore: fakeHandoffStore(),
+      traceObserver: { onEvent: () => {} },
+      streamDirectReply: DIRECT_REPLY,
+    })
+    assert.deepEqual(entry.reasoningCapability, {
+      supported: true,
+      levels: ["low", "high", "max"],
+      defaultEffort: "max",
+      model: "glm-5.3-flash",
+    })
+    assert.equal(Object.isFrozen(entry.reasoningCapability), true)
+    assert.equal(Object.isFrozen(entry.reasoningCapability.levels), true)
+  } finally {
+    await answerRuntime.processRuntime.close()
+  }
+})
+
+test("RE-03: every non-official endpoint/model pair is declared unsupported", async () => {
+  const variants: Array<{ baseUrl: string; model: string; modelReported: string }> = [
+    { baseUrl: "https://relay.example.com/api/paas/v4", model: "glm-5.3-flash", modelReported: "glm-5.3-flash" },
+    { baseUrl: "http://open.bigmodel.cn/api/paas/v4", model: "glm-5.3-flash", modelReported: "glm-5.3-flash" },
+    { baseUrl: "https://open.bigmodel.cn/api/paas/v3", model: "glm-5.3-flash", modelReported: "glm-5.3-flash" },
+    { baseUrl: OFFICIAL_REASONING_ENDPOINT, model: "glm-5.3", modelReported: "glm-5.3" },
+    { baseUrl: OFFICIAL_REASONING_ENDPOINT, model: "glm-5.3-flash-air", modelReported: "glm-5.3-flash-air" },
+    { baseUrl: OFFICIAL_REASONING_ENDPOINT, model: "GLM-5.3-Flash", modelReported: "GLM-5.3-Flash" },
+  ]
+  for (const variant of variants) {
+    const cfg: AppConfig = {
+      ...config,
+      openaiBaseUrl: variant.baseUrl,
+      openaiChatModel: variant.model,
+    }
+    const answerRuntime = createAnswerRuntime(cfg, clientFactory(makeChatClient({ route: "direct" })))
+    try {
+      const entry = await createSharedAnswerEntry({
+        config: cfg,
+        answerRuntime,
+        conversationStore: fakeConversationStore(),
+        handoffStore: fakeHandoffStore(),
+        traceObserver: { onEvent: () => {} },
+        streamDirectReply: DIRECT_REPLY,
+      })
+      assert.deepEqual(entry.reasoningCapability, {
+        supported: false,
+        levels: [],
+        defaultEffort: null,
+        model: variant.modelReported,
+      }, `${variant.baseUrl} + ${variant.model} must not be declared compatible`)
+    } finally {
+      await answerRuntime.processRuntime.close()
+    }
+  }
+})
+
+test("RE-03: direct, simple and ambiguous terminals record the requested effort", async () => {
+  const cases: Array<{
+    route: "direct" | "simple" | "ambiguous"
+    effort: "low" | "high" | "max"
+    status: string
+  }> = [
+    { route: "direct", effort: "low", status: "completed" },
+    { route: "simple", effort: "max", status: "completed" },
+    { route: "ambiguous", effort: "high", status: "clarification_required" },
+  ]
+  for (const testCase of cases) {
+    const chat = makeChatClient({ route: testCase.route })
+    const answerRuntime = createAnswerRuntime(config, clientFactory(chat))
+    try {
+      const entry = await createSharedAnswerEntry({
+        config,
+        answerRuntime,
+        searchOperations: fakeSearchOperations(),
+        conversationStore: fakeConversationStore(),
+        handoffStore: fakeHandoffStore(),
+        traceObserver: { onEvent: () => {} },
+        streamDirectReply: DIRECT_REPLY,
+      })
+      const events = await collect(entry.eventsSource("问题", {
+        runId: `run-effort-${testCase.route}`,
+        sessionId: `sess-effort-${testCase.route}`,
+        reasoningEffort: testCase.effort,
+      }))
+      const done = terminals(events)
+      assert.equal(done.length, 1, `${testCase.route}: exactly one terminal`)
+      assert.equal(done[0].result.status, testCase.status)
+      assert.equal(done[0].result.requestedReasoningEffort, testCase.effort)
+    } finally {
+      await answerRuntime.processRuntime.close()
+    }
+  }
+})
+
+test("RE-03: an FAQ standard answer records the effort without a model call", async () => {
+  const chat = makeChatClient({ route: "direct" })
+  const answerRuntime = createAnswerRuntime(config, clientFactory(chat))
+  try {
+    const entry = await createSharedAnswerEntry({
+      config,
+      answerRuntime,
+      conversationStore: fakeConversationStore(),
+      handoffStore: fakeHandoffStore(),
+      traceObserver: { onEvent: () => {} },
+      streamDirectReply: DIRECT_REPLY,
+      faq: { listActive: () => [{
+        entryId: "faq-effort", version: 1, question: "营业时间", answer: "九点到五点", variants: [],
+        normalizedQuestion: "营业时间", source: null,
+      }] } as unknown as import("../faq/faq_entry_service").FaqEntryService,
+    })
+    const events = await collect(entry.eventsSource("营业时间", {
+      runId: "run-effort-faq",
+      sessionId: "sess-effort-faq",
+      reasoningEffort: "low",
+      retrievalScope: { knowledgeBaseIds: ["kb-faq"] },
+    }))
+    const done = terminals(events)
+    assert.equal(done.length, 1)
+    assert.equal(done[0].result.reply, "九点到五点")
+    assert.equal(done[0].result.requestedReasoningEffort, "low")
+    assert.equal(chat.calls.length, 0, "the standard answer never calls a model")
+  } finally {
+    await answerRuntime.processRuntime.close()
+  }
+})
+
+test("RE-03: a complex run records the effort on its single terminal", async () => {
+  const chat = makeChatClient({ route: "complex" })
+  const answerRuntime = createAnswerRuntime(config, clientFactory(chat))
+  try {
+    const entry = await createSharedAnswerEntry({
+      config,
+      answerRuntime,
+      searchOperations: fakeSearchOperations([
+        retrievalResult("chunk-1", "退货窗口为 14 天。"),
+        retrievalResult("chunk-2", "换货须保留原包装。"),
+      ]),
+      conversationStore: fakeConversationStore(),
+      handoffStore: fakeHandoffStore(),
+      traceObserver: { onEvent: () => {} },
+    })
+    const events = await collect(entry.eventsSource("比较退货和换货", {
+      runId: "run-effort-complex",
+      sessionId: "sess-effort-complex",
+      reasoningEffort: "high",
+    }))
+    const done = terminals(events)
+    assert.equal(done.length, 1, "the complex route converges on exactly one terminal")
+    assert.equal(done[0].result.requestedReasoningEffort, "high")
+  } finally {
+    await answerRuntime.processRuntime.close()
+  }
+})
+
+test("RE-03: two sessions with different efforts never cross their values", async () => {
+  const chat = makeChatClient({ route: "simple" })
+  const answerRuntime = createAnswerRuntime(config, clientFactory(chat))
+  try {
+    const entry = await createSharedAnswerEntry({
+      config,
+      answerRuntime,
+      searchOperations: fakeSearchOperations(),
+      conversationStore: fakeConversationStore(),
+      handoffStore: fakeHandoffStore(),
+      traceObserver: { onEvent: () => {} },
+      streamDirectReply: DIRECT_REPLY,
+    })
+    const [lowEvents, maxEvents] = await Promise.all([
+      collect(entry.eventsSource("退货政策", {
+        runId: "run-effort-low",
+        sessionId: "sess-effort-low",
+        reasoningEffort: "low",
+      })),
+      collect(entry.eventsSource("退货政策", {
+        runId: "run-effort-max",
+        sessionId: "sess-effort-max",
+        reasoningEffort: "max",
+      })),
+    ])
+    assert.equal(terminals(lowEvents)[0].result.requestedReasoningEffort, "low")
+    assert.equal(terminals(maxEvents)[0].result.requestedReasoningEffort, "max")
+  } finally {
+    await answerRuntime.processRuntime.close()
+  }
+})
+
+test("RE-03: a run never rewrites the shared config or the frozen model snapshot", async () => {
+  const before = JSON.stringify(config)
+  const chat = makeChatClient({ route: "direct" })
+  const answerRuntime = createAnswerRuntime(config, clientFactory(chat))
+  try {
+    const entry = await createSharedAnswerEntry({
+      config,
+      answerRuntime,
+      conversationStore: fakeConversationStore(),
+      handoffStore: fakeHandoffStore(),
+      traceObserver: { onEvent: () => {} },
+      streamDirectReply: DIRECT_REPLY,
+    })
+    const events = await collect(entry.eventsSource("你好", {
+      runId: "run-effort-config",
+      sessionId: "sess-effort-config",
+      reasoningEffort: "max",
+    }))
+    assert.equal(JSON.stringify(config), before, "the shared config is never mutated")
+    const done = terminals(events)[0]
+    assert.equal(done.result.modelProfile?.chatModel, config.openaiChatModel)
+    assert.equal("requestedReasoningEffort" in (done.result.modelProfile ?? {}), false)
   } finally {
     await answerRuntime.processRuntime.close()
   }

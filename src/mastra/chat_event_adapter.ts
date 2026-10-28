@@ -45,6 +45,7 @@ import type {
   RetrievalTraceData,
   ContextTraceData,
   ValidationTraceData,
+  ReasoningEffort,
 } from "../types"
 import type { AnswerRunOptions, AnswerRunObserver } from "../answer/generation"
 import type { AccessContext } from "../access/context"
@@ -151,6 +152,12 @@ export interface MastraRunnerInput {
   longTermMemories?: import("./memory_prompt").RecalledMemory[]
   /** Explicit saved-memory inspection query; bypasses knowledge retrieval. */
   memoryIntent?: boolean
+  /**
+   * The run's frozen reasoning-effort request, forwarded verbatim from
+   * `AnswerRunOptions`. Absent means the run never asked — no runner may
+   * invent a value, and the provider payload keeps its old shape.
+   */
+  reasoningEffort?: ReasoningEffort
   /** Route preparation produced once by the dispatch runner. Standalone
    * route runners may omit it and perform their own ownership check. */
   preparedRoute?: PreparedMastraRoute
@@ -595,6 +602,10 @@ export function createMastraChatEventAdapter(
           ...(runOptions?.useMemory === false ? { useMemory: false } : {}),
           // Ticket 36 (WEB-01): the explicit web-search opt-in flag.
           ...(runOptions?.useWeb === true ? { useWeb: true } : {}),
+          // The run's frozen reasoning-effort request (omitted = never asked).
+          ...(runOptions?.reasoningEffort
+            ? { reasoningEffort: runOptions.reasoningEffort }
+            : {}),
           onAnswerDelta,
           onStageProgress,
         })
@@ -777,6 +788,12 @@ export function createMastraChatEventAdapter(
           summarizationOutcome: runnerOutput.summarizationOutcome,
           ...(runnerOutput.faq ? { faq: runnerOutput.faq } : {}),
           ...(runnerOutput.memoryUsed ? { memoryUsed: runnerOutput.memoryUsed } : {}),
+          // The request-side record: stamped from the run's own frozen choice
+          // on EVERY outcome (FAQ, clarification and pre-generation failures
+          // included), never inferred from the terminal status.
+          ...(runOptions?.reasoningEffort
+            ? { requestedReasoningEffort: runOptions.reasoningEffort }
+            : {}),
         })
         notifyObservers(event)
         yield event
@@ -829,6 +846,9 @@ export function createMastraChatEventAdapter(
                 ? undefined
                 : "no_cited_claims",
           },
+          ...(runOptions?.reasoningEffort
+            ? { requestedReasoningEffort: runOptions.reasoningEffort }
+            : {}),
         })
         notifyObservers(event)
         yield event

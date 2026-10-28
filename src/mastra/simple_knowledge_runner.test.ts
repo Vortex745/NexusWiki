@@ -1877,3 +1877,58 @@ test("PT-04 AC09: gap-first selection is labelled as an aggregation, a lone sear
     source: "dedicated_rerank",
   })
 })
+
+// ---------------------------------------------------------------------------
+// Reasoning effort: the frozen run choice must reach the initial draft AND a
+// forced correction rewrite; retrieval rounds never change with the level.
+// ---------------------------------------------------------------------------
+
+test("the reasoning effort reaches the simple draft and its correction rewrite unchanged", async () => {
+  async function run(effort?: "high") {
+    const oldResult = makeRetrievalResult()
+    const gapResult = makeRetrievalResult({
+      chunk: { id: "gap", documentId: "gap-doc", content: "New evidence", childrenIds: [], metadata: {} },
+    })
+    const oldEvidence = buildEvidence([oldResult])
+    const gapEvidence = buildEvidence([gapResult])
+    const searcher = makeFakeSearcher([
+      { status: "ok", results: [oldResult], unavailableChannels: [] },
+      { status: "ok", results: [gapResult], unavailableChannels: [] },
+    ])
+    const validator = makeFakeValidator([
+      { passed: false, hallucination: false, completeness: false, answerBasis: { text: "第一轮不能公开", referenceIds: [oldEvidence[0].id] } },
+      { passed: true, hallucination: false, completeness: true, answerBasis: { text: "第二轮依据新增资料。", referenceIds: [gapEvidence[0].id] } },
+    ])
+    const received: unknown[] = []
+    let call = 0
+    const draft = async function* (
+      _messages: AgentMessage[],
+      _signal: AbortSignal,
+      options?: { reasoningEffort?: "low" | "high" | "max" }
+    ): AsyncGenerator<string> {
+      received.push(options)
+      const evidence = call === 0 ? oldEvidence : gapEvidence
+      call += 1
+      yield buildCitedAnswer(evidence)
+    }
+    const runner = createSimpleKnowledgeMastraRunner({
+      router: makeFakeRouter("simple"),
+      createSearcher: () => searcher,
+      assembler: makeFakeAssembler(),
+      validator,
+      replanner: makeFakeRePlanner([{ text: "missing detail" }]),
+      streamAnswerDraft: draft,
+    })
+    const output = await runner(makeRunnerInput(effort ? { reasoningEffort: effort } : {}))
+    assert.equal(output.status, "completed")
+    return { received, searches: searcher.calls.length }
+  }
+
+  const withEffort = await run("high")
+  assert.deepEqual(withEffort.received, [{ reasoningEffort: "high" }, { reasoningEffort: "high" }])
+  assert.equal(withEffort.searches, 2, "one initial retrieval and one correction retrieval")
+
+  const omitted = await run()
+  assert.deepEqual(omitted.received, [undefined, undefined])
+  assert.equal(omitted.searches, withEffort.searches, "the level never changes retrieval rounds")
+})

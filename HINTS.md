@@ -94,6 +94,18 @@ All limits are opt-in. A configured token or cost limit fails closed if the prov
 
 When `ACCESS_MODE=single_tenant`, no token is required (backward compat). When `ACCESS_MODE=enforced`, all `/api/chat` and `/api/ingest` requests require a valid RS256 JWT verified by `jose.jwtVerify` against the remote JWKS.
 
+#### Local ID/password sign-in (`DEMO_OIDC=1`)
+
+| Variable | Default | Required? | Notes |
+|----------|---------|-----------|-------|
+| `DEMO_OIDC` | — | Optional | `1` starts the loopback issuer and enables `/api/auth/register` + `/api/auth/login` |
+| `DEMO_OIDC_PORT` | `3900` | Optional | Loopback issuer port |
+| `DEMO_OIDC_AUDIENCE` | `nexusrag-demo` | Optional | Token audience |
+| `ADMIN_LOGIN_ID` | `admin` | Optional | The administrator's special ID; 1–5 Chinese/Latin letters, reserved from registration |
+| `ADMIN_LOGIN_PASSWORD` | `DEMO_OIDC_PASSWORD` | Optional | Administrator password (fallback also defaults to `123456`); server-side only |
+
+Normal users register through the sign-in screen: ID ≤ 5 Chinese/Latin characters (case-insensitive uniqueness), password exactly 8 characters (case-sensitive). Accounts live in the `local_users` table of the process SQLite database. Registered users receive only the `chat` scope; the administrator receives all scopes.
+
 ### 2.8 Langfuse (Optional Observability)
 
 | Variable | Default | Required? | Notes |

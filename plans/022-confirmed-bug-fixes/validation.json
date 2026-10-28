@@ -1,0 +1,27 @@
+{
+  "checkedAt": "2026-10-28T15:21:27.441Z",
+  "status": "pass",
+  "scope": "Specification structure and consistency only; no business implementation verification",
+  "tickets": 5,
+  "userStories": 35,
+  "acceptanceCriteria": 35,
+  "requiredSectionsPerTicket": 7,
+  "resolvedLocalLinks": 27,
+  "dependencyCycles": 0,
+  "testingSeamsConfirmed": false,
+  "ticketsPublished": false,
+  "implementationStatus": "not_started",
+  "fixVerificationStatus": "not_run",
+  "checks": [
+    "unique tickets",
+    "required sections",
+    "numbered user stories",
+    "acceptance ownership",
+    "all acceptance unchecked",
+    "no paths or snippets in implementation decisions",
+    "local links resolve",
+    "seam coverage",
+    "acyclic dependencies",
+    "honest draft and confirmation status"
+  ]
+}

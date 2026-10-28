@@ -122,6 +122,7 @@ import type {
   ValidationTraceData,
   TokenUsage,
 } from "../types"
+import type { AnswerModelStreamOptions } from "../answer/generation"
 
 // ---------------------------------------------------------------------------
 // Seams
@@ -140,7 +141,10 @@ import type {
  */
 export type KnowledgeAnswerDraftStream = (
   messages: AgentMessage[],
-  signal: AbortSignal
+  signal: AbortSignal,
+  /** Generation parameters for THIS draft (the run's frozen reasoning
+   * effort). Omitted for runs that never asked — the call stays unchanged. */
+  options?: AnswerModelStreamOptions
 ) => AsyncIterable<string>
 
 /**
@@ -847,7 +851,11 @@ export function createSimpleKnowledgeMastraRunner(
     ]
     const initialTokens: string[] = []
     for await (const token of abortableStream(
-      streamAnswerDraft(initialMessages, signal),
+      streamAnswerDraft(
+        initialMessages,
+        signal,
+        input.reasoningEffort ? { reasoningEffort: input.reasoningEffort } : undefined
+      ),
       signal
     )) {
       initialTokens.push(token)
@@ -1177,7 +1185,11 @@ export function createSimpleKnowledgeMastraRunner(
       ]
       const regenTokens: string[] = []
       for await (const token of abortableStream(
-        streamAnswerDraft(regenMessages, signal),
+        streamAnswerDraft(
+        regenMessages,
+        signal,
+        input.reasoningEffort ? { reasoningEffort: input.reasoningEffort } : undefined
+      ),
         signal
       )) {
         regenTokens.push(token)

@@ -189,6 +189,8 @@ const config: AppConfig = {
   demoOidcPort: 3900,
   demoOidcAudience: "nexusrag-demo",
   demoOidcPassword: "",
+  adminLoginId: "admin",
+  adminLoginPassword: "",
   activationMode: "auto",
   conversationTtlDays: 30,
   conversationGcIntervalMs: 86_400_000,

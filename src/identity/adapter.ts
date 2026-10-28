@@ -102,11 +102,13 @@ export function accessContextFromClaims(
   // identity — fail closed (→ 401). The claim-mapping is configurable, so
   // a deployment that uses "sub" for tenant (non-standard) is supported.
   if (!tenantId || !subjectId) return null
+  const displayName = stringClaim(claims, "name")
   return {
     tenantId,
     subjectId,
     groups: groupsFromClaims(claims, mapping.groupsClaim),
     scopes: scopesFromClaims(claims),
+    ...(displayName ? { displayName } : {}),
   }
 }
 

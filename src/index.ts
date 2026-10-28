@@ -18,6 +18,8 @@ import {
   startDemoOidcIssuer,
   type DemoOidcIssuerHandle,
 } from "./identity"
+import { LocalAuthService, SqliteLocalUserStore } from "./identity/local_users"
+import type { LocalAuthOptions } from "./api/session"
 import { SqliteKnowledgeBaseRepo } from "./knowledge/knowledge_base_repo"
 import { KnowledgeBaseServiceImpl } from "./knowledge/knowledge_base_service"
 import { knowledgeBaseEmbeddingProfile } from "./types/knowledge_base"
@@ -69,61 +71,6 @@ async function main() {
   const cfg = loadConfig()
   console.log("[kefu-RAG] Config loaded", { esNode: cfg.esNode, neo4jUri: cfg.neo4jUri })
 
-  // Ticket 05: build the OIDC config + concrete IdentityAdapter from the
-  // environment. In single_tenant mode loadOidcConfig returns a noop config
-  // and the adapter is never constructed (the middleware short-circuits to
-  // singleTenantAccessContext). In enforced mode the JoseIdentityAdapter
-  // uses jose's jwtVerify + createRemoteJWKS for standards-based signature,
-  // issuer, audience, algorithm, expiry, and not-before validation in one
-  // trust boundary. Remote JWKS caching, cooldown, and key rotation are
-  // handled by jose internally — no manual cache warming needed.
-  //
-  // Ticket 01 (IAM-01): when DEMO_OIDC=1 the local demo issuer takes over.
-  // It starts on loopback, mints the three demo accounts, and the adapter
-  // verifies against ITS JWKS. `loadConfig` already reports the demo as
-  // enforced access mode (the demo flag wins over ACCESS_MODE on purpose: a
-  // demo that silently fell back to single-tenant would defeat the security
-  // flow), so the enforced identity path is what the server mounts.
-  let demoIssuer: DemoOidcIssuerHandle | undefined
-  let demoAuth: { tokenEndpoint: string; password: string; tokenAuth: string } | undefined
-  let oidcConfig = loadOidcConfig(process.env, cfg.accessMode)
-  if (cfg.demoOidc) {
-    demoIssuer = await startDemoOidcIssuer({
-      port: cfg.demoOidcPort,
-      audience: cfg.demoOidcAudience,
-    })
-    oidcConfig = {
-      kind: "active",
-      issuer: demoIssuer.issuer,
-      audience: cfg.demoOidcAudience,
-      jwksEndpoint: demoIssuer.jwksEndpoint,
-      claimMapping: DEFAULT_CLAIM_MAPPING,
-      clockSkewSeconds: DEFAULT_CLOCK_SKEW_SECONDS,
-    }
-    demoAuth = {
-      tokenEndpoint: demoIssuer.tokenEndpoint,
-      password: cfg.demoOidcPassword,
-      tokenAuth: demoIssuer.tokenAuth,
-    }
-    console.log(
-      `[kefu-RAG] Demo OIDC issuer listening on ${demoIssuer.issuer} — sign-in requires DEMO_OIDC_PASSWORD`
-    )
-  }
-  let identityAdapter: IdentityAdapter | undefined
-  if (cfg.accessMode === "enforced") {
-    identityAdapter = new JoseIdentityAdapter({ config: oidcConfig })
-  }
-
-  // Ticket 05 P4 + P5.2: startup fail-closed gate. Enforced mode without a
-  // wired identity adapter throws — main() rejects, top-level .catch() exits
-  // with code 1, no server, no worker. With the P5.2 adapter wired, enforced
-  // mode passes the startup gate; the runtime fail-closed still lives in
-  // createAccessMiddleware (enforced + adapter.resolve()=null → 401).
-  validateAccessMode({
-    accessMode: cfg.accessMode,
-    ...(identityAdapter ? { adapter: identityAdapter } : {}),
-  })
-
   const runtimeMode = readMastraRuntimeMode()
   assertRuntimeModeStartupAllowed(
     runtimeMode,
@@ -156,6 +103,69 @@ async function main() {
     }),
     tracingRuntime,
   )
+
+  // Ticket 05: build the OIDC config + concrete IdentityAdapter from the
+  // environment. In single_tenant mode loadOidcConfig returns a noop config
+  // and the adapter is never constructed (the middleware short-circuits to
+  // singleTenantAccessContext). In enforced mode the JoseIdentityAdapter
+  // uses jose's jwtVerify + createRemoteJWKS for standards-based signature,
+  // issuer, audience, algorithm, expiry, and not-before validation in one
+  // trust boundary. Remote JWKS caching, cooldown, and key rotation are
+  // handled by jose internally — no manual cache warming needed.
+  //
+  // Ticket 01 (IAM-01): when DEMO_OIDC=1 the local issuer takes over. It
+  // starts on loopback, mints tokens only for the administrator's special ID
+  // and the users registered into this process's database, and the adapter
+  // verifies against ITS JWKS. `loadConfig` already reports the demo as
+  // enforced access mode (the demo flag wins over ACCESS_MODE on purpose: a
+  // demo that silently fell back to single-tenant would defeat the security
+  // flow), so the enforced identity path is what the server mounts. The auth
+  // service is created here, next to the runtime, so the sign-in proxy and
+  // the issuer share ONE user registry.
+  let demoIssuer: DemoOidcIssuerHandle | undefined
+  let demoAuth: LocalAuthOptions | undefined
+  let oidcConfig = loadOidcConfig(process.env, cfg.accessMode)
+  if (cfg.demoOidc) {
+    const localAuth = new LocalAuthService(
+      new SqliteLocalUserStore(answerRuntime.processRuntime.db),
+      { adminId: cfg.adminLoginId, adminPassword: cfg.adminLoginPassword },
+    )
+    demoIssuer = await startDemoOidcIssuer({
+      port: cfg.demoOidcPort,
+      audience: cfg.demoOidcAudience,
+      resolveClaims: (account) => localAuth.claimsForAccount(account),
+    })
+    oidcConfig = {
+      kind: "active",
+      issuer: demoIssuer.issuer,
+      audience: cfg.demoOidcAudience,
+      jwksEndpoint: demoIssuer.jwksEndpoint,
+      claimMapping: DEFAULT_CLAIM_MAPPING,
+      clockSkewSeconds: DEFAULT_CLOCK_SKEW_SECONDS,
+    }
+    demoAuth = {
+      tokenEndpoint: demoIssuer.tokenEndpoint,
+      tokenAuth: demoIssuer.tokenAuth,
+      localAuth,
+    }
+    console.log(
+      `[kefu-RAG] Local sign-in ready on ${demoIssuer.issuer} — admin ID: ${cfg.adminLoginId}, registered users can sign in with their own ID`
+    )
+  }
+  let identityAdapter: IdentityAdapter | undefined
+  if (cfg.accessMode === "enforced") {
+    identityAdapter = new JoseIdentityAdapter({ config: oidcConfig })
+  }
+
+  // Ticket 05 P4 + P5.2: startup fail-closed gate. Enforced mode without a
+  // wired identity adapter throws — main() rejects, top-level .catch() exits
+  // with code 1, no server, no worker. With the P5.2 adapter wired, enforced
+  // mode passes the startup gate; the runtime fail-closed still lives in
+  // createAccessMiddleware (enforced + adapter.resolve()=null → 401).
+  validateAccessMode({
+    accessMode: cfg.accessMode,
+    ...(identityAdapter ? { adapter: identityAdapter } : {}),
+  })
 
   // Ticket 02 (KB-01, spec §8.1 L241): every tenant owns exactly one default
   // knowledge base, and startup creates it for the tenants this process serves.
@@ -261,6 +271,9 @@ async function main() {
       attachments,
       // Ticket 35 (TOOL-01B): the MCP capability invocation seam.
       ...(sharedAnswerEntry.mcp ? { mcpCapabilities: sharedAnswerEntry.mcp } : {}),
+      // The reasoning-effort capability THIS composition resolved — the
+      // transport must publish this exact frozen object, never re-read .env.
+      reasoningCapability: sharedAnswerEntry.reasoningCapability,
       // LO-06: the single tracing runtime built above.
       tracing: tracingRuntime,
       // Model settings saves write provider credentials here; detection and

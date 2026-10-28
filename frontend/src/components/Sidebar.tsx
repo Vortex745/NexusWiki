@@ -48,7 +48,8 @@ import {
 } from "../lib/api"
 import { useSlidingHighlight } from "../lib/useSlidingHighlight"
 import { knowledgeStore, useKnowledgeBases } from "../runtime/knowledgeStore"
-import { useSignedInSession } from "../runtime/SessionContext"
+import { useSession, useSignedInSession } from "../runtime/SessionContext"
+import { UserMenu } from "./arc/user-menu/user-menu"
 import { DocumentsDialog } from "./panels/DocumentsDialog"
 import { ConfirmDialog } from "./ui/Dialog"
 import { Button } from "./ui/Controls"
@@ -1178,6 +1179,8 @@ function WorkspaceMenu({ collapsed = false }: { collapsed?: boolean }) {
 export function Sidebar({ collapsed, isDark, onToggleTheme }: SidebarProps) {
   const { toggleSidebar } = useSidebar()
   const { threads, activeThreadId } = useConversation()
+  const session = useSignedInSession()
+  const { signOut } = useSession()
 
   // Ticket 08 (KB-04): load the knowledge-base list once per sign-in.
   useEffect(() => {
@@ -1388,6 +1391,26 @@ export function Sidebar({ collapsed, isDark, onToggleTheme }: SidebarProps) {
               </div>
             </div>
           </div>
+
+          {session?.displayName ? (
+            <div
+              className={cn(
+                "sidebar-account mt-2 flex shrink-0 items-center border-t border-line pt-2",
+                collapsed ? "justify-center" : "justify-start",
+              )}
+            >
+              <UserMenu
+                user={{
+                  name: session.displayName,
+                  caption: session.role === "admin" ? "管理员" : "普通用户",
+                }}
+                showName={!collapsed}
+                align="start"
+                onSignOut={() => signOut()}
+                className={cn(!collapsed && "w-full justify-start")}
+              />
+            </div>
+          ) : null}
         </div>
       </ShadcnSidebar>
     </>

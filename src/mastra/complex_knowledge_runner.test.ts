@@ -3859,3 +3859,68 @@ test("PT-07 review: commitFinalContext is honest — a lone search keeps its lab
   assert.equal(unlabelled.retrievalTrace.finalContextOrdering, undefined)
 })
 
+
+// ---------------------------------------------------------------------------
+// Reasoning effort: the frozen run choice must reach the initial complex draft
+// and a forced correction rewrite; the loop's tool budget is untouched.
+// ---------------------------------------------------------------------------
+
+test("the reasoning effort reaches the complex draft and its correction rewrite unchanged", async () => {
+  const makeController = () => makeFakeComplexLoopController([
+    { sufficient: false, tool: "semantic_lexical_hybrid", args: { query: "initial-query" } },
+    { sufficient: true },
+    { sufficient: false, tool: "semantic_lexical_hybrid", args: { query: "correction-query" } },
+    { sufficient: true },
+  ])
+  const makeSearcherDouble = () => makeFakeSearcher([
+    { status: "ok", results: [makeRetrievalResult({ chunk: { id: "c-init", documentId: "d-init", content: "initial", childrenIds: [], metadata: {} } })], unavailableChannels: [] },
+    { status: "ok", results: [makeRetrievalResult({ chunk: { id: "c-corr", documentId: "d-corr", content: "correction", childrenIds: [], metadata: {} } })], unavailableChannels: [] },
+  ])
+
+  async function run(effort?: "max") {
+    const searcher = makeSearcherDouble()
+    const received: unknown[] = []
+    let call = 0
+    const draft = async function* (
+      _messages: AgentMessage[],
+      _signal: AbortSignal,
+      options?: { reasoningEffort?: "low" | "high" | "max" }
+    ): AsyncGenerator<string> {
+      received.push(options)
+      const evidence = buildEvidence([
+        makeRetrievalResult({
+          chunk: {
+            id: call === 0 ? "c-init" : "c-corr",
+            documentId: call === 0 ? "d-init" : "d-corr",
+            content: "evidence",
+            childrenIds: [],
+            metadata: {},
+          },
+        }),
+      ])
+      call += 1
+      yield buildCitedAnswer(evidence)
+    }
+    const runner = createComplexKnowledgeMastraRunner({
+      router: makeFakeRouter("complex"),
+      createSearcher: () => searcher,
+      assembler: makeFakeAssembler(),
+      validator: makeFakeValidator([
+        { passed: false, hallucination: false, completeness: false },
+        { passed: true, hallucination: false, completeness: true },
+      ]),
+      replanner: makeFakeRePlanner([[{ text: "gap-query-1" }]]),
+      streamAnswerDraft: draft,
+      complexLoopController: makeController(),
+    })
+    const output = await runner(makeRunnerInput(effort ? { reasoningEffort: effort } : {}))
+    assert.equal(output.status, "completed")
+    return { received, searches: searcher.calls.length }
+  }
+
+  const withEffort = await run("max")
+  assert.deepEqual(withEffort.received, [{ reasoningEffort: "max" }, { reasoningEffort: "max" }])
+  const omitted = await run()
+  assert.deepEqual(omitted.received, [undefined, undefined])
+  assert.equal(omitted.searches, withEffort.searches, "the level never changes the loop's retrieval budget")
+})

@@ -1,0 +1,164 @@
+{
+  "schemaVersion": 1,
+  "title": "五个已复现 Bug 修复计划",
+  "createdOn": "2026-10-28",
+  "timezone": "Asia/Shanghai",
+  "baseline": {
+    "head": "bbedc95",
+    "includesPreExistingWorkingTreeChanges": true,
+    "recheckBeforeImplementation": true
+  },
+  "tracker": "local",
+  "status": "draft",
+  "implementationStatus": "not_started",
+  "verificationStatus": "not_run",
+  "publication": {
+    "status": "awaiting_testing_seam_confirmation",
+    "target": ".scratch/confirmed-bug-fix-tickets",
+    "proposedLabels": ["ready-for-agent"],
+    "published": false,
+    "startsImplementation": false
+  },
+  "testingBoundary": {
+    "confirmation": {
+      "confirmed": false,
+      "scope": "S1-S4 for BF-01 through BF-05",
+      "requiredBy": "to-spec: Check with the user that these seams match their expectations."
+    },
+    "primary": [
+      {
+        "id": "S1",
+        "name": "真实来源退役到运行时检索",
+        "tickets": ["BF-01"],
+        "controlledDependencies": ["isolated SQLite", "index adapter"],
+        "observables": ["search hits", "parent context", "PageIndex visibility"]
+      },
+      {
+        "id": "S2",
+        "name": "已认证 HTTP 运行历史读取",
+        "tickets": ["BF-02"],
+        "controlledDependencies": ["synthetic authenticated identities", "isolated SQLite"],
+        "observables": ["HTTP status", "complete owner response", "uniform not-found response"]
+      },
+      {
+        "id": "S3",
+        "name": "编辑和重新生成 HTTP 到真实分发输入",
+        "tickets": ["BF-03"],
+        "controlledDependencies": ["isolated SQLite", "external model and tools"],
+        "observables": ["history branch", "effectiveMessage", "unrelated pending controls"]
+      },
+      {
+        "id": "S4",
+        "name": "DocReaderPdfParser.parse",
+        "tickets": ["BF-04", "BF-05"],
+        "controlledDependencies": ["fake DocReader response frames"],
+        "observables": ["blocks", "table.rows", "raw text", "bounded completion"]
+      }
+    ],
+    "supplemental": [
+      "Existing public store and PageIndex methods for scope and transaction contracts",
+      "Focused normalizer cases for progress and escape diagnostics",
+      "Existing ingestion and attachment parser wiring regressions"
+    ]
+  },
+  "recommendedOrder": ["BF-01", "BF-02", "BF-03", "BF-04", "BF-05"],
+  "proposedFrontierAfterPublication": ["BF-01", "BF-02", "BF-03", "BF-04", "BF-05"],
+  "coordination": [
+    {
+      "tickets": ["BF-02", "BF-03"],
+      "reason": "可能共写聊天和会话历史模块",
+      "rule": "协调共享文件写入，不构造功能阻塞"
+    },
+    {
+      "tickets": ["BF-04", "BF-05"],
+      "reason": "共用 PDF 标准化文件",
+      "rule": "建议串行 BF-04 再 BF-05，不构造功能阻塞"
+    }
+  ],
+  "tickets": [
+    {
+      "id": "BF-01",
+      "title": "退役文档立即退出所有知识检索",
+      "priority": "P1",
+      "spec": "BF-01-retired-source-retrieval.md",
+      "status": "draft",
+      "implementationStatus": "not_started",
+      "verificationStatus": "not_run",
+      "blockedBy": [],
+      "testingSeams": ["S1"],
+      "userStories": [1, 2, 3, 4, 5, 6, 7],
+      "acceptanceCriteria": ["BF-01-A1", "BF-01-A2", "BF-01-A3", "BF-01-A4", "BF-01-A5", "BF-01-A6", "BF-01-A7"]
+    },
+    {
+      "id": "BF-02",
+      "title": "运行历史读取校验会话所有权",
+      "priority": "P1",
+      "spec": "BF-02-run-history-ownership.md",
+      "status": "draft",
+      "implementationStatus": "not_started",
+      "verificationStatus": "not_run",
+      "blockedBy": [],
+      "testingSeams": ["S2"],
+      "userStories": [1, 2, 3, 4, 5, 6, 7],
+      "acceptanceCriteria": ["BF-02-A1", "BF-02-A2", "BF-02-A3", "BF-02-A4", "BF-02-A5", "BF-02-A6", "BF-02-A7"]
+    },
+    {
+      "id": "BF-03",
+      "title": "编辑和重新生成时清除旧分支的待澄清状态",
+      "priority": "P2",
+      "spec": "BF-03-branch-pending-clarification.md",
+      "status": "draft",
+      "implementationStatus": "not_started",
+      "verificationStatus": "not_run",
+      "blockedBy": [],
+      "testingSeams": ["S3"],
+      "userStories": [1, 2, 3, 4, 5, 6, 7],
+      "acceptanceCriteria": ["BF-03-A1", "BF-03-A2", "BF-03-A3", "BF-03-A4", "BF-03-A5", "BF-03-A6", "BF-03-A7"]
+    },
+    {
+      "id": "BF-04",
+      "title": "特殊代码围栏不再导致整份 PDF 解析失败",
+      "priority": "P2",
+      "spec": "BF-04-markdown-fence-progress.md",
+      "status": "draft",
+      "implementationStatus": "not_started",
+      "verificationStatus": "not_run",
+      "blockedBy": [],
+      "testingSeams": ["S4"],
+      "userStories": [1, 2, 3, 4, 5, 6, 7],
+      "acceptanceCriteria": ["BF-04-A1", "BF-04-A2", "BF-04-A3", "BF-04-A4", "BF-04-A5", "BF-04-A6", "BF-04-A7"]
+    },
+    {
+      "id": "BF-05",
+      "title": "表格末格的转义竖线保留为真实单元格内容",
+      "priority": "P2",
+      "spec": "BF-05-table-escaped-pipe.md",
+      "status": "draft",
+      "implementationStatus": "not_started",
+      "verificationStatus": "not_run",
+      "blockedBy": [],
+      "testingSeams": ["S4"],
+      "userStories": [1, 2, 3, 4, 5, 6, 7],
+      "acceptanceCriteria": ["BF-05-A1", "BF-05-A2", "BF-05-A3", "BF-05-A4", "BF-05-A5", "BF-05-A6", "BF-05-A7"]
+    }
+  ],
+  "aggregateGate": {
+    "id": "G-BF",
+    "status": "not_run",
+    "ownerTickets": ["BF-01", "BF-02", "BF-03", "BF-04", "BF-05"],
+    "requires": [
+      "All 35 ticket acceptance criteria passed",
+      "Failing-before and passing-after behavior regressions",
+      "Affected existing suites and backend build passed",
+      "No business database writes or live provider calls"
+    ],
+    "separateExecutionTicket": false
+  },
+  "scope": {
+    "businessCodeChangesInThisPlanningTurn": false,
+    "databaseMigrationPlanned": false,
+    "newDependencyPlanned": false,
+    "liveProviderValidationPlanned": false,
+    "deploymentPlanned": false
+  }
+}

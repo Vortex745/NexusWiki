@@ -95,3 +95,13 @@ test("P1 regression: abort cancels the active Mastra Workflow run", async () => 
   const source = readFileSync(path.join(__dirname, "workflow_runner.ts"), "utf8")
   assert.match(source, /\.cancel\(/, "external abort must call Workflow Run.cancel()")
 })
+
+test("the workflow wrapper forwards the run's reasoning effort unchanged", async () => {
+  let captured: MastraRunnerInput | undefined
+  const runner = await createMastraWorkflowRunner(async (inner) => {
+    captured = inner
+    return output()
+  })
+  await runner({ ...input(), reasoningEffort: "high" })
+  assert.equal(captured?.reasoningEffort, "high")
+})

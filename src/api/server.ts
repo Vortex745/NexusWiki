@@ -25,7 +25,7 @@ import { SqliteSourceLifecycleStore } from "../knowledge/source_lifecycle_store"
 import { RetirementServiceImpl } from "../knowledge/retirement"
 import { createSourceGovernanceRouter } from "./source_governance"
 import { createStatusRouter } from "./status"
-import { createSessionRouter, type DemoAuthOptions } from "./session"
+import { createSessionRouter, type LocalAuthOptions } from "./session"
 import {
   createRetrievalScopeResolver,
   type RetrievalScopeResolver,
@@ -107,11 +107,12 @@ export function createApp(options: {
   ingestAccessMiddleware?: RequestHandler
   managementAccessMiddleware?: RequestHandler
   /**
-   * Ticket 01: when set, the local demo sign-in is available — the browser can
-   * exchange a demo account + password for a token through the server. Absent
-   * in every non-demo deployment, where /api/auth/login answers 404.
+   * Ticket 01: when set, local sign-in is available — the browser can register
+   * an ID/password account, exchange credentials for a token, and read its
+   * resolved identity. Absent in every non-demo deployment, where
+   * /api/auth/* answers 404.
    */
-  demoAuth?: DemoAuthOptions
+  demoAuth?: LocalAuthOptions
   sessionBinder?: SqliteSessionBinder
   /**
    * Ticket 05 (KB-03A): the server-side retrieval-scope resolver. startServer
@@ -137,6 +138,12 @@ export function createApp(options: {
    */
   knowledgeBaseFolders?: KnowledgeBaseFolderService
   eventsSource: AnswerEventsSource
+  /**
+   * The reasoning-effort capability the composition resolved for its ACTUAL
+   * endpoint/model. Absent in bare mounts and probes: the router then reports
+   * "unsupported" and old requests keep their exact shape.
+   */
+  reasoningCapability?: import("../types").ReasoningCapability
   // Optional runtime surfaces for the /api/status endpoint.
   // When omitted (e.g. tests), the status route is not mounted.
   processRuntime?: import("../runtime/process_runtime").ProcessRuntime
@@ -279,7 +286,9 @@ export function createApp(options: {
       // LO-09: real round/tool/stage scopes under the request root.
       options.tracing,
       // LF-07: Answer run metadata for the Agent file (file-only, never stdout).
-      options.agentLogger
+      options.agentLogger,
+      // The composition's frozen capability object (absent in bare mounts).
+      options.reasoningCapability
     )
   )
 
@@ -418,9 +427,9 @@ export function createApp(options: {
     app.use("/api/logs", options.managementAccessMiddleware)
   }
   app.use("/api", createLogsRouter())
-  // Ticket 01: identity session + demo sign-in. /api/auth/* is deliberately
-  // outside the identity middleware — you cannot be required to authenticate
-  // in order to authenticate.
+  // Ticket 01: identity session + local sign-in/registration. /api/auth/* is
+  // deliberately outside the identity middleware — you cannot be required to
+  // authenticate in order to authenticate.
   app.use("/api", createSessionRouter(options.demoAuth ? { demoAuth: options.demoAuth } : {}))
   // Ticket 09 P5: mount the Handoff HTTP API (spec §8 L1549-1552).
   // POST /chat/runs/:runId/handoff is covered by the /api/chat access middleware
@@ -576,7 +585,7 @@ export async function startServer(
   identityAdapter?: import("../access/context").IdentityAdapter,
   /** Ticket 01: enables the local demo sign-in when the demo issuer is running. */
   options: {
-    demoAuth?: DemoAuthOptions
+    demoAuth?: LocalAuthOptions
     /**
      * Ticket 22 (ATT-01): the SAME session attachment service the shared
      * answer entry reads its attachment channel from — one instance, so a
@@ -591,6 +600,13 @@ export async function startServer(
      * answered 404 forever.
      */
     mcpCapabilities?: import("../mastra/shared_answer_entry").SharedAnswerEntry["mcp"]
+    /**
+     * The reasoning-effort capability the Entry resolved from the SAME cfg it
+     * composed with. startServer's own loadConfig() cannot substitute: a
+     * capability read from a second config could claim support the running
+     * client does not have.
+     */
+    reasoningCapability?: import("../types").ReasoningCapability
     /**
      * LO-03: an already-built runtime logger. When absent, startServer builds
      * the process logger from `LOG_LEVEL` — the composition root stays the
@@ -720,6 +736,10 @@ export async function startServer(
     // Ticket 35 (TOOL-01B): forward the MCP capability invocation seam so the
     // capabilities router actually mounts in production.
     ...(options.mcpCapabilities ? { mcpCapabilities: options.mcpCapabilities } : {}),
+    // The entry-resolved reasoning capability (never a second config read).
+    ...(options.reasoningCapability
+      ? { reasoningCapability: options.reasoningCapability }
+      : {}),
   })
   const server = await new Promise<Server>((resolve) => {
     const s = app.listen(port, () => {

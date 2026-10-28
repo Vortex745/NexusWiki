@@ -428,7 +428,7 @@ export class IngestionLifecycle {
     if (input.versionIntent === "new_document") {
       identity = { ...identity, namespace: uuid() }
     }
-    const sourceKey = sourceIdentityKey(identity)
+    let sourceKey = sourceIdentityKey(identity)
     // Reserved system metadata is server-owned. A direct submit caller must not
     // be able to pre-seed parser/policy facts that the pipeline then trusts.
     const callerMetadata = input.metadata ? { ...input.metadata } : undefined
@@ -436,6 +436,17 @@ export class IngestionLifecycle {
 
     return this.db.transaction((): IngestionSubmission => {
       let source = this.docRepo.getSourceByKey(sourceKey)
+      // Retirement is terminal: the source's artifacts are purged and every
+      // catalog view hides it, so an identical re-upload must not dedupe into
+      // an invisible "unchanged" no-op. A re-import becomes its own Source
+      // generation, whose stable key keeps repeat uploads deduping normally.
+      if (source && this.docRepo.getSourceLifecycleState(source.sourceId) === "retired") {
+        for (let generation = 1; ; generation += 1) {
+          sourceKey = sourceIdentityKey(identity, generation)
+          source = this.docRepo.getSourceByKey(sourceKey)
+          if (!source || this.docRepo.getSourceLifecycleState(source.sourceId) !== "retired") break
+        }
+      }
       // Ticket 12 (DOC-01B): "new_document" must not be re-anchored onto a
       // legacy alias — the caller explicitly detached this submission into
       // its own source.
@@ -444,8 +455,11 @@ export class IngestionLifecycle {
           candidate.tenantId === identity.tenantId &&
           // Ticket 03 (KB-02A): a legacy Source may only be adopted into the
           // knowledge base it belongs to — the same file in two knowledge
-          // bases stays two Source identities (criterion 2).
+          // bases stays two Source identities (criterion 2). A retired legacy
+          // Source must not absorb the re-import for the same reason a retired
+          // canonical Source cannot: it stays tombstoned and invisible.
           candidate.knowledgeBaseId === identity.knowledgeBaseId &&
+          this.docRepo.getSourceLifecycleState(candidate.sourceId) !== "retired" &&
           resolveSourceIdentity(
             { kind: "file", uriOrExternalId: candidate.uri, namespace: "local" },
             undefined,

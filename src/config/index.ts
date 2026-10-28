@@ -89,6 +89,13 @@ export interface AppConfig {
    */
   demoOidcPassword: string
   /**
+   * The administrator's special sign-in ID. It is reserved: users cannot
+   * register it, and it is never listed in the browser bundle.
+   */
+  adminLoginId: string
+  /** The administrator's password; `ADMIN_LOGIN_PASSWORD` overrides `DEMO_OIDC_PASSWORD`. */
+  adminLoginPassword: string
+  /**
    * Eval refactor Ticket 03: dedicated rerank endpoint (Edgefn-compatible
    * `POST {base}/rerank`). Independent from the Chat/Embedding settings on
    * purpose — the reranker is its own provider and model. An empty key means
@@ -274,6 +281,13 @@ export function loadConfig(): AppConfig {
   // without any .env setup; DEMO_OIDC_PASSWORD still overrides it.
   const demoOidc = process.env.DEMO_OIDC === "1"
   const demoOidcPassword = process.env.DEMO_OIDC_PASSWORD || "123456"
+  const adminLoginId = process.env.ADMIN_LOGIN_ID?.trim() || "admin"
+  if (demoOidc && !/^[\p{Script=Han}A-Za-z]{1,5}$/u.test(adminLoginId)) {
+    throw new Error("ADMIN_LOGIN_ID must be 1-5 Chinese or Latin letters")
+  }
+  // The admin may keep the deployment's shared demo password, or set its own
+  // special one; either way the value stays in server config.
+  const adminLoginPassword = process.env.ADMIN_LOGIN_PASSWORD || demoOidcPassword
   const decisionProvider = process.env.DECISION_PROVIDER?.trim() || "chat"
   if (decisionProvider !== "chat" && decisionProvider !== "clef") {
     throw new Error("DECISION_PROVIDER must be chat or clef")
@@ -340,6 +354,8 @@ export function loadConfig(): AppConfig {
     demoOidcPort: integerEnv("DEMO_OIDC_PORT", "positive", 3900),
     demoOidcAudience: process.env.DEMO_OIDC_AUDIENCE || "nexusrag-demo",
     demoOidcPassword,
+    adminLoginId,
+    adminLoginPassword,
     // Ticket 03: dedicated rerank provider (defaults match the verified
     // Edgefn endpoint + bge-reranker-v2-m3 protocol; the key has no default
     // — an absent key disables dedicated rerank explicitly).
