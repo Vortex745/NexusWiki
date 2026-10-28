@@ -1,0 +1,21 @@
+(node:17752) ExperimentalWarning: localStorage is not available because --localstorage-file was not provided.
+(Use `node --trace-warnings ...` to show where the warning was created)
+✔ four-backtick PDF code fences retain code and surrounding prose (8.4507ms)
+✔ PDF code fences with attributes retain the info string, code and surrounding prose (1.1005ms)
+✔ ordinary triple-backtick PDF code fences keep their language and block contract (0.8218ms)
+✔ an unfinished PDF fence (```typescript) keeps the original rest and warning (0.5622ms)
+✔ an unfinished PDF fence (````python title="demo") keeps the original rest and warning (0.4275ms)
+✔ a four-backtick PDF fence contains shorter fences and closes at a longer fence (0.5679ms)
+✔ continuous and unrecognized PDF fences make progress without dropping raw text (7.7447ms)
+✔ empty consecutive PDF fences consume their delimiters and keep adjacent prose (1.1573ms)
+✔ PDF fences retain raw extraction and Unicode page locators through both parser entry points (2.6407ms)
+✔ the knowledge import pipeline indexes PDF fence content and keeps its raw extraction (2420.8701ms)
+✔ a PDF attachment becomes ready and searchable through the same fence parser (52.3453ms)
+ℹ tests 11
+ℹ suites 0
+ℹ pass 11
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 3192.2876

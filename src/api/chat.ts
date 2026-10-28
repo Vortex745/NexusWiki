@@ -212,7 +212,9 @@ export function createChatRouter(
 
   router.get("/chat/runs/:runId", (req: Request, res: Response) => {
     const history = traceRepository.getRun(String(req.params.runId))
-    if (!history) {
+    const context = (res.locals.accessContext as AccessContext | undefined) ?? singleTenantAccessContext()
+    // Ownership comes from the directory, even before an assistant/KB lock exists.
+    if (!history || !conversationHistory?.ownsSession(history.sessionId, context.tenantId, context.subjectId)) {
       res.status(404).json({ error: "Answer run not found" })
       return
     }

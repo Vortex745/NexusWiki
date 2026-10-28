@@ -1,0 +1,522 @@
+TAP version 13
+# (node:55520) ExperimentalWarning: localStorage is not available because --localstorage-file was not provided.
+# (Use `node --trace-warnings ...` to show where the warning was created)
+# Subtest: history is user-isolated and terminal statuses stay distinguishable
+ok 1 - history is user-isolated and terminal statuses stay distinguishable
+  ---
+  duration_ms: 52.4913
+  type: 'test'
+  ...
+# Subtest: the one-time browser import is idempotent, user-isolated and never touches memory
+ok 2 - the one-time browser import is idempotent, user-isolated and never touches memory
+  ---
+  duration_ms: 15.5363
+  type: 'test'
+  ...
+# Subtest: the chat transport records only non-completed terminals; completed runs are not duplicated
+ok 3 - the chat transport records only non-completed terminals; completed runs are not duplicated
+  ---
+  duration_ms: 285.2928
+  type: 'test'
+  ...
+# [chat] Error: Error: stream exploded before terminal
+#     at eventsSource (C:\\Users\\14253\\.codex\\bf-20261028\\worktrees\\bf-02\\src\\answer\\conversation_history.test.ts:300:13)
+#     at eventsSource.next (<anonymous>)
+#     at <anonymous> (C:\\Users\\14253\\.codex\\bf-20261028\\worktrees\\bf-02\\src\\api\\chat.ts:611:26)
+#     at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+# Subtest: a stream that dies without a terminal event records a provider_error turn
+ok 4 - a stream that dies without a terminal event records a provider_error turn
+  ---
+  duration_ms: 60.3213
+  type: 'test'
+  ...
+# Subtest: the first message locks the assistant version and knowledge subset
+ok 5 - the first message locks the assistant version and knowledge subset
+  ---
+  duration_ms: 50.7928
+  type: 'test'
+  ...
+# Subtest: editing an earlier question truncates later validated memory
+ok 6 - editing an earlier question truncates later validated memory
+  ---
+  duration_ms: 39.4023
+  type: 'test'
+  ...
+# Subtest: Ticket 08 P1: saveValidatedTurn + loadRecentTurns round-trip
+ok 7 - Ticket 08 P1: saveValidatedTurn + loadRecentTurns round-trip
+  ---
+  duration_ms: 45.8522
+  type: 'test'
+  ...
+# Subtest: Ticket 08 P1: tenant-bound isolation — tenant-b cannot read tenant-a turns
+ok 8 - Ticket 08 P1: tenant-bound isolation — tenant-b cannot read tenant-a turns
+  ---
+  duration_ms: 25.2394
+  type: 'test'
+  ...
+# Subtest: Ticket 08 P1: session-bound isolation — session-2 cannot read session-1 turns
+ok 9 - Ticket 08 P1: session-bound isolation — session-2 cannot read session-1 turns
+  ---
+  duration_ms: 14.3913
+  type: 'test'
+  ...
+# Subtest: Ticket 08 P1: bounded limit — loadRecentTurns returns at most `limit` most-recent turns in chronological order
+ok 10 - Ticket 08 P1: bounded limit — loadRecentTurns returns at most `limit` most-recent turns in chronological order
+  ---
+  duration_ms: 24.1994
+  type: 'test'
+  ...
+# Subtest: Ticket 08 P6: deleteInactiveBefore purges sessions whose most recent activity predates the cutoff (session-level TTL)
+ok 11 - Ticket 08 P6: deleteInactiveBefore purges sessions whose most recent activity predates the cutoff (session-level TTL)
+  ---
+  duration_ms: 24.8864
+  type: 'test'
+  ...
+# Subtest: Ticket 08 P6: deleteInactiveBefore also purges pending clarifications for inactive sessions
+ok 12 - Ticket 08 P6: deleteInactiveBefore also purges pending clarifications for inactive sessions
+  ---
+  duration_ms: 29.8214
+  type: 'test'
+  ...
+# Subtest: Ticket 01: saveRollingSummary + getRollingSummary round-trip
+ok 13 - Ticket 01: saveRollingSummary + getRollingSummary round-trip
+  ---
+  duration_ms: 27.3965
+  type: 'test'
+  ...
+# Subtest: Ticket 01: getRollingSummary returns null for non-existent session
+ok 14 - Ticket 01: getRollingSummary returns null for non-existent session
+  ---
+  duration_ms: 45.4348
+  type: 'test'
+  ...
+# Subtest: Ticket 01: getRollingSummary enforces tenant-bound isolation
+ok 15 - Ticket 01: getRollingSummary enforces tenant-bound isolation
+  ---
+  duration_ms: 23.3321
+  type: 'test'
+  ...
+# Subtest: Ticket 01: getRollingSummary enforces session-bound isolation
+ok 16 - Ticket 01: getRollingSummary enforces session-bound isolation
+  ---
+  duration_ms: 29.3906
+  type: 'test'
+  ...
+# Subtest: Ticket 01: saveRollingSummary is idempotent when re-saving the same checkpoint
+ok 17 - Ticket 01: saveRollingSummary is idempotent when re-saving the same checkpoint
+  ---
+  duration_ms: 15.6949
+  type: 'test'
+  ...
+# Subtest: Ticket 01: saveRollingSummary advances checkpoint when summarizedThroughTurnId is strictly greater
+ok 18 - Ticket 01: saveRollingSummary advances checkpoint when summarizedThroughTurnId is strictly greater
+  ---
+  duration_ms: 12.8313
+  type: 'test'
+  ...
+# Subtest: Ticket 01: saveRollingSummary rejects strictly smaller summarizedThroughTurnId (regression)
+ok 19 - Ticket 01: saveRollingSummary rejects strictly smaller summarizedThroughTurnId (regression)
+  ---
+  duration_ms: 13.8134
+  type: 'test'
+  ...
+# Subtest: Ticket 01: loadConversationMemory on empty session returns null summary + empty turns
+ok 20 - Ticket 01: loadConversationMemory on empty session returns null summary + empty turns
+  ---
+  duration_ms: 12.3807
+  type: 'test'
+  ...
+# Subtest: Ticket 01: loadConversationMemory returns summary when no validated turns exist
+ok 21 - Ticket 01: loadConversationMemory returns summary when no validated turns exist
+  ---
+  duration_ms: 11.5919
+  type: 'test'
+  ...
+# Subtest: Ticket 01: loadConversationMemory returns turns when no summary exists
+ok 22 - Ticket 01: loadConversationMemory returns turns when no summary exists
+  ---
+  duration_ms: 14.4699
+  type: 'test'
+  ...
+# Subtest: Ticket 01: loadConversationMemory returns summary + recent turns together
+ok 23 - Ticket 01: loadConversationMemory returns summary + recent turns together
+  ---
+  duration_ms: 13.7506
+  type: 'test'
+  ...
+# Subtest: Ticket 01: loadConversationMemory caps at six completed pairs (≤12 turns)
+ok 24 - Ticket 01: loadConversationMemory caps at six completed pairs (≤12 turns)
+  ---
+  duration_ms: 22.2464
+  type: 'test'
+  ...
+# Subtest: Ticket 01: loadConversationMemory drops trailing unpaired user turn
+ok 25 - Ticket 01: loadConversationMemory drops trailing unpaired user turn
+  ---
+  duration_ms: 16.7286
+  type: 'test'
+  ...
+# Subtest: Ticket 01: loadConversationMemory returns recentTurns in chronological (oldest-first) order
+ok 26 - Ticket 01: loadConversationMemory returns recentTurns in chronological (oldest-first) order
+  ---
+  duration_ms: 25.2484
+  type: 'test'
+  ...
+# Subtest: Ticket 01: loadConversationMemory enforces tenant-bound isolation
+ok 27 - Ticket 01: loadConversationMemory enforces tenant-bound isolation
+  ---
+  duration_ms: 16.9821
+  type: 'test'
+  ...
+# Subtest: Ticket 01: loadConversationMemory enforces session-bound isolation
+ok 28 - Ticket 01: loadConversationMemory enforces session-bound isolation
+  ---
+  duration_ms: 20.9742
+  type: 'test'
+  ...
+# Subtest: Ticket 01: loadConversationMemory excludes pending clarifications from recentTurns
+ok 29 - Ticket 01: loadConversationMemory excludes pending clarifications from recentTurns
+  ---
+  duration_ms: 48.9872
+  type: 'test'
+  ...
+# Subtest: Ticket 01: deleteInactiveBefore also deletes rolling summaries for inactive sessions
+ok 30 - Ticket 01: deleteInactiveBefore also deletes rolling summaries for inactive sessions
+  ---
+  duration_ms: 19.3601
+  type: 'test'
+  ...
+# Subtest: Ticket 01: deleteInactiveBefore preserves rolling summaries for active sessions
+ok 31 - Ticket 01: deleteInactiveBefore preserves rolling summaries for active sessions
+  ---
+  duration_ms: 14.4133
+  type: 'test'
+  ...
+# Subtest: Ticket 01: deleteInactiveBefore preserves summaries for mixed-age sessions (session-level TTL)
+ok 32 - Ticket 01: deleteInactiveBefore preserves summaries for mixed-age sessions (session-level TTL)
+  ---
+  duration_ms: 19.8038
+  type: 'test'
+  ...
+# Subtest: Ticket 02 P1: loadConversationMemory reports totalValidatedTurnCount=0 for empty session
+ok 33 - Ticket 02 P1: loadConversationMemory reports totalValidatedTurnCount=0 for empty session
+  ---
+  duration_ms: 21.3534
+  type: 'test'
+  ...
+# Subtest: Ticket 02 P1: loadConversationMemory reports totalValidatedTurnCount + oldestRecentTurnId for 1 pair
+ok 34 - Ticket 02 P1: loadConversationMemory reports totalValidatedTurnCount + oldestRecentTurnId for 1 pair
+  ---
+  duration_ms: 14.6906
+  type: 'test'
+  ...
+# Subtest: Ticket 02 P1: totalValidatedTurnCount counts ALL validated turns, not just the recent window
+ok 35 - Ticket 02 P1: totalValidatedTurnCount counts ALL validated turns, not just the recent window
+  ---
+  duration_ms: 22.6504
+  type: 'test'
+  ...
+# Subtest: Ticket 02 P1: totalValidatedTurnCount excludes pending clarifications
+ok 36 - Ticket 02 P1: totalValidatedTurnCount excludes pending clarifications
+  ---
+  duration_ms: 32.6823
+  type: 'test'
+  ...
+# Subtest: Ticket 02 P1: loadOlderTurnsForSummarization round-trip loads turns in id-ascending order
+ok 37 - Ticket 02 P1: loadOlderTurnsForSummarization round-trip loads turns in id-ascending order
+  ---
+  duration_ms: 33.9967
+  type: 'test'
+  ...
+# Subtest: Ticket 02 P1: loadOlderTurnsForSummarization returns empty when toIdInclusive <= fromIdExclusive
+ok 38 - Ticket 02 P1: loadOlderTurnsForSummarization returns empty when toIdInclusive <= fromIdExclusive
+  ---
+  duration_ms: 36.0263
+  type: 'test'
+  ...
+# Subtest: Ticket 02 P1: loadOlderTurnsForSummarization enforces tenant-bound isolation
+ok 39 - Ticket 02 P1: loadOlderTurnsForSummarization enforces tenant-bound isolation
+  ---
+  duration_ms: 15.3465
+  type: 'test'
+  ...
+# Subtest: Ticket 02 P1: loadOlderTurnsForSummarization excludes pending clarifications
+ok 40 - Ticket 02 P1: loadOlderTurnsForSummarization excludes pending clarifications
+  ---
+  duration_ms: 12.5765
+  type: 'test'
+  ...
+# Subtest: Ticket 02 P1: loadOlderTurnsForSummarization returns empty for unknown session
+ok 41 - Ticket 02 P1: loadOlderTurnsForSummarization returns empty for unknown session
+  ---
+  duration_ms: 11.8014
+  type: 'test'
+  ...
+# Subtest: Ticket 03: deleteInactiveBefore removes validated turns, pending clarification and rolling summary together
+ok 42 - Ticket 03: deleteInactiveBefore removes validated turns, pending clarification and rolling summary together
+  ---
+  duration_ms: 16.404
+  type: 'test'
+  ...
+# Subtest: Ticket 03: deleteInactiveBefore does not touch immutable answer_run_events trace history
+ok 43 - Ticket 03: deleteInactiveBefore does not touch immutable answer_run_events trace history
+  ---
+  duration_ms: 19.6291
+  type: 'test'
+  ...
+# Subtest: Ticket 03: deleteInactiveBefore is idempotent — second call returns 0 and does not error
+ok 44 - Ticket 03: deleteInactiveBefore is idempotent — second call returns 0 and does not error
+  ---
+  duration_ms: 28.3706
+  type: 'test'
+  ...
+# Subtest: P1 regression: peekPendingClarification is tenant-bound and non-destructive
+ok 45 - P1 regression: peekPendingClarification is tenant-bound and non-destructive
+  ---
+  duration_ms: 12.5314
+  type: 'test'
+  ...
+# Subtest: P1 regression: claimPendingClarification atomically returns a pending message once
+ok 46 - P1 regression: claimPendingClarification atomically returns a pending message once
+  ---
+  duration_ms: 22.4729
+  type: 'test'
+  ...
+# Subtest: trace append is idempotent and replay preserves event order
+ok 47 - trace append is idempotent and replay preserves event order
+  ---
+  duration_ms: 59.9871
+  type: 'test'
+  ...
+# Subtest: trace append rejects conflicting reuse of an event identity
+ok 48 - trace append rejects conflicting reuse of an event identity
+  ---
+  duration_ms: 10.884
+  type: 'test'
+  ...
+# (node:55572) ExperimentalWarning: localStorage is not available because --localstorage-file was not provided.
+# (Use `node --trace-warnings ...` to show where the warning was created)
+# Subtest: the first message locks the assistant version and knowledge subset against later requests
+ok 49 - the first message locks the assistant version and knowledge subset against later requests
+  ---
+  duration_ms: 296.8978
+  type: 'test'
+  ...
+# Subtest: a locked knowledge subset that cannot be resolved fails closed instead of widening
+ok 50 - a locked knowledge subset that cannot be resolved fails closed instead of widening
+  ---
+  duration_ms: 114.9399
+  type: 'test'
+  ...
+# Subtest: an overlapping run for the same session is refused before any answer work
+ok 51 - an overlapping run for the same session is refused before any answer work
+  ---
+  duration_ms: 124.8653
+  type: 'test'
+  ...
+# [chat] terminal event runId does not match the request; not recorded
+# Subtest: a terminal event carrying another run's id is not recorded
+ok 52 - a terminal event carrying another run's id is not recorded
+  ---
+  duration_ms: 70.1025
+  type: 'test'
+  ...
+# Subtest: edit and regenerate drop the replaced run, later memory and the derived summary
+ok 53 - edit and regenerate drop the replaced run, later memory and the derived summary
+  ---
+  duration_ms: 57.6829
+  type: 'test'
+  ...
+# Subtest: the shared entry receives frozen identity, knowledge and assistant snapshots
+ok 54 - the shared entry receives frozen identity, knowledge and assistant snapshots
+  ---
+  duration_ms: 33.3392
+  type: 'test'
+  ...
+# Subtest: a legacy request locks the default assistant without scanning the workspace
+ok 55 - a legacy request locks the default assistant without scanning the workspace
+  ---
+  duration_ms: 23.9613
+  type: 'test'
+  ...
+# (node:55904) ExperimentalWarning: localStorage is not available because --localstorage-file was not provided.
+# (Use `node --trace-warnings ...` to show where the warning was created)
+# Subtest: an authenticated user in another tenant cannot restore a private run
+ok 56 - an authenticated user in another tenant cannot restore a private run
+  ---
+  duration_ms: 158.2568
+  type: 'test'
+  ...
+# Subtest: the owner restores the complete ordered events of a locked session
+ok 57 - the owner restores the complete ordered events of a locked session
+  ---
+  duration_ms: 85.0279
+  type: 'test'
+  ...
+# Subtest: the owner can restore a session before any assistant or knowledge lock exists
+ok 58 - the owner can restore a session before any assistant or knowledge lock exists
+  ---
+  duration_ms: 55.6169
+  type: 'test'
+  ...
+# Subtest: another subject in the same tenant receives the same not-found response
+ok 59 - another subject in the same tenant receives the same not-found response
+  ---
+  duration_ms: 48.8587
+  type: 'test'
+  ...
+# Subtest: the same subject identifier in another tenant receives the same not-found response
+ok 60 - the same subject identifier in another tenant receives the same not-found response
+  ---
+  duration_ms: 54.3722
+  type: 'test'
+  ...
+# Subtest: a foreign user supplying the owner's identity in query parameters receives the same not-found response
+ok 61 - a foreign user supplying the owner's identity in query parameters receives the same not-found response
+  ---
+  duration_ms: 95.1144
+  type: 'test'
+  ...
+# Subtest: unknown runs and persisted traces without a directory are indistinguishable
+ok 62 - unknown runs and persisted traces without a directory are indistinguishable
+  ---
+  duration_ms: 51.0196
+  type: 'test'
+  ...
+# Subtest: missing identity is rejected by the existing authentication gate
+ok 63 - missing identity is rejected by the existing authentication gate
+  ---
+  duration_ms: 36.5342
+  type: 'test'
+  ...
+# Subtest: an authenticated owner without chat scope is rejected before history is returned
+ok 64 - an authenticated owner without chat scope is rejected before history is returned
+  ---
+  duration_ms: 46.3938
+  type: 'test'
+  ...
+# Subtest: Ticket 05 wiring: createChatRouter without sessionBinder is backward compatible (no 409, behavior unchanged)
+ok 65 - Ticket 05 wiring: createChatRouter without sessionBinder is backward compatible (no 409, behavior unchanged)
+  ---
+  duration_ms: 340.8458
+  type: 'test'
+  ...
+# Subtest: Ticket 05 wiring: first-sight bind returns 200 and binder records the binding
+ok 66 - Ticket 05 wiring: first-sight bind returns 200 and binder records the binding
+  ---
+  duration_ms: 216.9028
+  type: 'test'
+  ...
+# Subtest: Ticket 05 wiring: consistent reuse (same sessionId + same tenant/subject) returns 200, not 409
+ok 67 - Ticket 05 wiring: consistent reuse (same sessionId + same tenant/subject) returns 200, not 409
+  ---
+  duration_ms: 158.1243
+  type: 'test'
+  ...
+# Subtest: Ticket 05 wiring: conflicting reuse returns 409 Conflict with existing binding preserved
+ok 68 - Ticket 05 wiring: conflicting reuse returns 409 Conflict with existing binding preserved
+  ---
+  duration_ms: 69.7227
+  type: 'test'
+  ...
+# Subtest: Ticket 05 wiring: 409 conflict does NOT call eventsSource (no Answer run created — side-effect gating)
+ok 69 - Ticket 05 wiring: 409 conflict does NOT call eventsSource (no Answer run created — side-effect gating)
+  ---
+  duration_ms: 23.2246
+  type: 'test'
+  ...
+# Subtest: Ticket 05 wiring: single-tenant deterministic identity is used when no access middleware is mounted
+ok 70 - Ticket 05 wiring: single-tenant deterministic identity is used when no access middleware is mounted
+  ---
+  duration_ms: 18.7194
+  type: 'test'
+  ...
+# (node:26708) ExperimentalWarning: localStorage is not available because --localstorage-file was not provided.
+# (Use `node --trace-warnings ...` to show where the warning was created)
+# Subtest: complete chat JSON and SSE preserve the Answer event contract
+ok 71 - complete chat JSON and SSE preserve the Answer event contract
+  ---
+  duration_ms: 183.0696
+  type: 'test'
+  ...
+# Subtest: GET /api/chat/reasoning publishes the injected frozen capability with no store caching
+ok 72 - GET /api/chat/reasoning publishes the injected frozen capability with no store caching
+  ---
+  duration_ms: 56.6542
+  type: 'test'
+  ...
+# Subtest: GET /api/chat/reasoning reports unsupported on a bare router
+ok 73 - GET /api/chat/reasoning reports unsupported on a bare router
+  ---
+  duration_ms: 30.6342
+  type: 'test'
+  ...
+# Subtest: every invalid reasoning effort is a 400 with zero side effects
+ok 74 - every invalid reasoning effort is a 400 with zero side effects
+  ---
+  duration_ms: 106.5702
+  type: 'test'
+  ...
+# Subtest: a valid enum on an unsupported endpoint is refused before any side effect
+ok 75 - a valid enum on an unsupported endpoint is refused before any side effect
+  ---
+  duration_ms: 38.2668
+  type: 'test'
+  ...
+# Subtest: JSON, SSE and the persisted trace agree on the requested effort
+ok 76 - JSON, SSE and the persisted trace agree on the requested effort
+  ---
+  duration_ms: 60.7432
+  type: 'test'
+  ...
+# Subtest: an omitted request keeps the field out of JSON, SSE and the trace
+ok 77 - an omitted request keeps the field out of JSON, SSE and the trace
+  ---
+  duration_ms: 50.0985
+  type: 'test'
+  ...
+# Subtest: POST /api/chat with empty message returns 400
+ok 78 - POST /api/chat with empty message returns 400
+  ---
+  duration_ms: 152.4958
+  type: 'test'
+  ...
+# Subtest: SSE transport encodes every event as `data: <json>\\n\\n` with correct fields
+ok 79 - SSE transport encodes every event as `data: <json>\\n\\n` with correct fields
+  ---
+  duration_ms: 29.9145
+  type: 'test'
+  ...
+# Subtest: JSON transport encodes terminal fields and echoes full event stream
+ok 80 - JSON transport encodes terminal fields and echoes full event stream
+  ---
+  duration_ms: 25.5874
+  type: 'test'
+  ...
+# Subtest: GET /api/chat/runs/:runId returns 404 when run not in trace repository
+ok 81 - GET /api/chat/runs/:runId returns 404 when run not in trace repository
+  ---
+  duration_ms: 22.4458
+  type: 'test'
+  ...
+# Subtest: GET /api/chat/runs/:runId returns trace when events were persisted directly
+ok 82 - GET /api/chat/runs/:runId returns trace when events were persisted directly
+  ---
+  duration_ms: 24.1428
+  type: 'test'
+  ...
+# Subtest: approved answer basis survives real adapter, SSE, JSON, SQLite history and conversation consumption
+ok 83 - approved answer basis survives real adapter, SSE, JSON, SQLite history and conversation consumption
+  ---
+  duration_ms: 68.6138
+  type: 'test'
+  ...
+1..83
+# tests 83
+# suites 0
+# pass 83
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 12384.5254

@@ -1,0 +1,17 @@
+✔ four-backtick PDF code fences retain code and surrounding prose (8.6746ms)
+✔ PDF code fences with attributes retain the info string, code and surrounding prose (1.1493ms)
+✔ ordinary triple-backtick PDF code fences keep their language and block contract (0.8365ms)
+✔ an unfinished PDF fence (```typescript) keeps the original rest and warning (1.4379ms)
+✔ an unfinished PDF fence (````python title="demo") keeps the original rest and warning (0.7811ms)
+✔ a four-backtick PDF fence contains shorter fences and closes at a longer fence (0.9264ms)
+✔ continuous and unrecognized PDF fences make progress without dropping raw text (9.9259ms)
+✔ empty consecutive PDF fences consume their delimiters and keep adjacent prose (0.9721ms)
+✔ PDF fences retain raw extraction and Unicode page locators through both parser entry points (3.033ms)
+ℹ tests 9
+ℹ suites 0
+ℹ pass 9
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 1192.0129
