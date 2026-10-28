@@ -303,12 +303,17 @@ export class SqliteConversationHistoryStore {
     }
   }
 
-  /** The lock, or null when the caller does not own the directory. */
-  getSessionLock(sessionId: string, tenantId: string, subjectId: string): SessionLock | null {
+  /** Directory ownership is independent of an assistant/knowledge lock. */
+  ownsSession(sessionId: string, tenantId: string, subjectId: string): boolean {
     const row = this.db
       .prepare(`SELECT subject_id FROM conversation_directories WHERE id = ? AND tenant_id = ?`)
       .get(sessionId, tenantId) as { subject_id: string } | undefined
-    if (!row || row.subject_id !== subjectId) return null
+    return row?.subject_id === subjectId
+  }
+
+  /** The lock, or null for an unowned or not-yet-locked directory. */
+  getSessionLock(sessionId: string, tenantId: string, subjectId: string): SessionLock | null {
+    if (!this.ownsSession(sessionId, tenantId, subjectId)) return null
     return this.readLock(sessionId)
   }
 
@@ -429,10 +434,7 @@ export class SqliteConversationHistoryStore {
 
   /** Another user's directory is indistinguishable from an unknown one. */
   private assertOwned(sessionId: string, tenantId: string, subjectId: string): void {
-    const row = this.db
-      .prepare(`SELECT subject_id FROM conversation_directories WHERE id = ? AND tenant_id = ?`)
-      .get(sessionId, tenantId) as { subject_id: string } | undefined
-    if (!row || row.subject_id !== subjectId) {
+    if (!this.ownsSession(sessionId, tenantId, subjectId)) {
       throw new ConversationHistoryError("conversation not found")
     }
   }
