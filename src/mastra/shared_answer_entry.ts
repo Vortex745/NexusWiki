@@ -51,7 +51,7 @@ import {
   DEFAULT_RUN_BUDGET_MS,
   type RunResourceBudgetOptions,
 } from "../runtime/run_context"
-import type { AnswerRunEvent, AnswerRunResult } from "../types"
+import type { AnswerRunEvent, AnswerRunResult, ReasoningCapability, ReasoningEffort } from "../types"
 import type { AnswerModelProfileSnapshot } from "../types/answer"
 import type { AttachmentSearchOperations } from "../types/retrieval"
 import { knowledgeBaseEmbeddingProfile } from "../types/knowledge_base"
@@ -163,6 +163,12 @@ export interface SharedAnswerEntry {
   /** The single shared Answer run entry (transport-agnostic). */
   eventsSource: SharedAnswerEventsSource
   /**
+   * The reasoning-effort capability of THIS composition's endpoint/model,
+   * resolved once from the same config and frozen. The chat transport only
+   * publishes this object — it never re-reads the environment.
+   */
+  reasoningCapability: ReasoningCapability
+  /**
    * Ticket 14 (RET-01): the SAME search operations chat uses (same clients,
    * same dedicated reranker). Stateless beyond its clients; a new SearcherImpl
    * per run is exactly what the chat runners do.
@@ -226,6 +232,34 @@ export function shouldAttachLangfuseObserver(
 ): boolean {
   const enabled = option ?? true
   return enabled && !(exporter instanceof NoopLangfuseExporter)
+}
+
+/**
+ * The only endpoint/model pair this product declares reasoning-effort
+ * compatible with (the China-region official GLM API). Anything else —
+ * another host, a relay, an alias, another model, plain http — is NOT
+ * declared compatible: the selector hides and old requests keep their
+ * provider default. Guessing by prefix is deliberately not supported.
+ */
+const REASONING_ENDPOINT = "https://open.bigmodel.cn/api/paas/v4"
+const REASONING_MODEL = "glm-5.3-flash"
+const REASONING_LEVELS: readonly ReasoningEffort[] = Object.freeze(["low", "high", "max"] as const)
+
+/**
+ * Resolve (and freeze) the reasoning-effort capability for one composition.
+ * Pure: it reads the config it is handed and never the environment, a
+ * provider, the database or the filesystem.
+ */
+export function resolveReasoningCapability(config: AppConfig): ReasoningCapability {
+  const endpoint = (config.openaiBaseUrl ?? "").trim().replace(/\/+$/, "")
+  const model = (config.openaiChatModel ?? "").trim()
+  const supported = endpoint === REASONING_ENDPOINT && model === REASONING_MODEL
+  return Object.freeze({
+    supported,
+    levels: supported ? REASONING_LEVELS : Object.freeze([] as ReasoningEffort[]),
+    defaultEffort: supported ? "max" : null,
+    model: model.length > 0 ? model : null,
+  })
 }
 
 /**
@@ -364,6 +398,7 @@ export async function createSharedAnswerEntry(
 
   return {
     eventsSource: stampedEventsSource,
+    reasoningCapability: resolveReasoningCapability(cfg),
     searchOperations,
     ...(mcp ? { mcp } : {}),
   }

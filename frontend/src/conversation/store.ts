@@ -1,9 +1,25 @@
 import type { Conversation, Message, Thread } from "@core/conversation"
 import { ConversationImpl, LocalStorageConversationStorage } from "@core/conversation"
+import type { ReasoningEffort } from "../../../src/types/answer"
 
-import { fetchRunHistory, streamChat } from "../lib/api"
+import { fetchReasoningCapability, fetchRunHistory, streamChat } from "../lib/api"
 import { knowledgeStore } from "../runtime/knowledgeStore"
 import { assistantStore } from "../runtime/assistantStore"
+
+export type ReasoningStatus = "unknown" | "loading" | "ready" | "unavailable"
+
+/**
+ * The page-level reasoning-effort state. `ready` includes a normal
+ * `supported: false` response — the selector is hidden then, but the state is
+ * resolved, not failed. `unavailable` is a network/non-OK/malformed read.
+ */
+export interface ReasoningSnapshot {
+  status: ReasoningStatus
+  /** Non-empty only on ready + supported. */
+  levels: readonly ReasoningEffort[]
+  /** The page's current choice; non-null only on ready + supported. */
+  effort: ReasoningEffort | null
+}
 
 export interface ThreadSummary {
   id: string
@@ -22,6 +38,8 @@ export interface ConversationSnapshot {
   runningMessageId: string | null
   sidebarCollapsed: boolean
   online: boolean
+  /** The page-level reasoning-effort selection (shared by every composer). */
+  reasoning: ReasoningSnapshot
 }
 
 function createRunId(): string {
@@ -49,6 +67,13 @@ export class ConversationStore {
   private abortController: AbortController | null = null
   private runningMessage: Message | null = null
   private online = true
+  /**
+   * Page-level (NOT per-thread, NOT persisted): refresh restores the default.
+   * Sending never mutates this; the run freezes whatever is current.
+   */
+  private reasoningStatus: ReasoningStatus = "unknown"
+  private reasoningLevels: readonly ReasoningEffort[] = []
+  private reasoningEffort: ReasoningEffort | null = null
   /** Fires once per new prompt (after the composer has read staged attachments). */
   onSendStart?: () => void
 
@@ -172,12 +197,60 @@ export class ConversationStore {
     this.abortController?.abort()
   }
 
+  // -------------------------------------------------------------------------
+  // Reasoning effort (page-level)
+  // -------------------------------------------------------------------------
+
+  /**
+   * Load the running model's capability ONCE. Any resolved state — ready or
+   * unavailable — is final for this page: no retry, no polling. A failed read
+   * only hides the selector; chat keeps sending without the field.
+   */
+  async loadReasoningCapability(): Promise<void> {
+    if (this.reasoningStatus !== "unknown") return
+    this.reasoningStatus = "loading"
+    this.invalidate()
+    try {
+      const capability = await fetchReasoningCapability()
+      this.reasoningStatus = "ready"
+      this.reasoningLevels = capability.supported ? capability.levels : []
+      this.reasoningEffort = capability.supported ? capability.defaultEffort : null
+    } catch {
+      this.reasoningStatus = "unavailable"
+      this.reasoningLevels = []
+      this.reasoningEffort = null
+    }
+    this.invalidate()
+  }
+
+  /**
+   * Narrowing-only page preference: only a ready+supported model accepts a
+   * level, only an advertised level is accepted, and a run in flight locks it.
+   */
+  setReasoningEffort(effort: ReasoningEffort): void {
+    if (this.conversation.isRunning()) return
+    if (this.reasoningStatus !== "ready") return
+    if (!this.reasoningLevels.includes(effort)) return
+    if (this.reasoningEffort === effort) return
+    this.reasoningEffort = effort
+    this.invalidate()
+  }
+
+  /** The level this page would send right now; undefined = omit the field. */
+  private currentReasoningEffort(): ReasoningEffort | undefined {
+    if (this.reasoningStatus !== "ready") return undefined
+    return this.reasoningEffort ?? undefined
+  }
+
   private async executeRun(
     thread: Thread,
     assistant: Message,
     prompt: string,
     truncateFromRunId?: string,
   ): Promise<void> {
+    // Freeze BEFORE the first await: a capability load that lands mid-run, or
+    // a selection made while this request is in flight, can never rewrite it.
+    const reasoningEffort = this.currentReasoningEffort()
     const controller = new AbortController()
     this.abortController = controller
     this.conversation.startRun()
@@ -201,6 +274,8 @@ export class ConversationStore {
             : {}),
           // Ticket 21 (CONV-01B): edit and regenerate name the replaced branch.
           ...(truncateFromRunId ? { truncateFromRunId } : {}),
+          // The frozen page selection for THIS run (omitted = never asked).
+          ...(reasoningEffort ? { reasoningEffort } : {}),
         },
         (data) => {
           // Merge policy belongs to Conversation; this store only re-renders.
@@ -311,6 +386,11 @@ export class ConversationStore {
       runningMessageId: this.runningMessage?.id ?? null,
       sidebarCollapsed: this.conversation.getSidebarCollapsed(),
       online: this.online,
+      reasoning: {
+        status: this.reasoningStatus,
+        levels: this.reasoningLevels,
+        effort: this.reasoningEffort,
+      },
     }
   }
 

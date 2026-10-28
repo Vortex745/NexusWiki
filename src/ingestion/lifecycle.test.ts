@@ -147,6 +147,59 @@ test("unchanged source content is a queryable no-op", async () => {
   }
 })
 
+test("re-uploading content whose source was retired is a new import, not a hidden no-op", async () => {
+  const db = openDb(":memory:")
+  const lifecycle = new IngestionLifecycle(db, {
+    close: async () => {},
+    async run(_document, execution): Promise<void> {
+      for (const stage of ["chunk", "wikify", "storeChunks", "storeGraph"] as const) {
+        await execution.runStage(stage, {}, async () => undefined, () => ({ stage }))
+      }
+    },
+  })
+  const documents = new DocumentRepo(db)
+
+  try {
+    const input = {
+      title: "Refund policy",
+      content: "Refunds are available within 30 days.",
+      source: "retired-reimport.txt",
+    }
+    const initial = lifecycle.submit(input)
+    assert.equal((await lifecycle.runNext())?.success, true)
+    const initialSourceId = documents.get(initial.docId)?.sourceId
+    assert.ok(initialSourceId)
+
+    // The catalog's delete action retires the source and clears its pointer.
+    db.prepare(
+      "UPDATE sources SET lifecycle_state = 'retired', active_doc_id = NULL WHERE source_id = ?"
+    ).run(initialSourceId)
+
+    const reimport = lifecycle.submit(input)
+    assert.equal(reimport.status, "pending")
+    assert.notEqual(reimport.docId, initial.docId, "a retired source must not absorb the re-upload")
+    assert.equal((await lifecycle.runNext())?.success, true)
+
+    const catalog = documents.listCatalog({
+      tenantId: "default",
+      knowledgeBaseId: "kb-default-default",
+      page: 1,
+      pageSize: 20,
+    })
+    assert.deepEqual(catalog.documents.map((entry) => [entry.docId, entry.active]), [
+      [reimport.docId, true],
+    ])
+    // Retired stays terminal (tombstones keep their audit trail)…
+    assert.equal(documents.getSourceLifecycleState(initialSourceId), "retired")
+    // …while repeat uploads of the new import still dedupe normally.
+    const again = lifecycle.submit(input)
+    assert.equal(again.status, "unchanged")
+    assert.equal(again.docId, reimport.docId)
+  } finally {
+    db.close()
+  }
+})
+
 test("duplicate in-flight source content reuses the existing version and task", async () => {
   const db = openDb(":memory:")
   const started = deferred()

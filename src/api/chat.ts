@@ -2,7 +2,7 @@ import { Router, Request, Response } from "express"
 import { v4 as uuid } from "uuid"
 import type { AnswerRunOptions } from "../answer/generation"
 import { AnswerTraceRepository } from "../answer/trace_repository"
-import type { AnswerRunEvent } from "../types"
+import type { AnswerRunEvent, ReasoningCapability, ReasoningEffort } from "../types"
 import { singleTenantAccessContext, type AccessContext } from "../access/context"
 import type { SqliteSessionBinder } from "../access/session_binder"
 import {
@@ -64,6 +64,29 @@ interface ChatRequest {
    * list — URLs are extracted server-side from the message itself.
    */
   useWeb?: unknown
+  /**
+   * The run's reasoning-effort request (low | high | max). Received as
+   * `unknown` and validated once at this boundary: anything but the exact
+   * three values is a 400, and an explicit value on an unsupported
+   * endpoint/model is refused rather than silently dropped.
+   */
+  reasoningEffort?: unknown
+}
+
+/**
+ * What a router WITHOUT an injected capability answers. A bare mount must
+ * behave exactly like an unsupported endpoint: old requests work, an explicit
+ * reasoning effort is refused.
+ */
+const UNSUPPORTED_REASONING_CAPABILITY: ReasoningCapability = Object.freeze({
+  supported: false,
+  levels: Object.freeze([] as ReasoningEffort[]),
+  defaultEffort: null,
+  model: null,
+})
+
+function isReasoningEffort(value: unknown): value is ReasoningEffort {
+  return value === "low" || value === "high" || value === "max"
 }
 
 function streamPayload(event: AnswerRunEvent, sessionId: string) {
@@ -77,6 +100,11 @@ function streamPayload(event: AnswerRunEvent, sessionId: string) {
       status: event.result.status,
       references: event.result.references,
       degradation: event.result.degradation,
+      // The authoritative value is event.result; this shortcut exists only
+      // when the run actually requested a level.
+      ...(event.result.requestedReasoningEffort
+        ? { requestedReasoningEffort: event.result.requestedReasoningEffort }
+        : {}),
     } : {}),
   }
 }
@@ -135,8 +163,15 @@ export function createChatRouter(
    * Agent file is created and the event stream is returned unchanged.
    */
   agentLogger?: Logger,
+  /**
+   * The composition's frozen reasoning-effort capability. Absent → an
+   * unsupported router: GET reports no support and an explicit effort is a
+   * 400, while every old request keeps its exact shape.
+   */
+  reasoningCapability?: ReasoningCapability,
 ): Router {
   const router = Router()
+  const capability = reasoningCapability ?? UNSUPPORTED_REASONING_CAPABILITY
 
   /** LO-09: stage/round/tool scopes, only when the request root was sampled. */
   const answerSource = (
@@ -168,6 +203,13 @@ export function createChatRouter(
   // never interleave rows into the same conversation (or race its branch).
   const activeRuns = new Map<string, string>()
 
+  router.get("/chat/reasoning", (_req: Request, res: Response) => {
+    // Composition-time memory only: no provider, model list, MCP, database or
+    // filesystem read, and never a value re-derived from the environment.
+    res.setHeader("Cache-Control", "no-store")
+    res.json(capability)
+  })
+
   router.get("/chat/runs/:runId", (req: Request, res: Response) => {
     const history = traceRepository.getRun(String(req.params.runId))
     if (!history) {
@@ -194,6 +236,25 @@ export function createChatRouter(
     if (!message?.trim()) {
       res.status(400).json({ error: "message is required" })
       return
+    }
+
+    // The reasoning-effort request is validated HERE, before any session
+    // binding, history write, run-slot claim or event source call: a rejected
+    // request must leave zero side effects. Shape first, capability second.
+    const requestedReasoningEffort = (req.body as ChatRequest).reasoningEffort
+    let reasoningEffort: ReasoningEffort | undefined
+    if (requestedReasoningEffort !== undefined) {
+      if (!isReasoningEffort(requestedReasoningEffort)) {
+        res.status(400).json({ error: "reasoningEffort must be one of: low, high, max" })
+        return
+      }
+      if (!capability.supported) {
+        res.status(400).json({
+          error: "reasoningEffort is not supported by the running model",
+        })
+        return
+      }
+      reasoningEffort = requestedReasoningEffort
     }
 
     const sessionId = typeof requestedSessionId === "string"
@@ -332,6 +393,8 @@ export function createChatRouter(
       ...(req.body?.useMemory === false ? { useMemory: false } : {}),
       // Ticket 36 (WEB-01): only an explicit true opts into web search.
       ...(req.body?.useWeb === true ? { useWeb: true } : {}),
+      // The frozen reasoning-effort request (absent = never asked).
+      ...(reasoningEffort ? { reasoningEffort } : {}),
       ...(retrievalScope ? { retrievalScope } : {}),
       ...(assistantSnapshot ? { assistant: assistantSnapshot } : {}),
     }
@@ -589,6 +652,9 @@ export function createChatRouter(
           status: terminal.result.status,
           references: terminal.result.references,
           degradation: terminal.result.degradation,
+          ...(terminal.result.requestedReasoningEffort
+            ? { requestedReasoningEffort: terminal.result.requestedReasoningEffort }
+            : {}),
           events,
         })
       } catch (err) {

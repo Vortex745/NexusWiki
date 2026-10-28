@@ -1081,3 +1081,45 @@ test("P1 regression: abort during direct post-persistence summarization does not
   assert.equal(output.summarizationOutcome, "failed")
   assert.equal(store.validatedTurnsLog.length, 2)
 })
+
+// ---------------------------------------------------------------------------
+// Reasoning effort: the direct call carries it in the same third argument as
+// the assistant prompt; the ambiguous route still never generates.
+// ---------------------------------------------------------------------------
+
+test("the direct route sends the assistant prompt and the reasoning effort together", async () => {
+  let captured: { systemPrompt?: string; reasoningEffort?: string } | undefined
+  const runner = createDirectAmbiguousMastraRunner({
+    router: makeFakeRouter("direct"),
+    streamDirectReply: async function* (_message, _signal, options) {
+      captured = options
+      yield "好的"
+    },
+  })
+  const output = await runner(makeRunnerInput({
+    reasoningEffort: "low",
+    assistant: {
+      id: "assistant-1",
+      version: 1,
+      systemPrompt: "专家提示",
+      rerankModelProfileId: null,
+      toolPolicy: "read_only_retrieval",
+    },
+  }))
+  assert.equal(output.status, "completed")
+  assert.deepEqual(captured, { systemPrompt: "专家提示", reasoningEffort: "low" })
+})
+
+test("an ambiguous clarification never generates, even with a reasoning effort set", async () => {
+  let streamCalls = 0
+  const runner = createDirectAmbiguousMastraRunner({
+    router: makeFakeRouter("ambiguous"),
+    streamDirectReply: async function* () {
+      streamCalls += 1
+      yield "must-not-reach"
+    },
+  })
+  const output = await runner(makeRunnerInput({ reasoningEffort: "max" }))
+  assert.equal(output.status, "clarification_required")
+  assert.equal(streamCalls, 0)
+})

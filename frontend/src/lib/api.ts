@@ -1,4 +1,5 @@
 import type { RunHistory, SseEventData } from "@core/conversation"
+import type { ReasoningCapability, ReasoningEffort } from "../../../src/types/answer"
 
 import { MIME_BY_EXTENSION } from "./constants"
 import { isPdfLike, serverUploadErrorKind } from "./importBatch"
@@ -9,7 +10,7 @@ const API_BASE = "/api"
  * Ticket 01: the bearer token is obtained at runtime from the server after a
  * sign-in — it is deliberately NOT part of any bundle or build-time constant.
  * It is kept in localStorage so the gate holds for the token's whole lifetime
- * (seven days) instead of asking for the password again on every reload; the
+ * (five days) instead of asking for the password again on every reload; the
  * server still decides when it expires, and a 401 clears it.
  */
 const ACCESS_TOKEN_STORAGE_KEY = "nexusrag.accessToken"
@@ -70,18 +71,45 @@ export interface SessionPayload {
   role: "admin" | "reader"
   groups: string[]
   scopes: string[]
+  /** The local account ID; null for the token-less single-tenant context. */
+  displayName: string | null
 }
 
 export interface AuthConfigPayload {
   demoAuth: boolean
-  accounts: Array<{ key: string; label: string }>
+  registration: boolean
+  idMaxLength: number
+  passwordLength: number
 }
 
 export class InvalidCredentialsError extends Error {
   constructor() {
-    super("账号或密码不正确")
+    super("账号 ID 或密码不正确")
     this.name = "InvalidCredentialsError"
   }
+}
+
+/** A registration rejected by a field rule or a taken ID. */
+export class RegistrationError extends Error {
+  constructor(
+    message: string,
+    readonly code: string,
+    readonly status: number,
+  ) {
+    super(message)
+    this.name = "RegistrationError"
+  }
+}
+
+async function authErrorMessage(response: Response, fallback: string): Promise<string> {
+  try {
+    const body = (await response.json()) as { message?: unknown; error?: unknown }
+    if (typeof body.message === "string" && body.message.length > 0) return body.message
+    if (typeof body.error === "string" && body.error.length > 0) return body.error
+  } catch {
+    // A non-JSON error body falls back to the status text.
+  }
+  return `${fallback} (${response.status})`
 }
 
 export async function fetchAuthConfig(): Promise<AuthConfigPayload> {
@@ -90,15 +118,36 @@ export async function fetchAuthConfig(): Promise<AuthConfigPayload> {
   return (await response.json()) as AuthConfigPayload
 }
 
-/** Sign in and keep the returned token for subsequent calls. */
-export async function signIn(account: string, password: string): Promise<void> {
+/** Register a local account. The caller signs in separately afterwards. */
+export async function registerAccount(id: string, password: string): Promise<void> {
+  const response = await apiFetch("/auth/register", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ id, password }),
+  })
+  if (!response.ok) {
+    let code = ""
+    let message = `注册失败 (${response.status})`
+    try {
+      const body = (await response.json()) as { message?: unknown; error?: unknown }
+      if (typeof body.message === "string" && body.message.length > 0) message = body.message
+      if (typeof body.error === "string") code = body.error
+    } catch {
+      // Keep the status-based fallback.
+    }
+    throw new RegistrationError(message, code, response.status)
+  }
+}
+
+/** Sign in with an account ID and keep the returned token for subsequent calls. */
+export async function signIn(id: string, password: string): Promise<void> {
   const response = await apiFetch("/auth/login", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ account, password }),
+    body: JSON.stringify({ id, password }),
   })
   if (response.status === 401) throw new InvalidCredentialsError()
-  if (!response.ok) throw new Error(`登录失败 (${response.status})`)
+  if (!response.ok) throw new Error(await authErrorMessage(response, "登录失败"))
   const body = (await response.json()) as { accessToken?: string }
   if (!body.accessToken) throw new Error("登录失败：服务器未返回凭证")
   setAccessToken(body.accessToken)
@@ -340,6 +389,72 @@ export async function fetchRunHistory(runId: string): Promise<RunHistory> {
   return (await response.json()) as RunHistory
 }
 
+const REASONING_LEVELS: readonly ReasoningEffort[] = ["low", "high", "max"]
+
+function isReasoningEffort(value: unknown): value is ReasoningEffort {
+  return value === "low" || value === "high" || value === "max"
+}
+
+/**
+ * Parse the capability response ONCE at the network boundary. Anything this
+ * version does not understand — a fourth level, a different default, levels
+ * on an unsupported model — is malformed, not something to paper over: the
+ * store turns the throw into "unavailable" and the selector stays hidden.
+ */
+function parseReasoningCapability(value: unknown): ReasoningCapability {
+  if (value === null || typeof value !== "object") {
+    throw new Error("invalid reasoning capability")
+  }
+  const body = value as Record<string, unknown>
+  if (typeof body.supported !== "boolean") {
+    throw new Error("invalid reasoning capability: supported")
+  }
+  if (body.model !== null && typeof body.model !== "string") {
+    throw new Error("invalid reasoning capability: model")
+  }
+  if (!Array.isArray(body.levels)) {
+    throw new Error("invalid reasoning capability: levels")
+  }
+  const levels: ReasoningEffort[] = []
+  for (const level of body.levels) {
+    if (!isReasoningEffort(level) || levels.includes(level)) {
+      throw new Error("invalid reasoning capability: level entry")
+    }
+    levels.push(level)
+  }
+  const defaultEffort = body.defaultEffort
+  if (defaultEffort !== null && !isReasoningEffort(defaultEffort)) {
+    throw new Error("invalid reasoning capability: defaultEffort")
+  }
+  const supportedShape =
+    levels.length === REASONING_LEVELS.length &&
+    REASONING_LEVELS.every((level, index) => levels[index] === level)
+  if (body.supported) {
+    if (!supportedShape || defaultEffort !== "max") {
+      throw new Error("invalid reasoning capability: unsupported supported-shape")
+    }
+  } else if (levels.length !== 0 || defaultEffort !== null) {
+    throw new Error("invalid reasoning capability: unsupported-shape levels")
+  }
+  return {
+    supported: body.supported,
+    levels,
+    defaultEffort,
+    model: body.model,
+  }
+}
+
+/**
+ * The RUNNING endpoint/model's declared reasoning-effort capability. Fetched
+ * at most once per page by the conversation store; a non-OK response or a
+ * malformed body throws, so the store can hide the selector.
+ */
+export async function fetchReasoningCapability(): Promise<ReasoningCapability> {
+  const response = await apiFetch("/chat/reasoning")
+  if (!response.ok) throw new Error(`HTTP ${response.status}`)
+  return parseReasoningCapability(await response.json())
+}
+
 export interface ChatRequestBody {
   message: string
   runId: string
@@ -363,6 +478,12 @@ export interface ChatRequestBody {
    * recorded after it — before the new run starts. Omitted on a normal send.
    */
   truncateFromRunId?: string
+  /**
+   * The reasoning-effort level frozen for THIS run (low | high | max).
+   * Omitted when the model does not support it or the selection is not ready;
+   * the server refuses an explicit value it cannot honour.
+   */
+  reasoningEffort?: ReasoningEffort
 }
 
 /**

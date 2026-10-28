@@ -270,3 +270,111 @@ test("business chunk citation routes use configured physical index for exact and
     assert.deepEqual(indices, ["selected-v2", "selected-v2"])
   } finally {server.close(); db.close()}
 })
+
+// ---------------------------------------------------------------------------
+// Reasoning effort: the capability endpoint sits behind the chat identity
+// gate, and the ENTRY-injected capability — never a second config read — is
+// what the transport publishes.
+// ---------------------------------------------------------------------------
+
+const REASONING_CAPABILITY = Object.freeze({
+  supported: true,
+  levels: Object.freeze(["low", "high", "max"] as const),
+  defaultEffort: "max" as const,
+  model: "glm-5.3-flash",
+})
+
+test("the reasoning capability endpoint is guarded by the chat identity gate", async () => {
+  const db = openDb(":memory:")
+  const accessMiddleware: import("express").RequestHandler = (req, res, next) => {
+    if (req.headers.authorization !== "Bearer test-token") {
+      res.status(401).json({ error: "unauthorized" })
+      return
+    }
+    res.locals.accessContext = {
+      tenantId: "t1",
+      subjectId: "u1",
+      groups: [],
+      scopes: ["chat"],
+    } as AccessContext
+    next()
+  }
+  const app = createApp({
+    db,
+    accessMiddleware,
+    eventsSource: stubEventsSource(),
+    reasoningCapability: REASONING_CAPABILITY,
+  })
+  const { server, port } = await listen(app)
+  try {
+    const anonymous = await fetch(`http://127.0.0.1:${port}/api/chat/reasoning`)
+    assert.equal(anonymous.status, 401)
+
+    const authorized = await fetch(`http://127.0.0.1:${port}/api/chat/reasoning`, {
+      headers: { Authorization: "Bearer test-token" },
+    })
+    assert.equal(authorized.status, 200)
+    assert.deepEqual(await authorized.json(), {
+      supported: true,
+      levels: ["low", "high", "max"],
+      defaultEffort: "max",
+      model: "glm-5.3-flash",
+    })
+  } finally {
+    server.close()
+    db.close()
+  }
+})
+
+test("the entry-injected capability wins over createApp's own config copy", async () => {
+  const db = openDb(":memory:")
+  // The server's own config describes a DIFFERENT endpoint/model (whatever
+  // this process loaded). The entry resolved support for the model it actually
+  // composed with, and that is the ONLY object the transport may publish.
+  const app = createApp({
+    db,
+    eventsSource: stubEventsSource(),
+    config: {
+      openaiBaseUrl: "https://api.deepseek.com",
+      openaiChatModel: "deepseek-v4-flash",
+    } as never,
+    reasoningCapability: REASONING_CAPABILITY,
+  })
+  const { server, port } = await listen(app)
+  try {
+    const res = await fetch(`http://127.0.0.1:${port}/api/chat/reasoning`)
+    assert.equal(res.status, 200)
+    const body = await res.json() as Record<string, unknown>
+    assert.equal(body.supported, true)
+    assert.equal(body.model, "glm-5.3-flash")
+  } finally {
+    server.close()
+    db.close()
+  }
+})
+
+test("a bare app reports unsupported and still serves the old request shape", async () => {
+  const db = openDb(":memory:")
+  const app = createApp({ db, eventsSource: stubEventsSource() })
+  const { server, port } = await listen(app)
+  try {
+    const capability = await fetch(`http://127.0.0.1:${port}/api/chat/reasoning`)
+    assert.deepEqual(await capability.json(), {
+      supported: false,
+      levels: [],
+      defaultEffort: null,
+      model: null,
+    })
+    const legacy = await postChat(port, { message: "hi", stream: false })
+    assert.equal(legacy.status, 200)
+    const refused = await postChat(port, { message: "hi", reasoningEffort: "low" })
+    assert.equal(refused.status, 400)
+    assert.equal(
+      refused.json?.error,
+      "reasoningEffort is not supported by the running model"
+    )
+  } finally {
+    server.close()
+    db.close()
+  }
+})

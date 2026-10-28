@@ -21,6 +21,12 @@ export interface AccessContext {
   subjectId: string
   groups: string[]
   scopes: Scope[]
+  /**
+   * The human-facing account ID carried by a locally authenticated token.
+   * Absent for the deterministic single-tenant context and for external OIDC
+   * tokens that do not publish a name claim.
+   */
+  displayName?: string
 }
 
 /** Deterministic single-tenant identity. Never caller-supplied. */

@@ -44,18 +44,11 @@ export type { IdentityAdapterOptions } from "./adapter"
 export { JoseIdentityAdapter } from "./jose_adapter"
 export type { JoseIdentityAdapterOptions } from "./jose_adapter"
 
-// Ticket 01 (IAM-01): the three local demo identities + the loopback issuer
-// that mints them. Signing material stays inside the issuing process.
-export {
-  DEMO_ACCOUNTS,
-  DEMO_TENANT_ID,
-  DEMO_ADMIN_GROUP,
-  DEMO_TECHNICAL_READER_GROUP,
-  DEMO_POLICY_READER_GROUP,
-  resolveDemoAccount,
-} from "./demo_accounts"
-export type { DemoAccount, DemoAccountKey } from "./demo_accounts"
-export { startDemoOidcIssuer, demoAccountChoices } from "./demo_oidc_issuer"
+// Ticket 01 (IAM-01): the demo tenant marker + the loopback issuer that mints
+// tokens for locally authenticated identities. Signing material stays inside
+// the issuing process.
+export { DEMO_TENANT_ID, DEMO_ADMIN_GROUP } from "./demo_accounts"
+export { startDemoOidcIssuer } from "./demo_oidc_issuer"
 export type { DemoOidcIssuerOptions, DemoOidcIssuerHandle } from "./demo_oidc_issuer"
 
 // P5.3: signature verification primitives + cache-backed verifier factory + cache warmer.

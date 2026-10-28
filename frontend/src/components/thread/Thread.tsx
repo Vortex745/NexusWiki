@@ -58,9 +58,11 @@ import {
   type KeyboardEvent,
 } from "react"
 
-import { useConversation } from "../../conversation/useConversation"
+import { useConversation, conversationStore } from "../../conversation/useConversation"
 import { cn } from "../../lib/cn"
 import { ATTACHMENT_ACCEPT } from "../../lib/constants"
+import type { ReasoningEffort } from "../../../../src/types/answer"
+import { SplitButton } from "../arc/split-button/split-button"
 import {
   FEEDBACK_REASON_CODES,
   submitAnswerFeedback,
@@ -117,6 +119,11 @@ export function Thread({
   attachmentsProps: ThreadAttachmentsProps
 }) {
   const { activeThreadId } = useConversation()
+  // One capability read per page, after the thread is actually mounted. The
+  // store ignores repeat mounts once the state is no longer `unknown`.
+  useEffect(() => {
+    void conversationStore.loadReasoningCapability()
+  }, [])
   return (
     <ThreadPrimitive.Root
       className="flex h-full min-h-0 min-w-0 flex-1 flex-col"
@@ -373,11 +380,61 @@ function ComposerSurface({
             className="max-h-40 min-h-9 w-full resize-none bg-transparent px-2 py-1.5 text-sm leading-6 text-ink outline-none placeholder:text-faint md:text-[15px]"
           />
         </ComposerPrimitive.Input>
+        <ReasoningEffortControl />
         <div className="flex flex-none items-center pr-0.5">
           <ComposerAction />
         </div>
       </div>
     </div>
+  )
+}
+
+const REASONING_EFFORT_LABEL: Record<ReasoningEffort, string> = {
+  low: "轻量",
+  high: "增强",
+  max: "深度",
+}
+
+/**
+ * The composer's reasoning-effort control: ONE Arc split-button pill (merged
+ * mode) showing the current level and a chevron. Clicking anywhere opens the
+ * same three levels; the current one carries a check. Hidden until the
+ * capability is ready AND supported; a run in flight disables it and closes
+ * an open menu.
+ */
+function ReasoningEffortControl() {
+  const isRunning = useAuiState((s) => s.thread.isRunning)
+  const { reasoning } = useConversation()
+  const [open, setOpen] = useState(false)
+
+  useEffect(() => {
+    if (isRunning) setOpen(false)
+  }, [isRunning])
+
+  if (reasoning.status !== "ready" || reasoning.effort === null) return null
+  const effort = reasoning.effort
+  const label = REASONING_EFFORT_LABEL[effort]
+  return (
+    <span data-reasoning-effort={effort} className="flex-none">
+      <SplitButton
+        merged
+        variant="secondary"
+        compact
+        label={label}
+        mainAriaLabel={`思考强度：${label}`}
+        disabled={isRunning}
+        open={open}
+        onOpenChange={setOpen}
+        actions={reasoning.levels.map((level) => ({
+          label: REASONING_EFFORT_LABEL[level],
+          ...(level === effort
+            ? { icon: <Icon data-icon="inline-start" icon={Check} /> }
+            : {}),
+          onSelect: () => conversationStore.setReasoningEffort(level),
+          disabled: isRunning,
+        }))}
+      />
+    </span>
   )
 }
 

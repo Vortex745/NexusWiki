@@ -1,0 +1,66 @@
+@layer components {
+  .root { position: relative; display: inline-flex; flex: none; vertical-align: middle; }
+
+  /* The trigger anchors the menu, so it answers hover and press with color, never with scale. */
+  .trigger { position: relative; display: inline-flex; height: 40px; flex: none; align-items: center; gap: var(--space-2); margin: 0; padding: 4px; border: 0; border-radius: var(--radius-pill); background: transparent; color: var(--foreground); font: inherit; font-family: var(--font-body); font-size: var(--text-sm); letter-spacing: var(--tracking-body); cursor: pointer; -webkit-tap-highlight-color: transparent; transition: background-color var(--duration-fast) var(--ease-standard); }
+  .trigger[data-name] { padding-right: 10px; }
+  @media (hover: hover) and (pointer: fine) { .trigger:hover { background: var(--surface-muted); } }
+  .trigger[data-state="open"] { background: var(--surface-muted); }
+  .trigger:active { background: color-mix(in oklab, var(--surface-muted), var(--foreground) 8%); }
+  .triggerName { max-width: 11rem; overflow: hidden; font-weight: 500; line-height: 1; text-overflow: ellipsis; white-space: nowrap; }
+  /* Three zones: the avatar stays left, the name is centred in the whole
+     button, and the chevron hugs the right edge. */
+  .trigger[data-name] .triggerName { position: absolute; top: 50%; left: 50%; max-width: calc(100% - 100px); transform: translate(-50%, -50%); text-align: center; }
+  .trigger[data-name] .chevron { margin-left: auto; }
+  .chevron { flex: none; margin-left: -2px; color: var(--text-muted); transition: transform var(--duration-spring) var(--ease-spring), color var(--duration-fast) var(--ease-standard); }
+  .trigger:hover .chevron, .trigger[data-state="open"] .chevron { color: var(--foreground); }
+  .trigger[data-state="open"] .chevron { transform: rotate(180deg); }
+  @media (max-width: 639px) {
+    .trigger[data-name] { padding-right: 4px; }
+    .triggerName, .chevron { display: none; }
+  }
+
+  .face { position: relative; display: inline-grid; width: var(--face-size); height: var(--face-size); flex: none; }
+  .face[data-size="sm"] { --face-size: 32px; }
+  .face[data-size="md"] { --face-size: 34px; }
+  /* One solid colour per ID plus the ID's first character. The hue is set
+     inline by the component; light and dark keep their own tuned lightness. */
+  .portrait { display: grid; width: 100%; height: 100%; place-items: center; border-radius: var(--radius-pill); background: oklch(88% .065 var(--avatar-hue, 250)); color: oklch(32% .06 var(--avatar-hue, 250)); font-size: calc(var(--face-size) * .4); font-weight: 600; line-height: 1; user-select: none; }
+  :global([data-theme="dark"]) .portrait { background: oklch(42% .075 var(--avatar-hue, 250)); color: oklch(96% .012 var(--avatar-hue, 250)); }
+
+  /* The panel scales out of the avatar it belongs to; the component sets the origin once it is placed. */
+  .panel { --row: 32px; --inset: 4px; --menu-radius: 10px; --menu-line: color-mix(in oklab, var(--foreground) 9%, transparent); position: fixed; top: 0; left: 0; z-index: 60; box-sizing: border-box; width: 15.5rem; max-width: calc(100vw - 24px); padding: var(--inset); border: .5px solid var(--border); border-radius: var(--menu-radius); background: var(--surface-raised); box-shadow: var(--shadow-floating); color: var(--foreground); font-family: var(--font-body); letter-spacing: -.01em; line-height: 1.3; text-align: left; outline: none; transform-origin: var(--origin-x, 100%) var(--origin-y, 0px); }
+
+  .header { display: flex; align-items: center; gap: 10px; padding: 8px 8px 8px; }
+  .identity { display: grid; min-width: 0; flex: 1; gap: 2px; }
+  .name { min-width: 0; overflow: hidden; color: var(--foreground); font-size: 13px; font-weight: 500; letter-spacing: -.012em; line-height: 1.25; text-overflow: ellipsis; white-space: nowrap; }
+  .caption { overflow: hidden; color: var(--text-muted); font-size: 12px; letter-spacing: -.008em; line-height: 1.3; text-overflow: ellipsis; white-space: nowrap; }
+
+  .list { position: relative; }
+  .separator { height: .5px; margin: var(--inset) calc(var(--inset) * -1); background: var(--menu-line); }
+  @media (max-resolution: 1dppx) { .separator { height: 1px; background: color-mix(in oklab, var(--foreground) 6%, transparent); } }
+
+  /* One highlight follows the pointer and the keyboard. It is the only hover treatment in the menu. */
+  .highlight { position: absolute; top: 0; right: 0; left: 0; border-radius: 6px; background: color-mix(in oklab, var(--foreground) 6%, transparent); opacity: 0; pointer-events: none; }
+
+  .item { position: relative; display: flex; width: 100%; height: var(--row); box-sizing: border-box; align-items: center; gap: 10px; margin: 0; padding: 0 8px; border: 0; border-radius: 6px; background: transparent; color: var(--foreground); font: inherit; font-size: 13px; text-align: left; cursor: pointer; outline: none; user-select: none; -webkit-tap-highlight-color: transparent; transition: color var(--duration-fast) var(--ease-standard); }
+  .icon { display: inline-grid; width: 16px; flex: none; place-items: center; color: var(--text-secondary); transition: color var(--duration-fast) var(--ease-standard); }
+  .item:focus .icon { color: var(--foreground); }
+  .itemLabel { position: relative; display: inline-flex; min-width: 0; flex: 1; }
+  @media (hover: none) { .item:active { background: var(--surface-muted); } }
+
+  .spinner { animation: user-menu-spin .8s linear infinite; }
+  @keyframes user-menu-spin { to { transform: rotate(360deg); } }
+
+  /* Below 640px the same content rises as a bottom sheet with larger rows. */
+  .scrim { position: fixed; inset: 0; z-index: 70; background: oklch(0% 0 0 / .32); -webkit-tap-highlight-color: transparent; }
+  .sheet { --row: 46px; --inset: 10px; position: fixed; top: auto; right: 0; bottom: 0; left: 0; z-index: 71; width: auto; max-width: none; max-height: 88dvh; overflow-y: auto; overscroll-behavior: contain; padding: 8px var(--inset) calc(12px + env(safe-area-inset-bottom)); border-bottom: 0; border-radius: var(--radius-panel) var(--radius-panel) 0 0; }
+  .handle { display: block; width: 36px; height: 5px; margin: 0 auto 10px; border-radius: var(--radius-pill); background: var(--border-strong); cursor: grab; }
+  .sheet .header { padding: 4px 8px 12px; }
+  .sheet .item { font-size: var(--text-base); }
+
+  @media (prefers-reduced-motion: reduce) {
+    .trigger, .chevron, .item, .icon { transition: none; }
+    .spinner { animation-duration: 2.4s; }
+  }
+}

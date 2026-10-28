@@ -890,3 +890,88 @@ test("a runner that never signals is unaffected", async () => {
   );
   assert.deepEqual(running.map((event) => event.stage), ["route"]);
 });
+
+// ---------------------------------------------------------------------------
+// Reasoning effort: the adapter forwards the run's frozen choice and stamps it
+// on BOTH terminal construction paths before observers see them.
+// ---------------------------------------------------------------------------
+
+test("the run's reasoning effort is forwarded to the runner, and omission stays omission", async () => {
+  const received: Array<string | undefined> = [];
+  const runner: MastraRunner = async (input) => {
+    received.push(input.reasoningEffort);
+    return makeFakeRunnerOutput({ tokens: [], routeTrace: {}, retrievalTrace: {}, contextTrace: {}, validationTrace: {} });
+  };
+  const adapter = createMastraChatEventAdapter({ runner });
+  await collectEvents(adapter, "q", { reasoningEffort: "low" });
+  await collectEvents(adapter, "q", { reasoningEffort: "max" });
+  await collectEvents(adapter, "q");
+  assert.deepEqual(received, ["low", "max", undefined]);
+});
+
+test("success, provider failure and cancellation terminals all carry the requested effort", async () => {
+  const success = await collectEvents(
+    createMastraChatEventAdapter({ runner: makeFakeRunner() }),
+    "q",
+    { reasoningEffort: "high" }
+  );
+  const successDone = success.filter((event) => event.type === "done");
+  assert.equal(successDone.length, 1);
+  assert.equal(successDone[0].result.requestedReasoningEffort, "high");
+
+  const failing: MastraRunner = async () => {
+    throw new Error("provider exploded");
+  };
+  const failure = await collectEvents(
+    createMastraChatEventAdapter({ runner: failing }),
+    "q",
+    { reasoningEffort: "low" }
+  );
+  const failureDone = failure.filter((event) => event.type === "done");
+  assert.equal(failureDone.length, 1);
+  assert.equal(failureDone[0].result.status, "provider_error");
+  assert.equal(failureDone[0].result.requestedReasoningEffort, "low");
+
+  const cancelling: MastraRunner = async () => {
+    const error = new Error("cancelled");
+    error.name = "AbortError";
+    throw error;
+  };
+  const cancelled = await collectEvents(
+    createMastraChatEventAdapter({ runner: cancelling }),
+    "q",
+    { reasoningEffort: "max" }
+  );
+  const cancelledDone = cancelled.filter((event) => event.type === "done");
+  assert.equal(cancelledDone.length, 1);
+  assert.equal(cancelledDone[0].result.status, "cancelled");
+  assert.equal(cancelledDone[0].result.requestedReasoningEffort, "max");
+});
+
+test("an omitted request keeps every terminal free of the field", async () => {
+  const events = await collectEvents(
+    createMastraChatEventAdapter({ runner: makeFakeRunner() }),
+    "q"
+  );
+  const done = events.filter((event) => event.type === "done");
+  assert.equal(done.length, 1);
+  assert.equal("requestedReasoningEffort" in done[0].result, false);
+});
+
+test("observers see the stamped effort on the first notification of the terminal", async () => {
+  const observed: Array<Extract<AnswerRunEvent, { type: "done" }>> = [];
+  const events = await collectEvents(
+    createMastraChatEventAdapter({
+      runner: makeFakeRunner(),
+      observers: [{ onEvent: (event) => {
+        if (event.type === "done") observed.push(event);
+      } }],
+    }),
+    "q",
+    { reasoningEffort: "high" }
+  );
+  assert.equal(observed.length, 1);
+  assert.equal(observed[0].result.requestedReasoningEffort, "high");
+  const yielded = events.filter((event) => event.type === "done");
+  assert.equal(yielded[0].result.requestedReasoningEffort, "high");
+});

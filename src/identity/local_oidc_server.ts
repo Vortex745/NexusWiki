@@ -26,6 +26,8 @@
 
 import { createServer, type Server } from "node:http"
 import {
+  createPrivateKey,
+  createPublicKey,
   generateKeyPairSync,
   sign as cryptoSign,
   type KeyObject,
@@ -41,6 +43,13 @@ export interface LocalOidcServerOptions {
   kid?: string
   /** Port to listen on (0 = random free port, assigned by OS). */
   port?: number
+  /**
+   * An existing signing key to reuse instead of generating a fresh one.
+   * Used by the local sign-in issuer so a server restart does not invalidate
+   * tokens the browser still holds. Both PEMs must be provided together.
+   */
+  privateKeyPem?: string
+  publicKeyPem?: string
   /**
    * Ticket 01: when provided, `POST /token` mints claims through this
    * resolver instead of signing the raw request body. Returning null
@@ -58,7 +67,7 @@ export interface LocalOidcServerOptions {
   tokenAuth?: string
   /**
    * Lifetime of issued tokens in seconds. Defaults to one hour; the demo
-   * issuer overrides it so its sign-in gate stays open for seven days.
+   * issuer overrides it so its sign-in gate stays open for five days.
    */
   tokenTtlSeconds?: number
 }
@@ -79,8 +88,9 @@ export interface IssueTokenClaims {
 /**
  * Local OIDC test server that serves JWKS and signs JWTs.
  *
- * Generates an RSA-2048 key pair on construction. The public key is served
- * as JWKS at `/.well-known/jwks.json`. JWTs are signed with RS256.
+ * Generates an RSA-2048 key pair on construction unless both PEMs are
+ * supplied. The public key is served as JWKS at
+ * `/.well-known/jwks.json`. JWTs are signed with RS256.
  */
 export class LocalOidcServer {
   private readonly privateKey: KeyObject
@@ -106,11 +116,28 @@ export class LocalOidcServer {
     this.tokenAuth = options.tokenAuth
     this.tokenTtlSeconds = options.tokenTtlSeconds ?? 3600
 
-    const { privateKey, publicKey } = generateKeyPairSync("rsa", {
-      modulusLength: 2048,
-    })
-    this.privateKey = privateKey
-    this.publicKey = publicKey
+    if (options.privateKeyPem || options.publicKeyPem) {
+      if (!options.privateKeyPem || !options.publicKeyPem) {
+        throw new Error("privateKeyPem and publicKeyPem must be provided together")
+      }
+      this.privateKey = createPrivateKey(options.privateKeyPem)
+      this.publicKey = createPublicKey(options.publicKeyPem)
+      const derived = createPublicKey(this.privateKey)
+        .export({ type: "spki", format: "pem" })
+        .toString()
+      const supplied = this.publicKey
+        .export({ type: "spki", format: "pem" })
+        .toString()
+      if (derived !== supplied) {
+        throw new Error("publicKeyPem does not match privateKeyPem")
+      }
+    } else {
+      const { privateKey, publicKey } = generateKeyPairSync("rsa", {
+        modulusLength: 2048,
+      })
+      this.privateKey = privateKey
+      this.publicKey = publicKey
+    }
 
     // Export public key as JWK for the JWKS endpoint
     this.jwk = this.publicKey.export({ format: "jwk" })

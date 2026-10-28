@@ -24,6 +24,7 @@ import { type DirectReplyStream } from "./direct_ambiguous_runner"
 import { SYSTEM_PROMPT } from "./system_prompt"
 import { createOpenAIClient } from "../clients"
 import { createRunBudgetedOpenAIClient } from "../runtime/openai_budget_client"
+import type { ReasoningEffort } from "../types"
 
 // Extract the identity description from the first line of SYSTEM_PROMPT
 // (e.g. "你是智能客服助手，..."). This lets the model know who it is
@@ -82,7 +83,7 @@ export async function createDirectReplyStream(
   return async function* directReplyStream(
     message: string,
     signal: AbortSignal,
-    options?: { systemPrompt?: string }
+    options?: { systemPrompt?: string; reasoningEffort?: ReasoningEffort }
   ): AsyncIterable<string> {
     const messages: Array<{ role: "system" | "user"; content: string }> = [
       ...(options?.systemPrompt
@@ -96,6 +97,11 @@ export async function createDirectReplyStream(
         model,
         messages,
         stream: true,
+        // The run's explicit choice only; an omitted run keeps the provider's
+        // own default (the payload is otherwise unchanged).
+        ...(options?.reasoningEffort
+          ? { reasoning_effort: options.reasoningEffort }
+          : {}),
       },
       { signal }
     )

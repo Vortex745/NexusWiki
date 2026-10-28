@@ -367,6 +367,13 @@
       "ticket": "排除（认证/凭据）"
     },
     {
+      "n": 62,
+      "method": "POST",
+      "path": "/api/auth/register",
+      "expectRoot": false,
+      "ticket": "排除（注册/凭据）"
+    },
+    {
       "n": 70,
       "method": "POST",
       "path": "/api/chat/runs/:runId/handoff",

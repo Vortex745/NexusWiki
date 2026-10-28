@@ -73,12 +73,12 @@ const REFUSAL_MARKERS = [
 ]
 
 async function login(baseUrl: string): Promise<string> {
-  const password = process.env.DEMO_OIDC_PASSWORD
-  if (!password) throw new Error("DEMO_OIDC_PASSWORD must be set for the gate")
+  const password = process.env.ADMIN_LOGIN_PASSWORD || process.env.DEMO_OIDC_PASSWORD
+  if (!password) throw new Error("ADMIN_LOGIN_PASSWORD or DEMO_OIDC_PASSWORD must be set for the gate")
   const response = await fetch(`${baseUrl}/api/auth/login`, {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ account: "admin", password }),
+    body: JSON.stringify({ id: process.env.ADMIN_LOGIN_ID || "admin", password }),
   })
   if (!response.ok) throw new Error(`login failed: HTTP ${response.status}`)
   const body = (await response.json()) as { accessToken: string }

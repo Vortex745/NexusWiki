@@ -48,7 +48,7 @@ import type { Router } from "../retrieval/router/interface"
 import type { ConversationStore } from "../answer/conversation_store"
 import type { Summarizer } from "../answer/summarizer"
 import type { AccessContext } from "../access/context"
-import type { TokenUsage } from "../types"
+import type { TokenUsage, ReasoningEffort } from "../types"
 import type { MastraMemoryAdapter } from "./memory_adapter"
 import { formatMemoryAsContext } from "./memory_adapter"
 import { renderMemoryPromptSuffix } from "./memory_prompt"
@@ -83,8 +83,10 @@ export type DirectReplyStream = (
   message: string,
   signal: AbortSignal,
   /** Ticket 19 (AST-01B): the assistant's own prompt, prepended as a leading
-   * system message when present (the snapshot is transport-resolved). */
-  options?: { systemPrompt?: string }
+   * system message when present (the snapshot is transport-resolved).
+   * The same object carries the run's frozen reasoning-effort request — both
+   * are generation parameters, so they ride one optional third argument. */
+  options?: { systemPrompt?: string; reasoningEffort?: ReasoningEffort }
 ) => AsyncIterable<string>
 
 /**
@@ -326,6 +328,7 @@ export function createDirectAmbiguousMastraRunner(
     const tokens: string[] = []
     for await (const token of streamDirectReply(promptMessage, input.signal, {
       ...(systemPrompt ? { systemPrompt } : {}),
+      ...(input.reasoningEffort ? { reasoningEffort: input.reasoningEffort } : {}),
     })) {
       tokens.push(token)
       // Direct route has no critic gate before publication (T09 §13) — push

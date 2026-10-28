@@ -129,7 +129,7 @@ export function resolveSourceIdentity(
   }
 }
 
-export function sourceIdentityKey(identity: CanonicalSourceIdentity): string {
+export function sourceIdentityKey(identity: CanonicalSourceIdentity, generation = 0): string {
   const keyParts = [identity.kind, identity.uri, identity.namespace]
   if (identity.tenantId !== "default") keyParts.push(identity.tenantId)
   // Ticket 03 (KB-02A): a non-default knowledge base isolates the key, so the
@@ -141,6 +141,10 @@ export function sourceIdentityKey(identity: CanonicalSourceIdentity): string {
     // tenant's id must not hash to that tenant's identity.
     keyParts.push(`kb:${identity.knowledgeBaseId}`)
   }
+  // A re-import after retirement is a NEW Source (retired stays terminal).
+  // Tagging the generation keeps that new Source's key stable, so repeat
+  // uploads of the re-import still dedupe instead of piling up Sources.
+  if (generation > 0) keyParts.push(`gen:${generation}`)
   return createHash("sha256")
     .update(JSON.stringify(keyParts))
     .digest("hex")

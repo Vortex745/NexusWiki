@@ -28,7 +28,7 @@ export type SessionState =
 
 export interface SessionApi {
   state: SessionState
-  signIn(account: string, password: string): Promise<void>
+  signIn(id: string, password: string): Promise<void>
   signOut(): void
 }
 
@@ -71,8 +71,8 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
   }, [load])
 
   const signIn = useCallback(
-    async (account: string, password: string) => {
-      await requestSignIn(account, password)
+    async (id: string, password: string) => {
+      await requestSignIn(id, password)
       await load()
     },
     [load]

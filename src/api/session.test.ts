@@ -3,39 +3,54 @@ import test from "node:test"
 import { createServer } from "node:net"
 import express from "express"
 import type { Request, Response } from "express"
+import Database from "better-sqlite3"
 import { createAccessMiddleware } from "./access_middleware"
-import { createSessionRouter, type DemoAuthOptions } from "./session"
+import { createSessionRouter, type LocalAuthOptions } from "./session"
 import { JoseIdentityAdapter } from "../identity/jose_adapter"
 import { startDemoOidcIssuer, DEMO_TOKEN_TTL_SECONDS, type DemoOidcIssuerHandle } from "../identity/demo_oidc_issuer"
-import { DEMO_ACCOUNTS, DEMO_TENANT_ID } from "../identity/demo_accounts"
+import { DEMO_TENANT_ID } from "../identity/demo_accounts"
+import { LocalAuthService, SqliteLocalUserStore } from "../identity/local_users"
 import type { AccessContext, IdentityAdapter } from "../access/context"
 
 /**
- * Ticket 01 (IAM-01) acceptance: three real local OIDC identities.
+ * Ticket 01 (IAM-01) acceptance: local ID/password identities.
  *
- * The harness wires the REAL pieces over real HTTP: the loopback demo issuer
- * mints real RS256 tokens, the production JoseIdentityAdapter verifies them
- * against the issuer's real JWKS, and the real access middleware + session
- * router produce the role/group/scopes the browser is allowed to see.
+ * The harness wires the REAL pieces over real HTTP: the loopback issuer mints
+ * real RS256 tokens for the administrator's special ID and for users
+ * registered into a real SQLite table, the production JoseIdentityAdapter
+ * verifies them against the issuer's real JWKS, and the real access middleware
+ * + session router produce the role/groups/scopes the browser may see.
  */
 
-const DEMO_PASSWORD = "correct-horse-battery"
+const ADMIN_ID = "boss"
+const ADMIN_PASSWORD = "Boss8888"
+const USER_PASSWORD = "Pass1234"
 const AUDIENCE = "nexusrag-demo-test"
 
 interface Harness {
   port: number
   issuer: DemoOidcIssuerHandle
-  demoAuth: DemoAuthOptions
+  localAuth: LocalAuthService
+  demoAuth: LocalAuthOptions
   close(): Promise<void>
 }
 
 /**
  * `demoAuth: false` builds the legacy shape: single-tenant middleware, no
- * demo sign-in. Everything else is identical, so the compatibility assertion
+ * local sign-in. Everything else is identical, so the compatibility assertion
  * exercises the same server surface.
  */
 async function startHarness(options: { demoAuth: boolean }): Promise<Harness> {
-  const issuer = await startDemoOidcIssuer({ port: 0, audience: AUDIENCE })
+  const db = new Database(":memory:")
+  const localAuth = new LocalAuthService(new SqliteLocalUserStore(db), {
+    adminId: ADMIN_ID,
+    adminPassword: ADMIN_PASSWORD,
+  })
+  const issuer = await startDemoOidcIssuer({
+    port: 0,
+    audience: AUDIENCE,
+    resolveClaims: (account) => localAuth.claimsForAccount(account),
+  })
   const adapter: IdentityAdapter = new JoseIdentityAdapter({
     config: {
       kind: "active",
@@ -46,10 +61,10 @@ async function startHarness(options: { demoAuth: boolean }): Promise<Harness> {
       clockSkewSeconds: 60,
     },
   })
-  const demoAuth: DemoAuthOptions = {
+  const demoAuth: LocalAuthOptions = {
     tokenEndpoint: issuer.tokenEndpoint,
-    password: DEMO_PASSWORD,
     tokenAuth: issuer.tokenAuth,
+    localAuth,
   }
 
   const app = express()
@@ -72,16 +87,27 @@ async function startHarness(options: { demoAuth: boolean }): Promise<Harness> {
   return {
     port,
     issuer,
+    localAuth,
     demoAuth,
     close: async () => {
       await new Promise<void>((resolve) => server.close(() => resolve()))
       await issuer.stop()
+      db.close()
     },
   }
 }
 
 async function login(port: number, body: unknown) {
   const res = await fetch(`http://127.0.0.1:${port}/api/auth/login`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  })
+  return { status: res.status, json: (await res.json()) as Record<string, unknown> }
+}
+
+async function register(port: number, body: unknown) {
+  const res = await fetch(`http://127.0.0.1:${port}/api/auth/register`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
@@ -120,91 +146,145 @@ async function issuerToken(
   })
 }
 
-test("Ticket 01: all three demo accounts receive the expected role, groups and scopes", async () => {
+test("the administrator signs in with the special ID and receives the admin role", async () => {
   const harness = await startHarness({ demoAuth: true })
   try {
-    for (const account of DEMO_ACCOUNTS) {
-      const signIn = await login(harness.port, { account: account.key, password: DEMO_PASSWORD })
-      assert.equal(signIn.status, 200, `${account.key} must be able to sign in`)
-      const token = signIn.json.accessToken as string
-      assert.equal(typeof token, "string")
-      assert.equal(token.split(".").length, 3, "the issued token must be a JWT")
+    const signIn = await login(harness.port, { id: "BOSS", password: ADMIN_PASSWORD })
+    assert.equal(signIn.status, 200, "the admin ID is compared case-insensitively")
+    const token = signIn.json.accessToken as string
+    assert.equal(typeof token, "string")
+    assert.equal(token.split(".").length, 3, "the issued token must be a JWT")
 
-      const session = await getSession(harness.port, token)
-      assert.equal(session.status, 200, `${account.key} session must resolve`)
-      assert.equal(session.json.tenantId, DEMO_TENANT_ID)
-      assert.equal(session.json.subjectId, account.subjectId)
-      assert.deepEqual(session.json.groups, account.groups, `${account.key} group membership`)
-      assert.deepEqual(session.json.scopes, account.scopes, `${account.key} scopes`)
-      assert.equal(
-        session.json.role,
-        account.scopes.includes("admin") ? "admin" : "reader",
-        `${account.key} role is derived from the granted scopes`
-      )
+    const session = await getSession(harness.port, token)
+    assert.equal(session.status, 200)
+    assert.equal(session.json.tenantId, DEMO_TENANT_ID)
+    assert.equal(session.json.subjectId, "demo-admin")
+    assert.equal(session.json.displayName, ADMIN_ID)
+    assert.deepEqual(session.json.groups, ["demo-admins"])
+    assert.deepEqual(session.json.scopes, ["chat", "ingest", "review", "admin"])
+    assert.equal(session.json.role, "admin")
+    assert.equal(await postAdminProbe(harness.port, token), 204)
+  } finally {
+    await harness.close()
+  }
+})
+
+test("a registered user signs in with its own ID and only holds chat", async () => {
+  const harness = await startHarness({ demoAuth: true })
+  try {
+    const created = await register(harness.port, { id: "小明", password: USER_PASSWORD })
+    assert.equal(created.status, 201)
+    assert.deepEqual(created.json, { ok: true }, "registration never returns a token")
+
+    const signIn = await login(harness.port, { id: "小明", password: USER_PASSWORD })
+    assert.equal(signIn.status, 200)
+    const token = signIn.json.accessToken as string
+    const session = await getSession(harness.port, token)
+    assert.equal(session.json.tenantId, DEMO_TENANT_ID)
+    assert.equal(session.json.subjectId, "user:小明")
+    assert.equal(session.json.displayName, "小明")
+    assert.deepEqual(session.json.groups, [])
+    assert.deepEqual(session.json.scopes, ["chat"])
+    assert.equal(session.json.role, "reader")
+    assert.equal(await postAdminProbe(harness.port, token), 403, "a reader must not mutate")
+  } finally {
+    await harness.close()
+  }
+})
+
+test("registration enforces the ID and password rules", async () => {
+  const harness = await startHarness({ demoAuth: true })
+  try {
+    const cases: Array<{ body: unknown; status: number; error?: string }> = [
+      { body: { id: "abcdef", password: USER_PASSWORD }, status: 400, error: "invalid_id" },
+      { body: { id: "abc1", password: USER_PASSWORD }, status: 400, error: "invalid_id" },
+      { body: { id: "", password: USER_PASSWORD }, status: 400, error: "invalid_id" },
+      { body: { id: "张三", password: "short" }, status: 400, error: "invalid_password" },
+      { body: { id: "张三", password: "123456789" }, status: 400, error: "invalid_password" },
+    ]
+    for (const entry of cases) {
+      const result = await register(harness.port, entry.body)
+      assert.equal(result.status, entry.status, JSON.stringify(entry.body))
+      assert.equal(result.json.error, entry.error)
+      assert.equal(typeof result.json.message, "string")
+    }
+    const accepted = await register(harness.port, { id: "张ab", password: USER_PASSWORD })
+    assert.equal(accepted.status, 201, "mixed Chinese/Latin IDs are accepted")
+  } finally {
+    await harness.close()
+  }
+})
+
+test("ID uniqueness is case-insensitive and login accepts any casing", async () => {
+  const harness = await startHarness({ demoAuth: true })
+  try {
+    assert.equal((await register(harness.port, { id: "Alice", password: USER_PASSWORD })).status, 201)
+    const duplicate = await register(harness.port, { id: "ALICE", password: "Other123" })
+    assert.equal(duplicate.status, 409)
+    assert.equal(duplicate.json.error, "id_taken")
+
+    const signIn = await login(harness.port, { id: "alice", password: USER_PASSWORD })
+    assert.equal(signIn.status, 200)
+    const session = await getSession(harness.port, signIn.json.accessToken as string)
+    assert.equal(session.json.displayName, "Alice", "the registered casing is what the UI shows")
+  } finally {
+    await harness.close()
+  }
+})
+
+test("the administrator ID is reserved and cannot be registered", async () => {
+  const harness = await startHarness({ demoAuth: true })
+  try {
+    const result = await register(harness.port, { id: "BOSS", password: USER_PASSWORD })
+    assert.equal(result.status, 409)
+    assert.equal(result.json.error, "id_taken")
+  } finally {
+    await harness.close()
+  }
+})
+
+test("bad credentials fail without revealing which accounts exist", async () => {
+  const harness = await startHarness({ demoAuth: true })
+  try {
+    const attempts = [
+      await login(harness.port, { id: ADMIN_ID, password: "wrong" }),
+      await login(harness.port, { id: "ghost", password: USER_PASSWORD }),
+      await login(harness.port, { id: ADMIN_ID }),
+      await login(harness.port, { id: "小明", password: USER_PASSWORD }),
+    ]
+    for (const attempt of attempts) {
+      assert.equal(attempt.status, 401)
+      assert.equal(attempt.json.error, "invalid credentials")
     }
   } finally {
     await harness.close()
   }
 })
 
-test("Ticket 01: a demo sign-in stays valid for seven days", async () => {
+test("a local sign-in stays valid for five days", async () => {
   const harness = await startHarness({ demoAuth: true })
   try {
-    const signIn = await login(harness.port, { account: "admin", password: DEMO_PASSWORD })
+    const signIn = await login(harness.port, { id: ADMIN_ID, password: ADMIN_PASSWORD })
     assert.equal(signIn.status, 200)
     const token = signIn.json.accessToken as string
     const claims = JSON.parse(
       Buffer.from(token.split(".")[1], "base64url").toString("utf8")
     ) as { iat: number; exp: number }
-    assert.equal(DEMO_TOKEN_TTL_SECONDS, 7 * 24 * 60 * 60, "the gate lifetime is seven days")
+    assert.equal(DEMO_TOKEN_TTL_SECONDS, 5 * 24 * 60 * 60, "the gate lifetime is five days")
     assert.equal(claims.exp - claims.iat, DEMO_TOKEN_TTL_SECONDS)
   } finally {
     await harness.close()
   }
 })
 
-test("Ticket 01: readers are rejected from administrator mutations, the administrator is not", async () => {
+test("the issuer only mints known identities and ignores injected claims", async () => {
   const harness = await startHarness({ demoAuth: true })
   try {
-    const adminToken = (await login(harness.port, { account: "admin", password: DEMO_PASSWORD }))
-      .json.accessToken as string
-    assert.equal(await postAdminProbe(harness.port, adminToken), 204)
-
-    for (const key of ["technical-reader", "policy-reader"]) {
-      const token = (await login(harness.port, { account: key, password: DEMO_PASSWORD }))
-        .json.accessToken as string
-      assert.equal(await postAdminProbe(harness.port, token), 403, `${key} must not mutate`)
-    }
-  } finally {
-    await harness.close()
-  }
-})
-
-test("Ticket 01: a missing or unverifiable token is rejected before any handler runs", async () => {
-  const harness = await startHarness({ demoAuth: true })
-  try {
-    assert.equal((await getSession(harness.port)).status, 401)
-    assert.equal((await getSession(harness.port, "not-a-jwt")).status, 401)
-    // Signed by the issuer, but for an audience the adapter does not trust.
-    const foreign = await startDemoOidcIssuer({ port: 0, audience: "another-audience" })
-    try {
-      const res = await issuerToken(foreign, { account: "admin" })
-      const { access_token } = (await res.json()) as { access_token: string }
-      assert.equal((await getSession(harness.port, access_token)).status, 401)
-    } finally {
-      await foreign.stop()
-    }
-  } finally {
-    await harness.close()
-  }
-})
-
-test("Ticket 01: the issuer only mints the preset accounts and ignores injected claims", async () => {
-  const harness = await startHarness({ demoAuth: true })
-  try {
-    // A caller cannot promote itself: the body's own sub/groups/scope are ignored.
+    await register(harness.port, { id: "小明", password: USER_PASSWORD })
+    // A caller cannot promote itself: the body's own sub/tenant/groups/scope
+    // are ignored, and only the account key is resolved.
     const res = await issuerToken(harness.issuer, {
-      account: "policy-reader",
+      account: "小明",
       sub: "attacker",
       tenant_id: "other-tenant",
       groups: ["demo-admins"],
@@ -212,38 +292,38 @@ test("Ticket 01: the issuer only mints the preset accounts and ignores injected 
     })
     const { access_token } = (await res.json()) as { access_token: string }
     const session = await getSession(harness.port, access_token)
-    assert.equal(session.json.subjectId, "demo-policy-reader")
+    assert.equal(session.json.subjectId, "user:小明")
     assert.equal(session.json.tenantId, DEMO_TENANT_ID)
-    assert.deepEqual(session.json.groups, ["demo-policy-readers"])
+    assert.deepEqual(session.json.groups, [])
     assert.deepEqual(session.json.scopes, ["chat"])
     assert.equal(session.json.role, "reader")
 
-    const unknown = await issuerToken(harness.issuer, { account: "not-a-demo-account" })
+    const unknown = await issuerToken(harness.issuer, { account: "not-a-registered-user" })
     assert.equal(unknown.status, 400)
   } finally {
     await harness.close()
   }
 })
 
-test("Ticket 01: the issuer mints no token for a caller without the shared secret", async () => {
+test("the issuer mints no token for a caller without the shared secret", async () => {
   // Without this, the password in front of the sign-in proxy would be
   // decorative: the issuer listens on loopback, so any local process could ask
   // it for an administrator token directly.
   const harness = await startHarness({ demoAuth: true })
   try {
-    const direct = await issuerToken(harness.issuer, { account: "admin" }, false)
+    const direct = await issuerToken(harness.issuer, { account: ADMIN_ID }, false)
     assert.equal(direct.status, 401, "the issuer must refuse an unauthenticated caller")
     assert.equal("access_token" in ((await direct.json()) as object), false)
 
     const wrongSecret = await fetch(harness.issuer.tokenEndpoint, {
       method: "POST",
       headers: { "Content-Type": "application/json", authorization: "Bearer not-the-secret" },
-      body: JSON.stringify({ account: "admin" }),
+      body: JSON.stringify({ account: ADMIN_ID }),
     })
     assert.equal(wrongSecret.status, 401)
 
     // The proxy is the one caller that can still sign an administrator in.
-    const viaProxy = await login(harness.port, { account: "admin", password: DEMO_PASSWORD })
+    const viaProxy = await login(harness.port, { id: ADMIN_ID, password: ADMIN_PASSWORD })
     assert.equal(viaProxy.status, 200)
     assert.equal(
       (await getSession(harness.port, viaProxy.json.accessToken as string)).json.role,
@@ -254,15 +334,20 @@ test("Ticket 01: the issuer mints no token for a caller without the shared secre
   }
 })
 
-test("Ticket 01: a failed bind is reported instead of hanging the startup", async () => {
-  // The demo issuer uses a fixed port by default, so a second run would
+test("a failed bind is reported instead of hanging the startup", async () => {
+  // The issuer uses a fixed port in production, so a second run would
   // otherwise await a promise that never settles and log nothing.
   const blocker = createServer()
   await new Promise<void>((resolve) => blocker.listen(0, "127.0.0.1", resolve))
   const busyPort = (blocker.address() as { port: number }).port
   try {
     await assert.rejects(
-      () => startDemoOidcIssuer({ port: busyPort, audience: AUDIENCE }),
+      () =>
+        startDemoOidcIssuer({
+          port: busyPort,
+          audience: AUDIENCE,
+          resolveClaims: () => null,
+        }),
       /EADDRINUSE/
     )
   } finally {
@@ -270,34 +355,23 @@ test("Ticket 01: a failed bind is reported instead of hanging the startup", asyn
   }
 })
 
-test("Ticket 01: bad credentials fail without revealing which accounts exist", async () => {
+test("no credential or signing material appears in any response body", async () => {
   const harness = await startHarness({ demoAuth: true })
   try {
-    const wrongPassword = await login(harness.port, { account: "admin", password: "wrong" })
-    const unknownAccount = await login(harness.port, { account: "ghost", password: DEMO_PASSWORD })
-    const missingPassword = await login(harness.port, { account: "admin" })
-    for (const attempt of [wrongPassword, unknownAccount, missingPassword]) {
-      assert.equal(attempt.status, 401)
-      assert.equal(attempt.json.error, "invalid credentials")
-    }
-  } finally {
-    await harness.close()
-  }
-})
-
-test("Ticket 01: no credential or signing material appears in any response body", async () => {
-  const harness = await startHarness({ demoAuth: true })
-  try {
-    const signIn = await login(harness.port, { account: "admin", password: DEMO_PASSWORD })
+    const signIn = await login(harness.port, { id: ADMIN_ID, password: ADMIN_PASSWORD })
     assert.deepEqual(Object.keys(signIn.json), ["accessToken"], "login returns the token and nothing else")
 
     const configRes = await fetch(`http://127.0.0.1:${harness.port}/api/auth/config`)
     const configBody = await configRes.text()
-    assert.equal(configBody.includes(DEMO_PASSWORD), false, "the password must never be echoed")
+    assert.equal(configBody.includes(ADMIN_PASSWORD), false, "the password must never be echoed")
+    assert.equal(configBody.includes(ADMIN_ID), false, "the reserved ID is not advertised")
     assert.equal(configBody.includes("tokenEndpoint"), false, "the issuer endpoint stays server-side")
-    const config = JSON.parse(configBody) as { demoAuth: boolean; accounts: unknown[] }
-    assert.equal(config.demoAuth, true)
-    assert.equal(config.accounts.length, DEMO_ACCOUNTS.length)
+    assert.deepEqual(JSON.parse(configBody), {
+      demoAuth: true,
+      registration: true,
+      idMaxLength: 5,
+      passwordLength: 8,
+    })
 
     // The public JWKS carries public key material only.
     const jwksBody = await (await fetch(harness.issuer.jwksEndpoint)).text()
@@ -314,7 +388,7 @@ test("Ticket 01: no credential or signing material appears in any response body"
   }
 })
 
-test("Ticket 01: the legacy single-tenant path still works and does not use the demo sign-in", async () => {
+test("the legacy single-tenant path still works and does not use local sign-in", async () => {
   const harness = await startHarness({ demoAuth: false })
   try {
     const session = await getSession(harness.port)
@@ -322,27 +396,32 @@ test("Ticket 01: the legacy single-tenant path still works and does not use the 
     assert.equal(session.json.tenantId, "default")
     assert.equal(session.json.subjectId, "local")
     assert.equal(session.json.role, "admin")
+    assert.equal(session.json.displayName, null)
     assert.deepEqual(session.json.scopes, ["chat", "ingest", "review", "admin"])
     assert.equal(await postAdminProbe(harness.port), 204, "local context holds the admin scope")
 
-    assert.equal((await login(harness.port, { account: "admin", password: DEMO_PASSWORD })).status, 404)
-    const config = (await (await fetch(`http://127.0.0.1:${harness.port}/api/auth/config`)).json()) as {
-      demoAuth: boolean
-      accounts: unknown[]
-    }
-    assert.deepEqual(config, { demoAuth: false, accounts: [] })
+    assert.equal((await login(harness.port, { id: ADMIN_ID, password: ADMIN_PASSWORD })).status, 404)
+    assert.equal((await register(harness.port, { id: "小明", password: USER_PASSWORD })).status, 404)
+    const config = (await (await fetch(`http://127.0.0.1:${harness.port}/api/auth/config`)).json()) as unknown
+    assert.deepEqual(config, {
+      demoAuth: false,
+      registration: false,
+      idMaxLength: 0,
+      passwordLength: 0,
+    })
   } finally {
     await harness.close()
   }
 })
 
-test("Ticket 01: a resolved AccessContext is the only source of the reported identity", async () => {
+test("a resolved AccessContext is the only source of the reported identity", async () => {
   // Guards the contract that /api/session reads res.locals, not the request.
   const ctx: AccessContext = {
     tenantId: "demo",
-    subjectId: "demo-policy-reader",
-    groups: ["demo-policy-readers"],
+    subjectId: "user:小明",
+    groups: [],
     scopes: ["chat"],
+    displayName: "小明",
   }
   const app = express()
   app.use(express.json())
@@ -358,10 +437,11 @@ test("Ticket 01: a resolved AccessContext is the only source of the reported ide
     })
     assert.deepEqual(await res.json(), {
       tenantId: "demo",
-      subjectId: "demo-policy-reader",
+      subjectId: "user:小明",
       role: "reader",
-      groups: ["demo-policy-readers"],
+      groups: [],
       scopes: ["chat"],
+      displayName: "小明",
     })
   } finally {
     await new Promise<void>((resolve) => server.close(() => resolve()))
