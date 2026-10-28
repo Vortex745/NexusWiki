@@ -70,12 +70,12 @@ function makeLifecycle(db: DB, counter: { parseRawCalls: number }) {
   return { lifecycle, runs }
 }
 
-test("UT-19 a) 重处理复用已验证提取：parseRaw 零调用、块身份逐条一致", async () => {
+test("UT-19 a) completed reprocess creates a new version and re-extracts", async () => {
   const counter = { parseRawCalls: 0 }
   const db = openDb()
   const { lifecycle, runs } = makeLifecycle(db, counter)
   const submitted = lifecycle.submit({
-    title: "UT-19 复用",
+    title: "UT-19 新版本",
     content: "",
     rawContent: ORIGINAL,
     fileName: "reuse.txt",
@@ -84,27 +84,25 @@ test("UT-19 a) 重处理复用已验证提取：parseRaw 零调用、块身份�
   })
   const first = await lifecycle.runNext()
   assert.ok(first?.success)
-  const firstRunChunks = runs[0]
   assert.equal(counter.parseRawCalls, 1, "首次运行真实解码一次")
+  assert.equal(lifecycle.getStatus(submitted.docId)?.documentVersion.active, true)
 
-  // 重处理（同版本恢复语义）：提取复用 → parseRaw 不再被调用。
   const reprocess = lifecycle.reprocess(submitted.docId)
   assert.ok(reprocess, "重处理命令有结果")
   assert.equal(reprocess.changed, true)
+  assert.notEqual(reprocess.docId, submitted.docId, "重处理必须创建新文档版本")
   const second = await lifecycle.runNext()
   assert.ok(second?.success)
-  assert.equal(counter.parseRawCalls, 1, "复用路径 parseRaw 零调用")
-  assert.deepEqual(
-    runs[1].map((chunk) => ({ id: chunk.id, content: chunk.content })),
-    firstRunChunks.map((chunk) => ({ id: chunk.id, content: chunk.content })),
-    "复用产物的块身份与内容逐条一致"
-  )
+  assert.equal(counter.parseRawCalls, 2, "新版本重新提取，不复用旧版本缓存")
+  assert.ok(runs[1].length > 0, "新版本产生独立块集合")
+  assert.equal(lifecycle.getStatus(submitted.docId)?.documentVersion.active, false)
+  assert.equal(lifecycle.getStatus(reprocess.docId)?.documentVersion.active, true)
 })
 
-test("UT-19 b) 配置漂移：解析配置指纹变化 → 拒绝复用，从原件重跑", async () => {
+test("UT-19 b) completed reprocess ignores old evidence drift and re-extracts", async () => {
   const counter = { parseRawCalls: 0 }
   const db = openDb()
-  const { lifecycle, runs } = makeLifecycle(db, counter)
+  const { lifecycle } = makeLifecycle(db, counter)
   const submitted = lifecycle.submit({
     title: "UT-19 配置漂移",
     content: "",
@@ -116,19 +114,15 @@ test("UT-19 b) 配置漂移：解析配置指纹变化 → 拒绝复用，从原
   await lifecycle.runNext()
   assert.equal(counter.parseRawCalls, 1)
 
-  // 模拟解析配置漂移：篡改证据行的配置指纹（等效于 config 变化后的存储值）。
   db.prepare(
     "UPDATE extraction_artifacts SET parser_config_version = 'drifted-fingerprint' WHERE doc_id = ?"
   ).run(submitted.docId)
 
-  lifecycle.reprocess(submitted.docId)
+  const reprocess = lifecycle.reprocess(submitted.docId)
+  assert.ok(reprocess)
   await lifecycle.runNext()
-  assert.equal(counter.parseRawCalls, 2, "配置漂移 → 不复用，从原件重新解码")
-  assert.deepEqual(
-    runs[1].map((chunk) => chunk.id),
-    runs[0].map((chunk) => chunk.id),
-    "重跑产物身份仍确定（同输入同配置语义）"
-  )
+  assert.equal(counter.parseRawCalls, 2, "completed reprocess re-extracts regardless of old evidence")
+  assert.notEqual(reprocess.docId, submitted.docId)
 })
 
 test("UT-19 c) 证据损坏：哈希不匹配的半写证据拒绝复用", async () => {

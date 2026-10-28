@@ -733,16 +733,20 @@ export class IngestionLifecycle {
     }
     return this.db.transaction((): IngestionCancellationResult => {
       const document = this.docRepo.get(docId)
-      if (document && this.docRepo.getSourceLifecycleState(document.sourceId) === "retired") {
+      if (!document) {
+        return {
+          docId,
+          taskId: task?.id ?? 0,
+          status: task?.status ?? documentStatus ?? "pending",
+          changed: false,
+        }
+      }
+      if (this.docRepo.getSourceLifecycleState(document.sourceId) === "retired") {
         return { docId, taskId: task?.id ?? 0, status: "retired", changed: false }
       }
       // Ticket UT-18: same retained-original rule as retry() — reprocess runs
       // from the stored original bytes, never without them.
-      if (
-        document &&
-        document.fileName &&
-        (!document.rawContent || document.rawContent.length === 0)
-      ) {
+      if (document.fileName && (!document.rawContent || document.rawContent.length === 0)) {
         return {
           docId,
           taskId: task?.id ?? 0,
@@ -752,24 +756,42 @@ export class IngestionLifecycle {
             "original file content is not retained for this document; a reprocess re-runs from the retained original — upload the file again instead",
         }
       }
-      let taskId: number
-      if (task) {
-        if (!this.taskRepo.requeue(task.id, trace)) {
-          const current = this.taskRepo.getByDocId(docId)
-          return { docId, taskId: task.id, status: current?.status ?? "pending", changed: false }
-        }
-        taskId = task.id
-      } else {
-        // A legacy completed document may have no task row at all — enqueue one
-        // instead of requeueing.
-        taskId = this.taskRepo.enqueue({
-          docId,
-          op: "ingest",
-          payload: { reprocessed: true, ...(trace ? { trace } : {}) },
-        })
-      }
-      this.docRepo.updateStatus(docId, "pending")
-      return { docId, taskId, status: "pending", changed: true }
+
+      // A completed reprocess is a NEW document version. The old version and
+      // its artifacts stay intact until the new candidate passes technical
+      // completion, so a mid-run failure cannot damage the active content.
+      const newDocId = uuid()
+      const version = this.docRepo.getNextVersion(document.sourceId)
+      const metadata = { ...document.metadata }
+      delete metadata.system
+      this.docRepo.insert({
+        docId: newDocId,
+        sourceId: document.sourceId,
+        contentHash: document.contentHash,
+        version,
+        title: document.title,
+        source: document.source,
+        content: document.content,
+        rawContent: document.rawContent ?? undefined,
+        fileName: document.fileName ?? undefined,
+        mimeType: document.mimeType ?? undefined,
+        parserOverride: document.parserOverride ?? undefined,
+        tenantId: document.tenantId,
+        allowedGroups: document.allowedGroups,
+        knowledgeBaseId: document.knowledgeBaseId,
+        metadata,
+      })
+      const taskId = this.taskRepo.enqueue({
+        docId: newDocId,
+        op: "ingest",
+        payload: {
+          reprocessed: true,
+          sourceDocId: docId,
+          ...(trace ? { trace } : {}),
+        },
+      })
+      this.docRepo.recordOutcome(document.sourceId, newDocId, "pending")
+      return { docId: newDocId, taskId, status: "pending", changed: true }
     })()
   }
 

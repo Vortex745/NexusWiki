@@ -1547,13 +1547,17 @@ test("Ticket 12 DOC-01B: retry and reprocess reuse the lifecycle and are admin+t
     // Retry again is a state conflict (already pending), not a 500.
     assert.equal((await fetch(`http://127.0.0.1:${port}/api/ingest/${failedDoc}/retry`, { method: "POST" })).status, 409)
 
-    // Reprocess the completed doc; reprocessing a pending doc is a conflict.
+    // Reprocess the completed doc: a NEW version/task is created; the old
+    // completed doc keeps its task/status/artifacts untouched.
     const reprocessRes = await fetch(`http://127.0.0.1:${port}/api/ingest/${completedDoc}/reprocess`, { method: "POST" })
     assert.equal(reprocessRes.status, 200)
-    assert.equal((await reprocessRes.json() as { changed: boolean }).changed, true)
-    assert.equal(taskRepo.getByDocId(completedDoc)?.status, "pending")
-    assert.equal(repo.getStatus(completedDoc), "pending")
-    assert.equal((await fetch(`http://127.0.0.1:${port}/api/ingest/${completedDoc}/reprocess`, { method: "POST" })).status, 409)
+    const reprocessed = await reprocessRes.json() as { changed: boolean; docId: string }
+    assert.equal(reprocessed.changed, true)
+    assert.notEqual(reprocessed.docId, completedDoc)
+    assert.equal(taskRepo.getByDocId(reprocessed.docId)?.status, "pending")
+    assert.equal(repo.getStatus(reprocessed.docId), "pending")
+    assert.equal(taskRepo.getByDocId(completedDoc)?.status, "completed")
+    assert.equal(repo.getStatus(completedDoc), "completed")
     assert.equal((await fetch(`http://127.0.0.1:${port}/api/ingest/${failedDoc}/reprocess`, { method: "POST" })).status, 409)
   } finally {
     await new Promise<void>((resolve, reject) => {

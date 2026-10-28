@@ -118,23 +118,27 @@ test("LO-14-AC01/AC02/AC04: maintenance commands link the task to the operator's
 
     const reprocessed = await fetch(`${base}/api/ingest/${docId}/reprocess`, { method: "POST" })
     assert.equal(reprocessed.status, 200)
+    const reprocessBody = await reprocessed.json() as { docId: string }
+    assert.notEqual(reprocessBody.docId, docId, "completed reprocess creates a new document version")
     const reprocessTrace = reprocessed.headers.get("x-trace-id")
     assert.match(String(reprocessTrace), /^[0-9a-f]{32}$/)
     assert.notEqual(reprocessTrace, uploadTrace, "the operator action owns a new trace")
 
     const row = db
       .prepare("SELECT payload FROM task_pending_ops WHERE doc_id = ?")
-      .get(docId) as { payload: string }
+      .get(reprocessBody.docId) as { payload: string }
     const payload = JSON.parse(row.payload) as {
-      title?: string
+      reprocessed?: boolean
+      sourceDocId?: string
       trace?: { traceId?: string; sampled?: boolean }
     }
-    assert.equal(payload.title, "maintain", "the original task fields survive the requeue untouched")
+    assert.equal(payload.reprocessed, true)
+    assert.equal(payload.sourceDocId, docId)
     assert.equal(payload.trace?.traceId, reprocessTrace, "execution will continue the operator trace")
     assert.equal(payload.trace?.sampled, true)
 
     const tasksBefore = (db.prepare("SELECT COUNT(*) AS count FROM task_pending_ops").get() as { count: number }).count
-    const cancelled = await fetch(`${base}/api/ingest/${docId}/cancel`, { method: "POST" })
+    const cancelled = await fetch(`${base}/api/ingest/${reprocessBody.docId}/cancel`, { method: "POST" })
     assert.equal(cancelled.status, 200)
     const tasksAfter = (db.prepare("SELECT COUNT(*) AS count FROM task_pending_ops").get() as { count: number }).count
     assert.equal(tasksAfter, tasksBefore, "a synchronous command creates no task")
