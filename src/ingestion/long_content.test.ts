@@ -12,7 +12,6 @@ import { dirname, join, resolve } from "node:path"
 import test from "node:test"
 import { closeDb, openDb } from "./tracking"
 import { DocumentRepo } from "./tracking/doc_repo"
-import { ExpectedChunkRepository } from "./tracking/expected_chunk_repo"
 import { IngestionLifecycle } from "./lifecycle"
 import { PipelineStageRunner } from "./pipeline"
 import { estimateTokens, findOversizedChunks, resolveEmbeddingLimits } from "./limits"
@@ -142,9 +141,7 @@ test("UT-14 无空格长文本：不裁尾，尾部校验词进入切块且无�
   // 不裁尾：尾部校验词必须出现在某个块中。
   const joined = indexChunks.map((chunk) => chunk.content).join("\n")
   assert.ok(joined.includes(tailMarker), "尾部校验词必须保留（不静默裁尾）")
-  // 覆盖与清单仍成立（UT-13 契约在拆分路径上保持）。
-  const manifest = new ExpectedChunkRepository(db).list(submitted.docId)
-  assert.equal(manifest.length, indexChunks.length)
+  // 拆分路径仍保留尾部标记且每块在限额内（旧期望清单契约已退役）。
 })
 
 test("UT-14 长表格：按行拆分且每片重复表头（表头关系保留）", async () => {

@@ -193,37 +193,22 @@ test("P6.2 explicit-deny: SET active_doc_id only in doc_repo.ts and db.ts migrat
   )
 })
 
-test("P6.2 factory wiring: createIngestionLifecycle reads activationMode from config and passes to constructor", () => {
-  // Static-source check: the factory MUST read `loadConfig().activationMode`
-  // and pass it as the 4th constructor arg. This proves the factory is the
-  // single source of truth for activationMode — callers cannot bypass the
-  // review state machine by omitting the mode.
+test("P6.2 factory wiring: createIngestionLifecycle no longer reads a review mode or quality gate", () => {
   const factorySource = readFileSync(
     join(SRC_DIR, "ingestion", "pipeline.ts"),
     "utf8"
   )
-  // Extract from `export function createIngestionLifecycle` through the
-  // closing `cfg.activationMode)` of the return statement. The non-greedy
-  // match up to `cfg.activationMode)` ensures we capture the full
-  // constructor call including nested parentheses in PipelineStageRunner.
   const factoryMatch = factorySource.match(
-    /export function createIngestionLifecycle[\s\S]*?cfg\.activationMode[,)]/
+    /export function createIngestionLifecycle[\s\S]*?\n\}/
   )
-  assert.ok(
-    factoryMatch,
-    "createIngestionLifecycle factory must exist in pipeline.ts and pass cfg.activationMode to the constructor"
-  )
+  assert.ok(factoryMatch, "createIngestionLifecycle factory must exist in pipeline.ts")
   const factoryBody = factoryMatch[0]
-  // The factory reads config into a local `cfg` variable, then passes
-  // `cfg.activationMode` as the 4th constructor arg. Both must be present.
+  assert.doesNotMatch(factoryBody, /cfg\.activationMode/, "factory must not read activationMode")
+  assert.doesNotMatch(factoryBody, /pdfOcrFallbackEnabled/, "factory must not read the retired PDF quality flag")
+  assert.doesNotMatch(factoryBody, /createProductionPdfQualityGate/, "factory must not wire the PDF quality gate")
   assert.match(
     factoryBody,
-    /loadConfig\(\)/,
-    "factory must call loadConfig() to read the runtime config (single source of truth for activationMode)"
-  )
-  assert.match(
-    factoryBody,
-    /new IngestionLifecycle\([\s\S]*cfg\.activationMode[,)]/,
-    "factory must pass cfg.activationMode as the 4th constructor arg"
+    /new IngestionLifecycle\(/,
+    "factory must construct the lifecycle"
   )
 })

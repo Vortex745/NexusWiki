@@ -26,7 +26,6 @@ import {
   type Parser,
   type ParserRouteInfo,
 } from "./parser"
-import { BuiltinPdfTextLayerAbsentError } from "./parser/builtin_pdf"
 import { ocrApiParserConfigVersion } from "./parser/ocr_api"
 import {
   createIngestionStore,
@@ -36,17 +35,7 @@ import {
 import { findOversizedChunks, resolveEmbeddingLimits } from "./limits"
 import type { TracingRuntime } from "../tracing/contract"
 import { DOCREADER_UPSTREAM_SHA } from "./parser/docreader_pdf_types"
-import {
-  PdfQualityGateUnavailableError,
-  PdfQualityRejectionError,
-  decidePdfQualityWorkflow,
-  pdfQualityDiagnostics,
-  type PdfQualityDiagnostics,
-  type PdfQualityGate,
-  type PdfQualityGateResult,
-} from "./quality/pdf_ocr_fallback_flag"
 import { buildPageIndex } from "./page_index_builder"
-import { createProductionPdfQualityGate } from "./page_evidence/production_gate"
 import type { DB } from "./tracking/db"
 import { DocumentRepo } from "./tracking/doc_repo"
 import { PageIndexRepository } from "./tracking/page_index_repo"
@@ -77,8 +66,6 @@ interface ChunkStageResult {
   /** UT-15: proof inputs captured during the stage (null for content-only docs). */
   rawExtractionSha256?: string | null
   parserConfigVersion?: string | null
-  /** Ticket 04 (PDF quality): effective switch state + gate outcome for task diagnostics. */
-  pdfQuality?: PdfQualityDiagnostics
 }
 
 interface ChunkStoreStageResult {
@@ -260,38 +247,16 @@ function recordIngestionPolicy(
   if (repository.exists(document.id)) repository.updateMetadata(document.id, metadata)
 }
 
-/**
- * Ticket 04 (PDF quality): the optional boundary of the PDF OCR-fallback +
- * page-quality-gate workflow.
- *
- * - `qualityGate` is the page-audit seam. Tickets 07/08/12 implement it; the
- *   pipeline only ever asks it to audit an extracted PDF candidate. Production
- *   omits it, which is why an enabled switch without an evaluator fails closed
- *   instead of importing an unaudited PDF.
- * - `pdfOcrFallbackEnabled` overrides the server switch for an isolated scope,
- *   the same way `createIngestionLifecycle({ activationMode })` overrides
- *   `ACTIVATION_MODE`. Production omits it and reads
- *   `loadConfig().pdfOcrFallbackEnabled` (env `PDF_OCR_FALLBACK_ENABLED`,
- *   default off).
- */
-export interface PipelineStageRunnerOptions {
-  qualityGate?: PdfQualityGate
-  pdfOcrFallbackEnabled?: boolean
-}
-
 export class PipelineStageRunner implements IngestionStageRunner {
   private documentRepo: DocumentRepo
   private store: IngestionStoreImpl | null
   private readonly injectedWikifier?: WikifierLike
-  private readonly qualityGate?: PdfQualityGate
-  private readonly pdfOcrFallbackEnabledOverride?: boolean
 
   constructor(
     private db: DB,
     private resolveParser: ParserResolver = createConfiguredParser,
     store?: IngestionStoreImpl,
-    wikifier?: WikifierLike,
-    options?: PipelineStageRunnerOptions
+    wikifier?: WikifierLike
   ) {
     this.documentRepo = new DocumentRepo(db)
     // T21: accept an injected store for sharing across runs; lazily create one
@@ -299,26 +264,6 @@ export class PipelineStageRunner implements IngestionStageRunner {
     // that never reach storeChunks don't need env vars.
     this.store = store ?? null
     this.injectedWikifier = wikifier
-    this.qualityGate = options?.qualityGate
-    this.pdfOcrFallbackEnabledOverride = options?.pdfOcrFallbackEnabled
-  }
-
-  /**
-   * Ticket 04: the effective PDF OCR-fallback / quality-gate switch for this
-   * run. An explicit scope override wins; otherwise the validated server config
-   * value is used. A restricted environment where config cannot load, or a
-   * config object that never carried the field, resolves to the documented
-   * default (off) — exactly like `parserConfigFingerprint` below. Off is the
-   * only safe fallback: it keeps the existing import path instead of
-   * inventing a gate.
-   */
-  private effectivePdfOcrFallbackEnabled(): boolean {
-    if (this.pdfOcrFallbackEnabledOverride !== undefined) return this.pdfOcrFallbackEnabledOverride
-    try {
-      return loadConfig().pdfOcrFallbackEnabled === true
-    } catch {
-      return false
-    }
   }
 
   private ensureStore(): IngestionStoreImpl {
@@ -344,18 +289,6 @@ export class PipelineStageRunner implements IngestionStageRunner {
     document: Document,
     execution: StageExecution
   ): Promise<Record<string, unknown>> {
-    // Ticket 04 (PDF quality): the independent PDF OCR-fallback + quality-gate
-    // switch, resolved once per run from server config (or an explicit scope
-    // override). OFF (the default) this decision is inert and every candidate
-    // keeps the existing import path; ON, a PDF candidate must clear the page
-    // quality gate below before chunking, vectorization or index writes.
-    // Question-answering Clef routing reads nothing here.
-    const pdfQualityDecision = decidePdfQualityWorkflow({
-      flagEnabled: this.effectivePdfOcrFallbackEnabled(),
-      hasSourceBytes: Boolean(document.rawContent),
-      fileName: document.fileName ?? document.title,
-      mimeType: document.mimeType ?? undefined,
-    })
     let parserRoute: ParserRouteInfo | null = null
     let parserRoutingError: Error | null = null
       if (document.rawContent) {
@@ -400,13 +333,9 @@ export class PipelineStageRunner implements IngestionStageRunner {
               mimeType: document.mimeType,
               parser: parserRoute?.candidates[0] ?? null,
               parserReason: parserRoute?.reason ?? parserRoutingError?.message ?? null,
-              // Ticket 04: the effective switch state is part of the task
-              // diagnostics even when the stage later fails.
-              pdfOcrFallbackEnabled: pdfQualityDecision.flagEnabled,
             }
           : {
               contentLength: document.content.length,
-              pdfOcrFallbackEnabled: pdfQualityDecision.flagEnabled,
             },
         async (): Promise<ChunkStageResult> => {
           if (!document.rawContent) {
@@ -415,7 +344,6 @@ export class PipelineStageRunner implements IngestionStageRunner {
               blocks: [],
               parser: null,
               parserReason: null,
-              pdfQuality: pdfQualityDiagnostics(pdfQualityDecision),
             }
           }
           if (parserRoutingError) throw parserRoutingError
@@ -485,19 +413,7 @@ export class PipelineStageRunner implements IngestionStageRunner {
               try {
                 blocks = parser.normalizeRaw(rawExtraction, document.id)
               } catch (error) {
-                // Ticket 13: a PDF whose extractor read zero text blocks is a
-                // scan, not a broken import — under the quality workflow the
-                // candidate stays alive for the page-quality gate, whose
-                // whole-document OCR fallback (Ticket 12) owns the recovery.
-                // Ungated, the extractor's empty-text guard stays a terminal
-                // input failure (Ticket 17).
-                if (
-                  !(error instanceof BuiltinPdfTextLayerAbsentError) ||
-                  !pdfQualityDecision.gated
-                ) {
-                  throw error
-                }
-                blocks = []
+                throw error
               }
             } else {
               rawExtraction = null
@@ -573,30 +489,6 @@ export class PipelineStageRunner implements IngestionStageRunner {
             }
           }
 
-          // Ticket 04 (PDF quality): the switch's decision point. It sits after
-          // local extraction (and its durable evidence record) and BEFORE
-          // chunking, so an ON switch makes the page-quality gate the entry to
-          // the rest of the import and an OFF switch skips this block entirely.
-          // A rejection is terminal for this candidate; an enabled switch with
-          // no evaluator wired fails closed rather than importing unaudited
-          // pages. The audited candidate stays the local extraction — the OCR
-          // fallback (Ticket 12) replaces it behind this same gate.
-          let pdfQualityGateResult: PdfQualityGateResult | null = null
-          if (pdfQualityDecision.gated) {
-            if (!this.qualityGate) throw new PdfQualityGateUnavailableError()
-            pdfQualityGateResult = await this.qualityGate.audit({
-              docId: document.id,
-              version: document.version,
-              parser: usedParser,
-              blocks,
-              rawExtractionSha256: stageRawExtractionSha256,
-              signal: execution.signal,
-            })
-            if (pdfQualityGateResult.verdict !== "pass") {
-              throw new PdfQualityRejectionError(pdfQualityGateResult.reasonCodes)
-            }
-          }
-
           const parsedDocument: Document = {
             ...document,
             content: blocks.map((block) => block.text).join("\n\n"),
@@ -619,7 +511,6 @@ export class PipelineStageRunner implements IngestionStageRunner {
             parserReason,
             rawExtractionSha256: stageRawExtractionSha256,
             parserConfigVersion: parserConfigFingerprint(usedParser, parserRoute),
-            pdfQuality: pdfQualityDiagnostics(pdfQualityDecision, pdfQualityGateResult),
           }
         },
         (result) => ({
@@ -635,8 +526,6 @@ export class PipelineStageRunner implements IngestionStageRunner {
                 provenance: result.blocks[0]?.provenance ?? null,
               }
             : {}),
-          // Ticket 04: effective PDF switch state, stable codes only.
-          ...(result.pdfQuality ?? {}),
         })
       )
       const chunks = chunkResult.chunks
@@ -743,8 +632,6 @@ export class PipelineStageRunner implements IngestionStageRunner {
         chunkCount: chunks.length,
         entityCount: wikified.entities.length,
         wikilinkCount: wikified.wikilinks.length,
-        // Ticket 04: the root task record reports the effective switch state.
-        ...(chunkResult.pdfQuality ?? {}),
         ...(chunkResult.parser
           ? {
               parser: chunkResult.parser,
@@ -759,15 +646,14 @@ export class PipelineStageRunner implements IngestionStageRunner {
 /**
  * Optional overrides for {@link createIngestionLifecycle}.
  *
- * Production callers (HTTP/worker/CLI) omit these — the factory reads
- * `loadConfig().activationMode` and wires a `PipelineStageRunner`. Release
- * testing infrastructure (e.g. revision-scoped ingestion fixtures) supplies
- * explicit overrides so acceptance probes can exercise the lifecycle under
- * a controlled activation mode and stage runner without touching production
+ * Production callers (HTTP/worker/CLI) omit these and use the configured
+ * pipeline. Release testing infrastructure supplies explicit overrides so
+ * acceptance probes can exercise the lifecycle without touching production
  * config or external services.
  */
 export interface CreateIngestionLifecycleOptions {
   stageRunner?: IngestionStageRunner
+  /** @deprecated Review mode is retired; accepted for historical callers and ignored. */
   activationMode?: ActivationMode
   now?: () => Date
   /** LO-13: the worker-side runtime; absent in submit-only callers. */
@@ -778,46 +664,11 @@ export function createIngestionLifecycle(
   db: DB,
   options?: CreateIngestionLifecycleOptions
 ): IngestionLifecycle {
-  // P6.1 (spec L73): IngestionLifecycle owns the ACTIVATION_MODE decision.
-  // The factory reads the config once at construction; HTTP/worker/CLI
-  // callers all go through this factory so they cannot bypass the review
-  // state machine. Release testing infrastructure (Ticket 18) passes explicit
-  // overrides via `options` to exercise the lifecycle under a controlled
-  // activation mode and stage runner — the config-driven default still
-  // applies when an override is absent, so production behavior is unchanged.
-  //
-  // When `options.activationMode` is supplied, config loading is skipped
-  // entirely: the override is authoritative and config env vars (e.g.
-  // OPENAI_API_KEY) may not be present in the acceptance-test environment.
-  // The `cfg` variable unifies both paths so the audit regex still sees
-  // `cfg.activationMode` as the value passed to the constructor.
-  const cfg = options?.activationMode
-    ? { activationMode: options.activationMode }
-    : loadConfig()
-  // Ticket 21: the production page-quality gate, wired when the validated
-  // server switch asks for it (an explicit stageRunner override always wins).
-  // Wiring failures — config unreadable, a part unconstructible — leave the
-  // gate unwired and log; a gated import then fails closed with the
-  // documented PdfQualityGateUnavailableError instead of importing unaudited
-  // pages, and an OFF switch keeps the existing import path untouched.
-  let qualityGate: PdfQualityGate | undefined
-  if (!options?.stageRunner) {
-    try {
-      if (loadConfig().pdfOcrFallbackEnabled === true) {
-        qualityGate = createProductionPdfQualityGate(db, loadConfig())
-      }
-    } catch (error) {
-      console.warn(
-        "[pipeline] PDF page-quality gate not wired:",
-        error instanceof Error ? error.message : String(error)
-      )
-    }
-  }
   return new IngestionLifecycle(
     db,
-    options?.stageRunner ?? new PipelineStageRunner(db, createConfiguredParser, undefined, undefined, { qualityGate }),
+    options?.stageRunner ?? new PipelineStageRunner(db, createConfiguredParser),
     options?.now ?? (() => new Date()),
-    cfg.activationMode,
+    options?.activationMode ?? "auto",
     undefined,
     options?.tracing)
 }

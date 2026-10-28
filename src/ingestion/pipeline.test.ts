@@ -95,9 +95,6 @@ test("the chunk stage records and persists the MarkItDown decision and normalize
       mimeType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
       parser: "markitdown",
       parserReason: "extension .docx is supported by MarkItDown",
-      // Ticket 04: the effective PDF switch state is reported per stage. The
-      // document is not a PDF and the switch is unset, so it reads off.
-      pdfOcrFallbackEnabled: false,
     })
     assert.equal(chunkOutput?.parser, "markitdown")
     assert.equal(chunkOutput?.parserReason, "extension .docx is supported by MarkItDown")

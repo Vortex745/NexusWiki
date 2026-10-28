@@ -65,21 +65,9 @@ export interface AppConfig {
   /** Ingestion speed: concurrent ingestion tasks the worker may run. */
   ingestionConcurrency?: number
   /**
-   * PDF quality queue Ticket 04: the independent switch for the PDF
-   * OCR-fallback + page-quality-gate ingestion workflow. Default OFF — unset,
-   * blank or `0` keeps every PDF import on the existing
-   * extraction → chunk → vectorize → index path.
-   *
-   * Optional in the type the way the other ingestion/decision settings are:
-   * `loadConfig()` always populates it after validating
-   * `PDF_OCR_FALLBACK_ENABLED`, and a config object that never went through
-   * `loadConfig()` (isolated scopes, legacy stubs) reads as OFF — the
-   * fail-safe direction, never an accidental gate.
-   *
-   * It is an INGESTION switch only. Question-answering Clef routing
-   * (`decisionProvider` and its credentials/timeout), run budgets,
-   * cancellation, prompts and classification never consult it, and the value is
-   * never exported to the frontend or written into user content.
+   * @deprecated The PDF OCR-fallback / page-quality gate is retired. The field
+   * remains optional for historical config literals and is never read by the
+   * import path; `PDF_OCR_FALLBACK_ENABLED` receives a startup migration hint.
    */
   pdfOcrFallbackEnabled?: boolean
   imageAssetPath?: string
@@ -129,14 +117,11 @@ export interface AppConfig {
    */
   tavilyApiKey?: string
   /**
-   * Ticket 11 P1 (spec §11 L1574): ACTIVATION_MODE controls whether completed
-   * ingestion candidates become active immediately (`auto`, default) or
-   * require explicit human review (`review`). `auto` is the default
-   * compatibility behavior — existing flows behave unchanged. `review`
-   * stores completed candidates as `pending_review` and does NOT change the
-   * active version until approval (spec L1574).
+   * @deprecated Review mode is retired. The field remains optional for
+   * historical config literals and is never read by the import path;
+   * `ACTIVATION_MODE` receives a startup migration hint.
    */
-  activationMode: "auto" | "review"
+  activationMode?: "auto" | "review"
   /**
    * Ticket 08 P6 (spec §7 L1535): conversation records expire after this many
    * days of session inactivity. The GC job deletes ALL turns (validated +
@@ -186,6 +171,18 @@ function required(key: string): string {
 }
 
 let _config: AppConfig | null = null
+let legacyIngestionEnvWarned = false
+
+function warnLegacyIngestionEnv(): void {
+  if (legacyIngestionEnvWarned) return
+  const legacy = ["ACTIVATION_MODE", "PDF_OCR_FALLBACK_ENABLED"]
+    .filter((key) => Boolean(process.env[key]?.trim()))
+  if (legacy.length === 0) return
+  legacyIngestionEnvWarned = true
+  console.warn(
+    `[config] ${legacy.join(", ")} retired; new imports use weknora-technical-v1 and activate on technical completion.`
+  )
+}
 
 export const DEFAULT_ES_CHUNK_INDEX = "kefu-rag-chunks"
 
@@ -229,25 +226,6 @@ function integerEnv(
   return value
 }
 
-/**
- * Shared boolean env parser for opt-in switches, the same shape as integerEnv:
- *   - unset / blank      → the documented default (off for PDF_OCR_FALLBACK_ENABLED)
- *   - 1 / true           → true (case-insensitive, trimmed)
- *   - 0 / false          → false
- *   - anything else      → fails at startup. A safety switch that an operator
- *     meant to turn on must never be silently read as "off" — the same
- *     fail-loudly rule DECISION_PROVIDER applies to an unknown provider.
- */
-function booleanEnv(key: string, fallback: boolean): boolean {
-  const raw = process.env[key]?.trim()
-  if (!raw) return fallback
-  const value = raw.toLowerCase()
-  if (value === "1" || value === "true") return true
-  if (value === "0" || value === "false") return false
-  // The setting is named in the message; the operator's value is not echoed.
-  throw new Error(`${key} must be 1, 0, true or false`)
-}
-
 function optionalPricingTable(): AppConfig["answerRunModelPricing"] {
   const raw = process.env.ANSWER_RUN_MODEL_PRICING_JSON
   if (!raw) return undefined
@@ -283,6 +261,7 @@ function optionalPricingTable(): AppConfig["answerRunModelPricing"] {
 
 export function loadConfig(): AppConfig {
   if (_config) return _config
+  warnLegacyIngestionEnv()
   const openaiApiKey = required("OPENAI_API_KEY")
   const openaiBaseUrl = process.env.OPENAI_BASE_URL || ""
   const embeddingDimensions = process.env.EMBEDDING_DIMENSIONS
@@ -350,10 +329,6 @@ export function loadConfig(): AppConfig {
     embeddingBatchMaxChunks: integerEnv("EMBEDDING_BATCH_MAX_CHUNKS", "positive", 64),
     embeddingBatchMaxBytes: integerEnv("EMBEDDING_BATCH_MAX_BYTES", "positive", 150 * 1024),
     ingestionConcurrency: integerEnv("INGESTION_CONCURRENCY", "positive", 2),
-    // Ticket 04 (PDF quality): opt-in ingestion switch, off unless the
-    // operator asks for it. Read only by the ingestion pipeline's PDF quality
-    // gate; never part of a frontend settings payload or a log line.
-    pdfOcrFallbackEnabled: booleanEnv("PDF_OCR_FALLBACK_ENABLED", false),
     imageAssetPath: process.env.IMAGE_ASSET_PATH || "./data/image-assets",
     // Ticket 01: DEMO_OIDC=1 forces the enforced identity path. The demo
     // issuer is then the only identity source, so falling back to the
@@ -376,11 +351,6 @@ export function loadConfig(): AppConfig {
     mcpCapabilitiesEnabled: process.env.MCP_CAPABILITIES !== "0",
     // Ticket 36 (WEB-01): optional server-side Tavily key for web search.
     tavilyApiKey: process.env.TAVILY_API_KEY || undefined,
-    // Ticket 11 P1 (spec §11 L1574): ACTIVATION_MODE=auto is default; only
-    // the literal value "review" activates review mode. Any other value
-    // (including unset) falls back to "auto" — same defensive pattern as
-    // accessMode above.
-    activationMode: process.env.ACTIVATION_MODE === "review" ? "review" : "auto",
     conversationTtlDays: integerEnv("CONVERSATION_TTL_DAYS", "positive", 30),
     conversationGcIntervalMs: integerEnv("CONVERSATION_GC_INTERVAL_MS", "positive", 86_400_000),
     // T11: Langfuse env vars. Both LANGFUSE_PUBLIC_KEY and LANGFUSE_SECRET_KEY

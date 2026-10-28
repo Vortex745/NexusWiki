@@ -182,16 +182,15 @@ test("Ticket 01: DEMO_OIDC=1 forces the enforced identity path", () => {
 })
 
 /**
- * Ticket 04 (PDF quality): PDF_OCR_FALLBACK_ENABLED is read in a child process
- * for the same reason the decision provider is — `loadConfig` memoizes for the
- * lifetime of the process, and the flag has to be observed unset / on / off as
- * separate startups. The Clef decision fields ride along in every reading so
- * the isolation requirement is compared, never assumed.
+ * Legacy ingestion env vars are read in a child process because `loadConfig`
+ * memoizes for the process lifetime. They must be ignored (not fail startup)
+ * and produce a single migration hint.
  */
-function pdfFlagConfig(env: Record<string, string> = {}): {
+function legacyIngestionEnvConfig(env: Record<string, string> = {}): {
   status: number | null
   config?: Record<string, unknown>
   error?: string
+  stderr: string
 } {
   const childEnv: NodeJS.ProcessEnv = { ...process.env, OPENAI_API_KEY: "test-key", DEMO_OIDC: "" }
   for (const key of [
@@ -200,6 +199,7 @@ function pdfFlagConfig(env: Record<string, string> = {}): {
     "CLOUDFLARE_API_TOKEN",
     "DECISION_REQUEST_TIMEOUT_MS",
     "PDF_OCR_FALLBACK_ENABLED",
+    "ACTIVATION_MODE",
   ]) {
     delete childEnv[key]
   }
@@ -207,6 +207,7 @@ function pdfFlagConfig(env: Record<string, string> = {}): {
     try {
       const config = require(${JSON.stringify(resolve(__dirname, "index.ts"))}).loadConfig()
       process.stdout.write(JSON.stringify({ config: {
+        activationMode: config.activationMode,
         pdfOcrFallbackEnabled: config.pdfOcrFallbackEnabled,
         decisionProvider: config.decisionProvider,
         cloudflareAccountId: config.cloudflareAccountId,
@@ -219,78 +220,55 @@ function pdfFlagConfig(env: Record<string, string> = {}): {
     }
   `], { env: { ...childEnv, ...env }, encoding: "utf8" })
   assert.equal(child.error, undefined)
-  return { status: child.status, ...JSON.parse(child.stdout) }
+  return { status: child.status, stderr: child.stderr, ...JSON.parse(child.stdout) }
 }
 
-const PDF_FLAG_OFF = {
-  pdfOcrFallbackEnabled: false,
-  decisionProvider: "chat",
-  cloudflareAccountId: "",
-  cloudflareApiToken: "",
-  decisionRequestTimeoutMs: 10_000,
-}
-
-test("Ticket 04: PDF_OCR_FALLBACK_ENABLED defaults to false when unset", () => {
-  const result = pdfFlagConfig()
+test("legacy ingestion env vars are ignored and produce one migration hint", () => {
+  const result = legacyIngestionEnvConfig({
+    PDF_OCR_FALLBACK_ENABLED: "1",
+    ACTIVATION_MODE: "review",
+  })
   assert.equal(result.status, 0)
-  assert.deepEqual(result.config, PDF_FLAG_OFF)
+  assert.equal(result.config!.pdfOcrFallbackEnabled, undefined)
+  assert.equal(result.config!.activationMode, undefined)
+  assert.match(result.stderr, /PDF_OCR_FALLBACK_ENABLED/)
+  assert.match(result.stderr, /ACTIVATION_MODE/)
+  assert.match(result.stderr, /weknora-technical-v1/)
 })
 
-test("Ticket 04: PDF_OCR_FALLBACK_ENABLED enables only on 1/true and disables on 0/false", () => {
-  for (const enabled of ["1", "true", " 1 ", "TRUE", "True"]) {
-    const result = pdfFlagConfig({ PDF_OCR_FALLBACK_ENABLED: enabled })
-    assert.equal(result.status, 0, `${enabled} must be accepted`)
-    assert.equal(result.config!.pdfOcrFallbackEnabled, true, `${enabled} enables the switch`)
-  }
-  for (const disabled of ["0", "false", " 0 ", "FALSE"]) {
-    const result = pdfFlagConfig({ PDF_OCR_FALLBACK_ENABLED: disabled })
-    assert.equal(result.status, 0, `${disabled} must be accepted`)
-    assert.equal(result.config!.pdfOcrFallbackEnabled, false, `${disabled} keeps the existing import path`)
-  }
-  // A blank value is "not configured", exactly like the other trimmed settings.
-  const blank = pdfFlagConfig({ PDF_OCR_FALLBACK_ENABLED: " \t " })
-  assert.equal(blank.status, 0)
-  assert.equal(blank.config!.pdfOcrFallbackEnabled, false)
+test("no legacy hint appears when the retired env vars are unset", () => {
+  const result = legacyIngestionEnvConfig()
+  assert.equal(result.status, 0)
+  assert.doesNotMatch(result.stderr, /weknora-technical-v1/)
 })
 
-test("Ticket 04: an unrecognised PDF_OCR_FALLBACK_ENABLED fails at startup instead of silently disabling the gate", () => {
-  for (const value of ["yes", "no", "on", "off", "2", "-1", "1.5", "enabled", "10"]) {
-    const result = pdfFlagConfig({ PDF_OCR_FALLBACK_ENABLED: value })
-    assert.equal(result.status, 1, `${value} is not a legal switch value`)
-    assert.match(result.error!, /PDF_OCR_FALLBACK_ENABLED must be 1, 0, true or false/)
-    // The startup error names the setting, never the operator's value.
-    assert.equal(result.error!.includes(value), false)
-  }
+test("invalid legacy values are ignored, not fatal, and never alter routing config", () => {
+  const result = legacyIngestionEnvConfig({
+    PDF_OCR_FALLBACK_ENABLED: "yes",
+    ACTIVATION_MODE: "surprise",
+    ANSWER_RUN_MAX_MODEL_CALLS: "7",
+  })
+  assert.equal(result.status, 0)
+  assert.equal(result.config!.decisionProvider, "chat")
+  assert.equal(result.config!.decisionRequestTimeoutMs, 10_000)
 })
 
-test("Ticket 04: the PDF flag leaves the question-routing Clef configuration untouched", () => {
-  const clefEnv = {
+test("legacy env does not change the Clef routing fields", () => {
+  const result = legacyIngestionEnvConfig({
     DECISION_PROVIDER: "clef",
     CLOUDFLARE_ACCOUNT_ID: "test-account",
     CLOUDFLARE_API_TOKEN: "test-token",
     DECISION_REQUEST_TIMEOUT_MS: "2500",
-  }
-  const off = pdfFlagConfig({ ...clefEnv, PDF_OCR_FALLBACK_ENABLED: "0" })
-  const on = pdfFlagConfig({ ...clefEnv, PDF_OCR_FALLBACK_ENABLED: "1" })
-  assert.equal(off.status, 0)
-  assert.equal(on.status, 0)
-  assert.deepEqual(off.config!.pdfOcrFallbackEnabled, false)
-  assert.deepEqual(on.config!.pdfOcrFallbackEnabled, true)
-  // Every question-routing field is byte-identical with the switch on and off.
-  for (const key of [
-    "decisionProvider",
-    "cloudflareAccountId",
-    "cloudflareApiToken",
-    "decisionRequestTimeoutMs",
-  ]) {
-    assert.deepEqual(on.config![key], off.config![key], `${key} must not depend on the PDF flag`)
-  }
+    PDF_OCR_FALLBACK_ENABLED: "1",
+    ACTIVATION_MODE: "review",
+  })
+  assert.equal(result.status, 0)
   assert.deepEqual(
     {
-      decisionProvider: on.config!.decisionProvider,
-      cloudflareAccountId: on.config!.cloudflareAccountId,
-      cloudflareApiToken: on.config!.cloudflareApiToken,
-      decisionRequestTimeoutMs: on.config!.decisionRequestTimeoutMs,
+      decisionProvider: result.config!.decisionProvider,
+      cloudflareAccountId: result.config!.cloudflareAccountId,
+      cloudflareApiToken: result.config!.cloudflareApiToken,
+      decisionRequestTimeoutMs: result.config!.decisionRequestTimeoutMs,
     },
     {
       decisionProvider: "clef",
@@ -299,17 +277,4 @@ test("Ticket 04: the PDF flag leaves the question-routing Clef configuration unt
       decisionRequestTimeoutMs: 2500,
     }
   )
-})
-
-test("Ticket 04: the PDF flag is independent of the answer-run budget and activation settings", () => {
-  const result = pdfFlagConfig({
-    PDF_OCR_FALLBACK_ENABLED: "1",
-    ACTIVATION_MODE: "review",
-    ANSWER_RUN_MAX_MODEL_CALLS: "7",
-  })
-  assert.equal(result.status, 0)
-  assert.equal(result.config!.pdfOcrFallbackEnabled, true)
-  // Nothing above changed the routing defaults the flag must not touch.
-  assert.equal(result.config!.decisionProvider, "chat")
-  assert.equal(result.config!.decisionRequestTimeoutMs, 10_000)
 })

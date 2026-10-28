@@ -21,6 +21,10 @@ export type DocReaderFailureCode =
   | "docreader_invalid_request"
   | "docreader_parse_failed"
   | "docreader_cancelled"
+  | "docreader_invalid_stream"
+  | "docreader_image_missing"
+  | "docreader_ocr_required"
+  | "docreader_no_extractable_text"
 
 export class DocReaderError extends Error {
   constructor(

@@ -129,8 +129,8 @@ test("UT-18 b) 成功任务恢复为无操作；待校验候选恢复保留阻�
   const stillCompleted = new DocumentRepo(db).getOperationalState(submitted.docId)?.status
   assert.equal(stillCompleted, "completed")
 
-  // 待校验候选（GBK 模糊编码）：任务完成但门槛记录待校验原因；retry 无操作，
-  // 原因保留——点击恢复不能把待校验转成功。
+  // GBK 模糊编码：技术完成直接激活，但解码风险仍保留在文档元数据中；
+  // retry 无操作——点击恢复不会重新执行已完成的候选。
   const gbk = working.submit({
     title: "UT-18 待校验候选",
     content: "",
@@ -141,16 +141,15 @@ test("UT-18 b) 成功任务恢复为无操作；待校验候选恢复保留阻�
   })
   const gbkRun = await working.runNext()
   assert.ok(gbkRun?.success)
-  const blockReasonBefore = new DocumentRepo(db).getActivationBlockReason(gbk.docId)
-  assert.ok(
-    blockReasonBefore?.includes("activation_content_proof_pending_review"),
-    `待校验原因已记录：${blockReasonBefore}`
-  )
+  const gbkSystem = new DocumentRepo(db).get(gbk.docId)?.metadata.system as {
+    decode?: { reviewRequired?: boolean; reviewReason?: string }
+  }
+  assert.equal(gbkSystem.decode?.reviewRequired, true, "解码风险保留为技术元数据")
+  assert.equal(gbkSystem.decode?.reviewReason, "ambiguous_encoding")
+  assert.equal(new DocumentRepo(db).getActivationBlockReason(gbk.docId), null)
   const resumeBlocked = working.retry(gbk.docId)
   assert.ok(resumeBlocked)
-  assert.equal(resumeBlocked.changed, false, "已完成（待校验）候选不因 retry 重新执行")
-  const blockReasonAfter = new DocumentRepo(db).getActivationBlockReason(gbk.docId)
-  assert.equal(blockReasonAfter, blockReasonBefore, "待校验原因保留不变")
+  assert.equal(resumeBlocked.changed, false, "已完成候选不因 retry 重新执行")
 })
 
 test("UT-18 c) 文件型文档缺保留原件：恢复被拒并给可解释原因，任务保持终态", async () => {

@@ -168,13 +168,19 @@ test("UT-19 d) 复用不清除待校验：GBK 样本重处理后理由码保留"
     sourceIdentity: { kind: "file", uriOrExternalId: "C:/truth/ut19/gbk.txt", namespace: "ut19" },
   })
   await lifecycle.runNext()
-  const reasonBefore = documentRepo.getActivationBlockReason(submitted.docId)
-  assert.ok(reasonBefore?.includes("ambiguous_encoding"))
+  const decodeBefore = (documentRepo.get(submitted.docId)?.metadata.system as {
+    decode?: { reviewRequired?: boolean; reviewReason?: string }
+  }).decode
+  assert.equal(decodeBefore?.reviewReason, "ambiguous_encoding")
+  assert.equal(documentRepo.getActivationBlockReason(submitted.docId), null)
 
   lifecycle.reprocess(submitted.docId)
   await lifecycle.runNext()
-  const reasonAfter = documentRepo.getActivationBlockReason(submitted.docId)
-  assert.equal(reasonAfter, reasonBefore, "复用不清除待校验原因")
+  const decodeAfter = (documentRepo.get(submitted.docId)?.metadata.system as {
+    decode?: { reviewRequired?: boolean; reviewReason?: string }
+  }).decode
+  assert.deepEqual(decodeAfter, decodeBefore, "复用不清除解码风险元数据")
+  assert.equal(documentRepo.getActivationBlockReason(submitted.docId), null)
 })
 
 test("UT-19 收尾：关闭隔离库", () => {
