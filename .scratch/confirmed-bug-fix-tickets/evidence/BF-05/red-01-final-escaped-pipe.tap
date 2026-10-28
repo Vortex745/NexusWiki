@@ -1,0 +1,59 @@
+TAP version 13
+# Subtest: a final escaped pipe without a PDF table border stays in the final cell
+not ok 1 - a final escaped pipe without a PDF table border stays in the final cell
+  ---
+  duration_ms: 24.8439
+  type: 'test'
+  location: 'C:\\Users\\14253\\.codex\\bf-20261028\\worktrees\\bf-05\\src\\ingestion\\parser\\docreader_pdf_tables.test.ts:2:1535'
+  failureType: 'testCodeFailure'
+  error: |-
+    Expected values to be strictly deep-equal:
+    + actual - expected
+    ... Skipped lines
+
+      {
+        headers: [
+          'Field',
+          'Value'
+        ],
+    ...
+            'symbol',
+    +       'A\\'
+    -       'A|'
+          ]
+        ]
+      }
+
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected:
+    headers:
+      0: 'Field'
+      1: 'Value'
+    rows:
+      0:
+        0: 'symbol'
+        1: 'A|'
+  actual:
+    headers:
+      0: 'Field'
+      1: 'Value'
+    rows:
+      0:
+        0: 'symbol'
+        1: 'A\\'
+  operator: 'deepStrictEqual'
+  stack: |-
+    TestContext.<anonymous> (C:\Users\14253\.codex\bf-20261028\worktrees\bf-05\src\ingestion\parser\docreader_pdf_tables.test.ts:47:10)
+    async Test.run (node:internal/test_runner/test:1409:7)
+    async startSubtestAfterBootstrap (node:internal/test_runner/harness:387:3)
+  ...
+1..1
+# tests 1
+# suites 0
+# pass 0
+# fail 1
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 2118.8881

@@ -1,0 +1,39 @@
+{
+  "ticket": "BF-05",
+  "completedDate": "2026-10-29",
+  "timezone": "Asia/Shanghai",
+  "branch": "codex/bf-05",
+  "implementationCommit": "70503ab",
+  "baseline": "33a21bde9e11ea6b9e363385182c1ae12a03ad81",
+  "integrationAncestorVerified": true,
+  "mergedIntegrationTip": "a37d830e601fcb7c90152960735cfeeb9642291b",
+  "integrationMergeCommit": "34b5fe5c695a957e332bf4f5b49925b757f147a3",
+  "gates": [
+    { "name": "primary regression red", "passed": 0, "failed": 1, "exitCode": 1 },
+    { "name": "primary regression green", "passed": 1, "failed": 0, "exitCode": 0 },
+    { "name": "slash parity red", "passed": 1, "failed": 1, "exitCode": 1 },
+    { "name": "slash parity green", "passed": 2, "failed": 0, "exitCode": 0 },
+    { "name": "dedicated table matrix", "passed": 9, "failed": 0, "skipped": 0 },
+    { "name": "DocReader including BF-04 and BF-05", "passed": 47, "failed": 0, "skipped": 0 },
+    { "name": "parser selection and compatibility", "passed": 3, "failed": 0, "skipped": 0 },
+    { "name": "npm run build before unrelated retrieval merge", "exitCode": 0 },
+    { "name": "dedicated table matrix after integration merge", "passed": 9, "failed": 0, "skipped": 0 },
+    { "name": "git diff --check", "exitCode": 0 }
+  ],
+  "uniquePassingTests": 50,
+  "acceptance": {
+    "BF-05-A1": "passed",
+    "BF-05-A2": "passed",
+    "BF-05-A3": "passed",
+    "BF-05-A4": "passed",
+    "BF-05-A5": "passed",
+    "BF-05-A6": "passed",
+    "BF-05-A7": "passed"
+  },
+  "incompleteAcceptance": [],
+  "realProviderRequests": 0,
+  "productionChangesLimitedTo": "parseTableRow",
+  "BF04Preserved": true,
+  "authoredSharedTrackerChanges": false,
+  "originalCheckoutChanged": false
+}

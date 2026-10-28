@@ -1,0 +1,64 @@
+TAP version 13
+# Subtest: a final escaped pipe without a PDF table border stays in the final cell
+ok 1 - a final escaped pipe without a PDF table border stays in the final cell
+  ---
+  duration_ms: 10.1494
+  type: 'test'
+  ...
+# Subtest: an even backslash run leaves the final PDF table pipe as a border
+ok 2 - an even backslash run leaves the final PDF table pipe as a border
+  ---
+  duration_ms: 2.6937
+  type: 'test'
+  ...
+# Subtest: an escaped final PDF table pipe followed by an explicit border creates no extra cell
+ok 3 - an escaped final PDF table pipe followed by an explicit border creates no extra cell
+  ---
+  duration_ms: 0.8645
+  type: 'test'
+  ...
+# Subtest: trailing whitespace does not change PDF table escape or border meaning
+ok 4 - trailing whitespace does not change PDF table escape or border meaning
+  ---
+  duration_ms: 0.901
+  type: 'test'
+  ...
+# Subtest: interior PDF table pipes follow the same odd and even backslash rule as borders
+ok 5 - interior PDF table pipes follow the same odd and even backslash rule as borders
+  ---
+  duration_ms: 1.9334
+  type: 'test'
+  ...
+# Subtest: longer backslash runs preserve literal slashes while identifying final PDF table borders
+ok 6 - longer backslash runs preserve literal slashes while identifying final PDF table borders
+  ---
+  duration_ms: 1.3591
+  type: 'test'
+  ...
+# Subtest: ordinary bordered PDF tables retain headers, columns and whitespace trimming
+ok 7 - ordinary bordered PDF tables retain headers, columns and whitespace trimming
+  ---
+  duration_ms: 1.0871
+  type: 'test'
+  ...
+# Subtest: ordinary unbordered PDF tables retain headers, columns and whitespace trimming
+ok 8 - ordinary unbordered PDF tables retain headers, columns and whitespace trimming
+  ---
+  duration_ms: 0.5944
+  type: 'test'
+  ...
+# Subtest: structured escaped PDF table values retain their original raw extraction and surrounding prose
+ok 9 - structured escaped PDF table values retain their original raw extraction and surrounding prose
+  ---
+  duration_ms: 3.2475
+  type: 'test'
+  ...
+1..9
+# tests 9
+# suites 0
+# pass 9
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 1298.641

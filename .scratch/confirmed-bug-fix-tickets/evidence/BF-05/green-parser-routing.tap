@@ -1,0 +1,30 @@
+TAP version 13
+# (node:55844) ExperimentalWarning: localStorage is not available because --localstorage-file was not provided.
+# (Use `node --trace-warnings ...` to show where the warning was created)
+# Subtest: UT-06 路由：TXT 携带 PDF 专用 override 归一到文本路径且记录原意图
+ok 1 - UT-06 路由：TXT 携带 PDF 专用 override 归一到文本路径且记录原意图
+  ---
+  duration_ms: 2.7675
+  type: 'test'
+  ...
+# Subtest: UT-06 路由：类型兼容的 override 保持权威单候选，既有格式不受影响
+ok 2 - UT-06 路由：类型兼容的 override 保持权威单候选，既有格式不受影响
+  ---
+  duration_ms: 1.1008
+  type: 'test'
+  ...
+# Subtest: UT-06 真实上传到解析选择：TXT + 历史 PDF override 实际用 markitdown 解析成功
+ok 3 - UT-06 真实上传到解析选择：TXT + 历史 PDF override 实际用 markitdown 解析成功
+  ---
+  duration_ms: 176.6551
+  type: 'test'
+  ...
+1..3
+# tests 3
+# suites 0
+# pass 3
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 7941.0824
