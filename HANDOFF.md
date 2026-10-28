@@ -1,5 +1,12 @@
 # Handoff — OCR 激活门禁松绑（已实施）
 
+## BF-01–05 实施进行中（2026-10-28）
+
+- 用户已调用 implement-spec 要求完成全部五票；既定 S1–S4 测试边界随此次实施指令确认。正式本地执行入口为 .scratch/confirmed-bug-fix-tickets/README.md，execution-state.json 是唯一实时状态。
+- 集成分支 codex/confirmed-bug-fixes。原工作树的未提交内容保留原位，另外以 57dbc294 快照作为修复基线；修复 diff/审查固定点为该快照，不把此前身份和生成改动算成本批次修复。
+- 基线验证：12 个受影响套件 253/253，npm run build 通过；证据 .scratch/confirmed-bug-fix-tickets/evidence/baseline/。不代表五项 bug 已修复。
+- 独立工作树复用原 node_modules；仅复制 PYTHON_COMMAND 解析器环境，未复制 provider 凭据。并行 BF-01/BF-02/BF-04，随后合入 BF-03/BF-05；共享文件顺序是调度安排，不增加功能依赖。
+
 ## 五个 Bug 修复票草案（2026-10-28，测试边界待确认）
 
 - 来源规格：plans/022-confirmed-bug-fixes/README.md；BF-01–05 每票含 7 条用户故事、7 项未勾选验收，共 35 项。机器映射 ticket-plan.json，复现输入与旧基线 evidence.md，文档一致性校验 validation.json。

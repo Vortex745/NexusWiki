@@ -1,21 +1,21 @@
 {
-  "updatedAt": "2026-10-28T15:28:31.638Z",
+  "updatedAt": "2026-10-28T15:31:01.278Z",
   "integrationBranch": "codex/confirmed-bug-fixes",
   "baseline": "57dbc29459adac5ef737556a1542c9be5e707f0c",
   "status": "in_progress",
   "tickets": [
     {
       "id": "BF-01",
-      "status": "ready",
-      "implementationStatus": "not_started",
+      "status": "in_progress",
+      "implementationStatus": "in_progress",
       "verificationStatus": "not_run",
       "blockedBy": [],
       "resolution": null
     },
     {
       "id": "BF-02",
-      "status": "ready",
-      "implementationStatus": "not_started",
+      "status": "in_progress",
+      "implementationStatus": "in_progress",
       "verificationStatus": "not_run",
       "blockedBy": [],
       "resolution": null
@@ -30,8 +30,8 @@
     },
     {
       "id": "BF-04",
-      "status": "ready",
-      "implementationStatus": "not_started",
+      "status": "in_progress",
+      "implementationStatus": "in_progress",
       "verificationStatus": "not_run",
       "blockedBy": [],
       "resolution": null

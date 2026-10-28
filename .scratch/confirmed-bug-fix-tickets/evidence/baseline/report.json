@@ -1,0 +1,22 @@
+{
+  "capturedAt": "2026-10-28T15:33:52.765Z",
+  "baselineSnapshot": "57dbc29459adac5ef737556a1542c9be5e707f0c",
+  "tests": {
+    "files": 12,
+    "total": 253,
+    "passed": 253,
+    "failed": 0,
+    "skipped": 0,
+    "log": "focused.log"
+  },
+  "backendBuild": {
+    "status": "passed",
+    "log": "build.log"
+  },
+  "environment": {
+    "database": "isolated tests only",
+    "nodeModules": "junction to original dependency installation",
+    "dotenv": "parser command only; no provider credentials copied"
+  },
+  "scope": "pre-fix baseline; not acceptance of the five fixes"
+}
