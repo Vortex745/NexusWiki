@@ -73,6 +73,8 @@ export type AttachmentRejectionKind =
 export interface AttachmentFile {
   name: string
   mimeType?: string
+  /** Same parser override contract as the import API (`x-parser`). */
+  parserOverride?: string
   content: Buffer
 }
 
@@ -427,6 +429,7 @@ export class SessionAttachmentService implements AttachmentSearchOperations {
     const route = selectParserRoute({
       fileName: file.name,
       ...(file.mimeType ? { mimeType: file.mimeType } : {}),
+      ...(file.parserOverride ? { override: file.parserOverride } : {}),
     })
     const blocks = await this.parserFor(route.candidates[0], route).parse({
       content: file.content,

@@ -15,6 +15,7 @@ import test from "node:test"
 import { openDb } from "../ingestion/tracking/db"
 import { DocumentRepo } from "../ingestion/tracking/doc_repo"
 import { createIngestionLifecycle } from "../ingestion/pipeline"
+import type { ParserRouteInfo } from "../ingestion/parser"
 import {
   SameNameIntentRequiredError,
   type IngestionLifecycle,
@@ -114,7 +115,7 @@ test("a binary document is extracted through the import parser in the background
     lifecycle,
     // The same seam the import pipeline injects — no external executable runs.
     parserFor: () => ({
-      type: "builtin-pdf" as const,
+      type: "docreader-pdf" as const,
       parse: async () => [
         {
           id: "block-1",
@@ -123,7 +124,7 @@ test("a binary document is extracted through the import parser in the background
           text: "扫描件正文：退款将在三个工作日内原路退回。",
           sectionPath: [],
           metadata: {},
-          provenance: { parser: "builtin-pdf" as const, adapter: "script" as const },
+          provenance: { parser: "docreader-pdf" as const, adapter: "grpc" as const },
         },
       ],
     }),
@@ -143,6 +144,43 @@ test("a binary document is extracted through the import parser in the background
   })
   assert.ok(hits.length >= 1)
   assert.match(hits[0].chunk.content, /退款/)
+})
+
+test("a PDF attachment honors the force-OCR parser override", async () => {
+  const db = openDb(":memory:")
+  const lifecycle = createIngestionLifecycle(db, { stageRunner: fakeStageRunner(), activationMode: "auto" })
+  let seenRoute: ParserRouteInfo | undefined
+  const service = new SessionAttachmentService(db, {
+    lifecycle,
+    parserFor: (_type, route) => {
+      seenRoute = route
+      return {
+        type: "docreader-pdf" as const,
+        parse: async () => [
+          {
+            id: "block-force",
+            index: 0,
+            type: "paragraph" as const,
+            text: "强制 OCR 正文",
+            sectionPath: [],
+            metadata: {},
+            provenance: { parser: "docreader-pdf" as const, adapter: "grpc" as const },
+          },
+        ],
+      }
+    },
+  })
+  const [outcome] = await service.submit("sess-force", "t1", "alice", [{
+    name: "scan.pdf",
+    mimeType: "application/pdf",
+    parserOverride: "ocr-api",
+    content: Buffer.from("%PDF-1.4"),
+  }])
+  assert.equal(outcome.ok, true)
+  const attachmentId = outcome.ok ? outcome.attachment.id : ""
+  await waitFor(() => service.get(attachmentId, "sess-force", "t1", "alice")?.status === "ready")
+  assert.deepEqual(seenRoute?.candidates, ["docreader-pdf"])
+  assert.equal(seenRoute?.pdfForceScanned, true)
 })
 
 test("isolation: a session only ever sees its own attachments", async () => {

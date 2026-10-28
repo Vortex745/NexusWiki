@@ -116,6 +116,7 @@ export function createAttachmentsRouter(
           ...(req.header("x-file-mime-type")
             ? { mimeType: req.header("x-file-mime-type") as string }
             : {}),
+          ...(req.header("x-parser") ? { parserOverride: req.header("x-parser") as string } : {}),
           content,
         },
       ])
