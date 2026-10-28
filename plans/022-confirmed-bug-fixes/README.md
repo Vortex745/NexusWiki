@@ -2,7 +2,7 @@
 
 日期：2026-10-28（Asia/Shanghai）。源码基线：HEAD bbedc95 + 审查时工作树。当前状态：approved_source。实时实施与验收状态以正式本地队列为准。
 
-本目录保留需求和来源规格。用户于 2026-10-28 调用 implement-spec 要求完成全部五票，已确认既定边界并授权实施。唯一执行队列：[confirmed-bug-fix-tickets](../../.scratch/confirmed-bug-fix-tickets/README.md)，标签 ready-for-agent；不派发现有 UT/PT/LO/DR 队列。
+本目录保留需求和来源规格。用户于 2026-10-28 调用 implement-spec 要求完成全部五票，已确认既定边界并授权实施。唯一执行队列：[confirmed-bug-fix-tickets](../../.scratch/confirmed-bug-fix-tickets/README.md)，五票现已关闭；不派发现有 UT/PT/LO/DR 队列。
 
 ## 修复范围和成功标准
 
@@ -16,7 +16,9 @@
 | [BF-04](BF-04-markdown-fence-progress.md) | P2 | 特殊代码围栏不会让整份 PDF 失败 | 共用 PDF 标准化、parse | 四反引号及属性围栏正常完成，前后正文与代码保留 |
 | [BF-05](BF-05-table-escaped-pipe.md) | P2 | 表格末格的转义竖线保持真实值 | 共用 PDF 表格行扫描 | 转义竖线保留，不误剥内容或拆列 |
 
-每票 7 条用户故事、7 项未勾选验收，共 35 条故事与 35 项验收。验收责任映射与状态见 [ticket-plan.json](ticket-plan.json)；原复现、正常对照和证据边界见 [evidence.md](evidence.md)。文档结构、编号、映射及本地链接校验结果见 [validation.json](validation.json)，该校验不代表修复已通过。
+每票 7 条用户故事、7 项来源验收，共 35 条故事与 35 项验收。来源票保留验收原文，已勾选的执行副本在正式本地队列。验收责任映射与状态见 [ticket-plan.json](ticket-plan.json)；原复现、正常对照和证据边界见 [evidence.md](evidence.md)。文档结构、编号、映射及本地链接校验结果见 [validation.json](validation.json)，该校验不代表修复已通过。
+
+截至 2026-10-29：五票实现及 35 项验收完成，联合回归 408/408、后端构建通过。全量回归存在已在修复前复现的 8 项失败；[最终证据](../../.scratch/confirmed-bug-fix-tickets/evidence/final/README.md) 独立记录限制。下文顺序与清单是来源规格，不作为待执行队列。
 
 ## 建议执行顺序
 

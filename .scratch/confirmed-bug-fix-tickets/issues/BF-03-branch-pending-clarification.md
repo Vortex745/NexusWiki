@@ -1,6 +1,6 @@
 # BF-03：编辑和重新生成时清除旧分支的待澄清状态
 
-优先级：P2。状态：ready-for-agent；implementationStatus：not_started。标签：ready-for-agent。功能依赖：无。测试边界已随用户实施指令确认。
+优先级：P2。状态：resolved；implementationStatus：completed；verificationStatus：passed。标签：resolved。功能依赖：无。测试边界已随用户实施指令确认。
 
 ## Problem Statement
 
@@ -38,13 +38,13 @@
 
 ### Acceptance Criteria
 
-- [ ] BF-03-A1：待澄清旧问题被编辑替换后，下一次分发的 effectiveMessage 不再包含旧问题，且使用新请求。
-- [ ] BF-03-A2：重新生成覆盖同类旧分支时满足相同规则；展示历史与真实分发输入一致。
-- [ ] BF-03-A3：同租户其他会话和其他租户的 pending 对照保持原值；未授权截断继续被拒。
-- [ ] BF-03-A4：未知锚点返回既有 no-op 结果，展示历史、validated、pending 和摘要均不被修改。
-- [ ] BF-03-A5：既有 from/after 锚点包含规则、validated/history 返回计数与摘要失效行为通过公开存储回归。
-- [ ] BF-03-A6：不截断分支的正常澄清补参仍把原 pending 与补充输入正确合并；清理与现有截断处于同一事务。
-- [ ] BF-03-A7：包含“旧问题：帮我查退款”与“新问题：介绍产品”的行为回归在修复前失败、修复后通过；相关聊天/历史测试通过。
+- [x] BF-03-A1：待澄清旧问题被编辑替换后，下一次分发的 effectiveMessage 不再包含旧问题，且使用新请求。
+- [x] BF-03-A2：重新生成覆盖同类旧分支时满足相同规则；展示历史与真实分发输入一致。
+- [x] BF-03-A3：同租户其他会话和其他租户的 pending 对照保持原值；未授权截断继续被拒。
+- [x] BF-03-A4：未知锚点返回既有 no-op 结果，展示历史、validated、pending 和摘要均不被修改。
+- [x] BF-03-A5：既有 from/after 锚点包含规则、validated/history 返回计数与摘要失效行为通过公开存储回归。
+- [x] BF-03-A6：不截断分支的正常澄清补参仍把原 pending 与补充输入正确合并；清理与现有截断处于同一事务。
+- [x] BF-03-A7：包含“旧问题：帮我查退款”与“新问题：介绍产品”的行为回归在修复前失败、修复后通过；相关聊天/历史测试通过。
 
 ## Out of Scope
 
@@ -55,3 +55,9 @@
 - 原复现中 truncateFromRun 删除 2 条展示历史后，pending 仍保留。下一轮 effectiveMessage 为“旧问题：帮我查退款 新问题：介绍产品”。
 - 定位起点：[分支截断](../../../src/answer/conversation_history_store.ts)、[真实 pending 存储](../../../src/answer/conversation_store.ts)、[分发输入装配](../../../src/mastra/route_dispatch_runner.ts)。
 - pending 目前是会话态；不要凭空引入 run 归属迁移或增加对历史 pending 的精细保留要求。
+
+## Resolution
+
+完成日期：2026-10-29（Asia/Shanghai）。实现提交：`237f4afe0188f551fdb8afb890ef6d83b94d8d25`；集成合并：`d3cf4b8949cd2ca98581dba198ff2c426e8c4094`。
+
+七项验收均通过；[逐项行为证据](../evidence/BF-03/README.md)。新增回归 11 项；最终联合回归 408/408，后端构建通过；[汇总与全量基线限制](../evidence/final/README.md)。

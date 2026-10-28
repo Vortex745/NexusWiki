@@ -1,11 +1,14 @@
-# Handoff — OCR 激活门禁松绑（已实施）
+# Handoff — BF-01–05 已完成
 
-## BF-01–05 实施进行中（2026-10-28）
+## BF-01–05 已完成（2026-10-29）
 
-- 用户已调用 implement-spec 要求完成全部五票；既定 S1–S4 测试边界随此次实施指令确认。正式本地执行入口为 .scratch/confirmed-bug-fix-tickets/README.md，execution-state.json 是唯一实时状态。
-- 集成分支 codex/confirmed-bug-fixes。原工作树的未提交内容保留原位，另外以 57dbc294 快照作为修复基线；修复 diff/审查固定点为该快照，不把此前身份和生成改动算成本批次修复。
-- 基线验证：12 个受影响套件 253/253，npm run build 通过；证据 .scratch/confirmed-bug-fix-tickets/evidence/baseline/。不代表五项 bug 已修复。
-- 独立工作树复用原 node_modules；仅复制 PYTHON_COMMAND 解析器环境，未复制 provider 凭据。并行 BF-01/BF-02/BF-04，随后合入 BF-03/BF-05；共享文件顺序是调度安排，不增加功能依赖。
+- 集成分支 `codex/confirmed-bug-fixes`；工作区 `C:/Users/14253/.codex/worktrees/confirmed-bug-fixes/Agentic RAG`。五票已 resolved，35/35 项验收、新增 45 项行为回归、最终 32 文件联合套件 408/408、后端构建通过。状态与证据：`.scratch/confirmed-bug-fix-tickets/execution-state.json`、`evidence/final/README.md`。
+- 原工作区现有未提交业务内容与 index 保留；修复前快照 `57dbc29459adac5ef737556a1542c9be5e707f0c` 包含当时业务内容，审查使用 `git diff 57dbc29459adac5ef737556a1542c9be5e707f0c...HEAD`。业务及测试最终验证 HEAD `65c84c2e6192b4915243977dab40fa9b6d890d04`，后续仅补完成状态、证据和交接。原业务分支没有自动同步本批修复。
+- 已完成双轴独立审查：0 硬性违规、0 规格问题，唯一 P3 测试工厂重复建议已用共享 fixture 处理。
+- 全量回归不是全绿：3205 tests / 3195 pass / 8 fail / 2 skip。相同八项全部在修复前快照复现：5 项字节 fixture 断言与 CRLF 检出有关，2 项 persistence 和 1 项 MCP 文件依赖缺失 OPENAI_API_KEY。假配置下另暴露 2 项 MCP 既有失败，修复前同样复现，不扩进五票。
+- 验证踩坑：Windows 新 worktree 可经 Git LF/CRLF 转换破坏独立 SHA256 fixture；诊断恢复字节前先对 manifest 核验，最终 restore，勿把修正后的全量冒充原始全绿。CJS preload 使用 `--require C:/.../legacy-unit-env.cjs`；Windows 盘符路径不能直接当 ESM `--import` URL。
+- 五项修复不涉及迁移、新依赖、真实 provider 或业务数据写入、部署。下方 BF 草案、未实施与未确认记录属于历史，已被本节完成状态替代。
+
 
 ## 五个 Bug 修复票草案（2026-10-28，测试边界待确认）
 

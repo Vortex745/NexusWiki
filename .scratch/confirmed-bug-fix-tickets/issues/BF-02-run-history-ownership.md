@@ -1,6 +1,6 @@
 # BF-02：运行历史读取校验会话所有权
 
-优先级：P1。状态：ready-for-agent；implementationStatus：not_started。标签：ready-for-agent。功能依赖：无。测试边界已随用户实施指令确认。
+优先级：P1。状态：resolved；implementationStatus：completed；verificationStatus：passed。标签：resolved。功能依赖：无。测试边界已随用户实施指令确认。
 
 ## Problem Statement
 
@@ -39,13 +39,13 @@
 
 ### Acceptance Criteria
 
-- [ ] BF-02-A1：owner 读取自己已绑定会话的 run 得到 200，回答和事件结构与既有契约一致。
-- [ ] BF-02-A2：同租户其他 subject 读取该 run 得到 404，响应不含合成私密回答或事件内容。
-- [ ] BF-02-A3：不同租户读取该 run 得到 404，响应与未知 run 的 404 保持同一公开形状和错误信息。
-- [ ] BF-02-A4：未知 run、所属会话不存在的孤立 run 均为 404；既有未认证身份门禁继续生效。
-- [ ] BF-02-A5：owner 读取未绑定助手/知识库锁的合法会话 run 仍为 200；伪造请求参数不能改变身份。
-- [ ] BF-02-A6：前端恢复所依赖的本人读取契约通过，可信内部轨迹读取/观测测试不因 HTTP 授权变化而失败。
-- [ ] BF-02-A7：同租户或跨租户泄漏用例在修复前失败、修复后通过；离线证据只含合成数据，相关 chat 历史测试通过。
+- [x] BF-02-A1：owner 读取自己已绑定会话的 run 得到 200，回答和事件结构与既有契约一致。
+- [x] BF-02-A2：同租户其他 subject 读取该 run 得到 404，响应不含合成私密回答或事件内容。
+- [x] BF-02-A3：不同租户读取该 run 得到 404，响应与未知 run 的 404 保持同一公开形状和错误信息。
+- [x] BF-02-A4：未知 run、所属会话不存在的孤立 run 均为 404；既有未认证身份门禁继续生效。
+- [x] BF-02-A5：owner 读取未绑定助手/知识库锁的合法会话 run 仍为 200；伪造请求参数不能改变身份。
+- [x] BF-02-A6：前端恢复所依赖的本人读取契约通过，可信内部轨迹读取/观测测试不因 HTTP 授权变化而失败。
+- [x] BF-02-A7：同租户或跨租户泄漏用例在修复前失败、修复后通过；离线证据只含合成数据，相关 chat 历史测试通过。
 
 ## Out of Scope
 
@@ -57,3 +57,9 @@
 - 定位起点：[运行历史 HTTP 路由](../../../src/api/chat.ts)、[轨迹仓库](../../../src/answer/trace_repository.ts)、[会话目录所有权](../../../src/answer/conversation_history_store.ts)。
 - getSessionLock 的空值同时表示“无所有权”和“本人会话尚无锁”，不能直接充当本票的完整所有权判断。
 - 与 BF-03 可能接触相同聊天/历史模块；协调同文件写入即可，无功能先后依赖。
+
+## Resolution
+
+完成日期：2026-10-29（Asia/Shanghai）。实现提交：`bb4947d391bd4c51f8a1a1013a357783c38cd7b3`；集成合并：`607006a29da79d1b4d1a539c9d322d9d2a374356`。
+
+七项验收均通过；[逐项行为证据](../evidence/BF-02/README.md)。新增回归 9 项；最终联合回归 408/408，后端构建通过；[汇总与全量基线限制](../evidence/final/README.md)。

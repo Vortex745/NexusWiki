@@ -1,0 +1,16 @@
+{
+  "startedAt": "2026-10-28T16:10:54.498Z",
+  "finishedAt": "2026-10-28T16:14:46.098Z",
+  "exitCode": 1,
+  "command": "node --import tsx --import ./scripts/test-env.ts --test --test-concurrency=8 src/**/*.test.ts frontend/src/**/*.test.ts",
+  "credentialEnvironmentCleared": [
+    "FIRECRAWL_API_KEY",
+    "TYPESAFE_API_KEY"
+  ],
+  "totals": {
+    "tests": 3205,
+    "passed": 3195,
+    "failed": 8,
+    "skipped": 2
+  }
+}

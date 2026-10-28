@@ -1,6 +1,6 @@
 # BF-01：退役文档立即退出所有知识检索
 
-优先级：P1。状态：ready-for-agent；implementationStatus：not_started。标签：ready-for-agent。功能依赖：无。测试边界已随用户实施指令确认。
+优先级：P1。状态：resolved；implementationStatus：completed；verificationStatus：passed。标签：resolved。功能依赖：无。测试边界已随用户实施指令确认。
 
 ## Problem Statement
 
@@ -41,13 +41,13 @@
 
 ### Acceptance Criteria
 
-- [ ] BF-01-A1：先启用来源，再退役，并暂停清理；新 BM25 查询不返回该来源的命中，活动来源对照仍命中。
-- [ ] BF-01-A2：同一夹具下，向量检索及父块装配不返回 retired 文档内容；使用实际运行时资格接线。
-- [ ] BF-01-A3：PageIndex 的公开查询不返回 retired 来源，仍能导航正常活动来源。
-- [ ] BF-01-A4：清理任务保持 pending 或失败时，重复新检索仍满足 A1–A3，不依赖先执行物理删除。
-- [ ] BF-01-A5：候选/旧版本、其他租户、无组权限和范围外知识库对照仍被排除；合法活动版本仍可见。
-- [ ] BF-01-A6：回归在修复前因 retired 命中而失败，修复后通过；测试证据记录受控索引仍有旧数据且未调用真实网络。
-- [ ] BF-01-A7：资格判断没有新增逐命中数据库读取或外部调用，相关生命周期和检索既有测试通过。
+- [x] BF-01-A1：先启用来源，再退役，并暂停清理；新 BM25 查询不返回该来源的命中，活动来源对照仍命中。
+- [x] BF-01-A2：同一夹具下，向量检索及父块装配不返回 retired 文档内容；使用实际运行时资格接线。
+- [x] BF-01-A3：PageIndex 的公开查询不返回 retired 来源，仍能导航正常活动来源。
+- [x] BF-01-A4：清理任务保持 pending 或失败时，重复新检索仍满足 A1–A3，不依赖先执行物理删除。
+- [x] BF-01-A5：候选/旧版本、其他租户、无组权限和范围外知识库对照仍被排除；合法活动版本仍可见。
+- [x] BF-01-A6：回归在修复前因 retired 命中而失败，修复后通过；测试证据记录受控索引仍有旧数据且未调用真实网络。
+- [x] BF-01-A7：资格判断没有新增逐命中数据库读取或外部调用，相关生命周期和检索既有测试通过。
 
 ## Out of Scope
 
@@ -58,3 +58,9 @@
 - 原始复现：sourceState=retired；activeIdsAfterRetire 仍含退役 doc；actualHitsAfterRetire=1；cleanupCallsBeforeSearch=0；pendingCleanup=4；networkAttempts=0。
 - 定位起点：[来源退役](../../../src/knowledge/source_lifecycle_store.ts)、[活动版本资格](../../../src/ingestion/tracking/active_version_repo.ts)、[检索组合](../../../src/retrieval/search/searcher.ts)、[PageIndex 资格](../../../src/ingestion/tracking/page_index_repo.ts)。
 - 本票与 BF-02 优先处理；优先级不是功能阻塞关系。复现与基线见 [evidence.md](../../../plans/022-confirmed-bug-fixes/evidence.md)。
+
+## Resolution
+
+完成日期：2026-10-29（Asia/Shanghai）。实现提交：`f6a43499181e348b9debed0bfda90af6a6185d8e`；集成合并：`3a0dc345035a5575cbe89a1e4cf029d6caf1bc7c`。
+
+七项验收均通过；[逐项行为证据](../evidence/BF-01/README.md)。新增回归 5 项；最终联合回归 408/408，后端构建通过；[汇总与全量基线限制](../evidence/final/README.md)。

@@ -1,6 +1,6 @@
 # BF-04：特殊代码围栏不再导致整份 PDF 解析失败
 
-优先级：P2。状态：ready-for-agent；implementationStatus：not_started。标签：ready-for-agent。功能依赖：无。测试边界已随用户实施指令确认。
+优先级：P2。状态：resolved；implementationStatus：completed；verificationStatus：passed。标签：resolved。功能依赖：无。测试边界已随用户实施指令确认。
 
 ## Problem Statement
 
@@ -39,13 +39,13 @@ PDF 提取出的 Markdown 含四反引号围栏，或三个反引号加带属性
 
 ### Acceptance Criteria
 
-- [ ] BF-04-A1：含四反引号 typescript 围栏的完整输入通过公开 parse 正常返回，代码内容仍可读取。
-- [ ] BF-04-A2：三个反引号加 python title="demo" 的输入正常返回；无法结构化的信息按原文保留。
-- [ ] BF-04-A3：上述两例中的 Before、After 及代码正文全部保留；不是以空文档或只剩正文作为成功。
-- [ ] BF-04-A4：普通三反引号代码块输出与既有契约一致；未闭合围栏继续保留原文及既有 warning。
-- [ ] BF-04-A5：连续或无法识别的围栏输入在测试超时内完成，游标推进，不出现空段落读取异常或循环。
-- [ ] BF-04-A6：既有 raw extraction 与 locator 约束通过；知识库/附件受控接线用例均使用修复后的共享 parser。
-- [ ] BF-04-A7：两种已复现崩溃输入在修复前失败、修复后通过；既有 DocReader 套件通过，无真实 provider 请求。
+- [x] BF-04-A1：含四反引号 typescript 围栏的完整输入通过公开 parse 正常返回，代码内容仍可读取。
+- [x] BF-04-A2：三个反引号加 python title="demo" 的输入正常返回；无法结构化的信息按原文保留。
+- [x] BF-04-A3：上述两例中的 Before、After 及代码正文全部保留；不是以空文档或只剩正文作为成功。
+- [x] BF-04-A4：普通三反引号代码块输出与既有契约一致；未闭合围栏继续保留原文及既有 warning。
+- [x] BF-04-A5：连续或无法识别的围栏输入在测试超时内完成，游标推进，不出现空段落读取异常或循环。
+- [x] BF-04-A6：既有 raw extraction 与 locator 约束通过；知识库/附件受控接线用例均使用修复后的共享 parser。
+- [x] BF-04-A7：两种已复现崩溃输入在修复前失败、修复后通过；既有 DocReader 套件通过，无真实 provider 请求。
 
 ## Out of Scope
 
@@ -56,3 +56,9 @@ PDF 提取出的 Markdown 含四反引号围栏，或三个反引号加带属性
 - 精确触发样本与未修复的错误见 [evidence.md](../../../plans/022-confirmed-bug-fixes/evidence.md)。
 - 定位起点：[PDF 标准化](../../../src/ingestion/parser/docreader_pdf_normalize.ts)、[公开 PDF parser](../../../src/ingestion/parser/docreader_pdf.ts)、[既有 parser 回归](../../../src/ingestion/parser/docreader_pdf.test.ts)。
 - 与 BF-05 共用标准化实现，建议先 BF-04 再 BF-05，避免同时写同一文件；不是功能依赖。
+
+## Resolution
+
+完成日期：2026-10-29（Asia/Shanghai）。实现提交：`38535e8f884957743c9dfb97b79b0d855d98ea16`；集成合并：`33a21bde9e11ea6b9e363385182c1ae12a03ad81`。
+
+七项验收均通过；[逐项行为证据](../evidence/BF-04/README.md)。新增回归 11 项；最终联合回归 408/408，后端构建通过；[汇总与全量基线限制](../evidence/final/README.md)。

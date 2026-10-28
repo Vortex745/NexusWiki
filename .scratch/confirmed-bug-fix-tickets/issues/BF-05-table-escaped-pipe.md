@@ -1,6 +1,6 @@
 # BF-05：表格末格的转义竖线保留为真实单元格内容
 
-优先级：P2。状态：ready-for-agent；implementationStatus：not_started。标签：ready-for-agent。功能依赖：无。测试边界已随用户实施指令确认。
+优先级：P2。状态：resolved；implementationStatus：completed；verificationStatus：passed。标签：resolved。功能依赖：无。测试边界已随用户实施指令确认。
 
 ## Problem Statement
 
@@ -38,13 +38,13 @@ Markdown 表格没有独立行尾边框，且最后一格以转义竖线结尾�
 
 ### Acceptance Criteria
 
-- [ ] BF-05-A1：`Field | Value` 表格中 `symbol | A\|` 的末格精确为 `A|`，列数为 2，不能输出 A 加反斜线。
-- [ ] BF-05-A2：相同内容加显式行尾外框后仍为两格，末格仍为 `A|`，不会产生多余单元格。
-- [ ] BF-05-A3：单元格内部的转义竖线不拆列，普通未转义竖线继续分列；尾部空白不改变边框判定。
-- [ ] BF-05-A4：普通有/无外框表格、表头及既有空白修剪行为保持；连续反斜线奇偶边界按明确 fixture 期望解析。
-- [ ] BF-05-A5：原始 block.text 和前后正文保持完整；结构化 table.rows 与该输入的期望值一致。
-- [ ] BF-05-A6：公开 parser 回归在修复前失败、修复后通过；知识库及附件共享 parser 选择保持，既有 DocReader 套件通过。
-- [ ] BF-05-A7：修复不新增 provider 请求、依赖或额外文档全量预处理；使用离线合成输入给出验收证据。
+- [x] BF-05-A1：`Field | Value` 表格中 `symbol | A\|` 的末格精确为 `A|`，列数为 2，不能输出 A 加反斜线。
+- [x] BF-05-A2：相同内容加显式行尾外框后仍为两格，末格仍为 `A|`，不会产生多余单元格。
+- [x] BF-05-A3：单元格内部的转义竖线不拆列，普通未转义竖线继续分列；尾部空白不改变边框判定。
+- [x] BF-05-A4：普通有/无外框表格、表头及既有空白修剪行为保持；连续反斜线奇偶边界按明确 fixture 期望解析。
+- [x] BF-05-A5：原始 block.text 和前后正文保持完整；结构化 table.rows 与该输入的期望值一致。
+- [x] BF-05-A6：公开 parser 回归在修复前失败、修复后通过；知识库及附件共享 parser 选择保持，既有 DocReader 套件通过。
+- [x] BF-05-A7：修复不新增 provider 请求、依赖或额外文档全量预处理；使用离线合成输入给出验收证据。
 
 ## Out of Scope
 
@@ -55,3 +55,9 @@ Markdown 表格没有独立行尾边框，且最后一格以转义竖线结尾�
 - 精确三行样本、对照输入和既有结果见 [evidence.md](../../../plans/022-confirmed-bug-fixes/evidence.md)。
 - 定位起点：[表格行扫描](../../../src/ingestion/parser/docreader_pdf_normalize.ts)、[公开 PDF parser](../../../src/ingestion/parser/docreader_pdf.ts)、[既有 parser 测试](../../../src/ingestion/parser/docreader_pdf.test.ts)。
 - 与 BF-04 无功能依赖，建议串行写共享标准化文件。若另一票已经交付接线夹具，复用即可，不新增重复测试入口。
+
+## Resolution
+
+完成日期：2026-10-29（Asia/Shanghai）。实现提交：`70503abe2f2e6c66c7eaee7207b51a441e66dd86`；集成合并：`6acd0e41fdc4696e6b43e8b4398e4c1f15569f0c`。
+
+七项验收均通过；[逐项行为证据](../evidence/BF-05/README.md)。新增回归 9 项；最终联合回归 408/408，后端构建通过；[汇总与全量基线限制](../evidence/final/README.md)。

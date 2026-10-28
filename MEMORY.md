@@ -1,5 +1,12 @@
 # Memory
 
+## 活动检索资格与会话状态边界（2026-10-29）
+
+- 活动版本指针只是版本/历史关联，不单独决定检索资格。`active_version_repo` 与 PageIndex 活动子查询都需同时限定来源 lifecycle_state=active；退役后即使物理索引/节点仍在或清理失败，新检索也应不可见。
+- 会话 owner 与助手/知识库 lock 是不同契约。本人未绑定会话也可读历史；公开 run-history 应用可信 tenant+subject 查目录 ownership，不能用 getSessionLock 非空替代所有权。内部 trace 观测接口保持原边界。
+- 真实 pending clarification 存于 conversation_turns.kind=pending_clarification；分支截断在既有事务按 session+tenant 清理它。旧 clarification_pending 不能代替真实待澄清状态；未知锚点 no-op 与普通补参继续保留 pending。
+- Markdown 围栏识别与段落停止必须复用同一条件，结束围栏长度至少等于开始围栏；表格分隔符按连续反斜线奇偶判定，不能先无条件剥离最后一个竖线。修复应在共享 DocReader 标准化层覆盖导入与附件。
+
 ## 文件门禁与 PDF 引擎的新方向（2026-10-28，用户已定方向，尚未实施）
 
 - 用户明确选择用 WeKnora 的技术处理完成方式取代本项目的内容/索引双凭证及人工审批门禁，并实际接入 DocReader PDF。该方向取代旧“保留 PyMuPDF、选择性移植去噪规则”的建议，也不再局限于 ocr-advisory-v1 的唯一理由豁免。代码尚未改，实施不能把记忆当作部署或数据操作授权。完整决策与冲突：`plans/020-weknora-docreader/plan.md`。

@@ -1,0 +1,138 @@
+[mcp-capabilities] failed to start: Missing required env var: OPENAI_API_KEY
+[LLM] [capabilities] SdkError: Connection closed
+    at Client._onclose (C:\Users\14253\Desktop\Agentic RAG\node_modules\@modelcontextprotocol\core-internal\src\shared\protocol.ts:839:23)
+    at Client._onclose (C:\Users\14253\Desktop\Agentic RAG\node_modules\@modelcontextprotocol\client\dist\index.cjs:4059:9)
+    at StdioClientTransport._transport.onclose (C:\Users\14253\Desktop\Agentic RAG\node_modules\@modelcontextprotocol\core-internal\src\shared\protocol.ts:790:22)
+    at ChildProcess.<anonymous> (C:\Users\14253\Desktop\Agentic RAG\node_modules\@modelcontextprotocol\client\src\client\stdio.ts:153:22)
+    at ChildProcess.emit (node:events:514:20)
+    at cp.emit (C:\Users\14253\Desktop\Agentic RAG\node_modules\cross-spawn\lib\enoent.js:34:29)
+    at maybeClose (node:internal/child_process:1125:16)
+    at ChildProcess._handle.onexit (node:internal/child_process:305:5) undefined
+MCPClient errored connecting to MCP server: {
+  error: '{"message":"Failed to connect to MCP server capabilities: SdkError: Connection closed\\n    at Client._onclose (C:\\\\Users\\\\14253\\\\Desktop\\\\Agentic RAG\\\\node_modules\\\\@modelcontextprotocol\\\\core-internal\\\\src\\\\shared\\\\protocol.ts:839:23)\\n    at Client._onclose (C:\\\\Users\\\\14253\\\\Desktop\\\\Agentic RAG\\\\node_modules\\\\@modelcontextprotocol\\\\client\\\\dist\\\\index.cjs:4059:9)\\n    at StdioClientTransport._transport.onclose (C:\\\\Users\\\\14253\\\\Desktop\\\\Agentic RAG\\\\node_modules\\\\@modelcontextprotocol\\\\core-internal\\\\src\\\\shared\\\\protocol.ts:790:22)\\n    at ChildProcess.<anonymous> (C:\\\\Users\\\\14253\\\\Desktop\\\\Agentic RAG\\\\node_modules\\\\@modelcontextprotocol\\\\client\\\\src\\\\client\\\\stdio.ts:153:22)\\n    at ChildProcess.emit (node:events:514:20)\\n    at cp.emit (C:\\\\Users\\\\14253\\\\Desktop\\\\Agentic RAG\\\\node_modules\\\\cross-spawn\\\\lib\\\\enoent.js:34:29)\\n    at maybeClose (node:internal/child_process:1125:16)\\n    at ChildProcess._handle.onexit (node:internal/child_process:305:5)","domain":"MCP","category":"THIRD_PARTY","code":"MCP_CLIENT_CONNECT_FAILED","details":{"name":"capabilities"},"cause":{"message":"Connection closed","name":"SdkError","code":"CONNECTION_CLOSED"}}'
+}
+[mcp-capabilities] failed to start: Missing required env var: OPENAI_API_KEY
+[LLM] [capabilities] SdkError: Connection closed
+    at Client._onclose (C:\Users\14253\Desktop\Agentic RAG\node_modules\@modelcontextprotocol\core-internal\src\shared\protocol.ts:839:23)
+    at Client._onclose (C:\Users\14253\Desktop\Agentic RAG\node_modules\@modelcontextprotocol\client\dist\index.cjs:4059:9)
+    at StdioClientTransport._transport.onclose (C:\Users\14253\Desktop\Agentic RAG\node_modules\@modelcontextprotocol\core-internal\src\shared\protocol.ts:790:22)
+    at ChildProcess.<anonymous> (C:\Users\14253\Desktop\Agentic RAG\node_modules\@modelcontextprotocol\client\src\client\stdio.ts:153:22)
+    at ChildProcess.emit (node:events:514:20)
+    at cp.emit (C:\Users\14253\Desktop\Agentic RAG\node_modules\cross-spawn\lib\enoent.js:34:29)
+    at maybeClose (node:internal/child_process:1125:16)
+    at ChildProcess._handle.onexit (node:internal/child_process:305:5) undefined
+MCPClient errored connecting to MCP server: {
+  error: '{"message":"Failed to connect to MCP server capabilities: SdkError: Connection closed\\n    at Client._onclose (C:\\\\Users\\\\14253\\\\Desktop\\\\Agentic RAG\\\\node_modules\\\\@modelcontextprotocol\\\\core-internal\\\\src\\\\shared\\\\protocol.ts:839:23)\\n    at Client._onclose (C:\\\\Users\\\\14253\\\\Desktop\\\\Agentic RAG\\\\node_modules\\\\@modelcontextprotocol\\\\client\\\\dist\\\\index.cjs:4059:9)\\n    at StdioClientTransport._transport.onclose (C:\\\\Users\\\\14253\\\\Desktop\\\\Agentic RAG\\\\node_modules\\\\@modelcontextprotocol\\\\core-internal\\\\src\\\\shared\\\\protocol.ts:790:22)\\n    at ChildProcess.<anonymous> (C:\\\\Users\\\\14253\\\\Desktop\\\\Agentic RAG\\\\node_modules\\\\@modelcontextprotocol\\\\client\\\\src\\\\client\\\\stdio.ts:153:22)\\n    at ChildProcess.emit (node:events:514:20)\\n    at cp.emit (C:\\\\Users\\\\14253\\\\Desktop\\\\Agentic RAG\\\\node_modules\\\\cross-spawn\\\\lib\\\\enoent.js:34:29)\\n    at maybeClose (node:internal/child_process:1125:16)\\n    at ChildProcess._handle.onexit (node:internal/child_process:305:5)","domain":"MCP","category":"THIRD_PARTY","code":"MCP_CLIENT_CONNECT_FAILED","details":{"name":"capabilities"},"cause":{"message":"Connection closed","name":"SdkError","code":"CONNECTION_CLOSED"}}'
+}
+Failed to list tools from server: {
+  error: '{"message":"Failed to connect to MCP server capabilities: SdkError: Connection closed\\n    at Client._onclose (C:\\\\Users\\\\14253\\\\Desktop\\\\Agentic RAG\\\\node_modules\\\\@modelcontextprotocol\\\\core-internal\\\\src\\\\shared\\\\protocol.ts:839:23)\\n    at Client._onclose (C:\\\\Users\\\\14253\\\\Desktop\\\\Agentic RAG\\\\node_modules\\\\@modelcontextprotocol\\\\client\\\\dist\\\\index.cjs:4059:9)\\n    at StdioClientTransport._transport.onclose (C:\\\\Users\\\\14253\\\\Desktop\\\\Agentic RAG\\\\node_modules\\\\@modelcontextprotocol\\\\core-internal\\\\src\\\\shared\\\\protocol.ts:790:22)\\n    at ChildProcess.<anonymous> (C:\\\\Users\\\\14253\\\\Desktop\\\\Agentic RAG\\\\node_modules\\\\@modelcontextprotocol\\\\client\\\\src\\\\client\\\\stdio.ts:153:22)\\n    at ChildProcess.emit (node:events:514:20)\\n    at cp.emit (C:\\\\Users\\\\14253\\\\Desktop\\\\Agentic RAG\\\\node_modules\\\\cross-spawn\\\\lib\\\\enoent.js:34:29)\\n    at maybeClose (node:internal/child_process:1125:16)\\n    at ChildProcess._handle.onexit (node:internal/child_process:305:5)","domain":"MCP","category":"THIRD_PARTY","code":"MCP_CLIENT_GET_TOOLS_FAILED","details":{"serverName":"capabilities"},"cause":{"message":"Failed to connect to MCP server capabilities: SdkError: Connection closed\\n    at Client._onclose (C:\\\\Users\\\\14253\\\\Desktop\\\\Agentic RAG\\\\node_modules\\\\@modelcontextprotocol\\\\core-internal\\\\src\\\\shared\\\\protocol.ts:839:23)\\n    at Client._onclose (C:\\\\Users\\\\14253\\\\Desktop\\\\Agentic RAG\\\\node_modules\\\\@modelcontextprotocol\\\\client\\\\dist\\\\index.cjs:4059:9)\\n    at StdioClientTransport._transport.onclose (C:\\\\Users\\\\14253\\\\Desktop\\\\Agentic RAG\\\\node_modules\\\\@modelcontextprotocol\\\\core-internal\\\\src\\\\shared\\\\protocol.ts:790:22)\\n    at ChildProcess.<anonymous> (C:\\\\Users\\\\14253\\\\Desktop\\\\Agentic RAG\\\\node_modules\\\\@modelcontextprotocol\\\\client\\\\src\\\\client\\\\stdio.ts:153:22)\\n    at ChildProcess.emit (node:events:514:20)\\n    at cp.emit (C:\\\\Users\\\\14253\\\\Desktop\\\\Agentic RAG\\\\node_modules\\\\cross-spawn\\\\lib\\\\enoent.js:34:29)\\n    at maybeClose (node:internal/child_process:1125:16)\\n    at ChildProcess._handle.onexit (node:internal/child_process:305:5)","domain":"MCP","category":"THIRD_PARTY","code":"MCP_CLIENT_CONNECT_FAILED","details":{"name":"capabilities"},"cause":{"message":"Connection closed","name":"SdkError","code":"CONNECTION_CLOSED"}}}'
+}
+✖ Ticket 35: the compatible MCP client discovers and calls the local capability server through the tool boundary (10083.8339ms)
+[mcp-capabilities] failed to start: Missing required env var: OPENAI_API_KEY
+[LLM] [capabilities] SdkError: Connection closed
+    at Client._onclose (C:\Users\14253\Desktop\Agentic RAG\node_modules\@modelcontextprotocol\core-internal\src\shared\protocol.ts:839:23)
+    at Client._onclose (C:\Users\14253\Desktop\Agentic RAG\node_modules\@modelcontextprotocol\client\dist\index.cjs:4059:9)
+    at StdioClientTransport._transport.onclose (C:\Users\14253\Desktop\Agentic RAG\node_modules\@modelcontextprotocol\core-internal\src\shared\protocol.ts:790:22)
+    at ChildProcess.<anonymous> (C:\Users\14253\Desktop\Agentic RAG\node_modules\@modelcontextprotocol\client\src\client\stdio.ts:153:22)
+    at ChildProcess.emit (node:events:514:20)
+    at cp.emit (C:\Users\14253\Desktop\Agentic RAG\node_modules\cross-spawn\lib\enoent.js:34:29)
+    at maybeClose (node:internal/child_process:1125:16)
+    at ChildProcess._handle.onexit (node:internal/child_process:305:5) undefined
+MCPClient errored connecting to MCP server: {
+  error: '{"message":"Failed to connect to MCP server capabilities: SdkError: Connection closed\\n    at Client._onclose (C:\\\\Users\\\\14253\\\\Desktop\\\\Agentic RAG\\\\node_modules\\\\@modelcontextprotocol\\\\core-internal\\\\src\\\\shared\\\\protocol.ts:839:23)\\n    at Client._onclose (C:\\\\Users\\\\14253\\\\Desktop\\\\Agentic RAG\\\\node_modules\\\\@modelcontextprotocol\\\\client\\\\dist\\\\index.cjs:4059:9)\\n    at StdioClientTransport._transport.onclose (C:\\\\Users\\\\14253\\\\Desktop\\\\Agentic RAG\\\\node_modules\\\\@modelcontextprotocol\\\\core-internal\\\\src\\\\shared\\\\protocol.ts:790:22)\\n    at ChildProcess.<anonymous> (C:\\\\Users\\\\14253\\\\Desktop\\\\Agentic RAG\\\\node_modules\\\\@modelcontextprotocol\\\\client\\\\src\\\\client\\\\stdio.ts:153:22)\\n    at ChildProcess.emit (node:events:514:20)\\n    at cp.emit (C:\\\\Users\\\\14253\\\\Desktop\\\\Agentic RAG\\\\node_modules\\\\cross-spawn\\\\lib\\\\enoent.js:34:29)\\n    at maybeClose (node:internal/child_process:1125:16)\\n    at ChildProcess._handle.onexit (node:internal/child_process:305:5)","domain":"MCP","category":"THIRD_PARTY","code":"MCP_CLIENT_CONNECT_FAILED","details":{"name":"capabilities"},"cause":{"message":"Connection closed","name":"SdkError","code":"CONNECTION_CLOSED"}}'
+}
+[mcp-capabilities] failed to start: Missing required env var: OPENAI_API_KEY
+[LLM] [capabilities] SdkError: Connection closed
+    at Client._onclose (C:\Users\14253\Desktop\Agentic RAG\node_modules\@modelcontextprotocol\core-internal\src\shared\protocol.ts:839:23)
+    at Client._onclose (C:\Users\14253\Desktop\Agentic RAG\node_modules\@modelcontextprotocol\client\dist\index.cjs:4059:9)
+    at StdioClientTransport._transport.onclose (C:\Users\14253\Desktop\Agentic RAG\node_modules\@modelcontextprotocol\core-internal\src\shared\protocol.ts:790:22)
+    at ChildProcess.<anonymous> (C:\Users\14253\Desktop\Agentic RAG\node_modules\@modelcontextprotocol\client\src\client\stdio.ts:153:22)
+    at ChildProcess.emit (node:events:514:20)
+    at cp.emit (C:\Users\14253\Desktop\Agentic RAG\node_modules\cross-spawn\lib\enoent.js:34:29)
+    at maybeClose (node:internal/child_process:1125:16)
+    at ChildProcess._handle.onexit (node:internal/child_process:305:5) undefined
+MCPClient errored connecting to MCP server: {
+  error: '{"message":"Failed to connect to MCP server capabilities: SdkError: Connection closed\\n    at Client._onclose (C:\\\\Users\\\\14253\\\\Desktop\\\\Agentic RAG\\\\node_modules\\\\@modelcontextprotocol\\\\core-internal\\\\src\\\\shared\\\\protocol.ts:839:23)\\n    at Client._onclose (C:\\\\Users\\\\14253\\\\Desktop\\\\Agentic RAG\\\\node_modules\\\\@modelcontextprotocol\\\\client\\\\dist\\\\index.cjs:4059:9)\\n    at StdioClientTransport._transport.onclose (C:\\\\Users\\\\14253\\\\Desktop\\\\Agentic RAG\\\\node_modules\\\\@modelcontextprotocol\\\\core-internal\\\\src\\\\shared\\\\protocol.ts:790:22)\\n    at ChildProcess.<anonymous> (C:\\\\Users\\\\14253\\\\Desktop\\\\Agentic RAG\\\\node_modules\\\\@modelcontextprotocol\\\\client\\\\src\\\\client\\\\stdio.ts:153:22)\\n    at ChildProcess.emit (node:events:514:20)\\n    at cp.emit (C:\\\\Users\\\\14253\\\\Desktop\\\\Agentic RAG\\\\node_modules\\\\cross-spawn\\\\lib\\\\enoent.js:34:29)\\n    at maybeClose (node:internal/child_process:1125:16)\\n    at ChildProcess._handle.onexit (node:internal/child_process:305:5)","domain":"MCP","category":"THIRD_PARTY","code":"MCP_CLIENT_CONNECT_FAILED","details":{"name":"capabilities"},"cause":{"message":"Connection closed","name":"SdkError","code":"CONNECTION_CLOSED"}}'
+}
+Failed to list tools from server: {
+  error: '{"message":"Failed to connect to MCP server capabilities: SdkError: Connection closed\\n    at Client._onclose (C:\\\\Users\\\\14253\\\\Desktop\\\\Agentic RAG\\\\node_modules\\\\@modelcontextprotocol\\\\core-internal\\\\src\\\\shared\\\\protocol.ts:839:23)\\n    at Client._onclose (C:\\\\Users\\\\14253\\\\Desktop\\\\Agentic RAG\\\\node_modules\\\\@modelcontextprotocol\\\\client\\\\dist\\\\index.cjs:4059:9)\\n    at StdioClientTransport._transport.onclose (C:\\\\Users\\\\14253\\\\Desktop\\\\Agentic RAG\\\\node_modules\\\\@modelcontextprotocol\\\\core-internal\\\\src\\\\shared\\\\protocol.ts:790:22)\\n    at ChildProcess.<anonymous> (C:\\\\Users\\\\14253\\\\Desktop\\\\Agentic RAG\\\\node_modules\\\\@modelcontextprotocol\\\\client\\\\src\\\\client\\\\stdio.ts:153:22)\\n    at ChildProcess.emit (node:events:514:20)\\n    at cp.emit (C:\\\\Users\\\\14253\\\\Desktop\\\\Agentic RAG\\\\node_modules\\\\cross-spawn\\\\lib\\\\enoent.js:34:29)\\n    at maybeClose (node:internal/child_process:1125:16)\\n    at ChildProcess._handle.onexit (node:internal/child_process:305:5)","domain":"MCP","category":"THIRD_PARTY","code":"MCP_CLIENT_GET_TOOLS_FAILED","details":{"serverName":"capabilities"},"cause":{"message":"Failed to connect to MCP server capabilities: SdkError: Connection closed\\n    at Client._onclose (C:\\\\Users\\\\14253\\\\Desktop\\\\Agentic RAG\\\\node_modules\\\\@modelcontextprotocol\\\\core-internal\\\\src\\\\shared\\\\protocol.ts:839:23)\\n    at Client._onclose (C:\\\\Users\\\\14253\\\\Desktop\\\\Agentic RAG\\\\node_modules\\\\@modelcontextprotocol\\\\client\\\\dist\\\\index.cjs:4059:9)\\n    at StdioClientTransport._transport.onclose (C:\\\\Users\\\\14253\\\\Desktop\\\\Agentic RAG\\\\node_modules\\\\@modelcontextprotocol\\\\core-internal\\\\src\\\\shared\\\\protocol.ts:790:22)\\n    at ChildProcess.<anonymous> (C:\\\\Users\\\\14253\\\\Desktop\\\\Agentic RAG\\\\node_modules\\\\@modelcontextprotocol\\\\client\\\\src\\\\client\\\\stdio.ts:153:22)\\n    at ChildProcess.emit (node:events:514:20)\\n    at cp.emit (C:\\\\Users\\\\14253\\\\Desktop\\\\Agentic RAG\\\\node_modules\\\\cross-spawn\\\\lib\\\\enoent.js:34:29)\\n    at maybeClose (node:internal/child_process:1125:16)\\n    at ChildProcess._handle.onexit (node:internal/child_process:305:5)","domain":"MCP","category":"THIRD_PARTY","code":"MCP_CLIENT_CONNECT_FAILED","details":{"name":"capabilities"},"cause":{"message":"Connection closed","name":"SdkError","code":"CONNECTION_CLOSED"}}}'
+}
+✖ Ticket 35: capability status never carries credentials (11574.1258ms)
+✔ Ticket 35: disablement is a config decision — nothing spawns, nothing registers (1.5985ms)
+[LLM] [capabilities] SdkError: Connection closed
+    at Client._onclose (C:\Users\14253\Desktop\Agentic RAG\node_modules\@modelcontextprotocol\core-internal\src\shared\protocol.ts:839:23)
+    at Client._onclose (C:\Users\14253\Desktop\Agentic RAG\node_modules\@modelcontextprotocol\client\dist\index.cjs:4059:9)
+    at StdioClientTransport._transport.onclose (C:\Users\14253\Desktop\Agentic RAG\node_modules\@modelcontextprotocol\core-internal\src\shared\protocol.ts:790:22)
+    at ChildProcess.<anonymous> (C:\Users\14253\Desktop\Agentic RAG\node_modules\@modelcontextprotocol\client\src\client\stdio.ts:153:22)
+    at ChildProcess.emit (node:events:514:20)
+    at cp.emit (C:\Users\14253\Desktop\Agentic RAG\node_modules\cross-spawn\lib\enoent.js:34:29)
+    at maybeClose (node:internal/child_process:1125:16)
+    at ChildProcess._handle.onexit (node:internal/child_process:305:5) undefined
+MCPClient errored connecting to MCP server: {
+  error: '{"message":"Failed to connect to MCP server capabilities: SdkError: Connection closed\\n    at Client._onclose (C:\\\\Users\\\\14253\\\\Desktop\\\\Agentic RAG\\\\node_modules\\\\@modelcontextprotocol\\\\core-internal\\\\src\\\\shared\\\\protocol.ts:839:23)\\n    at Client._onclose (C:\\\\Users\\\\14253\\\\Desktop\\\\Agentic RAG\\\\node_modules\\\\@modelcontextprotocol\\\\client\\\\dist\\\\index.cjs:4059:9)\\n    at StdioClientTransport._transport.onclose (C:\\\\Users\\\\14253\\\\Desktop\\\\Agentic RAG\\\\node_modules\\\\@modelcontextprotocol\\\\core-internal\\\\src\\\\shared\\\\protocol.ts:790:22)\\n    at ChildProcess.<anonymous> (C:\\\\Users\\\\14253\\\\Desktop\\\\Agentic RAG\\\\node_modules\\\\@modelcontextprotocol\\\\client\\\\src\\\\client\\\\stdio.ts:153:22)\\n    at ChildProcess.emit (node:events:514:20)\\n    at cp.emit (C:\\\\Users\\\\14253\\\\Desktop\\\\Agentic RAG\\\\node_modules\\\\cross-spawn\\\\lib\\\\enoent.js:34:29)\\n    at maybeClose (node:internal/child_process:1125:16)\\n    at ChildProcess._handle.onexit (node:internal/child_process:305:5)","domain":"MCP","category":"THIRD_PARTY","code":"MCP_CLIENT_CONNECT_FAILED","details":{"name":"capabilities"},"cause":{"message":"Connection closed","name":"SdkError","code":"CONNECTION_CLOSED"}}'
+}
+[LLM] [capabilities] SdkError: Connection closed
+    at Client._onclose (C:\Users\14253\Desktop\Agentic RAG\node_modules\@modelcontextprotocol\core-internal\src\shared\protocol.ts:839:23)
+    at Client._onclose (C:\Users\14253\Desktop\Agentic RAG\node_modules\@modelcontextprotocol\client\dist\index.cjs:4059:9)
+    at StdioClientTransport._transport.onclose (C:\Users\14253\Desktop\Agentic RAG\node_modules\@modelcontextprotocol\core-internal\src\shared\protocol.ts:790:22)
+    at ChildProcess.<anonymous> (C:\Users\14253\Desktop\Agentic RAG\node_modules\@modelcontextprotocol\client\src\client\stdio.ts:153:22)
+    at ChildProcess.emit (node:events:514:20)
+    at cp.emit (C:\Users\14253\Desktop\Agentic RAG\node_modules\cross-spawn\lib\enoent.js:34:29)
+    at maybeClose (node:internal/child_process:1125:16)
+    at ChildProcess._handle.onexit (node:internal/child_process:305:5) undefined
+MCPClient errored connecting to MCP server: {
+  error: '{"message":"Failed to connect to MCP server capabilities: SdkError: Connection closed\\n    at Client._onclose (C:\\\\Users\\\\14253\\\\Desktop\\\\Agentic RAG\\\\node_modules\\\\@modelcontextprotocol\\\\core-internal\\\\src\\\\shared\\\\protocol.ts:839:23)\\n    at Client._onclose (C:\\\\Users\\\\14253\\\\Desktop\\\\Agentic RAG\\\\node_modules\\\\@modelcontextprotocol\\\\client\\\\dist\\\\index.cjs:4059:9)\\n    at StdioClientTransport._transport.onclose (C:\\\\Users\\\\14253\\\\Desktop\\\\Agentic RAG\\\\node_modules\\\\@modelcontextprotocol\\\\core-internal\\\\src\\\\shared\\\\protocol.ts:790:22)\\n    at ChildProcess.<anonymous> (C:\\\\Users\\\\14253\\\\Desktop\\\\Agentic RAG\\\\node_modules\\\\@modelcontextprotocol\\\\client\\\\src\\\\client\\\\stdio.ts:153:22)\\n    at ChildProcess.emit (node:events:514:20)\\n    at cp.emit (C:\\\\Users\\\\14253\\\\Desktop\\\\Agentic RAG\\\\node_modules\\\\cross-spawn\\\\lib\\\\enoent.js:34:29)\\n    at maybeClose (node:internal/child_process:1125:16)\\n    at ChildProcess._handle.onexit (node:internal/child_process:305:5)","domain":"MCP","category":"THIRD_PARTY","code":"MCP_CLIENT_CONNECT_FAILED","details":{"name":"capabilities"},"cause":{"message":"Connection closed","name":"SdkError","code":"CONNECTION_CLOSED"}}'
+}
+Failed to list tools from server: {
+  error: '{"message":"Failed to connect to MCP server capabilities: SdkError: Connection closed\\n    at Client._onclose (C:\\\\Users\\\\14253\\\\Desktop\\\\Agentic RAG\\\\node_modules\\\\@modelcontextprotocol\\\\core-internal\\\\src\\\\shared\\\\protocol.ts:839:23)\\n    at Client._onclose (C:\\\\Users\\\\14253\\\\Desktop\\\\Agentic RAG\\\\node_modules\\\\@modelcontextprotocol\\\\client\\\\dist\\\\index.cjs:4059:9)\\n    at StdioClientTransport._transport.onclose (C:\\\\Users\\\\14253\\\\Desktop\\\\Agentic RAG\\\\node_modules\\\\@modelcontextprotocol\\\\core-internal\\\\src\\\\shared\\\\protocol.ts:790:22)\\n    at ChildProcess.<anonymous> (C:\\\\Users\\\\14253\\\\Desktop\\\\Agentic RAG\\\\node_modules\\\\@modelcontextprotocol\\\\client\\\\src\\\\client\\\\stdio.ts:153:22)\\n    at ChildProcess.emit (node:events:514:20)\\n    at cp.emit (C:\\\\Users\\\\14253\\\\Desktop\\\\Agentic RAG\\\\node_modules\\\\cross-spawn\\\\lib\\\\enoent.js:34:29)\\n    at maybeClose (node:internal/child_process:1125:16)\\n    at ChildProcess._handle.onexit (node:internal/child_process:305:5)","domain":"MCP","category":"THIRD_PARTY","code":"MCP_CLIENT_GET_TOOLS_FAILED","details":{"serverName":"capabilities"},"cause":{"message":"Failed to connect to MCP server capabilities: SdkError: Connection closed\\n    at Client._onclose (C:\\\\Users\\\\14253\\\\Desktop\\\\Agentic RAG\\\\node_modules\\\\@modelcontextprotocol\\\\core-internal\\\\src\\\\shared\\\\protocol.ts:839:23)\\n    at Client._onclose (C:\\\\Users\\\\14253\\\\Desktop\\\\Agentic RAG\\\\node_modules\\\\@modelcontextprotocol\\\\client\\\\dist\\\\index.cjs:4059:9)\\n    at StdioClientTransport._transport.onclose (C:\\\\Users\\\\14253\\\\Desktop\\\\Agentic RAG\\\\node_modules\\\\@modelcontextprotocol\\\\core-internal\\\\src\\\\shared\\\\protocol.ts:790:22)\\n    at ChildProcess.<anonymous> (C:\\\\Users\\\\14253\\\\Desktop\\\\Agentic RAG\\\\node_modules\\\\@modelcontextprotocol\\\\client\\\\src\\\\client\\\\stdio.ts:153:22)\\n    at ChildProcess.emit (node:events:514:20)\\n    at cp.emit (C:\\\\Users\\\\14253\\\\Desktop\\\\Agentic RAG\\\\node_modules\\\\cross-spawn\\\\lib\\\\enoent.js:34:29)\\n    at maybeClose (node:internal/child_process:1125:16)\\n    at ChildProcess._handle.onexit (node:internal/child_process:305:5)","domain":"MCP","category":"THIRD_PARTY","code":"MCP_CLIENT_CONNECT_FAILED","details":{"name":"capabilities"},"cause":{"message":"Connection closed","name":"SdkError","code":"CONNECTION_CLOSED"}}}'
+}
+✔ Ticket 35: an unreachable server is a bounded, visible failure — not a crash (284.8256ms)
+✔ Ticket 35: MCP tools join the read-only allowlist alongside the built-ins (2.4303ms)
+ℹ tests 5
+ℹ suites 0
+ℹ pass 3
+ℹ fail 2
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 30079.7349
+
+✖ failing tests:
+
+test at src\mcp\capability_server.test.ts:2:1250
+✖ Ticket 35: the compatible MCP client discovers and calls the local capability server through the tool boundary (10083.8339ms)
+  AssertionError [ERR_ASSERTION]: discovery failed: discovery returned no callable tools
+
+  false !== true
+
+      at TestContext.<anonymous> (C:\Users\14253\.codex\bf-20261028\worktrees\baseline-verification\src\mcp\capability_server.test.ts:33:12)
+      at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+      at async Test.run (node:internal/test_runner/test:1409:7)
+      at async startSubtestAfterBootstrap (node:internal/test_runner/harness:387:3) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: false,
+    expected: true,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at src\mcp\capability_server.test.ts:2:2711
+✖ Ticket 35: capability status never carries credentials (11574.1258ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  + actual - expected
+
+  + 'unknown_tool'
+  - 'ok'
+
+      at TestContext.<anonymous> (C:\Users\14253\.codex\bf-20261028\worktrees\baseline-verification\src\mcp\capability_server.test.ts:76:14)
+      at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+      at async Test.run (node:internal/test_runner/test:1409:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: 'unknown_tool',
+    expected: 'ok',
+    operator: 'strictEqual',
+    diff: 'simple'
+  }

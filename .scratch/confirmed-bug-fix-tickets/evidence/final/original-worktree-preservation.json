@@ -1,0 +1,9 @@
+{
+  "checkedAt": "2026-10-28T16:45:14.125Z",
+  "businessDiffBefore": "b06d2860237f144523690beebbe06decdd51f330d9605bdabce6419cef5d0605",
+  "businessDiffAfter": "b06d2860237f144523690beebbe06decdd51f330d9605bdabce6419cef5d0605",
+  "indexBefore": "8a248756ae6dfe638b1a741919d8a05c4b0e6efe852883fac6efd8734923e5ab",
+  "indexAfter": "8a248756ae6dfe638b1a741919d8a05c4b0e6efe852883fac6efd8734923e5ab",
+  "preserved": true,
+  "onlyOriginalEdit": "Prepended completion pointer to HANDOFF.md; all previous content retained."
+}

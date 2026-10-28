@@ -10,9 +10,9 @@
     "integrationSnapshot": "57dbc29459adac5ef737556a1542c9be5e707f0c"
   },
   "tracker": "local",
-  "status": "published",
-  "implementationStatus": "not_started",
-  "verificationStatus": "not_run",
+  "status": "approved_source",
+  "implementationStatus": "tracked_in_execution_state",
+  "verificationStatus": "tracked_in_execution_state",
   "publication": {
     "status": "published",
     "target": ".scratch/confirmed-bug-fix-tickets",
@@ -142,9 +142,9 @@
       "title": "退役文档立即退出所有知识检索",
       "priority": "P1",
       "spec": "BF-01-retired-source-retrieval.md",
-      "status": "ready-for-agent",
-      "implementationStatus": "not_started",
-      "verificationStatus": "not_run",
+      "status": "approved_source",
+      "implementationStatus": "tracked_in_execution_state",
+      "verificationStatus": "tracked_in_execution_state",
       "blockedBy": [],
       "testingSeams": [
         "S1"
@@ -169,7 +169,7 @@
       ],
       "sourceSpec": "plans/022-confirmed-bug-fixes/BF-01-retired-source-retrieval.md",
       "labels": [
-        "ready-for-agent"
+        "source-spec"
       ]
     },
     {
@@ -177,9 +177,9 @@
       "title": "运行历史读取校验会话所有权",
       "priority": "P1",
       "spec": "BF-02-run-history-ownership.md",
-      "status": "ready-for-agent",
-      "implementationStatus": "not_started",
-      "verificationStatus": "not_run",
+      "status": "approved_source",
+      "implementationStatus": "tracked_in_execution_state",
+      "verificationStatus": "tracked_in_execution_state",
       "blockedBy": [],
       "testingSeams": [
         "S2"
@@ -204,7 +204,7 @@
       ],
       "sourceSpec": "plans/022-confirmed-bug-fixes/BF-02-run-history-ownership.md",
       "labels": [
-        "ready-for-agent"
+        "source-spec"
       ]
     },
     {
@@ -212,9 +212,9 @@
       "title": "编辑和重新生成时清除旧分支的待澄清状态",
       "priority": "P2",
       "spec": "BF-03-branch-pending-clarification.md",
-      "status": "ready-for-agent",
-      "implementationStatus": "not_started",
-      "verificationStatus": "not_run",
+      "status": "approved_source",
+      "implementationStatus": "tracked_in_execution_state",
+      "verificationStatus": "tracked_in_execution_state",
       "blockedBy": [],
       "testingSeams": [
         "S3"
@@ -239,7 +239,7 @@
       ],
       "sourceSpec": "plans/022-confirmed-bug-fixes/BF-03-branch-pending-clarification.md",
       "labels": [
-        "ready-for-agent"
+        "source-spec"
       ]
     },
     {
@@ -247,9 +247,9 @@
       "title": "特殊代码围栏不再导致整份 PDF 解析失败",
       "priority": "P2",
       "spec": "BF-04-markdown-fence-progress.md",
-      "status": "ready-for-agent",
-      "implementationStatus": "not_started",
-      "verificationStatus": "not_run",
+      "status": "approved_source",
+      "implementationStatus": "tracked_in_execution_state",
+      "verificationStatus": "tracked_in_execution_state",
       "blockedBy": [],
       "testingSeams": [
         "S4"
@@ -274,7 +274,7 @@
       ],
       "sourceSpec": "plans/022-confirmed-bug-fixes/BF-04-markdown-fence-progress.md",
       "labels": [
-        "ready-for-agent"
+        "source-spec"
       ]
     },
     {
@@ -282,9 +282,9 @@
       "title": "表格末格的转义竖线保留为真实单元格内容",
       "priority": "P2",
       "spec": "BF-05-table-escaped-pipe.md",
-      "status": "ready-for-agent",
-      "implementationStatus": "not_started",
-      "verificationStatus": "not_run",
+      "status": "approved_source",
+      "implementationStatus": "tracked_in_execution_state",
+      "verificationStatus": "tracked_in_execution_state",
       "blockedBy": [],
       "testingSeams": [
         "S4"
@@ -309,13 +309,13 @@
       ],
       "sourceSpec": "plans/022-confirmed-bug-fixes/BF-05-table-escaped-pipe.md",
       "labels": [
-        "ready-for-agent"
+        "source-spec"
       ]
     }
   ],
   "aggregateGate": {
     "id": "G-BF",
-    "status": "not_run",
+    "status": "tracked_in_execution_state",
     "ownerTickets": [
       "BF-01",
       "BF-02",
@@ -340,6 +340,6 @@
   },
   "executionSourceOfTruth": ".scratch/confirmed-bug-fix-tickets/execution-state.json",
   "integrationBranch": "codex/confirmed-bug-fixes",
-  "integrationWorktree": "C:\\Users\\14253\\.codex\\worktrees\\confirmed-bug-fixes\\Agentic RAG",
+  "integrationWorktree": "C:/Users/14253/.codex/worktrees/confirmed-bug-fixes/Agentic RAG",
   "publicationSnapshotOnly": true
 }

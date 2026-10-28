@@ -1,6 +1,6 @@
 # BF-03：编辑和重新生成时清除旧分支的待澄清状态
 
-优先级：P2。状态：approved_source。实施与验收状态以正式本地队列为准。标签：ready-for-agent。功能依赖：无。测试边界已确认。
+优先级：P2。状态：approved_source；实施与验收状态见正式本地队列 execution-state.json。本文件保留来源规格。
 
 ## Problem Statement
 

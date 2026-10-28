@@ -1,0 +1,266 @@
+(node:9080) ExperimentalWarning: localStorage is not available because --localstorage-file was not provided.
+(Use `node --trace-warnings ...` to show where the warning was created)
+✖ UT-10 解码：BOM 是最强编码证据，解码输出保留 BOM 与原行尾 (10.2571ms)
+✖ UT-10 解码：无 BOM 的有效 UTF-8 即证据，不待校验 (1.2505ms)
+✖ UT-10 清洗：字面 Markdown 语法原样保留，全文单块不重排 (1.3136ms)
+✖ UT-10 端到端：8 个真值样本从摄取入口符合独立真值且可追溯 (106.3484ms)
+✖ IngestionStoreImpl without deps falls back to config-based clients (backward compat) (3.851ms)
+✖ createIngestionStore factory returns a shared IngestionStoreImpl (125.1119ms)
+(node:58408) ExperimentalWarning: localStorage is not available because --localstorage-file was not provided.
+(Use `node --trace-warnings ...` to show where the warning was created)
+✖ UT-01 真值清单完整性：样本字节与设计真值哈希一致 (6.6541ms)
+C:\Users\14253\.codex\bf-20261028\worktrees\baseline-verification\src\config\index.ts:176
+  if (!v) throw new Error(`Missing required env var: ${key}`)
+                ^
+
+Error: Missing required env var: OPENAI_API_KEY
+    at required (C:\Users\14253\.codex\bf-20261028\worktrees\baseline-verification\src\config\index.ts:176:17)
+    at loadConfig (C:\Users\14253\.codex\bf-20261028\worktrees\baseline-verification\src\config\index.ts:272:24)
+    at assert (C:\Users\14253\.codex\bf-20261028\worktrees\baseline-verification\src\mcp\capability_server.test.ts:24:16)
+    at Object.<anonymous> (C:\Users\14253\.codex\bf-20261028\worktrees\baseline-verification\src\mcp\capability_server.test.ts:125:2)
+    at Module._compile (node:internal/modules/cjs/loader:1934:14)
+    at Object.transformer (C:\Users\14253\Desktop\Agentic RAG\node_modules\tsx\dist\register-BoI6-WNn.cjs:9:3252)
+    at Module.load (node:internal/modules/cjs/loader:1656:32)
+    at Module._load (node:internal/modules/cjs/loader:1448:12)
+    at wrapModuleLoad (node:internal/modules/cjs/loader:261:19)
+    at loadCJSModuleWithModuleLoad (node:internal/modules/esm/translators:376:15)
+
+Node.js v26.8.1
+✖ src\mcp\capability_server.test.ts (6408.5941ms)
+ℹ tests 8
+ℹ suites 0
+ℹ pass 0
+ℹ fail 8
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 7985.2262
+
+✖ failing tests:
+
+test at src\ingestion\direct_text.test.ts:2:3404
+✖ UT-10 解码：BOM 是最强编码证据，解码输出保留 BOM 与原行尾 (10.2571ms)
+  AssertionError [ERR_ASSERTION]: utf8-bom BOM 后逐字一致
+  + actual - expected
+
+  + '退货政策真值样本 v1\r\n' +
+  +   'Return Policy Truth Sample\r\n' +
+  +   '\r\n' +
+  +   '订单编号：A-2026-1004\r\n' +
+  +   '不支持七天无理由退款的条件包括：定制商品与激活类数字商品。\r\n' +
+  +   'Support contact: support@example.com，电话 400-000-0000。\r\n' +
+  +   '\r\n' +
+  +   '步骤一：登录账户\r\n' +
+  +   '步骤二：打开订单详情\r\n' +
+  +   '步骤三：点击申请退款\r\n' +
+  +   '\r\n' +
+  +   '以下为示例配置（行首缩进必须保留）：\r\n' +
+  +   '    retry_limit = 3\r\n' +
+  +   '    timeout_ms = 1500\r\n' +
+  +   '        nested_flag = true\r\n' +
+  +   '\r\n' +
+  +   '字面记号：# 一级标记 **加粗** `code`\r\n' +
+  +   '重复行（有效重复，原样出现三次）：\r\n' +
+  +   '同一行内容原样重复\r\n' +
+  +   '同一行内容原样重复\r\n' +
+  +   '同一行内容原样重复\r\n' +
+  +   '\r\n' +
+  +   '结尾校验词：终线-42\r\n'
+  - '退货政策真值样本 v1\n' +
+  -   'Return Policy Truth Sample\n' +
+  -   '\n' +
+  -   '订单编号：A-2026-1004\n' +
+  -   '不支持七天无理由退款的条件包括：定制商品与激活类数字商品。\n' +
+  -   'Support contact: support@example.com，电话 400-000-0000。\n' +
+  -   '\n' +
+  -   '步骤一：登录账户\n' +
+  -   '步骤二：打开订单详情\n' +
+  -   '步骤三：点击申请退款\n' +
+  -   '\n' +
+  -   '以下为示例配置（行首缩进必须保留）：\n' +
+  -   '    retry_limit = 3\n' +
+  -   '    timeout_ms = 1500\n' +
+  -   '        nested_flag = true\n' +
+  -   '\n' +
+  -   '字面记号：# 一级标记 **加粗** `code`\n' +
+  -   '重复行（有效重复，原样出现三次）：\n' +
+  -   '同一行内容原样重复\n' +
+  -   '同一行内容原样重复\n' +
+  -   '同一行内容原样重复\n' +
+  -   '\n' +
+  -   '结尾校验词：终线-42\n'
+
+      at TestContext.<anonymous> (C:\Users\14253\.codex\bf-20261028\worktrees\baseline-verification\src\ingestion\direct_text.test.ts:126:12)
+      at Test.runInAsyncScope (node:async_hooks:226:14)
+      at Test.run (node:internal/test_runner/test:1402:25)
+      at Test.start (node:internal/test_runner/test:1262:17)
+      at startSubtestAfterBootstrap (node:internal/test_runner/harness:387:17) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: '退货政策真值样本 v1\r\nReturn Policy Truth Sample\r\n\r\n订单编号：A-2026-1004\r\n不支持七天无理由退款的条件包括：定制商品与激活类数字商品。\r\nSupport contact: support@example.com，电话 400-000-0000。\r\n\r\n步骤一：登录账户\r\n步骤二：打开订单详情\r\n步骤三：点击申请退款\r\n\r\n以下为示例配置（行首缩进必须保留）：\r\n    retry_limit = 3\r\n    timeout_ms = 1500\r\n        nested_flag = true\r\n\r\n字面记号：# 一级标记 **加粗** `code`\r\n重复行（有效重复，原样出现三次）：\r\n同一行内容原样重复\r\n同一行内容原样重复\r\n同一行内容原样重复\r\n\r\n结尾校验词：终线-42\r\n',
+    expected: '退货政策真值样本 v1\nReturn Policy Truth Sample\n\n订单编号：A-2026-1004\n不支持七天无理由退款的条件包括：定制商品与激活类数字商品。\nSupport contact: support@example.com，电话 400-000-0000。\n\n步骤一：登录账户\n步骤二：打开订单详情\n步骤三：点击申请退款\n\n以下为示例配置（行首缩进必须保留）：\n    retry_limit = 3\n    timeout_ms = 1500\n        nested_flag = true\n\n字面记号：# 一级标记 **加粗** `code`\n重复行（有效重复，原样出现三次）：\n同一行内容原样重复\n同一行内容原样重复\n同一行内容原样重复\n\n结尾校验词：终线-42\n',
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at src\ingestion\direct_text.test.ts:2:4282
+✖ UT-10 解码：无 BOM 的有效 UTF-8 即证据，不待校验 (1.2505ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  + actual - expected
+
+  + '退货政策真值样本 v1\r\n' +
+  +   'Return Policy Truth Sample\r\n' +
+  +   '\r\n' +
+  +   '订单编号：A-2026-1004\r\n' +
+  +   '不支持七天无理由退款的条件包括：定制商品与激活类数字商品。\r\n' +
+  +   'Support contact: support@example.com，电话 400-000-0000。\r\n' +
+  +   '\r\n' +
+  +   '步骤一：登录账户\r\n' +
+  +   '步骤二：打开订单详情\r\n' +
+  +   '步骤三：点击申请退款\r\n' +
+  +   '\r\n' +
+  +   '以下为示例配置（行首缩进必须保留）：\r\n' +
+  +   '    retry_limit = 3\r\n' +
+  +   '    timeout_ms = 1500\r\n' +
+  +   '        nested_flag = true\r\n' +
+  +   '\r\n' +
+  +   '字面记号：# 一级标记 **加粗** `code`\r\n' +
+  +   '重复行（有效重复，原样出现三次）：\r\n' +
+  +   '同一行内容原样重复\r\n' +
+  +   '同一行内容原样重复\r\n' +
+  +   '同一行内容原样重复\r\n' +
+  +   '\r\n' +
+  +   '结尾校验词：终线-42\r\n'
+  - '退货政策真值样本 v1\n' +
+  -   'Return Policy Truth Sample\n' +
+  -   '\n' +
+  -   '订单编号：A-2026-1004\n' +
+  -   '不支持七天无理由退款的条件包括：定制商品与激活类数字商品。\n' +
+  -   'Support contact: support@example.com，电话 400-000-0000。\n' +
+  -   '\n' +
+  -   '步骤一：登录账户\n' +
+  -   '步骤二：打开订单详情\n' +
+  -   '步骤三：点击申请退款\n' +
+  -   '\n' +
+  -   '以下为示例配置（行首缩进必须保留）：\n' +
+  -   '    retry_limit = 3\n' +
+  -   '    timeout_ms = 1500\n' +
+  -   '        nested_flag = true\n' +
+  -   '\n' +
+  -   '字面记号：# 一级标记 **加粗** `code`\n' +
+  -   '重复行（有效重复，原样出现三次）：\n' +
+  -   '同一行内容原样重复\n' +
+  -   '同一行内容原样重复\n' +
+  -   '同一行内容原样重复\n' +
+  -   '\n' +
+  -   '结尾校验词：终线-42\n'
+
+      at TestContext.<anonymous> (C:\Users\14253\.codex\bf-20261028\worktrees\baseline-verification\src\ingestion\direct_text.test.ts:136:10)
+      at Test.runInAsyncScope (node:async_hooks:226:14)
+      at Test.run (node:internal/test_runner/test:1402:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:974:18)
+      at Test.postRun (node:internal/test_runner/test:1542:19)
+      at Test.run (node:internal/test_runner/test:1467:12)
+      at async startSubtestAfterBootstrap (node:internal/test_runner/harness:387:3) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: '退货政策真值样本 v1\r\nReturn Policy Truth Sample\r\n\r\n订单编号：A-2026-1004\r\n不支持七天无理由退款的条件包括：定制商品与激活类数字商品。\r\nSupport contact: support@example.com，电话 400-000-0000。\r\n\r\n步骤一：登录账户\r\n步骤二：打开订单详情\r\n步骤三：点击申请退款\r\n\r\n以下为示例配置（行首缩进必须保留）：\r\n    retry_limit = 3\r\n    timeout_ms = 1500\r\n        nested_flag = true\r\n\r\n字面记号：# 一级标记 **加粗** `code`\r\n重复行（有效重复，原样出现三次）：\r\n同一行内容原样重复\r\n同一行内容原样重复\r\n同一行内容原样重复\r\n\r\n结尾校验词：终线-42\r\n',
+    expected: '退货政策真值样本 v1\nReturn Policy Truth Sample\n\n订单编号：A-2026-1004\n不支持七天无理由退款的条件包括：定制商品与激活类数字商品。\nSupport contact: support@example.com，电话 400-000-0000。\n\n步骤一：登录账户\n步骤二：打开订单详情\n步骤三：点击申请退款\n\n以下为示例配置（行首缩进必须保留）：\n    retry_limit = 3\n    timeout_ms = 1500\n        nested_flag = true\n\n字面记号：# 一级标记 **加粗** `code`\n重复行（有效重复，原样出现三次）：\n同一行内容原样重复\n同一行内容原样重复\n同一行内容原样重复\n\n结尾校验词：终线-42\n',
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at src\ingestion\direct_text.test.ts:2:6635
+✖ UT-10 清洗：字面 Markdown 语法原样保留，全文单块不重排 (1.3136ms)
+  AssertionError [ERR_ASSERTION]: LF 无 BOM 样本：清洗输出与解码输出逐字一致
+  + actual - expected
+
+  + '# 这一行以井号开头，井号属于内容\n**双星号必须原样保留**\n1. 第一项\n2. 第二项\n|列A|列B|\n|---|---|\n|甲|乙|\n'
+  - '# 这一行以井号开头，井号属于内容\r\n' +
+  -   '**双星号必须原样保留**\r\n' +
+  -   '1. 第一项\r\n' +
+  -   '2. 第二项\r\n' +
+  -   '|列A|列B|\r\n' +
+  -   '|---|---|\r\n' +
+  -   '|甲|乙|\r\n'
+
+      at TestContext.<anonymous> (C:\Users\14253\.codex\bf-20261028\worktrees\baseline-verification\src\ingestion\direct_text.test.ts:177:10)
+      at Test.runInAsyncScope (node:async_hooks:226:14)
+      at Test.run (node:internal/test_runner/test:1402:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:974:18) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: '# 这一行以井号开头，井号属于内容\n**双星号必须原样保留**\n1. 第一项\n2. 第二项\n|列A|列B|\n|---|---|\n|甲|乙|\n',
+    expected: '# 这一行以井号开头，井号属于内容\r\n**双星号必须原样保留**\r\n1. 第一项\r\n2. 第二项\r\n|列A|列B|\r\n|---|---|\r\n|甲|乙|\r\n',
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at src\ingestion\direct_text.test.ts:2:8956
+✖ UT-10 端到端：8 个真值样本从摄取入口符合独立真值且可追溯 (106.3484ms)
+  AssertionError [ERR_ASSERTION]: utf8-baseline 允许变换可追溯
+  + actual - expected
+
+  + [
+  +   'CRLF/CR -> LF'
+  + ]
+  - []
+
+      at TestContext.<anonymous> (C:\Users\14253\.codex\bf-20261028\worktrees\baseline-verification\src\ingestion\direct_text.test.ts:218:12)
+      at async Test.run (node:internal/test_runner/test:1409:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: [ 'CRLF/CR -> LF' ],
+    expected: [],
+    operator: 'deepStrictEqual',
+    diff: 'simple'
+  }
+
+test at src\ingestion\storage\persistence.test.ts:2:2639
+✖ IngestionStoreImpl without deps falls back to config-based clients (backward compat) (3.851ms)
+  Error: Missing required env var: OPENAI_API_KEY
+      at required (C:\Users\14253\.codex\bf-20261028\worktrees\baseline-verification\src\config\index.ts:176:17)
+      at loadConfig (C:\Users\14253\.codex\bf-20261028\worktrees\baseline-verification\src\config\index.ts:272:24)
+      at new ESStore (C:\Users\14253\.codex\bf-20261028\worktrees\baseline-verification\src\ingestion\storage\store.ts:233:19)
+      at new IngestionStoreImpl (C:\Users\14253\.codex\bf-20261028\worktrees\baseline-verification\src\ingestion\storage\store.ts:685:17)
+      at TestContext.<anonymous> (C:\Users\14253\.codex\bf-20261028\worktrees\baseline-verification\src\ingestion\storage\persistence.test.ts:101:17)
+      at Test.runInAsyncScope (node:async_hooks:226:14)
+      at Test.run (node:internal/test_runner/test:1402:25)
+      at Test.start (node:internal/test_runner/test:1262:17)
+      at startSubtestAfterBootstrap (node:internal/test_runner/harness:387:17)
+
+test at src\ingestion\storage\persistence.test.ts:2:2885
+✖ createIngestionStore factory returns a shared IngestionStoreImpl (125.1119ms)
+  Error: Missing required env var: OPENAI_API_KEY
+      at required (C:\Users\14253\.codex\bf-20261028\worktrees\baseline-verification\src\config\index.ts:176:17)
+      at loadConfig (C:\Users\14253\.codex\bf-20261028\worktrees\baseline-verification\src\config\index.ts:272:24)
+      at createIngestionStore (C:\Users\14253\.codex\bf-20261028\worktrees\baseline-verification\src\ingestion\storage\index.ts:58:15)
+      at TestContext.<anonymous> (C:\Users\14253\.codex\bf-20261028\worktrees\baseline-verification\src\ingestion\storage\persistence.test.ts:108:17)
+      at async Test.run (node:internal/test_runner/test:1409:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7)
+
+test at src\ingestion\truth\txt_truth.test.ts:2:2647
+✖ UT-01 真值清单完整性：样本字节与设计真值哈希一致 (6.6541ms)
+  AssertionError [ERR_ASSERTION]: sample utf8-baseline bytes drifted from the registered hash
+  + actual - expected
+
+  + '012b6a5d840db6471f390084491fae855b7b12e3098ea06aa9c3dcdb04cc91cf'
+  - 'a505ddfacd5dc9cc047caee29474ab81293f1f46b3aee14caad9650716de4c41'
+
+      at TestContext.<anonymous> (C:\Users\14253\.codex\bf-20261028\worktrees\baseline-verification\src\ingestion\truth\txt_truth.test.ts:100:12)
+      at Test.runInAsyncScope (node:async_hooks:226:14)
+      at Test.run (node:internal/test_runner/test:1402:25)
+      at Test.start (node:internal/test_runner/test:1262:17)
+      at startSubtestAfterBootstrap (node:internal/test_runner/harness:387:17) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: '012b6a5d840db6471f390084491fae855b7b12e3098ea06aa9c3dcdb04cc91cf',
+    expected: 'a505ddfacd5dc9cc047caee29474ab81293f1f46b3aee14caad9650716de4c41',
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at src\mcp\capability_server.test.ts:1:1
+✖ src\mcp\capability_server.test.ts (6408.5941ms)
+  'test failed'
