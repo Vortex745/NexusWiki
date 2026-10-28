@@ -1,0 +1,4 @@
+npm notice run kefu-rag-main@1.0.0 build
+npm notice run tsc
+npm notice run kefu-rag-main@1.0.0 postbuild
+npm notice run node scripts/copy-docreader-proto.cjs
