@@ -1,0 +1,21 @@
+✖ four-backtick PDF code fences retain code and surrounding prose (6.0881ms)
+ℹ tests 1
+ℹ suites 0
+ℹ pass 0
+ℹ fail 1
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 868.1185
+
+✖ failing tests:
+
+test at src\ingestion\parser\docreader_pdf_fences.test.ts:2:1560
+✖ four-backtick PDF code fences retain code and surrounding prose (6.0881ms)
+  TypeError: Cannot read properties of undefined (reading 'end')
+      at normalizeDocReaderEnvelope (C:\Users\14253\.codex\bf-20261028\worktrees\bf-04\src\ingestion\parser\docreader_pdf_normalize.ts:410:40)
+      at DocReaderPdfParser.normalizeRaw (C:\Users\14253\.codex\bf-20261028\worktrees\bf-04\src\ingestion\parser\docreader_pdf.ts:271:20)
+      at DocReaderPdfParser.parse (C:\Users\14253\.codex\bf-20261028\worktrees\bf-04\src\ingestion\parser\docreader_pdf.ts:119:17)
+      at async TestContext.<anonymous> (C:\Users\14253\.codex\bf-20261028\worktrees\bf-04\src\ingestion\parser\docreader_pdf_fences.test.ts:41:18)
+      at async Test.run (node:internal/test_runner/test:1409:7)
+      at async startSubtestAfterBootstrap (node:internal/test_runner/harness:387:3)

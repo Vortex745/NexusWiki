@@ -1,0 +1,10 @@
+✔ four-backtick PDF code fences retain code and surrounding prose (10.0433ms)
+✔ PDF code fences with attributes retain the info string, code and surrounding prose (2.1711ms)
+ℹ tests 2
+ℹ suites 0
+ℹ pass 2
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 978.1468

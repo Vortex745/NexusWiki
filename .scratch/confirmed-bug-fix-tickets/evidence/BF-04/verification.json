@@ -1,0 +1,33 @@
+{
+  "ticket": "BF-04",
+  "date": "2026-10-28",
+  "branch": "codex/bf-04",
+  "implementationCommit": "38535e8",
+  "baseline": "98846175afef3dad15005169cbb55493456eb423",
+  "mergedIntegrationTip": "ef02c84eb26e9e6c75b1cdf045f6e4d8b0a59980",
+  "integrationMergeCommit": "632f872",
+  "originalBaselineTriggers": { "passed": 0, "failed": 2, "expectedExitCode": 1 },
+  "gates": [
+    { "name": "dedicated fence public-seam suite", "passed": 11, "failed": 0, "skipped": 0 },
+    { "name": "DocReader suite including fence suite", "passed": 38, "failed": 0, "skipped": 0 },
+    { "name": "existing attachment and extraction wiring", "passed": 17, "failed": 0, "skipped": 0 },
+    { "name": "parser type compatibility", "passed": 3, "failed": 0, "skipped": 0 },
+    { "name": "npm run build", "exitCode": 0 },
+    { "name": "git diff --check", "exitCode": 0 }
+  ],
+  "uniquePassingTests": 58,
+  "acceptance": {
+    "BF-04-A1": "passed",
+    "BF-04-A2": "passed",
+    "BF-04-A3": "passed",
+    "BF-04-A4": "passed",
+    "BF-04-A5": "passed",
+    "BF-04-A6": "passed",
+    "BF-04-A7": "passed"
+  },
+  "incompleteAcceptance": [],
+  "realProviderRequests": 0,
+  "parseTableRowChanged": false,
+  "sharedTrackerEdited": false,
+  "originalCheckoutChanged": false
+}

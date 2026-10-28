@@ -1,0 +1,31 @@
+(node:49424) ExperimentalWarning: localStorage is not available because --localstorage-file was not provided.
+(Use `node --trace-warnings ...` to show where the warning was created)
+✔ an upload is listed with its parse status, usage and the session limits (207.7385ms)
+✔ a percent-encoded UTF-8 attachment name round-trips through the header (57.1963ms)
+✔ an unsupported x-parser override is refused with 400 before anything is stored (42.0962ms)
+✔ limits and unsupported types answer per file, not as a failed batch (66.9277ms)
+✔ one session cannot read or promote another session's attachment (69.4393ms)
+✔ promotion needs the ingest capability and an active target base (72.9707ms)
+✔ an unpromoted attachment can be removed, a promoted one cannot (40.3113ms)
+✔ cleanup retires unpromoted rows and keeps promoted ones (41.072ms)
+(node:44880) ExperimentalWarning: localStorage is not available because --localstorage-file was not provided.
+(Use `node --trace-warnings ...` to show where the warning was created)
+✔ limits: five files, 20 MB each and 50 MB per session, reported per file (5770.3317ms)
+✔ a binary document is extracted through the import parser in the background (23.2446ms)
+✔ a PDF attachment honors the force-OCR parser override (10.8531ms)
+✔ isolation: a session only ever sees its own attachments (26.0471ms)
+✔ retrieval carries attachment provenance, never public knowledge membership (19.8329ms)
+✔ promotion is explicit, follows the same-name/version rules and is one-way (20.5729ms)
+✔ cleanup retires only this session's unpromoted attachments (20.6393ms)
+✔ promotion submits through the injected lifecycle seam with a session-scoped identity (13.3908ms)
+(node:55796) ExperimentalWarning: localStorage is not available because --localstorage-file was not provided.
+(Use `node --trace-warnings ...` to show where the warning was created)
+✔ the pipeline persists DocReader extraction evidence, parser metadata and policy (55.2193ms)
+ℹ tests 17
+ℹ suites 0
+ℹ pass 17
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 19411.9315
