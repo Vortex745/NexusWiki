@@ -1,0 +1,37 @@
+TAP version 13
+# (node:58636) ExperimentalWarning: localStorage is not available because --localstorage-file was not provided.
+# (Use `node --trace-warnings ...` to show where the warning was created)
+# Subtest: editing a clarification branch sends only the replacement question to real dispatch
+not ok 1 - editing a clarification branch sends only the replacement question to real dispatch
+  ---
+  duration_ms: 305.7407
+  type: 'test'
+  location: 'C:\\Users\\14253\\.codex\\bf-20261028\\worktrees\\bf-03\\src\\api\\chat.branch_pending.test.ts:2:4874'
+  failureType: 'testCodeFailure'
+  error: |-
+    Expected values to be strictly equal:
+    + actual - expected
+
+    + '旧问题：帮我查退款 新问题：介绍产品'
+    - '新问题：介绍产品'
+
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected: '新问题：介绍产品'
+  actual: '旧问题：帮我查退款 新问题：介绍产品'
+  operator: 'strictEqual'
+  stack: |-
+    TestContext.<anonymous> (C:\Users\14253\.codex\bf-20261028\worktrees\bf-03\src\api\chat.branch_pending.test.ts:101:10)
+    process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+    async Test.run (node:internal/test_runner/test:1409:7)
+    async startSubtestAfterBootstrap (node:internal/test_runner/harness:387:3)
+  ...
+1..1
+# tests 1
+# suites 0
+# pass 0
+# fail 1
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 6282.9716
