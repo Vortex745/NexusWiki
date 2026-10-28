@@ -15,7 +15,6 @@ import { SpanRepo } from "./tracking/span_repo"
 import { TaskRepo } from "./tracking/task_repo"
 import { WikiStore } from "../wiki/store"
 import { ArtifactCleanupService, isCleanupOperation } from "../knowledge/cleanup"
-import { ACTIVATION_POLICY_VERSION, evaluateActivationGate } from "./activation_gate"
 import {
   allowedOperationsFor,
   classifyIngestionError,
@@ -48,6 +47,27 @@ export const INGESTION_STAGE_NAMES = [
 const RUNNING_ABORT_CONTROLLERS = new Map<string, AbortController>()
 
 export type IngestionStageName = (typeof INGESTION_STAGE_NAMES)[number]
+
+function recordPolicyCompletion(docRepo: DocumentRepo, docId: string, completedAt: Date): void {
+  const document = docRepo.get(docId)
+  if (!document) return
+  const existingSystem = document.metadata.system
+  const system = existingSystem && typeof existingSystem === "object" && !Array.isArray(existingSystem)
+    ? existingSystem as Record<string, unknown>
+    : {}
+  const policy = system.ingestionPolicy
+  if (!policy || typeof policy !== "object" || Array.isArray(policy)) return
+  docRepo.updateMetadata(docId, {
+    ...document.metadata,
+    system: {
+      ...system,
+      ingestionPolicy: {
+        ...(policy as Record<string, unknown>),
+        completedAt: completedAt.toISOString(),
+      },
+    },
+  })
+}
 
 export interface StageExecution {
   readonly signal: AbortSignal
@@ -394,6 +414,10 @@ export class IngestionLifecycle {
       identity = { ...identity, namespace: uuid() }
     }
     const sourceKey = sourceIdentityKey(identity)
+    // Reserved system metadata is server-owned. A direct submit caller must not
+    // be able to pre-seed parser/policy facts that the pipeline then trusts.
+    const callerMetadata = input.metadata ? { ...input.metadata } : undefined
+    if (callerMetadata) delete callerMetadata.system
 
     return this.db.transaction((): IngestionSubmission => {
       let source = this.docRepo.getSourceByKey(sourceKey)
@@ -529,7 +553,7 @@ export class IngestionLifecycle {
         allowedGroups: source.allowedGroups,
         knowledgeBaseId: source.knowledgeBaseId,
         // Ticket 11 (DOC-01A): caller-validated catalog metadata (tags/folder).
-        metadata: input.metadata,
+        metadata: callerMetadata,
       })
       const taskId = this.taskRepo.enqueue({
         docId,
@@ -907,48 +931,19 @@ export class IngestionLifecycle {
           throw new Error(`Ingestion task ${task.id} could not be completed`)
         }
         this.docRepo.updateStatus(task.docId, "completed")
-        // P6.1 (spec L73, L1574): IngestionLifecycle owns terminal activation.
-        // `ACTIVATION_MODE=review` blocks unreviewed versions from active
-        // status — the completed candidate is marked `pending_review` and
-        // does NOT become active until human approval via
-        // `CandidateReviewStore.review()` (spec L1575). HTTP, worker,
-        // pipeline, and repository do NOT implement implicit success
-        // transfer. `ACTIVATION_MODE=auto` (default) preserves the existing
-        // behavior — activate immediately on completion.
-        if (this.activationMode === "review") {
-          this.docRepo.markPendingReview(task.docId)
-        } else {
-          // Ticket UT-04 (UP-08): the joint activation gate. A candidate
-          // without complete content-integrity and index evidence must not
-          // switch the active identity — the stages succeeded, so the task
-          // still completes, but the candidate stays inactive with a recorded
-          // reason. The positive path arrives with UT-15/16/17; no
-          // intermediate ticket may bypass this gate.
-          const decision = evaluateActivationGate(
-            this.docRepo.getCandidateEvidence(task.docId)
-          )
-          if (decision.passed) {
-            this.docRepo.activate(task.docId)
-            this.docRepo.clearActivationBlock(task.docId)
-            if (this.docRepo.getActive(document.sourceId)?.id === document.id) {
-              // Acceptance is recorded only when the active pointer really
-              // points at this version; an older candidate the gate passed
-              // must not claim the newer version's activation.
-              this.docRepo.recordActivationAcceptance(task.docId, {
-                policyVersion: decision.policyVersion ?? ACTIVATION_POLICY_VERSION,
-                warningCodes: decision.warningCodes,
-                evaluatedAt: this.now().toISOString(),
-              })
-              const wiki = new WikiStore(this.db, this.now)
-              if (wiki.enabled(document.tenantId ?? "default", document.knowledgeBaseId ?? "")) {
-                // LO-16: the derived wiki job continues this ingestion task's
-                // trace instead of rooting a new one.
-                wiki.enqueue(document.tenantId ?? "default", document.knowledgeBaseId ?? "",
-                  document.id, document.sourceId, "ingest", taskTraceFromScope(taskScope))
-              }
-            }
-          } else {
-            this.docRepo.recordActivationBlock(task.docId, decision.reason ?? "activation_gate_denied")
+        recordPolicyCompletion(this.docRepo, task.docId, finishedAt)
+        // A technically complete candidate activates directly. Version order
+        // remains the only protection: an older candidate cannot displace a
+        // newer active version.
+        this.docRepo.activate(task.docId)
+        this.docRepo.clearActivationBlock(task.docId)
+        if (this.docRepo.getActive(document.sourceId)?.id === document.id) {
+          const wiki = new WikiStore(this.db, this.now)
+          if (wiki.enabled(document.tenantId ?? "default", document.knowledgeBaseId ?? "")) {
+            // LO-16: the derived wiki job continues this ingestion task's
+            // trace instead of rooting a new one.
+            wiki.enqueue(document.tenantId ?? "default", document.knowledgeBaseId ?? "",
+              document.id, document.sourceId, "ingest", taskTraceFromScope(taskScope))
           }
         }
       })()

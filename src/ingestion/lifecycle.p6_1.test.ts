@@ -65,7 +65,7 @@ function deferred(): { promise: Promise<void>; resolve: () => void } {
   return { promise, resolve }
 }
 
-test("P6.1+UT-04 auto mode (default): completed doc stays inactive under the joint activation gate", async () => {
+test("P6.1 default activation: completed doc activates immediately", async () => {
   const db = openDb(":memory:")
   const lifecycle = new IngestionLifecycle(db, noopRunner(), () => new Date(), "auto")
 
@@ -81,14 +81,14 @@ test("P6.1+UT-04 auto mode (default): completed doc stays inactive under the joi
     assert.equal(readCandidateState(db, submitted.docId), "approved")
     const status = lifecycle.getStatus(submitted.docId)
     assert.equal(status?.documentStatus, "completed")
-    assert.equal(status?.documentVersion.active, false)
-    assert.ok(status?.activationBlockReason, "the gate records why activation was denied")
+    assert.equal(status?.documentVersion.active, true)
+    assert.equal(status?.activationBlockReason, null)
   } finally {
     db.close()
   }
 })
 
-test("P6.1 review mode: completed doc is marked pending_review and does NOT activate", async () => {
+test("P6.1 review mode is ignored: completed doc activates immediately", async () => {
   const db = openDb(":memory:")
   const lifecycle = new IngestionLifecycle(db, noopRunner(), () => new Date(), "review")
 
@@ -101,30 +101,19 @@ test("P6.1 review mode: completed doc is marked pending_review and does NOT acti
     const result = await lifecycle.runNext()
 
     assert.equal(result?.success, true)
-    assert.equal(
-      readCandidateState(db, submitted.docId),
-      "pending_review",
-      "review mode must mark completed candidate as pending_review (not approved)"
-    )
+    assert.equal(readCandidateState(db, submitted.docId), "approved")
     const status = lifecycle.getStatus(submitted.docId)
     assert.equal(status?.documentStatus, "completed")
-    assert.equal(
-      status?.documentVersion.active,
-      false,
-      "review mode must NOT activate the unreviewed version"
-    )
+    assert.equal(status?.documentVersion.active, true)
+    assert.equal(status?.activationBlockReason, null)
   } finally {
     db.close()
   }
 })
 
-test("P6.1 review mode: previous active version is preserved when a new version completes", async () => {
+test("P6.1 review mode: a newer completed version becomes active", async () => {
   const db = openDb(":memory:")
   try {
-    // Establish the initial active v1 by direct repo command (state
-    // construction — Ticket UT-04 keeps lifecycle completions inactive),
-    // then run review mode for v2 — this mirrors a tenant that already has a
-    // verified active version.
     const autoLifecycle = new IngestionLifecycle(db, noopRunner(), () => new Date(), "auto")
     const initial = autoLifecycle.submit({
       title: "Policy",
@@ -132,9 +121,7 @@ test("P6.1 review mode: previous active version is preserved when a new version 
       source: "policy:review-preserve",
     })
     await autoLifecycle.runNext()
-    new DocumentRepo(db).activate(initial.docId)
-    const initialActive = autoLifecycle.getStatus(initial.docId)?.documentVersion.active
-    assert.equal(initialActive, true, "precondition: v1 active")
+    assert.equal(autoLifecycle.getStatus(initial.docId)?.documentVersion.active, true)
 
     const reviewLifecycle = new IngestionLifecycle(db, noopRunner(), () => new Date(), "review")
     const replacement = reviewLifecycle.submit({
@@ -145,32 +132,15 @@ test("P6.1 review mode: previous active version is preserved when a new version 
     })
     await reviewLifecycle.runNext()
 
-    assert.equal(
-      readCandidateState(db, replacement.docId),
-      "pending_review",
-      "v2 must be pending_review under review mode"
-    )
-    assert.equal(
-      reviewLifecycle.getStatus(replacement.docId)?.documentVersion.active,
-      false,
-      "v2 must NOT be active under review mode"
-    )
-    assert.equal(
-      reviewLifecycle.getStatus(initial.docId)?.documentVersion.active,
-      true,
-      "v1 must remain active after v2 completes under review mode"
-    )
-    assert.equal(
-      readCandidateState(db, initial.docId),
-      "approved",
-      "v1 candidate_state must remain approved (review mode only marks NEW completions)"
-    )
+    assert.equal(readCandidateState(db, replacement.docId), "approved")
+    assert.equal(reviewLifecycle.getStatus(replacement.docId)?.documentVersion.active, true)
+    assert.equal(reviewLifecycle.getStatus(initial.docId)?.documentVersion.active, false)
   } finally {
     db.close()
   }
 })
 
-test("P6.1+UT-04 review mode: approve records the business approval but cannot activate without evidence", async () => {
+test("P6.1 review mode: approve is an idempotent no-op for an already-active doc", async () => {
   const db = openDb(":memory:")
   const lifecycle = new IngestionLifecycle(db, noopRunner(), () => new Date(), "review")
   const documentRepo = new DocumentRepo(db)
@@ -183,12 +153,8 @@ test("P6.1+UT-04 review mode: approve records the business approval but cannot a
       source: "policy:approve",
     })
     await lifecycle.runNext()
+    assert.equal(lifecycle.getStatus(submitted.docId)?.documentVersion.active, true)
 
-    assert.equal(readCandidateState(db, submitted.docId), "pending_review")
-    assert.equal(lifecycle.getStatus(submitted.docId)?.documentVersion.active, false)
-
-    // TenantId 'default' is the single-tenant default set by DocumentRepo.insert
-    // when the source row's tenant_id is 'default' (SCHEMA DEFAULT).
     const result = reviewStore.review(
       submitted.docId,
       "default",
@@ -198,27 +164,17 @@ test("P6.1+UT-04 review mode: approve records the business approval but cannot a
     )
 
     assert.equal(result?.candidateState, "approved")
-    assert.equal(
-      result?.activatedAsActive,
-      false,
-      "Ticket UT-04: approval cannot bypass the joint activation gate"
-    )
+    assert.equal(result?.activatedAsActive, false)
     assert.equal(readCandidateState(db, submitted.docId), "approved")
-    assert.equal(
-      lifecycle.getStatus(submitted.docId)?.documentVersion.active,
-      false,
-      "approve must NOT activate a candidate without activation evidence"
-    )
-    assert.ok(lifecycle.getStatus(submitted.docId)?.activationBlockReason)
+    assert.equal(lifecycle.getStatus(submitted.docId)?.documentVersion.active, true)
+    assert.equal(lifecycle.getStatus(submitted.docId)?.activationBlockReason, null)
   } finally {
     db.close()
   }
 })
 
-test("P6.1 review mode: reject via CandidateReviewStore does NOT activate and preserves previous active", async () => {
+test("P6.1 review mode: rejecting an already-active doc does not move the active pointer", async () => {
   const db = openDb(":memory:")
-  // Establish v1 as active by direct repo command (state construction —
-  // Ticket UT-04 keeps lifecycle completions inactive).
   const autoLifecycle = new IngestionLifecycle(db, noopRunner(), () => new Date(), "auto")
   const initial = autoLifecycle.submit({
     title: "Policy",
@@ -226,7 +182,6 @@ test("P6.1 review mode: reject via CandidateReviewStore does NOT activate and pr
     source: "policy:reject",
   })
   await autoLifecycle.runNext()
-  new DocumentRepo(db).activate(initial.docId)
 
   const reviewLifecycle = new IngestionLifecycle(db, noopRunner(), () => new Date(), "review")
   const documentRepo = new DocumentRepo(db)
@@ -240,9 +195,8 @@ test("P6.1 review mode: reject via CandidateReviewStore does NOT activate and pr
       versionIntent: "new_version",
     })
     await reviewLifecycle.runNext()
-
-    assert.equal(readCandidateState(db, replacement.docId), "pending_review")
-    assert.equal(reviewLifecycle.getStatus(replacement.docId)?.documentVersion.active, false)
+    assert.equal(reviewLifecycle.getStatus(replacement.docId)?.documentVersion.active, true)
+    documentRepo.markPendingReview(replacement.docId)
 
     const result = reviewStore.review(
       replacement.docId,
@@ -255,24 +209,15 @@ test("P6.1 review mode: reject via CandidateReviewStore does NOT activate and pr
     assert.equal(result?.candidateState, "rejected")
     assert.equal(result?.activatedAsActive, false)
     assert.equal(readCandidateState(db, replacement.docId), "rejected")
-    assert.equal(
-      reviewLifecycle.getStatus(replacement.docId)?.documentVersion.active,
-      false,
-      "reject must NOT activate the rejected doc"
-    )
-    assert.equal(
-      reviewLifecycle.getStatus(initial.docId)?.documentVersion.active,
-      true,
-      "reject must preserve the previous active version"
-    )
+    assert.equal(reviewLifecycle.getStatus(replacement.docId)?.documentVersion.active, true)
+    assert.equal(reviewLifecycle.getStatus(initial.docId)?.documentVersion.active, false)
   } finally {
     db.close()
   }
 })
 
-test("P6.1+UT-04 backward compat: IngestionLifecycle without activationMode defaults to auto (gate still applies)", async () => {
+test("P6.1 backward compat: default lifecycle activates on completion", async () => {
   const db = openDb(":memory:")
-  // No fourth argument — matches every pre-P6.1 caller in the codebase.
   const lifecycle = new IngestionLifecycle(db, noopRunner())
 
   try {
@@ -284,17 +229,9 @@ test("P6.1+UT-04 backward compat: IngestionLifecycle without activationMode defa
     const result = await lifecycle.runNext()
 
     assert.equal(result?.success, true)
-    assert.equal(
-      readCandidateState(db, submitted.docId),
-      "approved",
-      "default mode preserves pre-P6.1 behavior (approved, not pending_review)"
-    )
-    assert.equal(
-      lifecycle.getStatus(submitted.docId)?.documentVersion.active,
-      false,
-      "Ticket UT-04: even the default auto mode cannot activate without evidence"
-    )
-    assert.ok(lifecycle.getStatus(submitted.docId)?.activationBlockReason)
+    assert.equal(readCandidateState(db, submitted.docId), "approved")
+    assert.equal(lifecycle.getStatus(submitted.docId)?.documentVersion.active, true)
+    assert.equal(lifecycle.getStatus(submitted.docId)?.activationBlockReason, null)
   } finally {
     db.close()
   }
@@ -389,17 +326,10 @@ test("P6.1 review mode: cancelled ingestion does NOT mark pending_review", async
   }
 })
 
-test("P6.1 蓝军: no implicit activation path bypasses the lifecycle under review mode", () => {
-  // Static contract check: IngestionLifecycle.runNext() is the ONLY place
-  // in the production code that calls DocumentRepo.activate() on the
-  // completion path. CandidateReviewStore.review() is the ONLY legitimate
-  // approve-activates path. No HTTP/worker/pipeline/repository code path
-  // implements implicit success transfer (spec L73).
-  //
-  // This test asserts the invariant by reading the lifecycle module source
-  // and confirming the activate call is gated on activationMode. It is a
-  // defense-in-depth check against future regressions that might re-add
-  // an unconditional activate.
+test("P6.1 蓝军: technical completion activates inside the lifecycle, without the retired gate", () => {
+  // Static contract check: IngestionLifecycle.runNext() is the completion
+  // path. It now activates directly after the transaction completes and no
+  // longer consults the retired gate or marks pending_review.
   const fs = require("node:fs")
   const path = require("node:path")
   const lifecycleSource = fs.readFileSync(
@@ -407,21 +337,15 @@ test("P6.1 蓝军: no implicit activation path bypasses the lifecycle under revi
     "utf8"
   )
 
-  // The activate call must be inside a conditional branch on activationMode.
-  assert.match(
-    lifecycleSource,
-    /activationMode === "review"[\s\S]*?markPendingReview[\s\S]*?else[\s\S]*?activate/,
-    "runNext() must gate activate() on activationMode (review → markPendingReview; else → activate)"
-  )
-
-  // The activate call must NOT appear unconditionally after updateStatus
-  // (i.e., the pre-P6.1 pattern is gone).
   const updateStatusBlock = lifecycleSource.match(
     /updateStatus\([^)]+, "completed"\)([\s\S]*?)\}\)\(\)/
   )
   assert.ok(updateStatusBlock, "found updateStatus('completed') transaction block")
-  assert.ok(
-    !/^\s*this\.docRepo\.activate\(/.test(updateStatusBlock[1].trim()),
-    "activate() must NOT be called unconditionally after updateStatus('completed')"
+  assert.match(
+    updateStatusBlock[1],
+    /this\.docRepo\.activate\(task\.docId\)/,
+    "technical completion must activate the candidate in the same transaction"
   )
+  assert.doesNotMatch(lifecycleSource, /evaluateActivationGate/, "the joint gate must not be consulted")
+  assert.doesNotMatch(lifecycleSource, /markPendingReview/, "completed runs must not enter pending_review")
 })

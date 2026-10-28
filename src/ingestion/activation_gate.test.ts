@@ -232,7 +232,7 @@ test("OCR 软提示只买来索引检查资格：索引缺失/失败/绑定不�
   }
 })
 
-test("UT-04 自动激活：阶段成功的候选保持未激活并记录缺失原因", async () => {
+test("技术完成自动激活：阶段成功即成为活动身份", async () => {
   const db = openDb(":memory:")
   try {
     const lifecycle = new IngestionLifecycle(db, completingRunner())
@@ -244,28 +244,24 @@ test("UT-04 自动激活：阶段成功的候选保持未激活并记录缺失�
     const status = lifecycle.getStatus(submitted.docId)
     assert.equal(status?.task?.status, "completed")
     assert.equal(status?.documentStatus, "completed")
-    assert.ok(status?.activationBlockReason?.includes(ACTIVATION_BLOCKED_EVIDENCE_RECORD_MISSING))
+    assert.equal(status?.activationBlockReason, null)
 
     const source = db.prepare(
       "SELECT active_doc_id, last_outcome FROM sources WHERE source_id = (SELECT source_id FROM documents WHERE doc_id = ?)"
     ).get(submitted.docId) as { active_doc_id: string | null; last_outcome: string }
-    assert.equal(source.active_doc_id, null, "首个未验证候选不得成为活动身份")
+    assert.equal(source.active_doc_id, submitted.docId, "技术成功直接成为活动身份")
     assert.equal(source.last_outcome, "completed", "生命周期结论如实记录阶段成功")
   } finally {
     db.close()
   }
 })
 
-test("UT-04 旧版本保护：新候选被拒后既有活动版本身份与原件不变", async () => {
+test("新候选技术完成切换活动身份，旧版本原件不变", async () => {
   const db = openDb(":memory:")
   try {
     const lifecycle = new IngestionLifecycle(db, completingRunner())
-    const docRepo = new DocumentRepo(db)
 
-    // v1：直接以仓库命令构造"既有活动版本"（状态构造，非激活决策）；
-    // 其任务照常运行一次以清空队列。
     const v1 = lifecycle.submit({ title: "v1", content: "旧版本正文", source: "protect-test" })
-    docRepo.activate(v1.docId)
     await lifecycle.runNext()
     assert.equal(
       (db.prepare("SELECT active_doc_id FROM sources WHERE source_id = (SELECT source_id FROM documents WHERE doc_id = ?)").get(v1.docId) as { active_doc_id: string }).active_doc_id,
@@ -273,10 +269,9 @@ test("UT-04 旧版本保护：新候选被拒后既有活动版本身份与原�
     )
     const v1RawBefore = (db.prepare("SELECT length(raw_content) AS n FROM documents WHERE doc_id = ?").get(v1.docId) as { n: number | null }).n
 
-    // v2：不同内容的新候选 → 阶段成功但被门槛拒绝。
     const v2 = lifecycle.submit({
       title: "v2",
-      content: "新候选正文（缺凭证）",
+      content: "新候选正文",
       versionIntent: "new_version",
       source: "protect-test",
     })
@@ -287,53 +282,42 @@ test("UT-04 旧版本保护：新候选被拒后既有活动版本身份与原�
     const after = db.prepare(
       "SELECT active_doc_id FROM sources WHERE source_id = (SELECT source_id FROM documents WHERE doc_id = ?)"
     ).get(v1.docId) as { active_doc_id: string }
-    assert.equal(after.active_doc_id, v1.docId, "旧正常版本持续作为活动身份")
-    assert.equal(
-      lifecycle.getStatus(v2.docId)?.activationBlockReason,
-      ACTIVATION_BLOCKED_EVIDENCE_RECORD_MISSING,
-      "新候选状态给出缺失原因"
-    )
+    assert.equal(after.active_doc_id, v2.docId, "较新的技术完成版本成为活动身份")
+    assert.equal(lifecycle.getStatus(v1.docId)?.documentVersion.active, false)
+    assert.equal(lifecycle.getStatus(v2.docId)?.documentVersion.active, true)
+    assert.equal(lifecycle.getStatus(v2.docId)?.activationBlockReason, null)
     const v1RawAfter = (db.prepare("SELECT length(raw_content) AS n FROM documents WHERE doc_id = ?").get(v1.docId) as { n: number | null }).n
     assert.equal(v1RawAfter, v1RawBefore, "旧版本原件不被触碰")
-
-    // 重处理被拒候选：再次运行仍被拒，活动身份仍不变。
-    const reprocess = lifecycle.reprocess(v2.docId)
-    assert.equal(reprocess?.changed, true)
-    await lifecycle.runNext()
-    assert.equal(
-      lifecycle.getStatus(v2.docId)?.activationBlockReason,
-      ACTIVATION_BLOCKED_EVIDENCE_RECORD_MISSING
-    )
-    assert.equal(
-      (db.prepare("SELECT active_doc_id FROM sources WHERE source_id = (SELECT source_id FROM documents WHERE doc_id = ?)").get(v1.docId) as { active_doc_id: string }).active_doc_id,
-      v1.docId
-    )
   } finally {
     db.close()
   }
 })
 
-test("UT-04 人工批准不绕过门槛：approved 但不激活，理由可见", async () => {
+test("review 模式不再阻断新导入：完成即激活，历史审批存储不改变指针", async () => {
   const db: DB = openDb(":memory:")
   try {
     const lifecycle = new IngestionLifecycle(db, completingRunner(), () => new Date(), "review")
     const submitted = lifecycle.submit({ title: "待审候选", content: "正文", source: "review-gate" })
     await lifecycle.runNext()
     assert.equal(lifecycle.getStatus(submitted.docId)?.documentStatus, "completed")
+    assert.equal(lifecycle.getStatus(submitted.docId)?.activationBlockReason, null)
 
+    const source = db.prepare(
+      "SELECT active_doc_id FROM sources WHERE source_id = (SELECT source_id FROM documents WHERE doc_id = ?)"
+    ).get(submitted.docId) as { active_doc_id: string | null }
+    assert.equal(source.active_doc_id, submitted.docId, "review 配置不再阻止技术完成激活")
+
+    // The historical store remains readable for old rows, but approving an
+    // already-active candidate is an idempotent no-op, not an activation path.
     const review = new SqliteCandidateReviewStore(db, new DocumentRepo(db))
     const result = review.review(submitted.docId, "default", "approve", "业务批准", "reviewer-1")
     assert.ok(result)
     assert.equal(result.candidateState, "approved")
-    assert.equal(result.activatedAsActive, false, "批准不得切换活动身份（缺联合凭证）")
-    assert.equal(
-      lifecycle.getStatus(submitted.docId)?.activationBlockReason,
-      ACTIVATION_BLOCKED_EVIDENCE_RECORD_MISSING
-    )
-    const source = db.prepare(
+    assert.equal(result.activatedAsActive, false)
+    const afterReview = db.prepare(
       "SELECT active_doc_id FROM sources WHERE source_id = (SELECT source_id FROM documents WHERE doc_id = ?)"
     ).get(submitted.docId) as { active_doc_id: string | null }
-    assert.equal(source.active_doc_id, null)
+    assert.equal(afterReview.active_doc_id, submitted.docId)
   } finally {
     db.close()
   }
@@ -377,7 +361,7 @@ test("UT-17 双凭证 pass 且绑定一致 → 联合激活放行；取消约束
   }
 })
 
-test("OCR 软提示自动激活：原始 pending_review 保留，接受事实单独记录且新证据不继承", async () => {
+test("内容凭证与 OCR 软提示不再参与激活，也不生成接受记录", async () => {
   const db = openDb(":memory:")
   try {
     const lifecycle = new IngestionLifecycle(db, completingRunner())
@@ -402,32 +386,19 @@ test("OCR 软提示自动激活：原始 pending_review 保留，接受事实单
     const source = db.prepare(
       "SELECT active_doc_id FROM sources WHERE source_id = (SELECT source_id FROM documents WHERE doc_id = ?)"
     ).get(submitted.docId) as { active_doc_id: string | null }
-    assert.equal(source.active_doc_id, submitted.docId, "唯一软提示且索引通过 → 普通 OCR 成为活动版本")
+    assert.equal(source.active_doc_id, submitted.docId, "旧内容证据不影响技术完成激活")
 
     const status = lifecycle.getStatus(submitted.docId)
     assert.equal(status?.activationBlockReason, null)
-    assert.deepEqual(status?.activationWarnings, [ACTIVATION_WARNING_OCR_CONTENT_UNVERIFIED])
-    assert.equal(status?.activationPolicyVersion, ACTIVATION_POLICY_VERSION)
-
-    const acceptance = docRepo.getActivationAcceptance(submitted.docId)
-    assert.ok(acceptance)
-    assert.deepEqual(acceptance?.warningCodes, [ACTIVATION_WARNING_OCR_CONTENT_UNVERIFIED])
-    assert.equal(acceptance?.expectedChunksSha256, "digest-ocr")
-    assert.equal(typeof acceptance?.evaluatedAt, "string")
+    assert.deepEqual(status?.activationWarnings, [])
+    assert.equal(status?.activationPolicyVersion, null)
+    assert.equal(docRepo.getActivationAcceptance(submitted.docId), null)
 
     const evidence = docRepo.getCandidateEvidence(submitted.docId) as {
       contentProof: { verdict: string; reasonCodes: string[] }
     }
-    assert.equal(evidence.contentProof.verdict, "pending_review", "原始内容事实不改写")
+    assert.equal(evidence.contentProof.verdict, "pending_review", "历史证据保留原样")
     assert.deepEqual(evidence.contentProof.reasonCodes, [ACTIVATION_WARNING_OCR_CONTENT_UNVERIFIED])
-
-    // 新的摄取产物重新生成证据：旧的接受记录不得继承。
-    docRepo.setCandidateEvidence(submitted.docId, {
-      schemaVersion: 1,
-      contentProof: evidence.contentProof,
-      indexProof: null,
-    })
-    assert.equal(docRepo.getActivationAcceptance(submitted.docId), null)
   } finally {
     db.close()
   }

@@ -33,12 +33,9 @@ import {
   IngestionStoreImpl,
   type ChunkStoreMetrics,
 } from "./storage"
-import { evaluateBlockCoverage } from "./chunk_coverage"
 import { findOversizedChunks, resolveEmbeddingLimits } from "./limits"
-import { produceContentProof, manifestDigest } from "./content_proof"
-import { verifyIndexEntries } from "./index_verification"
-import { ACTIVATION_EVIDENCE_SCHEMA_VERSION } from "./activation_gate"
 import type { TracingRuntime } from "../tracing/contract"
+import { DOCREADER_UPSTREAM_SHA } from "./parser/docreader_pdf_types"
 import {
   PdfQualityGateUnavailableError,
   PdfQualityRejectionError,
@@ -52,7 +49,6 @@ import { buildPageIndex } from "./page_index_builder"
 import { createProductionPdfQualityGate } from "./page_evidence/production_gate"
 import type { DB } from "./tracking/db"
 import { DocumentRepo } from "./tracking/doc_repo"
-import { ExpectedChunkRepository } from "./tracking/expected_chunk_repo"
 import { PageIndexRepository } from "./tracking/page_index_repo"
 import {
   EXTRACTION_EVIDENCE_SCHEMA_VERSION,
@@ -81,8 +77,6 @@ interface ChunkStageResult {
   /** UT-15: proof inputs captured during the stage (null for content-only docs). */
   rawExtractionSha256?: string | null
   parserConfigVersion?: string | null
-  /** 解码/结构层的待校验理由码（UT-10 decode + UT-12 risks）。 */
-  reviewReasons?: string[]
   /** Ticket 04 (PDF quality): effective switch state + gate outcome for task diagnostics. */
   pdfQuality?: PdfQualityDiagnostics
 }
@@ -245,6 +239,27 @@ function recordParserMetadata(
   })
 }
 
+export interface IngestionPolicyMarker {
+  version: "weknora-technical-v1"
+  parser: ParserType | null
+  upstreamSha: string | null
+  pdfMode: "auto" | "force_scanned" | null
+}
+
+function recordIngestionPolicy(
+  repository: DocumentRepo,
+  document: Document,
+  policy: IngestionPolicyMarker
+): void {
+  const existingSystem = document.metadata.system
+  const system = existingSystem && typeof existingSystem === "object" && !Array.isArray(existingSystem)
+    ? existingSystem as Record<string, unknown>
+    : {}
+  const metadata = { ...document.metadata, system: { ...system, ingestionPolicy: policy } }
+  document.metadata = metadata
+  if (repository.exists(document.id)) repository.updateMetadata(document.id, metadata)
+}
+
 /**
  * Ticket 04 (PDF quality): the optional boundary of the PDF OCR-fallback +
  * page-quality-gate workflow.
@@ -353,12 +368,27 @@ export class PipelineStageRunner implements IngestionStageRunner {
         } catch (error) {
           parserRoutingError = error instanceof Error ? error : new Error(String(error))
         }
+        recordIngestionPolicy(this.documentRepo, document, {
+          version: "weknora-technical-v1",
+          parser: parserRoute?.candidates[0] ?? null,
+          upstreamSha: parserRoute?.candidates[0] === "docreader-pdf" ? DOCREADER_UPSTREAM_SHA : null,
+          pdfMode: parserRoute?.candidates[0] === "docreader-pdf"
+            ? (parserRoute.pdfForceScanned ? "force_scanned" : "auto")
+            : null,
+        })
         recordParserMetadata(
           this.documentRepo,
           document,
           parserRoute?.candidates[0] ?? null,
           parserRoute?.reason ?? parserRoutingError?.message ?? "parser routing failed"
         )
+      } else {
+        recordIngestionPolicy(this.documentRepo, document, {
+          version: "weknora-technical-v1",
+          parser: null,
+          upstreamSha: null,
+          pdfMode: null,
+        })
       }
 
       const chunkResult = await execution.runStage(
@@ -497,29 +527,11 @@ export class PipelineStageRunner implements IngestionStageRunner {
           // from the extraction payload itself (builtin-pdf emits them), decode
           // warnings from the parser's own extraction provenance (UT-10).
           let stageRawExtractionSha256: string | null = null
-          const stageReviewReasons: string[] = []
           if (rawExtraction !== null) {
             stageRawExtractionSha256 = createHash("sha256")
               .update(Buffer.from(rawExtraction, "utf8"))
               .digest("hex")
-            if (reusedExtraction) {
-              // UT-19: the persisted evidence row stays untouched on reuse.
-              // The decode/structural review reasons from the ORIGINAL run are
-              // still in the document's system metadata — carry them into this
-              // run's content proof (a reuse never clears a pending review).
-              const persistedSystem = (
-                document.metadata as {
-                  system?: {
-                    decode?: { reviewRequired?: boolean; reviewReason?: string }
-                    extraction?: { risks?: { reviewReasons?: string[] } }
-                  }
-                }
-              ).system
-              if (persistedSystem?.decode?.reviewRequired && persistedSystem.decode.reviewReason) {
-                stageReviewReasons.push(persistedSystem.decode.reviewReason)
-              }
-              stageReviewReasons.push(...(persistedSystem?.extraction?.risks?.reviewReasons ?? []))
-            } else {
+            if (!reusedExtraction) {
               const provenance =
                 typeof usedParserInstance?.extractionProvenance === "function"
                   ? usedParserInstance.extractionProvenance()
@@ -545,19 +557,6 @@ export class PipelineStageRunner implements IngestionStageRunner {
                   // failure cannot happen for a successfully normalized payload.
                 }
               }
-              // UT-15: collect the decode (UT-10) and structural (UT-12) review
-              // reasons the parser recorded — they are upstream gaps the content
-              // proof must carry; downstream coverage can never clear them.
-              const decodeInfo = provenance?.metadata.decode as
-                | { reviewRequired?: boolean; reviewReason?: string }
-                | undefined
-              if (decodeInfo?.reviewRequired && decodeInfo.reviewReason) {
-                stageReviewReasons.push(decodeInfo.reviewReason)
-              }
-              const extractionRisks = provenance?.metadata.extraction as
-                | { risks?: { reviewReasons?: string[] } }
-                | undefined
-              stageReviewReasons.push(...(extractionRisks?.risks?.reviewReasons ?? []))
               new ExtractionEvidenceRepository(this.db).record({
                 docId: document.id,
                 version: document.version,
@@ -619,8 +618,7 @@ export class PipelineStageRunner implements IngestionStageRunner {
             parser: usedParser,
             parserReason,
             rawExtractionSha256: stageRawExtractionSha256,
-            parserConfigVersion: parserConfigFingerprint(usedParser),
-            reviewReasons: stageReviewReasons,
+            parserConfigVersion: parserConfigFingerprint(usedParser, parserRoute),
             pdfQuality: pdfQualityDiagnostics(pdfQualityDecision, pdfQualityGateResult),
           }
         },
@@ -642,35 +640,7 @@ export class PipelineStageRunner implements IngestionStageRunner {
         })
       )
       const chunks = chunkResult.chunks
-
-      // Ticket UT-13: persist the EXPECTED retrieval manifest for this
-      // document version (every index-bound chunk with its stable identity,
-      // content hash and covered source blocks — parent chunks never enter
-      // the index), then verify block coverage independently. A coverage gap
-      // is a loud stage failure, never a silent partial index expectation.
       const indexChunks = chunks.filter((chunk) => chunk.metadata.kind !== "parent")
-      const manifestEntries = indexChunks.map((chunk, position) => ({
-        chunkId: chunk.id,
-        kind: String(chunk.metadata.kind ?? "child"),
-        position,
-        contentSha256: ExpectedChunkRepository.contentSha256(chunk.content),
-        blockIds: ((chunk.metadata.normalizedBlocks as Array<{ id?: string }> | undefined) ?? [])
-          .map((block) => block.id)
-          .filter((id): id is string => typeof id === "string"),
-      }))
-      new ExpectedChunkRepository(this.db).replaceAll(
-        document.id,
-        document.version,
-        manifestEntries
-      )
-      if (chunkResult.blocks.length > 0) {
-        const coverage = evaluateBlockCoverage(chunkResult.blocks, indexChunks)
-        if (coverage.verdict === "gaps") {
-          throw new Error(
-            `chunk coverage gaps: ${coverage.missingBlockIds.length}/${coverage.totalBlocks} normalized blocks missing from index chunks`
-          )
-        }
-      }
 
       // Ticket UT-14: enforce the explicit embedding input token limit with a
       // conservative character-based estimate (never inferred from bytes). A
@@ -686,39 +656,6 @@ export class PipelineStageRunner implements IngestionStageRunner {
             "lower the chunker size limits or raise EMBEDDING_INPUT_TOKEN_LIMIT; no silent provider truncation"
         )
       }
-
-      // Ticket UT-15: the content integrity proof — the joint verdict over
-      // extraction evidence, decode/structural review reasons and chunk
-      // coverage, BOUND to the same raw extraction, manifest and parser
-      // configuration. Recorded ALWAYS (pass or pending_review) so the
-      // activation gate and the uploader see precise reasons. A pass never
-      // activates anything by itself: it only qualifies the candidate for
-      // index verification (UT-16) — the gate's index half stays fail-closed.
-      const extractionEvidence = new ExtractionEvidenceRepository(this.db).get(
-        document.id,
-        document.version
-      )
-      const contentProof = produceContentProof({
-        extractionEvidence: extractionEvidence?.artifact ?? null,
-        reviewReasons: chunkResult.reviewReasons ?? [],
-        blocks: chunkResult.blocks,
-        indexChunks,
-        manifestEntries,
-        parserConfigVersion: chunkResult.parserConfigVersion ?? null,
-      })
-      // Ticket 21: merge, never overwrite — the page-quality audit envelope
-      // the gate persisted earlier in this run (and any future producer) must
-      // survive the content/index proof write.
-      const existingEvidence = this.documentRepo.getCandidateEvidence(document.id)
-      const priorEvidence = existingEvidence && typeof existingEvidence === "object" && !Array.isArray(existingEvidence)
-        ? existingEvidence as Record<string, unknown>
-        : {}
-      this.documentRepo.setCandidateEvidence(document.id, {
-        ...priorEvidence,
-        schemaVersion: ACTIVATION_EVIDENCE_SCHEMA_VERSION,
-        contentProof,
-        indexProof: null,
-      })
 
       const wikified = await execution.runStage(
         "wikify",
@@ -771,96 +708,6 @@ export class PipelineStageRunner implements IngestionStageRunner {
           ...(stored.metrics ?? {}),
         })
       )
-
-      // Ticket UT-16/UT-17: verify what ACTUALLY landed in the index against
-      // the expected manifest — logical identity, count, content hash, vector
-      // presence AND search visibility (a bounded-retry _search probe through
-      // the actual retrieval boundary; refresh delay, invisibility or search
-      // failure never announce completion). The result becomes the candidate
-      // evidence's indexProof; its manifest digest is compared against the
-      // content proof's binding at the joint gate (UT-17).
-      if (indexChunks.length > 0) {
-        const store = this.ensureStore() as IngestionStoreImpl & {
-          readIndexEntries?: (
-            documentId: string,
-            chunkIds: string[]
-          ) => Promise<Map<string, { content: string | null; embedding: number[] | null }>>
-          countVisibleIndexEntries?: (
-            documentId: string,
-            chunkIds: string[],
-            options?: { tenantId?: string }
-          ) => Promise<number>
-        }
-        if (typeof store.readIndexEntries === "function") {
-          const expectedIds = manifestEntries.map((entry) => entry.chunkId)
-          let searchVisibleCount: number | undefined
-          let probeError: string | null = null
-          if (typeof store.countVisibleIndexEntries === "function") {
-            // 有界等待索引可见性：刷新延迟/分片可见性延迟以 3×400ms 收敛；
-            // 仍不可见如实记录（index_not_searchable），绝不宣布完成。
-            for (let attempt = 0; attempt < 3; attempt += 1) {
-              try {
-                searchVisibleCount = await store.countVisibleIndexEntries(
-                  document.id,
-                  expectedIds,
-                  { tenantId: document.tenantId }
-                )
-                if (searchVisibleCount >= expectedIds.length) break
-              } catch (error) {
-                // 探针故障不是摄取失败：核验语义（UT-16）是"失败可观察、
-                // 由联合门槛拒绝激活"，已完成的索引工作不作废。
-                probeError = error instanceof Error ? error.message : String(error)
-                break
-              }
-              if (attempt < 2) await new Promise((resolveWait) => setTimeout(resolveWait, 400))
-            }
-          }
-          let entries: Map<string, { content: string | null; embedding: number[] | null }> = new Map()
-          try {
-            entries = await store.readIndexEntries(document.id, expectedIds)
-          } catch (error) {
-            probeError = probeError ?? (error instanceof Error ? error.message : String(error))
-          }
-          const indexProof =
-            probeError !== null
-              ? {
-                  verdict: "fail" as const,
-                  reasonCodes: ["index_verification_probe_failed"],
-                  expectedCount: manifestEntries.length,
-                  verifiedCount: 0,
-                  missingChunkIds: [] as string[],
-                  contentMismatchChunkIds: [] as string[],
-                  missingVectorChunkIds: [] as string[],
-                  extraEntryCount: 0,
-                  searchVisibleCount:
-                    typeof searchVisibleCount === "number" ? searchVisibleCount : null,
-                  manifestSha256: manifestDigest(manifestEntries),
-                  verifiedAt: new Date().toISOString(),
-                  probeError: probeError.slice(0, 300),
-                }
-              : verifyIndexEntries({
-                  expected: manifestEntries,
-                  entries,
-                  searchVisibleCount,
-                  manifestSha256: manifestDigest(manifestEntries),
-                })
-          // Read-merge-write, same contract as the contentProof write: the
-          // candidate evidence column is shared by independent producers
-          // (ticket 21's pdfQualityAudit, UT-15's contentProof), and no
-          // single proof may whole-column-overwrite the others.
-          const existingEvidence = this.documentRepo.getCandidateEvidence(document.id)
-          const priorEvidence =
-            existingEvidence && typeof existingEvidence === "object" && !Array.isArray(existingEvidence)
-              ? (existingEvidence as Record<string, unknown>)
-              : {}
-          this.documentRepo.setCandidateEvidence(document.id, {
-            ...priorEvidence,
-            schemaVersion: ACTIVATION_EVIDENCE_SCHEMA_VERSION,
-            contentProof: priorEvidence.contentProof ?? null,
-            indexProof,
-          })
-        }
-      }
 
       await execution.runStage(
         "storeGraph",

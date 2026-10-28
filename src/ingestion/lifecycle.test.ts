@@ -134,17 +134,14 @@ test("unchanged source content is a queryable no-op", async () => {
     assert.equal(await lifecycle.runNext(), null)
     assert.equal(runs, 1)
     assert.equal(lifecycle.getStatus(initial.docId)?.lifecycleOutcome, "unchanged")
-    // Ticket UT-04: the joint activation gate keeps the candidate inactive —
-    // the unchanged no-op now references the latest submission, and the
-    // candidate stays non-active with a recorded reason.
+    // The unchanged no-op references the latest submission; technical success
+    // activates it without any additional approval evidence.
     assert.deepEqual(lifecycle.getStatus(initial.docId)?.documentVersion, {
       version: 1,
       contentHash: "2926202d1cedb270ca52211dcae0d2bafd009a7bfd6699a08233e946501e5229",
-      active: false,
+      active: true,
     })
-    assert.ok(
-      lifecycle.getStatus(initial.docId)?.activationBlockReason?.includes("activation_evidence_record_missing")
-    )
+    assert.equal(lifecycle.getStatus(initial.docId)?.activationBlockReason, null)
   } finally {
     db.close()
   }
@@ -463,7 +460,7 @@ test("a failed replacement remains inspectable without replacing the active vers
   }
 })
 
-test("a successful replacement completes but cannot switch the active identity while activation evidence is missing (UT-04)", async () => {
+test("a successful replacement completes and switches the active identity", async () => {
   const db = openDb(":memory:")
   const runner: IngestionStageRunner = {
     close: async () => {},
@@ -493,17 +490,15 @@ test("a successful replacement completes but cannot switch the active identity w
     assert.equal(initial.version, 1)
     assert.equal(replacement.version, 2)
     assert.equal(lifecycle.getStatus(initial.docId)?.documentVersion.active, false)
-    assert.equal(lifecycle.getStatus(replacement.docId)?.documentVersion.active, false)
+    assert.equal(lifecycle.getStatus(replacement.docId)?.documentVersion.active, true)
     assert.equal(lifecycle.getStatus(replacement.docId)?.lifecycleOutcome, "completed")
-    assert.ok(
-      lifecycle.getStatus(replacement.docId)?.activationBlockReason?.includes("activation_evidence_record_missing")
-    )
+    assert.equal(lifecycle.getStatus(replacement.docId)?.activationBlockReason, null)
   } finally {
     db.close()
   }
 })
 
-test("an older version finishing late cannot disturb the active identity (gate-blocked, UT-04)", async () => {
+test("an older version finishing late cannot disturb the active identity", async () => {
   const db = openDb(":memory:")
   const olderStarted = deferred()
   const releaseOlder = deferred()
@@ -543,10 +538,6 @@ test("an older version finishing late cannot disturb the active identity (gate-b
     const olderRun = lifecycle.runNext()
     await olderStarted.promise
     assert.equal((await lifecycle.runNext())?.success, true)
-    // Ticket UT-04: lifecycle completions stay inactive; the newer version is
-    // promoted by direct repo command so the late-finisher protection (the
-    // same WHERE clause activate() uses) is exercised against it.
-    new DocumentRepo(db).activate(newer.docId)
     assert.equal(lifecycle.getStatus(newer.docId)?.documentVersion.active, true)
 
     releaseOlder.resolve()
@@ -554,7 +545,7 @@ test("an older version finishing late cannot disturb the active identity (gate-b
     assert.equal(lifecycle.getStatus(initial.docId)?.documentVersion.active, false)
     assert.equal(lifecycle.getStatus(older.docId)?.documentVersion.active, false)
     assert.equal(lifecycle.getStatus(newer.docId)?.documentVersion.active, true)
-    assert.ok(lifecycle.getStatus(older.docId)?.activationBlockReason)
+    assert.equal(lifecycle.getStatus(older.docId)?.activationBlockReason, null)
   } finally {
     db.close()
   }
@@ -1194,15 +1185,14 @@ test("Ticket 04 KB-02B: knowledge ownership survives retry, cancellation and act
     assert.equal(repo.get(submitted.docId)?.knowledgeBaseId, "kb-policies")
     assert.equal(sourceKnowledgeBase(sourceId), "kb-policies")
 
-    // 重试成功：阶段完成但被联合激活门槛拒绝（UT-04）——归属不变，且不产生
-    // 新文档；活动身份保持为空（该来源从未有过已验证版本）。
+    // 重试成功：技术完成直接激活——归属不变，且不产生新文档。
     now += 2_000
     const completed = await lifecycle.runNext()
     assert.equal(completed?.success, true)
     assert.equal(repo.get(submitted.docId)?.knowledgeBaseId, "kb-policies")
     assert.equal(sourceKnowledgeBase(sourceId), "kb-policies")
-    assert.equal(repo.getActive(sourceId)?.id, undefined)
-    assert.ok(lifecycle.getStatus(submitted.docId)?.activationBlockReason)
+    assert.equal(repo.getActive(sourceId)?.id, submitted.docId)
+    assert.equal(lifecycle.getStatus(submitted.docId)?.activationBlockReason, null)
 
     // 取消另一个库里的在途导入：归属同样不变。
     const toCancel = lifecycle.submit({
