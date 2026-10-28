@@ -356,3 +356,59 @@ test("image-only markdown is never indexed as paragraph text", async () => {
   assert.equal(blocks.length, 1)
   assert.equal(blocks[0].text, "OCR body text")
 })
+
+test("aligned DocReader text is reconstructed as a table while the caption stays a paragraph", async () => {
+  const markdown = [
+    "费用项目 金额 是否可退",
+    "手续费 50 元 是",
+    "运费 30 元 否",
+    "打包费 20 元 是",
+    "表格下方说明 ： 以上费率不含税 ，校验词 表-1 。",
+  ].join("\n")
+  const doc = parser([metaFrame(markdown)])
+  const raw = await doc.parseRaw({ content: PDF, fileName: "table.pdf" })
+  const blocks = doc.normalizeRaw(raw, "doc-whitespace-table")
+  assert.deepEqual(blocks.map((block) => block.type), ["table", "paragraph"])
+  assert.deepEqual(blocks[0].table, {
+    headers: ["费用项目", "金额", "是否可退"],
+    rows: [
+      ["手续费", "50元", "是"],
+      ["运费", "30元", "否"],
+      ["打包费", "20元", "是"],
+    ],
+  })
+  assert.match(blocks[0].text, /\| 费用项目 \| 金额 \| 是否可退 \|/)
+  assert.match(blocks[1].text, /表格下方说明/)
+})
+
+test("wrapped whitespace table rows are assembled without inventing cells", async () => {
+  const markdown = [
+    "姓名 金额 是否退款",
+    "张三 50元",
+    "是",
+    "李四 30元",
+    "否",
+  ].join("\n")
+  const doc = parser([metaFrame(markdown)])
+  const raw = await doc.parseRaw({ content: PDF, fileName: "wrapped-table.pdf" })
+  const blocks = doc.normalizeRaw(raw, "doc-wrapped-table")
+  assert.equal(blocks.length, 1)
+  assert.equal(blocks[0].type, "table")
+  assert.deepEqual(blocks[0].table, {
+    headers: ["姓名", "金额", "是否退款"],
+    rows: [["张三", "50元", "是"], ["李四", "30元", "否"]],
+  })
+})
+
+test("ordinary prose with numbers stays a paragraph, not a table", async () => {
+  const markdown = [
+    "第一页：本样本用于逐页真值核对。",
+    "订单编号：A-2026-1004，金额 50 元。",
+    "第三页：顺序校验 甲、乙、丙。",
+  ].join("\n")
+  const doc = parser([metaFrame(markdown)])
+  const raw = await doc.parseRaw({ content: PDF, fileName: "prose.pdf" })
+  const blocks = doc.normalizeRaw(raw, "doc-prose")
+  assert.equal(blocks.length, 1)
+  assert.equal(blocks[0].type, "paragraph")
+})

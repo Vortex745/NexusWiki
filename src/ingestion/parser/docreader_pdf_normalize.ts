@@ -104,6 +104,69 @@ function tableShape(lines: Line[]): { headers: string[]; rows: string[][] } {
   }
 }
 
+const NUMERIC_UNIT = /^(?:元|天|%|次|年|月|日|小时|分钟|秒|kg|KG|g|m|cm|mm|GB|MB|KB)$/
+
+function tableCells(text: string): string[] {
+  const tokens = text.trim().split(/\s+/).filter(Boolean)
+  const cells: string[] = []
+  for (let index = 0; index < tokens.length; index += 1) {
+    if (/^\d+(?:[.,]\d+)?$/.test(tokens[index]) && NUMERIC_UNIT.test(tokens[index + 1] ?? "")) {
+      cells.push(`${tokens[index]}${tokens[index + 1]}`)
+      index += 1
+    } else {
+      cells.push(tokens[index])
+    }
+  }
+  return cells
+}
+
+interface WhitespaceTable {
+  headers: string[]
+  rows: string[][]
+  consumed: number
+}
+
+/**
+ * DocReader's builtin PDF engine emits visually aligned tables as plain lines
+ * (no pipe syntax). Recover a conservative table only when a header line and
+ * at least two numeric rows share the same cell count; prose and layout text
+ * stay paragraphs. This is normalization, not a quality approval gate.
+ */
+function detectWhitespaceTable(lines: Line[]): WhitespaceTable | null {
+  if (lines.length < 3) return null
+  const headerText = lines[0].text.trim()
+  if (!headerText || /[：:。！？；,，;!?]$/.test(headerText)) return null
+  const headers = tableCells(headerText)
+  if (headers.length < 3 || headers.some((cell) => /\d/.test(cell))) return null
+
+  const rows: string[][] = []
+  let pending: string[] = []
+  let lastComplete = 1
+  for (let index = 1; index < lines.length; index += 1) {
+    const raw = lines[index].text.trim()
+    if (!raw || /[：:。！？；]/.test(raw)) break
+    const cells = tableCells(raw)
+    if (cells.length === 0 || pending.length + cells.length > headers.length) break
+    pending.push(...cells)
+    if (pending.length === headers.length) {
+      if (!pending.some((cell) => /\d/.test(cell))) return null
+      rows.push(pending)
+      pending = []
+      lastComplete = index + 1
+    }
+  }
+  if (pending.length > 0 || rows.length < 2) return null
+  return { headers, rows, consumed: lastComplete }
+}
+
+function markdownTable(headers: string[], rows: string[][]): string {
+  return [
+    `| ${headers.join(" | ")} |`,
+    `| ${headers.map(() => "---").join(" | ")} |`,
+    ...rows.map((row) => `| ${row.join(" | ")} |`),
+  ].join("\n")
+}
+
 function mapCodePointOffsets(markdown: string, boundaries: Set<number>): Map<number, number> {
   const mapped = new Map<number, number>()
   let codePoints = 0
@@ -322,12 +385,31 @@ export function normalizeDocReaderEnvelope(
       paragraph.push(lines[cursor])
       cursor += 1
     }
-    const last = paragraph.at(-1)!
-    addBlock(
-      "paragraph",
-      paragraph.map((entry) => entry.text.trim()).join("\n"),
-      { start: line.start, end: last.end }
-    )
+    const table = detectWhitespaceTable(paragraph)
+    if (table) {
+      const tableLines = paragraph.slice(0, table.consumed)
+      const rest = paragraph.slice(table.consumed)
+      addBlock(
+        "table",
+        markdownTable(table.headers, table.rows),
+        { start: tableLines[0].start, end: tableLines.at(-1)!.end },
+        { table: { headers: table.headers, rows: table.rows } }
+      )
+      if (rest.length > 0) {
+        addBlock(
+          "paragraph",
+          rest.map((entry) => entry.text.trim()).join("\n"),
+          { start: rest[0].start, end: rest.at(-1)!.end }
+        )
+      }
+    } else {
+      const last = paragraph.at(-1)!
+      addBlock(
+        "paragraph",
+        paragraph.map((entry) => entry.text.trim()).join("\n"),
+        { start: line.start, end: last.end }
+      )
+    }
     index = cursor
   }
 
