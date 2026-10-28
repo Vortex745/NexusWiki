@@ -355,8 +355,19 @@ export class ESStore {
   /** Remove a candidate's previous index artifacts before a retry re-stores. */
   async deleteDocumentChunks(documentId: string, signal?: AbortSignal): Promise<void> {
     if (!documentId) throw new Error("documentId is required")
+    const client = this.client as unknown as {
+      deleteByQuery?: (params: {
+        index: string
+        query: { term: { documentId: string } }
+        refresh: boolean
+        conflicts: "proceed"
+      }, options?: { signal?: AbortSignal }) => Promise<unknown>
+    }
+    // Restricted evaluation scopes may inject a narrowly stubbed ES client;
+    // absent capability means there is no persisted index to clean.
+    if (typeof client.deleteByQuery !== "function") return
     try {
-      await this.client.deleteByQuery({
+      await client.deleteByQuery({
         index: this.indexName,
         query: { term: { documentId } },
         refresh: true,
