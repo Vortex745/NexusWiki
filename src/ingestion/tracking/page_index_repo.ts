@@ -219,7 +219,7 @@ export class PageIndexRepository {
     // becomes a bound parameter (and never becomes a list read into memory).
     if (eligibility?.restrictToActiveDocumentVersions) {
       conditions.push(
-        "EXISTS (SELECT 1 FROM sources s WHERE s.active_doc_id = page_index_nodes.document_id)"
+        "EXISTS (SELECT 1 FROM sources s WHERE s.lifecycle_state = 'active' AND s.active_doc_id = page_index_nodes.document_id)"
       )
     }
 

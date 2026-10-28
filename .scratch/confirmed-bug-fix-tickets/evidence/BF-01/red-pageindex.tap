@@ -1,0 +1,35 @@
+(node:54172) ExperimentalWarning: localStorage is not available because --localstorage-file was not provided.
+(Use `node --trace-warnings ...` to show where the warning was created)
+✔ BF-01: BM25 and assembled parents exclude a retired source before cleanup (68.8416ms)
+✖ BF-01: PageIndex navigation and hydrated context exclude retirement while nodes remain stored (46.1486ms)
+ℹ tests 2
+ℹ suites 0
+ℹ pass 1
+ℹ fail 1
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 4473.7378
+
+✖ failing tests:
+
+test at src\retrieval\search\searcher.retirement.test.ts:2:8048
+✖ BF-01: PageIndex navigation and hydrated context exclude retirement while nodes remain stored (46.1486ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly deep-equal:
+  + actual - expected
+
+    [
+  +   '6bf0ad72-82b7-41b7-9a9b-b59ed4c09836',
+      '943f2408-dfc2-4bf3-909f-343391aa9df1'
+    ]
+
+      at TestContext.<anonymous> (C:\Users\14253\.codex\bf-20261028\worktrees\bf-01\src\retrieval\search\searcher.retirement.test.ts:185:10)
+      at async Test.run (node:internal/test_runner/test:1409:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: [ '6bf0ad72-82b7-41b7-9a9b-b59ed4c09836', '943f2408-dfc2-4bf3-909f-343391aa9df1' ],
+    expected: [ '943f2408-dfc2-4bf3-909f-343391aa9df1' ],
+    operator: 'deepStrictEqual',
+    diff: 'simple'
+  }

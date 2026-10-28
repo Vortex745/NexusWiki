@@ -1,0 +1,1431 @@
+TAP version 13
+# Subtest: P6.1 default activation: completed doc activates immediately
+ok 1 - P6.1 default activation: completed doc activates immediately
+  ---
+  duration_ms: 31.6811
+  type: 'test'
+  ...
+# Subtest: P6.1 review mode is ignored: completed doc activates immediately
+ok 2 - P6.1 review mode is ignored: completed doc activates immediately
+  ---
+  duration_ms: 13.4733
+  type: 'test'
+  ...
+# Subtest: P6.1 review mode: a newer completed version becomes active
+ok 3 - P6.1 review mode: a newer completed version becomes active
+  ---
+  duration_ms: 15.5634
+  type: 'test'
+  ...
+# Subtest: P6.1 review mode: approve is an idempotent no-op for an already-active doc
+ok 4 - P6.1 review mode: approve is an idempotent no-op for an already-active doc
+  ---
+  duration_ms: 14.7675
+  type: 'test'
+  ...
+# Subtest: P6.1 review mode: rejecting an already-active doc does not move the active pointer
+ok 5 - P6.1 review mode: rejecting an already-active doc does not move the active pointer
+  ---
+  duration_ms: 16.4797
+  type: 'test'
+  ...
+# Subtest: P6.1 backward compat: default lifecycle activates on completion
+ok 6 - P6.1 backward compat: default lifecycle activates on completion
+  ---
+  duration_ms: 12.657
+  type: 'test'
+  ...
+# Subtest: P6.1 review mode: failed ingestion does NOT mark pending_review (only completed runs gate)
+ok 7 - P6.1 review mode: failed ingestion does NOT mark pending_review (only completed runs gate)
+  ---
+  duration_ms: 15.5418
+  type: 'test'
+  ...
+# Subtest: P6.1 review mode: cancelled ingestion does NOT mark pending_review
+ok 8 - P6.1 review mode: cancelled ingestion does NOT mark pending_review
+  ---
+  duration_ms: 16.4129
+  type: 'test'
+  ...
+# Subtest: P6.1 蓝军: technical completion activates inside the lifecycle, without the retired gate
+ok 9 - P6.1 蓝军: technical completion activates inside the lifecycle, without the retired gate
+  ---
+  duration_ms: 2.1679
+  type: 'test'
+  ...
+# Subtest: P6.2 caller audit: no production file constructs new IngestionLifecycle(...) directly
+ok 10 - P6.2 caller audit: no production file constructs new IngestionLifecycle(...) directly
+  ---
+  duration_ms: 125.4594
+  type: 'test'
+  ...
+# Subtest: P6.2 caller audit: HTTP/worker/CLI callers explicitly use createIngestionLifecycle factory
+ok 11 - P6.2 caller audit: HTTP/worker/CLI callers explicitly use createIngestionLifecycle factory
+  ---
+  duration_ms: 1.437
+  type: 'test'
+  ...
+# Subtest: P6.2 explicit-deny: docRepo.activate() only in the lifecycle auto-branch
+ok 12 - P6.2 explicit-deny: docRepo.activate() only in the lifecycle auto-branch
+  ---
+  duration_ms: 98.9547
+  type: 'test'
+  ...
+# Subtest: P6.2 explicit-deny: no production code hardcodes SET candidate_state = 'approved'
+ok 13 - P6.2 explicit-deny: no production code hardcodes SET candidate_state = 'approved'
+  ---
+  duration_ms: 107.5507
+  type: 'test'
+  ...
+# Subtest: P6.2 explicit-deny: SET active_doc_id only in doc_repo.ts and db.ts migration
+ok 14 - P6.2 explicit-deny: SET active_doc_id only in doc_repo.ts and db.ts migration
+  ---
+  duration_ms: 111.1814
+  type: 'test'
+  ...
+# Subtest: P6.2 factory wiring: createIngestionLifecycle no longer reads a review mode or quality gate
+ok 15 - P6.2 factory wiring: createIngestionLifecycle no longer reads a review mode or quality gate
+  ---
+  duration_ms: 0.9061
+  type: 'test'
+  ...
+# Subtest: P6.3 review mode is ignored: completed docs activate while the review store stays readable
+ok 16 - P6.3 review mode is ignored: completed docs activate while the review store stays readable
+  ---
+  duration_ms: 50.0758
+  type: 'test'
+  ...
+# Subtest: P6.3 replay invariant: re-approve preserves the FIRST reviewer's audit fields
+ok 17 - P6.3 replay invariant: re-approve preserves the FIRST reviewer's audit fields
+  ---
+  duration_ms: 15.4733
+  type: 'test'
+  ...
+# Subtest: P6.3 蓝军 static contract: no new CandidateReviewStore methods for retry/cancel
+ok 18 - P6.3 蓝军 static contract: no new CandidateReviewStore methods for retry/cancel
+  ---
+  duration_ms: 3.0875
+  type: 'test'
+  ...
+# Subtest: P6.3 蓝军 static contract: technical completion activates inside the lifecycle
+ok 19 - P6.3 蓝军 static contract: technical completion activates inside the lifecycle
+  ---
+  duration_ms: 1.5262
+  type: 'test'
+  ...
+# Subtest: INGESTION_STAGE_NAMES is the exclusive source of truth for stage order
+ok 20 - INGESTION_STAGE_NAMES is the exclusive source of truth for stage order
+  ---
+  duration_ms: 2.9665
+  type: 'test'
+  ...
+# Subtest: TrackedStageExecution rejects out-of-order stage calls
+ok 21 - TrackedStageExecution rejects out-of-order stage calls
+  ---
+  duration_ms: 38.2258
+  type: 'test'
+  ...
+# Subtest: TrackedStageExecution rejects stage calls after the sequence is complete
+ok 22 - TrackedStageExecution rejects stage calls after the sequence is complete
+  ---
+  duration_ms: 16.1379
+  type: 'test'
+  ...
+# Subtest: PipelineStageRunner does not independently finalize task or document states
+ok 23 - PipelineStageRunner does not independently finalize task or document states
+  ---
+  duration_ms: 0.5407
+  type: 'test'
+  ...
+# Subtest: an ingestion job exposes its complete four-stage success lifecycle
+ok 24 - an ingestion job exposes its complete four-stage success lifecycle
+  ---
+  duration_ms: 78.6014
+  type: 'test'
+  ...
+# Subtest: unchanged source content is a queryable no-op
+ok 25 - unchanged source content is a queryable no-op
+  ---
+  duration_ms: 39.5972
+  type: 'test'
+  ...
+# Subtest: re-uploading content whose source was retired is a new import, not a hidden no-op
+ok 26 - re-uploading content whose source was retired is a new import, not a hidden no-op
+  ---
+  duration_ms: 47.2885
+  type: 'test'
+  ...
+# Subtest: duplicate in-flight source content reuses the existing version and task
+ok 27 - duplicate in-flight source content reuses the existing version and task
+  ---
+  duration_ms: 46.9025
+  type: 'test'
+  ...
+# Subtest: Windows file identity is stable across path casing
+ok 28 - Windows file identity is stable across path casing
+  ---
+  duration_ms: 23.6055
+  type: 'test'
+  ...
+# Subtest: same canonical source is isolated by tenant
+ok 29 - same canonical source is isolated by tenant
+  ---
+  duration_ms: 28.12
+  type: 'test'
+  ...
+# Subtest: legacy alias adoption stays within the tenant and updates access metadata
+ok 30 - legacy alias adoption stays within the tenant and updates access metadata
+  ---
+  duration_ms: 45.2599
+  type: 'test'
+  ...
+# Subtest: Ticket 03 KB-02A: a legacy alias is not adopted across knowledge bases
+ok 31 - Ticket 03 KB-02A: a legacy alias is not adopted across knowledge bases
+  ---
+  duration_ms: 39.5133
+  type: 'test'
+  ...
+# Subtest: a failed replacement remains inspectable without replacing the active version
+ok 32 - a failed replacement remains inspectable without replacing the active version
+  ---
+  duration_ms: 57.1428
+  type: 'test'
+  ...
+# Subtest: a successful replacement completes and switches the active identity
+ok 33 - a successful replacement completes and switches the active identity
+  ---
+  duration_ms: 42.6368
+  type: 'test'
+  ...
+# Subtest: an older version finishing late cannot disturb the active identity
+ok 34 - an older version finishing late cannot disturb the active identity
+  ---
+  duration_ms: 62.5645
+  type: 'test'
+  ...
+# Subtest: an ingestion job cannot complete when its runner omits required stages
+ok 35 - an ingestion job cannot complete when its runner omits required stages
+  ---
+  duration_ms: 24.2431
+  type: 'test'
+  ...
+# Subtest: a failed ingestion job leaves no open stage spans
+ok 36 - a failed ingestion job leaves no open stage spans
+  ---
+  duration_ms: 21.8797
+  type: 'test'
+  ...
+# Subtest: a failed ingestion job persists 2s, 4s, and 8s retries
+ok 37 - a failed ingestion job persists 2s, 4s, and 8s retries
+  ---
+  duration_ms: 145.7689
+  type: 'test'
+  ...
+# Subtest: an ingestion job can complete after its persisted retry
+ok 38 - an ingestion job can complete after its persisted retry
+  ---
+  duration_ms: 19.8282
+  type: 'test'
+  ...
+# Subtest: stale running claims consume retry budget and eventually dead-letter
+ok 39 - stale running claims consume retry budget and eventually dead-letter
+  ---
+  duration_ms: 32.7504
+  type: 'test'
+  ...
+# Subtest: a stale worker callback cannot mutate a newer attempt
+ok 40 - a stale worker callback cannot mutate a newer attempt
+  ---
+  duration_ms: 23.9465
+  type: 'test'
+  ...
+# Subtest: a pending ingestion job can be cancelled idempotently
+ok 41 - a pending ingestion job can be cancelled idempotently
+  ---
+  duration_ms: 15.1781
+  type: 'test'
+  ...
+# Subtest: a running ingestion job cancels open spans and fences its late callback
+ok 42 - a running ingestion job cancels open spans and fences its late callback
+  ---
+  duration_ms: 16.641
+  type: 'test'
+  ...
+# Subtest: cancellation wins when it races failure persistence
+    # Subtest: after 0 recorded failures
+    ok 1 - after 0 recorded failures
+      ---
+      duration_ms: 14.5274
+      type: 'test'
+      ...
+    # Subtest: after 3 recorded failures
+    ok 2 - after 3 recorded failures
+      ---
+      duration_ms: 16.7008
+      type: 'test'
+      ...
+    1..2
+ok 43 - cancellation wins when it races failure persistence
+  ---
+  duration_ms: 32.3559
+  type: 'test'
+  ...
+# Subtest: raw file submissions hash and persist the original bytes
+ok 44 - raw file submissions hash and persist the original bytes
+  ---
+  duration_ms: 18.0867
+  type: 'test'
+  ...
+# Subtest: cancelling through another lifecycle aborts the running parser signal
+ok 45 - cancelling through another lifecycle aborts the running parser signal
+  ---
+  duration_ms: 18.7412
+  type: 'test'
+  ...
+# Subtest: Ticket 04 KB-02B: knowledge ownership survives retry, cancellation and activation
+ok 46 - Ticket 04 KB-02B: knowledge ownership survives retry, cancellation and activation
+  ---
+  duration_ms: 22.2348
+  type: 'test'
+  ...
+# Subtest: Ticket 06 P3: openDb migration adds tenant_id/allowed_groups columns to page_index_nodes with correct DEFAULTs
+ok 47 - Ticket 06 P3: openDb migration adds tenant_id/allowed_groups columns to page_index_nodes with correct DEFAULTs
+  ---
+  duration_ms: 36.886
+  type: 'test'
+  ...
+# Subtest: Ticket 06 P3: replaceNodes() without accessMetadata falls back to DEFAULT 'default' / '[]'
+ok 48 - Ticket 06 P3: replaceNodes() without accessMetadata falls back to DEFAULT 'default' / '[]'
+  ---
+  duration_ms: 10.9964
+  type: 'test'
+  ...
+# Subtest: Ticket 06 P3: replaceNodes() with accessMetadata writes the provided tenantId/allowedGroups
+ok 49 - Ticket 06 P3: replaceNodes() with accessMetadata writes the provided tenantId/allowedGroups
+  ---
+  duration_ms: 15.6222
+  type: 'test'
+  ...
+# Subtest: Ticket 06 P3: replaceNodes() applies accessMetadata to every node in the batch
+ok 50 - Ticket 06 P3: replaceNodes() applies accessMetadata to every node in the batch
+  ---
+  duration_ms: 9.4661
+  type: 'test'
+  ...
+# Subtest: Ticket 06 P3: getNodesByDocument() returns PageIndexNode with tenantId/allowedGroups populated
+ok 51 - Ticket 06 P3: getNodesByDocument() returns PageIndexNode with tenantId/allowedGroups populated
+  ---
+  duration_ms: 12.4083
+  type: 'test'
+  ...
+# Subtest: Ticket 06 P3: getNodesByDocument() returns DEFAULT access metadata when replaceNodes omitted it
+ok 52 - Ticket 06 P3: getNodesByDocument() returns DEFAULT access metadata when replaceNodes omitted it
+  ---
+  duration_ms: 12.9995
+  type: 'test'
+  ...
+# Subtest: Ticket 06 P3: searchNodes() returns PageIndexNode with access metadata populated
+ok 53 - Ticket 06 P3: searchNodes() returns PageIndexNode with access metadata populated
+  ---
+  duration_ms: 10.9104
+  type: 'test'
+  ...
+# Subtest: Ticket 06 P3: replaceNodes() overwrites previous access metadata on re-replace (immutability = no UPDATE, but DELETE+INSERT is allowed)
+ok 54 - Ticket 06 P3: replaceNodes() overwrites previous access metadata on re-replace (immutability = no UPDATE, but DELETE+INSERT is allowed)
+  ---
+  duration_ms: 12.1687
+  type: 'test'
+  ...
+# Subtest: PT-10 AC01: five higher-sorted foreign-knowledge-base nodes leave the target's bounded slot intact
+ok 55 - PT-10 AC01: five higher-sorted foreign-knowledge-base nodes leave the target's bounded slot intact
+  ---
+  duration_ms: 14.3705
+  type: 'test'
+  ...
+# Subtest: PT-10 AC02: cross-tenant matches sorting ahead of the target never consume its slot
+ok 56 - PT-10 AC02: cross-tenant matches sorting ahead of the target never consume its slot
+  ---
+  duration_ms: 18.802
+  type: 'test'
+  ...
+# Subtest: PT-10 AC02: an invisible group's nodes never consume a group-restricted caller's slots
+ok 57 - PT-10 AC02: an invisible group's nodes never consume a group-restricted caller's slots
+  ---
+  duration_ms: 12.7158
+  type: 'test'
+  ...
+# Subtest: PT-10 AC02: non-active document versions never consume the active caller's slots
+ok 58 - PT-10 AC02: non-active document versions never consume the active caller's slots
+  ---
+  duration_ms: 16.2371
+  type: 'test'
+  ...
+# Subtest: PT-10 AC03: a configured-but-empty active set selects nothing while an unconfigured axis keeps the default behavior
+ok 59 - PT-10 AC03: a configured-but-empty active set selects nothing while an unconfigured axis keeps the default behavior
+  ---
+  duration_ms: 10.587
+  type: 'test'
+  ...
+# Subtest: PT-10 AC03: the SQL active axis is exactly ActiveVersionRepository.getActiveDocIds()
+ok 60 - PT-10 AC03: the SQL active axis is exactly ActiveVersionRepository.getActiveDocIds()
+  ---
+  duration_ms: 10.1591
+  type: 'test'
+  ...
+# Subtest: PT-10 AC04: an untagged legacy row stays refused under an explicit scope and selectable without one
+ok 61 - PT-10 AC04: an untagged legacy row stays refused under an explicit scope and selectable without one
+  ---
+  duration_ms: 12.3304
+  type: 'test'
+  ...
+# Subtest: PT-10 AC04: a multi-knowledge-base scope returns the union of the named bases only
+ok 62 - PT-10 AC04: a multi-knowledge-base scope returns the union of the named bases only
+  ---
+  duration_ms: 8.9332
+  type: 'test'
+  ...
+# Subtest: PT-10 AC05: eight eligible nodes return the first five in the stable (document_id, node_id) order
+ok 63 - PT-10 AC05: eight eligible nodes return the first five in the stable (document_id, node_id) order
+  ---
+  duration_ms: 10.4185
+  type: 'test'
+  ...
+# Subtest: PT-10 AC07: LIKE wildcards stay literal, zero hits stay empty, and metadata still comes back
+ok 64 - PT-10 AC07: LIKE wildcards stay literal, zero hits stay empty, and metadata still comes back
+  ---
+  duration_ms: 12.064
+  type: 'test'
+  ...
+# Subtest: PT-10 AC07: a malformed access-metadata row degrades exactly like the application-layer filter
+ok 65 - PT-10 AC07: a malformed access-metadata row degrades exactly like the application-layer filter
+  ---
+  duration_ms: 11.6554
+  type: 'test'
+  ...
+# Subtest: PT-10 AC08: eligibility is resolved in the query — ineligible matches are never materialised
+ok 66 - PT-10 AC08: eligibility is resolved in the query — ineligible matches are never materialised
+  ---
+  duration_ms: 54.5561
+  type: 'test'
+  ...
+# Subtest: PT-10 AC08: a 2,000-document active set adds no bound parameters to the node query
+ok 67 - PT-10 AC08: a 2,000-document active set adds no bound parameters to the node query
+  ---
+  duration_ms: 34.1944
+  type: 'test'
+  ...
+# Subtest: P4 retire: returns null for non-existent source (404)
+ok 68 - P4 retire: returns null for non-existent source (404)
+  ---
+  duration_ms: 36.9006
+  type: 'test'
+  ...
+# Subtest: P4 retire: returns null for cross-tenant source (404)
+ok 69 - P4 retire: returns null for cross-tenant source (404)
+  ---
+  duration_ms: 12.165
+  type: 'test'
+  ...
+# Subtest: P4 retire on active source: transitions to retired + creates tombstone + enqueues 4 cleanup tasks per doc
+ok 70 - P4 retire on active source: transitions to retired + creates tombstone + enqueues 4 cleanup tasks per doc
+  ---
+  duration_ms: 18.4863
+  type: 'test'
+  ...
+# Subtest: P4 retire on quarantined source: quarantined → retired is legal
+ok 71 - P4 retire on quarantined source: quarantined → retired is legal
+  ---
+  duration_ms: 15.7424
+  type: 'test'
+  ...
+# Subtest: P4 retire with multiple docs: enqueues 4*N tasks + tombstone records all doc_ids
+ok 72 - P4 retire with multiple docs: enqueues 4*N tasks + tombstone records all doc_ids
+  ---
+  duration_ms: 10.798
+  type: 'test'
+  ...
+# Subtest: P4 retire with zero docs: enqueues zero tasks + tombstone with empty retired_version_ids
+ok 73 - P4 retire with zero docs: enqueues zero tasks + tombstone with empty retired_version_ids
+  ---
+  duration_ms: 9.2642
+  type: 'test'
+  ...
+# Subtest: P4 retire on already-retired source: idempotent (no new tombstone, no duplicate tasks)
+ok 74 - P4 retire on already-retired source: idempotent (no new tombstone, no duplicate tasks)
+  ---
+  duration_ms: 10.8725
+  type: 'test'
+  ...
+# Subtest: P4 idempotent retire: enqueues MISSING tasks only (handles interrupted previous retire)
+ok 75 - P4 idempotent retire: enqueues MISSING tasks only (handles interrupted previous retire)
+  ---
+  duration_ms: 15.8072
+  type: 'test'
+  ...
+# Subtest: P4 tombstone: records reason and actor verbatim
+ok 76 - P4 tombstone: records reason and actor verbatim
+  ---
+  duration_ms: 10.7948
+  type: 'test'
+  ...
+# Subtest: P4 cleanup ops: enqueues exactly cleanup_es, cleanup_neo4j, cleanup_pageindex, cleanup_images per doc
+ok 77 - P4 cleanup ops: enqueues exactly cleanup_es, cleanup_neo4j, cleanup_pageindex, cleanup_images per doc
+  ---
+  duration_ms: 10.5776
+  type: 'test'
+  ...
+# Subtest: P4 safety property: retired state persists across idempotent re-calls (no reactivation)
+ok 78 - P4 safety property: retired state persists across idempotent re-calls (no reactivation)
+  ---
+  duration_ms: 12.2562
+  type: 'test'
+  ...
+# Subtest: P4 RetirementResult shape: first call returns idempotent=false + tombstoneId
+ok 79 - P4 RetirementResult shape: first call returns idempotent=false + tombstoneId
+  ---
+  duration_ms: 10.7317
+  type: 'test'
+  ...
+# Subtest: retirement retracts existing Wiki contributions even when generation is disabled
+ok 80 - retirement retracts existing Wiki contributions even when generation is disabled
+  ---
+  duration_ms: 12.8777
+  type: 'test'
+  ...
+# Subtest: a knowledge-base wipe retires every source of that base and only that base
+ok 81 - a knowledge-base wipe retires every source of that base and only that base
+  ---
+  duration_ms: 12.0905
+  type: 'test'
+  ...
+# Subtest: a wipe keeps the metadata rows and writes one tombstone per source
+ok 82 - a wipe keeps the metadata rows and writes one tombstone per source
+  ---
+  duration_ms: 10.3675
+  type: 'test'
+  ...
+# Subtest: a second wipe reports everything as already retired and queues nothing again
+ok 83 - a second wipe reports everything as already retired and queues nothing again
+  ---
+  duration_ms: 11.526
+  type: 'test'
+  ...
+# Subtest: a partially retired knowledge base splits the counts honestly
+ok 84 - a partially retired knowledge base splits the counts honestly
+  ---
+  duration_ms: 10.2731
+  type: 'test'
+  ...
+# Subtest: another tenant's source under the same knowledge-base id is out of reach
+ok 85 - another tenant's source under the same knowledge-base id is out of reach
+  ---
+  duration_ms: 10.2876
+  type: 'test'
+  ...
+# Subtest: an unknown knowledge base id wipes nothing
+ok 86 - an unknown knowledge base id wipes nothing
+  ---
+  duration_ms: 10.3646
+  type: 'test'
+  ...
+# Subtest: C4: a retirement command hands its trace to the wiki retraction job
+ok 87 - C4: a retirement command hands its trace to the wiki retraction job
+  ---
+  duration_ms: 11.575
+  type: 'test'
+  ...
+# Subtest: P2 getSource: returns null for non-existent source
+ok 88 - P2 getSource: returns null for non-existent source
+  ---
+  duration_ms: 25.7955
+  type: 'test'
+  ...
+# Subtest: P2 getSource: returns null for cross-tenant source (no information leak)
+ok 89 - P2 getSource: returns null for cross-tenant source (no information leak)
+  ---
+  duration_ms: 8.3892
+  type: 'test'
+  ...
+# Subtest: P2 getSource: returns entry with lifecycle_state='active' for new source
+ok 90 - P2 getSource: returns entry with lifecycle_state='active' for new source
+  ---
+  duration_ms: 8.6401
+  type: 'test'
+  ...
+# Subtest: P2 transition: active → quarantined succeeds
+ok 91 - P2 transition: active → quarantined succeeds
+  ---
+  duration_ms: 22.4056
+  type: 'test'
+  ...
+# Subtest: P2 transition: active → retired succeeds
+ok 92 - P2 transition: active → retired succeeds
+  ---
+  duration_ms: 10.5609
+  type: 'test'
+  ...
+# Subtest: P2 transition: quarantined → active succeeds (manual un-quarantine)
+ok 93 - P2 transition: quarantined → active succeeds (manual un-quarantine)
+  ---
+  duration_ms: 16.0264
+  type: 'test'
+  ...
+# Subtest: P2 transition: quarantined → retired succeeds (escalation)
+ok 94 - P2 transition: quarantined → retired succeeds (escalation)
+  ---
+  duration_ms: 16.7529
+  type: 'test'
+  ...
+# Subtest: P2 transition: retired → active throws InvalidSourceLifecycleTransitionError (L1593 non-reactivation)
+ok 95 - P2 transition: retired → active throws InvalidSourceLifecycleTransitionError (L1593 non-reactivation)
+  ---
+  duration_ms: 11.0215
+  type: 'test'
+  ...
+# Subtest: P2 transition: retired → quarantined throws (retired is terminal)
+ok 96 - P2 transition: retired → quarantined throws (retired is terminal)
+  ---
+  duration_ms: 9.1784
+  type: 'test'
+  ...
+# Subtest: P2 transition: same-state transition throws (strict — HTTP layer handles idempotency)
+ok 97 - P2 transition: same-state transition throws (strict — HTTP layer handles idempotency)
+  ---
+  duration_ms: 8.1387
+  type: 'test'
+  ...
+# Subtest: P2 transition: returns null for non-existent source (404 semantics)
+ok 98 - P2 transition: returns null for non-existent source (404 semantics)
+  ---
+  duration_ms: 7.6864
+  type: 'test'
+  ...
+# Subtest: P2 transition: returns null for cross-tenant source (404, no leak)
+ok 99 - P2 transition: returns null for cross-tenant source (404, no leak)
+  ---
+  duration_ms: 8.9523
+  type: 'test'
+  ...
+# Subtest: P2 createTombstone: inserts row and returns SourceTombstone
+ok 100 - P2 createTombstone: inserts row and returns SourceTombstone
+  ---
+  duration_ms: 9.4449
+  type: 'test'
+  ...
+# Subtest: P2 getLatestTombstone: returns null when no tombstone exists
+ok 101 - P2 getLatestTombstone: returns null when no tombstone exists
+  ---
+  duration_ms: 9.2007
+  type: 'test'
+  ...
+# Subtest: P2 getLatestTombstone: returns null for cross-tenant source
+ok 102 - P2 getLatestTombstone: returns null for cross-tenant source
+  ---
+  duration_ms: 8.2916
+  type: 'test'
+  ...
+# Subtest: P2 getLatestTombstone: returns most recent tombstone when multiple exist for same source
+ok 103 - P2 getLatestTombstone: returns most recent tombstone when multiple exist for same source
+  ---
+  duration_ms: 9.4381
+  type: 'test'
+  ...
+# Subtest: P2 transition: updatedAt is refreshed on every successful transition
+ok 104 - P2 transition: updatedAt is refreshed on every successful transition
+  ---
+  duration_ms: 9.8378
+  type: 'test'
+  ...
+# Subtest: P2 SourceLifecycleEntry: returned entry shape matches interface
+ok 105 - P2 SourceLifecycleEntry: returned entry shape matches interface
+  ---
+  duration_ms: 9.3381
+  type: 'test'
+  ...
+# [search] attachment channel unavailable: attachment store unavailable
+# [search] attachment channel unavailable: attachment store unavailable
+# (node:4716) ExperimentalWarning: localStorage is not available because --localstorage-file was not provided.
+# (Use `node --trace-warnings ...` to show where the warning was created)
+# Subtest: the attachment channel joins a search only when the run carries a session
+ok 106 - the attachment channel joins a search only when the run carries a session
+  ---
+  duration_ms: 49.0953
+  type: 'test'
+  ...
+# Subtest: a session with no knowledge selection still answers from its own attachments
+ok 107 - a session with no knowledge selection still answers from its own attachments
+  ---
+  duration_ms: 11.3085
+  type: 'test'
+  ...
+# Subtest: another session's attachment is unreachable, even for the same user
+ok 108 - another session's attachment is unreachable, even for the same user
+  ---
+  duration_ms: 12.3689
+  type: 'test'
+  ...
+# Subtest: temporary citations say attachment, never knowledge-base membership
+ok 109 - temporary citations say attachment, never knowledge-base membership
+  ---
+  duration_ms: 17.0651
+  type: 'test'
+  ...
+# Subtest: a fresh session has nothing to retrieve until a file is attached
+ok 110 - a fresh session has nothing to retrieve until a file is attached
+  ---
+  duration_ms: 14.7563
+  type: 'test'
+  ...
+# Subtest: PT-02 AC05: a failing attachment source degrades the search and names the channel
+ok 111 - PT-02 AC05: a failing attachment source degrades the search and names the channel
+  ---
+  duration_ms: 2.1823
+  type: 'test'
+  ...
+# Subtest: PT-02 AC05: an empty knowledge scope with a failing attachment source stays insufficient and says why
+ok 112 - PT-02 AC05: an empty knowledge scope with a failing attachment source stays insufficient and says why
+  ---
+  duration_ms: 17.3687
+  type: 'test'
+  ...
+# Subtest: PT-02 AC05: a composition without attachment capability keeps the fail-closed empty scope
+ok 113 - PT-02 AC05: a composition without attachment capability keeps the fail-closed empty scope
+  ---
+  duration_ms: 0.398
+  type: 'test'
+  ...
+# Subtest: PT-02 AC04: every search of one run reads the same bound session triple
+ok 114 - PT-02 AC04: every search of one run reads the same bound session triple
+  ---
+  duration_ms: 12.8426
+  type: 'test'
+  ...
+# (node:52784) ExperimentalWarning: localStorage is not available because --localstorage-file was not provided.
+# (Use `node --trace-warnings ...` to show where the warning was created)
+# Subtest: BF-01: BM25 and assembled parents exclude a retired source before cleanup
+ok 115 - BF-01: BM25 and assembled parents exclude a retired source before cleanup
+  ---
+  duration_ms: 98.0336
+  type: 'test'
+  ...
+# Subtest: BF-01: PageIndex navigation and hydrated context exclude retirement while nodes remain stored
+ok 116 - BF-01: PageIndex navigation and hydrated context exclude retirement while nodes remain stored
+  ---
+  duration_ms: 33.9798
+  type: 'test'
+  ...
+# Subtest: BF-01: vector results and parents stay hidden with an empty active set
+ok 117 - BF-01: vector results and parents stay hidden with an empty active set
+  ---
+  duration_ms: 14.6617
+  type: 'test'
+  ...
+# Subtest: BF-01: delayed and failed cleanup cannot restore BM25, vector or PageIndex visibility
+ok 118 - BF-01: delayed and failed cleanup cannot restore BM25, vector or PageIndex visibility
+  ---
+  duration_ms: 54.4608
+  type: 'test'
+  ...
+# Subtest: BF-01: lifecycle filtering preserves version, tenant, group and knowledge-base exclusions
+ok 119 - BF-01: lifecycle filtering preserves version, tenant, group and knowledge-base exclusions
+  ---
+  duration_ms: 68.55
+  type: 'test'
+  ...
+# [search] parent expansion unavailable: parent lookup failed
+# [search] reranker unavailable: reranker model timeout
+# [search] graph channel unavailable: neo4j unavailable
+# [search] vector channel unavailable: unavailable
+# [search] bm25 channel unavailable: unavailable
+# [search] graph channel unavailable: unavailable
+# [search] pageIndex channel unavailable: unavailable
+# [search] pageIndex channel unavailable: unavailable
+# [search] graph channel unavailable: Neo4j: could not perform discovery
+# [search] graph channel unavailable: neo4j unavailable
+# [search] graph channel unavailable: ServiceUnavailable: Neo4j bolt connection refused
+# [search] graph channel unavailable: Neo4j unreachable
+# [search] bm25 channel unavailable: bm25 unavailable
+# [search] vector channel unavailable: unavailable
+# [search] bm25 channel unavailable: unavailable
+# Subtest: RRF preserves channel and graph provenance for shared evidence
+ok 120 - RRF preserves channel and graph provenance for shared evidence
+  ---
+  duration_ms: 11.7008
+  type: 'test'
+  ...
+# Subtest: RRF does not collapse equal chunk ids from different document versions
+ok 121 - RRF does not collapse equal chunk ids from different document versions
+  ---
+  duration_ms: 1.4219
+  type: 'test'
+  ...
+# Subtest: runtime search recalls child, image, and legacy passages and loads parents by document
+ok 122 - runtime search recalls child, image, and legacy passages and loads parents by document
+  ---
+  duration_ms: 2.6723
+  type: 'test'
+  ...
+# Subtest: graph search follows provenance back to chunk evidence
+ok 123 - graph search follows provenance back to chunk evidence
+  ---
+  duration_ms: 10.9121
+  type: 'test'
+  ...
+# Subtest: graph search bounds provenance lookup and keeps relationships on supporting chunks
+ok 124 - graph search bounds provenance lookup and keeps relationships on supporting chunks
+  ---
+  duration_ms: 4.1254
+  type: 'test'
+  ...
+# Subtest: hybrid search owns all channels, fusion, reranking, dedupe, and top-K
+ok 125 - hybrid search owns all channels, fusion, reranking, dedupe, and top-K
+  ---
+  duration_ms: 2.77
+  type: 'test'
+  ...
+# Subtest: child recall expands a bounded parent without changing evidence identity
+ok 126 - child recall expands a bounded parent without changing evidence identity
+  ---
+  duration_ms: 1.07
+  type: 'test'
+  ...
+# Subtest: parent expansion failure degrades to the recalled child
+ok 127 - parent expansion failure degrades to the recalled child
+  ---
+  duration_ms: 1.5394
+  type: 'test'
+  ...
+# Subtest: missing parent records degrade without dropping recalled children
+ok 128 - missing parent records degrade without dropping recalled children
+  ---
+  duration_ms: 0.7079
+  type: 'test'
+  ...
+# Subtest: reranker adapter reject degrades to fused results without escaping the seam
+ok 129 - reranker adapter reject degrades to fused results without escaping the seam
+  ---
+  duration_ms: 1.0043
+  type: 'test'
+  ...
+# Subtest: one unavailable channel returns degraded results from the others
+ok 130 - one unavailable channel returns degraded results from the others
+  ---
+  duration_ms: 1.185
+  type: 'test'
+  ...
+# Subtest: all unavailable channels return an explicit insufficient outcome
+ok 131 - all unavailable channels return an explicit insufficient outcome
+  ---
+  duration_ms: 0.9807
+  type: 'test'
+  ...
+# Subtest: page index search recalls chunks linked to matching page index nodes
+ok 132 - page index search recalls chunks linked to matching page index nodes
+  ---
+  duration_ms: 0.8985
+  type: 'test'
+  ...
+# Subtest: pageIndex channel participates in fusion and degrades when unavailable
+ok 133 - pageIndex channel participates in fusion and degrades when unavailable
+  ---
+  duration_ms: 0.8075
+  type: 'test'
+  ...
+# Subtest: active version filter excludes chunks from non-active document versions
+ok 134 - active version filter excludes chunks from non-active document versions
+  ---
+  duration_ms: 0.7383
+  type: 'test'
+  ...
+# Subtest: no active version filter when repo is absent
+ok 135 - no active version filter when repo is absent
+  ---
+  duration_ms: 1.1556
+  type: 'test'
+  ...
+# Subtest: Ticket 07 P1: Searcher.search passes accessContext to each channel
+ok 136 - Ticket 07 P1: Searcher.search passes accessContext to each channel
+  ---
+  duration_ms: 0.741
+  type: 'test'
+  ...
+# Subtest: Ticket 07 P1: Searcher.search passes undefined accessContext when omitted (backward compat)
+ok 137 - Ticket 07 P1: Searcher.search passes undefined accessContext when omitted (backward compat)
+  ---
+  duration_ms: 0.4714
+  type: 'test'
+  ...
+# Subtest: Ticket 07 P2: vectorSearch includes tenant filter when accessContext is provided
+ok 138 - Ticket 07 P2: vectorSearch includes tenant filter when accessContext is provided
+  ---
+  duration_ms: 0.4427
+  type: 'test'
+  ...
+# Subtest: Ticket 07 P2: vectorSearch includes group filter when accessContext.groups is non-empty
+ok 139 - Ticket 07 P2: vectorSearch includes group filter when accessContext.groups is non-empty
+  ---
+  duration_ms: 0.3083
+  type: 'test'
+  ...
+# Subtest: Ticket 07 P2: vectorSearch without accessContext has no tenant or group filter (backward compat)
+ok 140 - Ticket 07 P2: vectorSearch without accessContext has no tenant or group filter (backward compat)
+  ---
+  duration_ms: 0.7276
+  type: 'test'
+  ...
+# Subtest: Ticket 07 P2: bm25Search includes tenant and group filter when accessContext is provided
+ok 141 - Ticket 07 P2: bm25Search includes tenant and group filter when accessContext is provided
+  ---
+  duration_ms: 2.7251
+  type: 'test'
+  ...
+# Subtest: Ticket 07 P2: bm25Search without accessContext has no tenant or group filter (backward compat)
+ok 142 - Ticket 07 P2: bm25Search without accessContext has no tenant or group filter (backward compat)
+  ---
+  duration_ms: 0.4677
+  type: 'test'
+  ...
+# Subtest: Ticket 07 P3: pageIndexSearch filters PageIndex nodes by tenantId before ES lookup
+ok 143 - Ticket 07 P3: pageIndexSearch filters PageIndex nodes by tenantId before ES lookup
+  ---
+  duration_ms: 1.6943
+  type: 'test'
+  ...
+# Subtest: Ticket 07 P3: pageIndexSearch filters PageIndex nodes by allowedGroups for group-restricted user
+ok 144 - Ticket 07 P3: pageIndexSearch filters PageIndex nodes by allowedGroups for group-restricted user
+  ---
+  duration_ms: 0.7165
+  type: 'test'
+  ...
+# Subtest: Ticket 07 P3: pageIndexSearch without accessContext does not filter nodes (backward compat)
+ok 145 - Ticket 07 P3: pageIndexSearch without accessContext does not filter nodes (backward compat)
+  ---
+  duration_ms: 6.8984
+  type: 'test'
+  ...
+# Subtest: Ticket 07 P3: pageIndexSearch ES recheck includes ACL filter when accessContext provided
+ok 146 - Ticket 07 P3: pageIndexSearch ES recheck includes ACL filter when accessContext provided
+  ---
+  duration_ms: 0.493
+  type: 'test'
+  ...
+# Subtest: Ticket 07 P4: graphSearch filters provenance by tenantId before ES recheck
+ok 147 - Ticket 07 P4: graphSearch filters provenance by tenantId before ES recheck
+  ---
+  duration_ms: 0.8114
+  type: 'test'
+  ...
+# Subtest: Ticket 07 P4: graphSearch filters provenance by allowedGroups for group-restricted user
+ok 148 - Ticket 07 P4: graphSearch filters provenance by allowedGroups for group-restricted user
+  ---
+  duration_ms: 0.5187
+  type: 'test'
+  ...
+# Subtest: Ticket 07 P4: graphSearch without accessContext does not filter provenance (backward compat)
+ok 149 - Ticket 07 P4: graphSearch without accessContext does not filter provenance (backward compat)
+  ---
+  duration_ms: 0.3384
+  type: 'test'
+  ...
+# Subtest: Ticket 07 P4: graphSearch ES recheck includes ACL filter when accessContext provided
+ok 150 - Ticket 07 P4: graphSearch ES recheck includes ACL filter when accessContext provided
+  ---
+  duration_ms: 2.8414
+  type: 'test'
+  ...
+# Subtest: Ticket 07 P4: graphSearch legacy 2-element provenance passes through app-layer filter to ES gate
+ok 151 - Ticket 07 P4: graphSearch legacy 2-element provenance passes through app-layer filter to ES gate
+  ---
+  duration_ms: 0.6133
+  type: 'test'
+  ...
+# Subtest: P2.2 fallback path is exercised when provenance is empty (multi_match query shape, not primary bool.should)
+ok 152 - P2.2 fallback path is exercised when provenance is empty (multi_match query shape, not primary bool.should)
+  ---
+  duration_ms: 1.019
+  type: 'test'
+  ...
+# Subtest: P2.2 fallback deny: missing tenant tag → tenantId filter present (fail closed for untagged)
+ok 153 - P2.2 fallback deny: missing tenant tag → tenantId filter present (fail closed for untagged)
+  ---
+  duration_ms: 1.2506
+  type: 'test'
+  ...
+# Subtest: P2.2 fallback deny: cross-tenant → tenantId filter present (denies tenant-b chunk when caller is tenant-a)
+ok 154 - P2.2 fallback deny: cross-tenant → tenantId filter present (denies tenant-b chunk when caller is tenant-a)
+  ---
+  duration_ms: 1.0631
+  type: 'test'
+  ...
+# Subtest: P2.2 fallback deny: wrong group → allowedGroups filter present (denies non-intersecting group)
+ok 155 - P2.2 fallback deny: wrong group → allowedGroups filter present (denies non-intersecting group)
+  ---
+  duration_ms: 0.8452
+  type: 'test'
+  ...
+# Subtest: P2.2 fallback deny: inactive version → documentId terms filter present (denies non-active documents)
+ok 156 - P2.2 fallback deny: inactive version → documentId terms filter present (denies non-active documents)
+  ---
+  duration_ms: 5.1048
+  type: 'test'
+  ...
+# Subtest: P2.2 fallback backward compat: no accessContext and no activeVersionRepo → fallback filter unchanged (just childFilter)
+ok 157 - P2.2 fallback backward compat: no accessContext and no activeVersionRepo → fallback filter unchanged (just childFilter)
+  ---
+  duration_ms: 1.5035
+  type: 'test'
+  ...
+# Subtest: P2.3 outage: graph driver session.run throws → SearcherImpl degrades gracefully (graph unavailable, other channels produce results)
+ok 158 - P2.3 outage: graph driver session.run throws → SearcherImpl degrades gracefully (graph unavailable, other channels produce results)
+  ---
+  duration_ms: 2.405
+  type: 'test'
+  ...
+# Subtest: P2.3 outage: accessContext propagated to all available channels during graph outage
+ok 159 - P2.3 outage: accessContext propagated to all available channels during graph outage
+  ---
+  duration_ms: 1.4434
+  type: 'test'
+  ...
+# Subtest: P2.3 outage: no unauthorized leak — ES queries from available channels contain all 3 ACL filters (tenant + group + active-version) during outage
+ok 160 - P2.3 outage: no unauthorized leak — ES queries from available channels contain all 3 ACL filters (tenant + group + active-version) during outage
+  ---
+  duration_ms: 1.8989
+  type: 'test'
+  ...
+# Subtest: P2.3 outage: backward compat — accessContext undefined → degradation behavior unchanged (no ACL filter)
+ok 161 - P2.3 outage: backward compat — accessContext undefined → degradation behavior unchanged (no ACL filter)
+  ---
+  duration_ms: 0.8357
+  type: 'test'
+  ...
+# Subtest: P2.3 outage: graph driver session() throws (driver itself broken) → graphSearch throws before ES query
+ok 162 - P2.3 outage: graph driver session() throws (driver itself broken) → graphSearch throws before ES query
+  ---
+  duration_ms: 0.8642
+  type: 'test'
+  ...
+# Subtest: P2.3 outage: no hang — search completes promptly during graph outage
+ok 163 - P2.3 outage: no hang — search completes promptly during graph outage
+  ---
+  duration_ms: 0.9671
+  type: 'test'
+  ...
+# Subtest: P2.3 provenance regression: fallback path (empty provenance) Evidence carries all 3 ACL attributions (tenant + group + active-version)
+ok 164 - P2.3 provenance regression: fallback path (empty provenance) Evidence carries all 3 ACL attributions (tenant + group + active-version)
+  ---
+  duration_ms: 0.4656
+  type: 'test'
+  ...
+# Subtest: P2.3 outage: full SearcherImpl flow with RuntimeSearchOperations — graph throws, other channels produce ACL-filtered Evidence
+ok 165 - P2.3 outage: full SearcherImpl flow with RuntimeSearchOperations — graph throws, other channels produce ACL-filtered Evidence
+  ---
+  duration_ms: 0.6983
+  type: 'test'
+  ...
+# Subtest: Ticket 07 P5: loadParents includes tenant filter when accessContext provided
+ok 166 - Ticket 07 P5: loadParents includes tenant filter when accessContext provided
+  ---
+  duration_ms: 0.2686
+  type: 'test'
+  ...
+# Subtest: Ticket 07 P5: loadParents includes group filter when accessContext.groups is non-empty
+ok 167 - Ticket 07 P5: loadParents includes group filter when accessContext.groups is non-empty
+  ---
+  duration_ms: 0.1853
+  type: 'test'
+  ...
+# Subtest: Ticket 07 P5: loadParents without accessContext has no filter (backward compat)
+ok 168 - Ticket 07 P5: loadParents without accessContext has no filter (backward compat)
+  ---
+  duration_ms: 0.1692
+  type: 'test'
+  ...
+# Subtest: Ticket 07 P5: SearcherImpl.search passes accessContext to loadParents
+ok 169 - Ticket 07 P5: SearcherImpl.search passes accessContext to loadParents
+  ---
+  duration_ms: 0.3608
+  type: 'test'
+  ...
+# Subtest: Ticket 06 P2: default search (no channels option) executes all four channels and omits unselectedChannels
+ok 170 - Ticket 06 P2: default search (no channels option) executes all four channels and omits unselectedChannels
+  ---
+  duration_ms: 0.3152
+  type: 'test'
+  ...
+# Subtest: Ticket 06 P2: single-channel subset (vector only) executes only vectorSearch and reports unselectedChannels
+ok 171 - Ticket 06 P2: single-channel subset (vector only) executes only vectorSearch and reports unselectedChannels
+  ---
+  duration_ms: 0.2693
+  type: 'test'
+  ...
+# Subtest: Ticket 06 P2: multi-channel subset (vector + bm25) executes only requested channels
+ok 172 - Ticket 06 P2: multi-channel subset (vector + bm25) executes only requested channels
+  ---
+  duration_ms: 0.2998
+  type: 'test'
+  ...
+# Subtest: Ticket 06 P2: degraded outcome with channel selection reports partial failure among selected channels only
+ok 173 - Ticket 06 P2: degraded outcome with channel selection reports partial failure among selected channels only
+  ---
+  duration_ms: 0.5255
+  type: 'test'
+  ...
+# Subtest: Ticket 06 P2: insufficient outcome with channel selection reports all selected channels unavailable
+ok 174 - Ticket 06 P2: insufficient outcome with channel selection reports all selected channels unavailable
+  ---
+  duration_ms: 1.0658
+  type: 'test'
+  ...
+# Subtest: Ticket 06 P2: ACL propagation with channel selection — accessContext passed to selected channels only
+ok 175 - Ticket 06 P2: ACL propagation with channel selection — accessContext passed to selected channels only
+  ---
+  duration_ms: 0.6515
+  type: 'test'
+  ...
+# Subtest: Ticket 06 P2: graphBudget omitted when graph channel not selected, present when selected
+ok 176 - Ticket 06 P2: graphBudget omitted when graph channel not selected, present when selected
+  ---
+  duration_ms: 3.2839
+  type: 'test'
+  ...
+# Subtest: P7.2 regression: mid-rerank cancellation terminates the run instead of degrading to reranker_unavailable
+ok 177 - P7.2 regression: mid-rerank cancellation terminates the run instead of degrading to reranker_unavailable
+  ---
+  duration_ms: 0.8459
+  type: 'test'
+  ...
+# Subtest: P7.2 regression: mid-parent-load cancellation terminates the run instead of degrading to parent_expansion_unavailable
+ok 178 - P7.2 regression: mid-parent-load cancellation terminates the run instead of degrading to parent_expansion_unavailable
+  ---
+  duration_ms: 1.1217
+  type: 'test'
+  ...
+# [search] reranker unavailable: dedicated reranker is not configured (set RERANK_API_KEY and RERANK_BASE_URL)
+# [search] pageIndex channel unavailable: page index table unavailable
+# Subtest: P7.2 regression: hung Neo4j session.run rejects promptly on abort and closes the session
+ok 179 - P7.2 regression: hung Neo4j session.run rejects promptly on abort and closes the session
+  ---
+  duration_ms: 37.6414
+  type: 'test'
+  ...
+# Subtest: Ticket 05: vectorSearch scopes to the knowledge-base ids
+ok 180 - Ticket 05: vectorSearch scopes to the knowledge-base ids
+  ---
+  duration_ms: 0.7522
+  type: 'test'
+  ...
+# Subtest: Ticket 05: bm25Search scopes to the knowledge-base ids
+ok 181 - Ticket 05: bm25Search scopes to the knowledge-base ids
+  ---
+  duration_ms: 0.4261
+  type: 'test'
+  ...
+# Subtest: Ticket 05: an unscoped channel emits no knowledge-base clause (backward compat)
+ok 182 - Ticket 05: an unscoped channel emits no knowledge-base clause (backward compat)
+  ---
+  duration_ms: 0.5248
+  type: 'test'
+  ...
+# Subtest: Ticket 05: an explicit empty scope returns no evidence without any query or embedding
+ok 183 - Ticket 05: an explicit empty scope returns no evidence without any query or embedding
+  ---
+  duration_ms: 0.731
+  type: 'test'
+  ...
+# Subtest: Ticket 05: an empty scope dispatches no channel at all, all four requested
+ok 184 - Ticket 05: an empty scope dispatches no channel at all, all four requested
+  ---
+  duration_ms: 0.784
+  type: 'test'
+  ...
+# Subtest: Ticket 05: SearcherImpl.search forwards the retrieval scope to both channels
+ok 185 - Ticket 05: SearcherImpl.search forwards the retrieval scope to both channels
+  ---
+  duration_ms: 1.4978
+  type: 'test'
+  ...
+# Subtest: Ticket 05: contradictory documents in two knowledge bases never cross
+ok 186 - Ticket 05: contradictory documents in two knowledge bases never cross
+  ---
+  duration_ms: 2.7066
+  type: 'test'
+  ...
+# Subtest: Ticket 06: a shared entity does not reveal another knowledge base's relations or documents
+ok 187 - Ticket 06: a shared entity does not reveal another knowledge base's relations or documents
+  ---
+  duration_ms: 0.8262
+  type: 'test'
+  ...
+# Subtest: Ticket 06: graphSearch scoped recheck carries the knowledge-base clause and drops unowned provenance
+ok 188 - Ticket 06: graphSearch scoped recheck carries the knowledge-base clause and drops unowned provenance
+  ---
+  duration_ms: 2.8172
+  type: 'test'
+  ...
+# Subtest: Ticket 06: graphSearch name-fallback hydration carries the knowledge-base clause
+ok 189 - Ticket 06: graphSearch name-fallback hydration carries the knowledge-base clause
+  ---
+  duration_ms: 0.927
+  type: 'test'
+  ...
+# Subtest: Ticket 06: graphSearch without a scope keeps reading every knowledge base (backward compat)
+ok 190 - Ticket 06: graphSearch without a scope keeps reading every knowledge base (backward compat)
+  ---
+  duration_ms: 0.4939
+  type: 'test'
+  ...
+# Subtest: Ticket 06: a re-ingested chunk's tagged provenance outranks its legacy entry
+ok 191 - Ticket 06: a re-ingested chunk's tagged provenance outranks its legacy entry
+  ---
+  duration_ms: 0.4692
+  type: 'test'
+  ...
+# Subtest: Ticket 06: graphSearch with an explicit empty scope queries nothing
+ok 192 - Ticket 06: graphSearch with an explicit empty scope queries nothing
+  ---
+  duration_ms: 0.2678
+  type: 'test'
+  ...
+# Subtest: Ticket 06: pageIndexSearch filters nodes by knowledge base and carries the clause into hydration
+ok 193 - Ticket 06: pageIndexSearch filters nodes by knowledge base and carries the clause into hydration
+  ---
+  duration_ms: 0.8752
+  type: 'test'
+  ...
+# Subtest: Ticket 06: pageIndexSearch without a scope keeps reading every knowledge base (backward compat)
+ok 194 - Ticket 06: pageIndexSearch without a scope keeps reading every knowledge base (backward compat)
+  ---
+  duration_ms: 1.37
+  type: 'test'
+  ...
+# Subtest: Ticket 06: pageIndexSearch with an explicit empty scope queries nothing
+ok 195 - Ticket 06: pageIndexSearch with an explicit empty scope queries nothing
+  ---
+  duration_ms: 0.3293
+  type: 'test'
+  ...
+# Subtest: Ticket 06: SearcherImpl.search forwards the retrieval scope to graph and PageIndex channels
+ok 196 - Ticket 06: SearcherImpl.search forwards the retrieval scope to graph and PageIndex channels
+  ---
+  duration_ms: 0.3936
+  type: 'test'
+  ...
+# Subtest: Ticket 07: loadParents carries the knowledge-base clause when a scope is provided
+ok 197 - Ticket 07: loadParents carries the knowledge-base clause when a scope is provided
+  ---
+  duration_ms: 0.2317
+  type: 'test'
+  ...
+# Subtest: Ticket 07: loadParents never hydrates a parent outside the scope
+ok 198 - Ticket 07: loadParents never hydrates a parent outside the scope
+  ---
+  duration_ms: 0.3205
+  type: 'test'
+  ...
+# Subtest: Ticket 07: loadParents without a scope keeps the legacy query shape
+ok 199 - Ticket 07: loadParents without a scope keeps the legacy query shape
+  ---
+  duration_ms: 0.1939
+  type: 'test'
+  ...
+# Subtest: Ticket 07: loadParents with an explicit empty scope returns nothing without a query
+ok 200 - Ticket 07: loadParents with an explicit empty scope returns nothing without a query
+  ---
+  duration_ms: 0.4729
+  type: 'test'
+  ...
+# Subtest: Ticket 07: SearcherImpl forwards the run's scope object identity into parent expansion
+ok 201 - Ticket 07: SearcherImpl forwards the run's scope object identity into parent expansion
+  ---
+  duration_ms: 0.517
+  type: 'test'
+  ...
+# Subtest: PT-10 AC01: five higher-sorted foreign-knowledge-base nodes no longer push the target out of the PageIndex quota
+ok 202 - PT-10 AC01: five higher-sorted foreign-knowledge-base nodes no longer push the target out of the PageIndex quota
+  ---
+  duration_ms: 2.0057
+  type: 'test'
+  ...
+# Subtest: PT-10 AC02: cross-tenant matches sorting ahead of the target never consume its slot
+ok 203 - PT-10 AC02: cross-tenant matches sorting ahead of the target never consume its slot
+  ---
+  duration_ms: 1.5328
+  type: 'test'
+  ...
+# Subtest: PT-10 AC02: an invisible group's nodes never consume a group-restricted caller's slot
+ok 204 - PT-10 AC02: an invisible group's nodes never consume a group-restricted caller's slot
+  ---
+  duration_ms: 11.5088
+  type: 'test'
+  ...
+# Subtest: PT-10 AC02: a non-active document version never consumes the active caller's slot
+ok 205 - PT-10 AC02: a non-active document version never consumes the active caller's slot
+  ---
+  duration_ms: 1.1655
+  type: 'test'
+  ...
+# Subtest: PT-10 AC03: a configured-but-empty active set hides everything while an unconfigured repository keeps the default read
+ok 206 - PT-10 AC03: a configured-but-empty active set hides everything while an unconfigured repository keeps the default read
+  ---
+  duration_ms: 0.6874
+  type: 'test'
+  ...
+# Subtest: PT-10 AC04: an explicit empty knowledge scope queries neither PageIndex nor Elasticsearch
+ok 207 - PT-10 AC04: an explicit empty knowledge scope queries neither PageIndex nor Elasticsearch
+  ---
+  duration_ms: 0.2421
+  type: 'test'
+  ...
+# Subtest: PT-10 AC04: an admin caller gains no cross-tenant or cross-knowledge-base reach from the node quota
+ok 208 - PT-10 AC04: an admin caller gains no cross-tenant or cross-knowledge-base reach from the node quota
+  ---
+  duration_ms: 0.5057
+  type: 'test'
+  ...
+# Subtest: PT-10 AC05: eight eligible nodes yield the first five, deduped by linked chunk and cut to topK
+ok 209 - PT-10 AC05: eight eligible nodes yield the first five, deduped by linked chunk and cut to topK
+  ---
+  duration_ms: 0.5355
+  type: 'test'
+  ...
+# Subtest: PT-10 AC06: material that lost eligibility between selection and hydration is refused
+ok 210 - PT-10 AC06: material that lost eligibility between selection and hydration is refused
+  ---
+  duration_ms: 1.1171
+  type: 'test'
+  ...
+# Subtest: PT-10 AC06: a repository that ignores the eligibility argument is still filtered before hydration
+ok 211 - PT-10 AC06: a repository that ignores the eligibility argument is still filtered before hydration
+  ---
+  duration_ms: 0.7259
+  type: 'test'
+  ...
+# Subtest: PT-10 AC07: a failing repository stays an explainable channel outage and the abort signal still reaches hydration
+ok 212 - PT-10 AC07: a failing repository stays an explainable channel outage and the abort signal still reaches hydration
+  ---
+  duration_ms: 1.4526
+  type: 'test'
+  ...
+# [search] web channel unavailable: web evidence unavailable: policy denied: intranet.local
+# [search] web channel unavailable: web evidence unavailable:
+# [search] web channel unavailable: web evidence unavailable: tavily failed: tavily 503
+# Subtest: a URL pasted into the message joins retrieval as web evidence — no opt-in flag needed
+ok 213 - a URL pasted into the message joins retrieval as web evidence — no opt-in flag needed
+  ---
+  duration_ms: 74.7746
+  type: 'test'
+  ...
+# Subtest: web search is opt-in: no URL and no useWeb → the channel never runs
+ok 214 - web search is opt-in: no URL and no useWeb → the channel never runs
+  ---
+  duration_ms: 4.2632
+  type: 'test'
+  ...
+# Subtest: web search requested but unconfigured reports web_unconfigured without faking success
+ok 215 - web search requested but unconfigured reports web_unconfigured without faking success
+  ---
+  duration_ms: 2.3724
+  type: 'test'
+  ...
+# Subtest: a fully failed web attempt marks the channel unavailable; knowledge-only answering continues
+ok 216 - a fully failed web attempt marks the channel unavailable; knowledge-only answering continues
+  ---
+  duration_ms: 1.8724
+  type: 'test'
+  ...
+# Subtest: web citations carry origin + URL + fetch time and stay distinct from knowledge citations
+ok 217 - web citations carry origin + URL + fetch time and stay distinct from knowledge citations
+  ---
+  duration_ms: 3.3817
+  type: 'test'
+  ...
+# Subtest: an empty knowledge scope with only web evidence still answers; with no web evidence it stays fail-closed
+ok 218 - an empty knowledge scope with only web evidence still answers; with no web evidence it stays fail-closed
+  ---
+  duration_ms: 2.3929
+  type: 'test'
+  ...
+# Subtest: PT-03 AC01: an explicit opt-in with no URL still asks the configured provider
+ok 219 - PT-03 AC01: an explicit opt-in with no URL still asks the configured provider
+  ---
+  duration_ms: 3.346
+  type: 'test'
+  ...
+# Subtest: PT-03 AC02: opt-in web evidence is labelled web, never a knowledge-base document or an attachment
+ok 220 - PT-03 AC02: opt-in web evidence is labelled web, never a knowledge-base document or an attachment
+  ---
+  duration_ms: 5.9213
+  type: 'test'
+  ...
+# Subtest: PT-03 AC05: zero web results, a failed provider and a missing capability degrade distinctly
+ok 221 - PT-03 AC05: zero web results, a failed provider and a missing capability degrade distinctly
+  ---
+  duration_ms: 1.7889
+  type: 'test'
+  ...
+# Subtest: PT-03 AC03: an opt-out search never asks the provider, and a URL still follows the read policy
+ok 222 - PT-03 AC03: an opt-out search never asks the provider, and a URL still follows the read policy
+  ---
+  duration_ms: 0.8898
+  type: 'test'
+  ...
+# (node:35760) ExperimentalWarning: localStorage is not available because --localstorage-file was not provided.
+# (Use `node --trace-warnings ...` to show where the warning was created)
+# Subtest: the run-log distinguishes success, unchanged, timeout, rate limit and invalid URL
+ok 223 - the run-log distinguishes success, unchanged, timeout, rate limit and invalid URL
+  ---
+  duration_ms: 133.7535
+  type: 'test'
+  ...
+# Subtest: pausing sync stops new runs but leaves imported content searchable
+ok 224 - pausing sync stops new runs but leaves imported content searchable
+  ---
+  duration_ms: 18.0414
+  type: 'test'
+  ...
+# Subtest: one temporary miss never retires content; two misses mark it pending
+ok 225 - one temporary miss never retires content; two misses mark it pending
+  ---
+  duration_ms: 89.7156
+  type: 'test'
+  ...
+# Subtest: a truncated sitemap read never folds into the missing-page ledger
+ok 226 - a truncated sitemap read never folds into the missing-page ledger
+  ---
+  duration_ms: 55.5256
+  type: 'test'
+  ...
+# Subtest: a failed or garbage sitemap read leaves the ledger untouched
+ok 227 - a failed or garbage sitemap read leaves the ledger untouched
+  ---
+  duration_ms: 62.4668
+  type: 'test'
+  ...
+# Subtest: a redirecting page still links to its content for later retirement
+ok 228 - a redirecting page still links to its content for later retirement
+  ---
+  duration_ms: 45.3539
+  type: 'test'
+  ...
+# Subtest: retirement requires explicit administrator confirmation of a pending page
+ok 229 - retirement requires explicit administrator confirmation of a pending page
+  ---
+  duration_ms: 106.6317
+  type: 'test'
+  ...
+# Subtest: failure classification covers the fetcher's real error shapes
+ok 230 - failure classification covers the fetcher's real error shapes
+  ---
+  duration_ms: 1.6604
+  type: 'test'
+  ...
+1..230
+# tests 232
+# suites 0
+# pass 232
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 39345.6567

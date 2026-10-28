@@ -1,45 +1,51 @@
 {
-  "updatedAt": "2026-10-28T15:31:01.278Z",
+  "updatedAt": "2026-10-28T15:58:09.754Z",
   "integrationBranch": "codex/confirmed-bug-fixes",
   "baseline": "57dbc29459adac5ef737556a1542c9be5e707f0c",
   "status": "in_progress",
   "tickets": [
     {
       "id": "BF-01",
-      "status": "in_progress",
-      "implementationStatus": "in_progress",
-      "verificationStatus": "not_run",
+      "status": "implemented",
+      "implementationStatus": "completed",
+      "verificationStatus": "passed_ticket_gates",
       "blockedBy": [],
-      "resolution": null
+      "resolution": null,
+      "mergeCommit": "3a0dc345035a5575cbe89a1e4cf029d6caf1bc7c",
+      "evidence": "evidence/BF-01/README.md"
     },
     {
       "id": "BF-02",
-      "status": "in_progress",
-      "implementationStatus": "in_progress",
-      "verificationStatus": "not_run",
+      "status": "implemented",
+      "implementationStatus": "completed",
+      "verificationStatus": "passed_ticket_gates",
       "blockedBy": [],
-      "resolution": null
+      "resolution": null,
+      "mergeCommit": "607006a",
+      "evidence": "evidence/BF-02/README.md"
     },
     {
       "id": "BF-03",
-      "status": "ready",
-      "implementationStatus": "not_started",
+      "status": "in_progress",
+      "implementationStatus": "in_progress",
       "verificationStatus": "not_run",
       "blockedBy": [],
       "resolution": null
     },
     {
       "id": "BF-04",
-      "status": "in_progress",
-      "implementationStatus": "in_progress",
-      "verificationStatus": "not_run",
+      "status": "implemented",
+      "implementationStatus": "completed",
+      "verificationStatus": "passed_ticket_gates",
       "blockedBy": [],
-      "resolution": null
+      "resolution": null,
+      "mergeCommit": "33a21bd",
+      "evidence": "evidence/BF-04/README.md"
     },
     {
       "id": "BF-05",
-      "status": "ready",
-      "implementationStatus": "not_started",
+      "status": "in_progress",
+      "implementationStatus": "in_progress",
       "verificationStatus": "not_run",
       "blockedBy": [],
       "resolution": null

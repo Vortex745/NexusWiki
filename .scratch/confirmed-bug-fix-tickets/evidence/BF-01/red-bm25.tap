@@ -1,0 +1,34 @@
+(node:44096) ExperimentalWarning: localStorage is not available because --localstorage-file was not provided.
+(Use `node --trace-warnings ...` to show where the warning was created)
+✖ BF-01: BM25 and assembled parents exclude a retired source before cleanup (58.3592ms)
+ℹ tests 1
+ℹ suites 0
+ℹ pass 0
+ℹ fail 1
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 3404.5728
+
+✖ failing tests:
+
+test at src\retrieval\search\searcher.retirement.test.ts:2:6504
+✖ BF-01: BM25 and assembled parents exclude a retired source before cleanup (58.3592ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly deep-equal:
+  + actual - expected
+
+    [
+  +   'a2975dd0-2a5c-48db-908b-021a6d665c7a',
+      'd74b2a92-54b2-4167-bcc3-b00823c64145'
+    ]
+
+      at TestContext.<anonymous> (C:\Users\14253\.codex\bf-20261028\worktrees\bf-01\src\retrieval\search\searcher.retirement.test.ts:164:10)
+      at async Test.run (node:internal/test_runner/test:1409:7)
+      at async startSubtestAfterBootstrap (node:internal/test_runner/harness:387:3) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: [ 'a2975dd0-2a5c-48db-908b-021a6d665c7a', 'd74b2a92-54b2-4167-bcc3-b00823c64145' ],
+    expected: [ 'd74b2a92-54b2-4167-bcc3-b00823c64145' ],
+    operator: 'deepStrictEqual',
+    diff: 'simple'
+  }
