@@ -12,6 +12,7 @@ import type {
 import { RecursiveChunker } from "./chunker/chunker"
 import {
   IngestionLifecycle,
+  WEKNORA_TECHNICAL_POLICY_VERSION,
   type IngestionStageRunner,
   type StageExecution,
 } from "./lifecycle"
@@ -227,7 +228,7 @@ function recordParserMetadata(
 }
 
 export interface IngestionPolicyMarker {
-  version: "weknora-technical-v1"
+  version: typeof WEKNORA_TECHNICAL_POLICY_VERSION
   parser: ParserType | null
   upstreamSha: string | null
   pdfMode: "auto" | "force_scanned" | null
@@ -302,7 +303,7 @@ export class PipelineStageRunner implements IngestionStageRunner {
           parserRoutingError = error instanceof Error ? error : new Error(String(error))
         }
         recordIngestionPolicy(this.documentRepo, document, {
-          version: "weknora-technical-v1",
+          version: WEKNORA_TECHNICAL_POLICY_VERSION,
           parser: parserRoute?.candidates[0] ?? null,
           upstreamSha: parserRoute?.candidates[0] === "docreader-pdf" ? DOCREADER_UPSTREAM_SHA : null,
           pdfMode: parserRoute?.candidates[0] === "docreader-pdf"
@@ -317,7 +318,7 @@ export class PipelineStageRunner implements IngestionStageRunner {
         )
       } else {
         recordIngestionPolicy(this.documentRepo, document, {
-          version: "weknora-technical-v1",
+          version: WEKNORA_TECHNICAL_POLICY_VERSION,
           parser: null,
           upstreamSha: null,
           pdfMode: null,

@@ -14,7 +14,7 @@ import { spawnSync } from "node:child_process"
 import { resolve } from "node:path"
 import test from "node:test"
 
-import { loadConfig } from "./index"
+import { legacyIngestionEnvKeys, loadConfig } from "./index"
 
 process.env.OPENAI_API_KEY = "test-key"
 process.env.DEMO_OIDC = "1"
@@ -223,7 +223,7 @@ function legacyIngestionEnvConfig(env: Record<string, string> = {}): {
   return { status: child.status, stderr: child.stderr, ...JSON.parse(child.stdout) }
 }
 
-test("legacy ingestion env vars are ignored and produce one migration hint", () => {
+test("legacy ingestion env vars are ignored and never emit unstructured console output", () => {
   const result = legacyIngestionEnvConfig({
     PDF_OCR_FALLBACK_ENABLED: "1",
     ACTIVATION_MODE: "review",
@@ -231,9 +231,24 @@ test("legacy ingestion env vars are ignored and produce one migration hint", () 
   assert.equal(result.status, 0)
   assert.equal(result.config!.pdfOcrFallbackEnabled, undefined)
   assert.equal(result.config!.activationMode, undefined)
-  assert.match(result.stderr, /PDF_OCR_FALLBACK_ENABLED/)
-  assert.match(result.stderr, /ACTIVATION_MODE/)
-  assert.match(result.stderr, /weknora-technical-v1/)
+  assert.doesNotMatch(result.stderr, /PDF_OCR_FALLBACK_ENABLED|ACTIVATION_MODE|weknora-technical-v1/)
+})
+
+test("the startup hint lists retired ingestion env vars through the neutral logger seam", () => {
+  // WD-05: the composition root (src/index.ts) emits one structured warning;
+  // config only reports the keys, so business code never writes to console.
+  assert.deepEqual(
+    legacyIngestionEnvKeys({
+      PDF_OCR_FALLBACK_ENABLED: "1",
+      ACTIVATION_MODE: "review",
+    } as NodeJS.ProcessEnv),
+    ["ACTIVATION_MODE", "PDF_OCR_FALLBACK_ENABLED"],
+  )
+  assert.deepEqual(
+    legacyIngestionEnvKeys({ ACTIVATION_MODE: "   " } as NodeJS.ProcessEnv),
+    [],
+  )
+  assert.deepEqual(legacyIngestionEnvKeys({} as NodeJS.ProcessEnv), [])
 })
 
 test("no legacy hint appears when the retired env vars are unset", () => {

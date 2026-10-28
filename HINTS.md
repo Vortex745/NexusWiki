@@ -145,19 +145,23 @@ Clef routes `direct / simple / ambiguous / complex` with the fixed model `@cf/cl
 
 Clef calls share the Answer run budgets. With a cost limit, add the exact `@cf/cloudflare/clef` key to `ANSWER_RUN_MODEL_PRICING_JSON`. Change `DECISION_PROVIDER` back to `chat` and restart the backend to restore the Chat router.
 
-### 2.11 OCR (Volcengine OCRPdf)
+### 2.11 PDF parsing (DocReader) and OCR (Volcengine OCRPdf)
 
-| Variable | Required? | Notes |
-|----------|-----------|-------|
-| `VOLC_ACCESSKEY` | For OCR | Server-side Access Key ID |
-| `VOLC_SECRETKEY` | For OCR | Server-side Secret Access Key; not an Ark/OpenAI API key |
-| `VOLC_SESSION_TOKEN` | For STS only | Session token accompanying temporary AK/SK |
+| Variable | Default | Required? | Notes |
+|----------|---------|-----------|-------|
+| `DOCREADER_ADDR` | `127.0.0.1:50051` | For PDF imports | gRPC endpoint of the pinned DocReader service; blank fails client construction |
+| `DOCREADER_TIMEOUT_MS` | `300000` | Optional | Per-read ceiling in positive integer milliseconds |
+| `VOLC_ACCESSKEY` | — | For scanned pages and images | Server-side Access Key ID |
+| `VOLC_SECRETKEY` | — | For scanned pages and images | Server-side Secret Access Key; not an Ark/OpenAI API key |
+| `VOLC_SESSION_TOKEN` | — | For STS only | Session token accompanying temporary AK/SK |
 
-Enable intelligent document parsing on the Volcengine account, configure the credentials in local `.env`, and restart the backend. Images use `ocr-api`; scanned PDFs select **OCR API** in the import advanced options. Default PDF imports extract the text layer with `builtin-pdf`. Historical `marker/mineru` overrides map to `ocr-api`; production does not construct those CLI OCR runtimes.
+Start the parser service with `docker compose -f docker-compose.docreader.yml up -d --build`. The image builds from WeKnora commit `256a3f2966866337f7dc3c5fcc10037f2ae18d52` with the official `docker/Dockerfile.docreader`; set `DOCREADER_BUILD_CONTEXT` to a local clone when the Docker daemon cannot fetch a Git build context. The container is pinned to `127.0.0.1:50051`, 2 CPU / 2 GiB, `restart: "no"`. There is no silent fallback: if DocReader or the OCR credentials are unavailable, PDF imports fail with a stable error instead of switching engines.
 
-OCR calls use `https://visual.volcengineapi.com`, Action `OCRPdf`, Version `2021-08-23`, body version `v3`, region `cn-north-1`, service `cv`. The adapter reads PDF page counts and splits at 16 pages and 8 MiB of encoded form data. A single oversized page/image fails explicitly. The existing `PARSER_TIMEOUT_MS` (120000) bounds the whole document; input/output limits default to 20 MiB each. No TOS bucket is required.
+Routing: every PDF (`.pdf` or `application/pdf`) defaults to `docreader-pdf`. DocReader's `builtin` engine extracts the text layer and renders page images; pages with no text layer are OCRed individually through the Volc OCR API. Images stay on `ocr-api`. The import dialog's **强制 OCR** option sends `x-parser: ocr-api`, which maps to DocReader with `pdf_force_scanned=true`; legacy `marker`/`mineru` PDF overrides map to the same force-scanned mode, while `builtin-pdf`/`docreader-pdf` map to auto. Both `POST /api/ingest/file` and the attachment route validate `x-parser` through `isParserOverride`; unknown values are refused with 400.
 
-Raw responses, page IDs and coordinates are retained as extraction evidence. Header/footer/footnote filtering is disabled. OCR results carry `ocr_content_unverified` — transport success and page coverage never prove semantic accuracy. Under the `ocr-advisory-v1` activation policy, that sole generic warning is accepted as a non-blocking warning and the candidate may activate **only after every index, binding and search-visibility check passes**; the raw content proof stays `pending_review` and the acceptance fact is recorded separately in `candidate_evidence.activationAcceptance`. Any additional OCR warning (missing/empty pages, layout, table or image semantics, text corruption) keeps the candidate pending review, and a mixed/unknown/blank reason set is never accepted. Missing credentials/auth failures do not automatically retry or fall back to another OCR engine. Decision record: `.scratch/ocr-activation-relaxation-2026-10-26/plan.md`; supersedes the earlier "all OCR must block activation" rule in this section. `npm run release:smoke` includes a live OCR probe using a fixed synthetic PDF when credentials are configured.
+Completion policy: `weknora-technical-v1`. New imports carry no content proof, expected-chunk manifest, coverage/index verification gate, or manual review; when the required extraction, cleaning, chunking, embedding and storage stages succeed, the lifecycle activates the candidate automatically. OCR warnings (for example `ocr_content_unverified`) are advisory `activationWarnings` — they no longer hold a candidate for review. The review API is retired and answers `410 review_workflow_retired` after authentication. Reprocessing a completed document creates a new docId, version and task; the old active document stays active until the new candidate succeeds. `ACTIVATION_MODE` and `PDF_OCR_FALLBACK_ENABLED` are retired: they are ignored, and startup emits one structured `config.legacy_env.retired` warning through the neutral logger.
+
+OCR calls use `https://visual.volcengineapi.com`, Action `OCRPdf`, Version `2021-08-23`, body version `v3`, region `cn-north-1`, service `cv`. The adapter reads PDF page counts and splits at 16 pages and 8 MiB of encoded form data. A single oversized page/image fails explicitly. `PARSER_TIMEOUT_MS` (120000) bounds the whole document; input/output limits default to 20 MiB each. No TOS bucket is required. Raw responses, page IDs and coordinates are retained as extraction evidence; header/footer/footnote filtering is disabled. Missing credentials/auth failures do not automatically retry or fall back to another OCR engine. `npm run release:smoke` includes a live OCR probe using a fixed synthetic PDF when credentials are configured.
 
 ---
 
@@ -222,7 +226,8 @@ npm run release:promotion-check    # Validate release artifact promotion contrac
 | OpenAI-compatible API | Chat + embeddings | Always (dev + prod) |
 | Cloudflare Workers AI | Clef question routing | When `DECISION_PROVIDER=clef` |
 | MarkItDown | Document ingestion (raw file → normalized blocks) | Ingestion; Ticket 09 will repair ABI |
-| Volcengine OCRPdf | PDF/image recognition and structured extraction | Images + PDF OCR override; server-side AK/SK required |
+| DocReader (pinned WeKnora `256a3f29`) | Default PDF extraction: text layer, page images, per-page layout | PDF imports; `docker-compose.docreader.yml` on `127.0.0.1:50051` |
+| Volcengine OCRPdf | OCR for scanned PDF pages and images | Scanned pages in any PDF + image files; server-side AK/SK required |
 | Langfuse | Observability / trace export | Optional (disabled by default) |
 
 ---

@@ -53,7 +53,12 @@ export const SUPPORTED_DOCUMENT_EXTENSIONS: readonly string[] = [
   ...IMAGE_EXTENSIONS,
 ]
 
-const PARSER_OVERRIDES = new Set<ParserType>([
+/**
+ * Every override both HTTP entry points accept on `x-parser`. `direct-txt` is
+ * internal-only but harmless as an override: an incompatible file class is
+ * normalized to its type-matched route, never hijacked.
+ */
+export const PARSER_OVERRIDE_VALUES: readonly ParserType[] = [
   "markitdown",
   "marker",
   "mineru",
@@ -61,7 +66,9 @@ const PARSER_OVERRIDES = new Set<ParserType>([
   "direct-txt",
   "ocr-api",
   "docreader-pdf",
-])
+]
+
+const PARSER_OVERRIDES = new Set<ParserType>(PARSER_OVERRIDE_VALUES)
 
 export interface ParserSelectionInput {
   fileName: string
@@ -92,7 +99,7 @@ function parserOverride(value: string): ParserType {
     return value
   }
   throw new Error(
-    `Unsupported parser override: ${value}. Expected markitdown, ocr-api, builtin-pdf, docreader-pdf, or direct-txt.`
+    `Unsupported parser override: ${value}. Expected ${PARSER_OVERRIDE_VALUES.join(", ")}.`
   )
 }
 

@@ -29,6 +29,7 @@ import {
   type AttachmentRejectionKind,
   type SessionAttachmentService,
 } from "../attachments/session_attachment_service"
+import { isParserOverride, PARSER_OVERRIDE_VALUES } from "../ingestion/parser"
 import { SameNameIntentRequiredError } from "../ingestion/lifecycle"
 import type { SqliteSessionBinder } from "../access/session_binder"
 import { singleTenantAccessContext, type AccessContext } from "../access/context"
@@ -110,13 +111,20 @@ export function createAttachmentsRouter(
         return
       }
       const content = Buffer.isBuffer(req.body) ? req.body : Buffer.alloc(0)
+      const parserOverride = req.header("x-parser")?.trim().toLowerCase()
+      if (parserOverride && !isParserOverride(parserOverride)) {
+        res.status(400).json({
+          error: `x-parser must be one of: ${PARSER_OVERRIDE_VALUES.join(", ")}`,
+        })
+        return
+      }
       const outcomes = await service.submit(sessionOf(req), context.tenantId, context.subjectId, [
         {
           name,
           ...(req.header("x-file-mime-type")
             ? { mimeType: req.header("x-file-mime-type") as string }
             : {}),
-          ...(req.header("x-parser") ? { parserOverride: req.header("x-parser") as string } : {}),
+          ...(parserOverride ? { parserOverride } : {}),
           content,
         },
       ])

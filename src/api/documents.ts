@@ -2,7 +2,7 @@ import { Router, type Request, type Response } from "express"
 import type { Client } from "@elastic/elasticsearch"
 import type { AccessContext } from "../access/context"
 import { singleTenantAccessContext } from "../access/context"
-import { readProcessingPolicy } from "../ingestion/lifecycle"
+import { readProcessingPolicy, WEKNORA_TECHNICAL_POLICY_VERSION } from "../ingestion/lifecycle"
 import type { DocumentRepo, DocumentCatalogPage } from "../ingestion/tracking/doc_repo"
 import type { ExtractionEvidenceRepository } from "../ingestion/tracking/extraction_evidence_repo"
 import type { PageIndexRepository } from "../ingestion/tracking/page_index_repo"
@@ -223,7 +223,7 @@ export function createDocumentsRouter(options: {
         mimeType: doc.mimeType ?? "text/plain",
         status: operational?.status ?? "pending",
         processingPolicy,
-        candidateState: processingPolicy === "weknora-technical-v1"
+        candidateState: processingPolicy === WEKNORA_TECHNICAL_POLICY_VERSION
           ? null
           : operational?.candidateState ?? "approved",
         version: doc.version,

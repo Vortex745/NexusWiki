@@ -101,6 +101,46 @@ test("raw file ingestion accepts bounded bytes and file metadata before JSON par
   }
 })
 
+test("force-OCR PDF imports accept the ocr-api override at the HTTP boundary", async () => {
+  // The import dialog's 强制 OCR option sends x-parser: ocr-api. The API must
+  // accept it (the router maps it to DocReader force-scanned); a narrow
+  // allow-list here would reject the UI's own option with 400.
+  const directory = mkdtempSync(join(tmpdir(), "kefu-rag-api-"))
+  process.env.OPENAI_API_KEY = process.env.OPENAI_API_KEY || "test-key"
+  process.env.SQLITE_PATH = join(directory, "ingestion.db")
+  const server = createApp({ eventsSource, ingestAccessMiddleware: tenantAccessMiddleware }).listen(0)
+
+  try {
+    await new Promise<void>((resolve) => server.once("listening", resolve))
+    const address = server.address()
+    assert.ok(address && typeof address === "object")
+    const response = await fetch(`http://127.0.0.1:${address.port}/api/ingest/file`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/octet-stream",
+        "x-file-name": "scan.pdf",
+        "x-file-mime-type": "application/pdf",
+        "x-parser": "ocr-api",
+        "x-source-kind": "file",
+        "x-source-id": "C:/knowledge/scan.pdf",
+        "x-source-namespace": "local",
+      },
+      body: Buffer.from("%PDF-1.4\n% force-ocr acceptance\n"),
+    })
+
+    assert.equal(response.status, 200)
+    const submitted = await response.json() as { docId: string; status: string }
+    assert.equal(submitted.status, "pending")
+    assert.equal(new DocumentRepo(openDb()).get(submitted.docId)?.parserOverride, "ocr-api")
+  } finally {
+    await new Promise<void>((resolve, reject) => {
+      server.close((error) => error ? reject(error) : resolve())
+    })
+    closeDb()
+    rmSync(directory, { recursive: true, force: true })
+  }
+})
+
 test("an oversized upload is refused with a JSON 413 instead of the default HTML error page", async () => {
   const directory = mkdtempSync(join(tmpdir(), "kefu-rag-api-"))
   process.env.OPENAI_API_KEY = process.env.OPENAI_API_KEY || "test-key"

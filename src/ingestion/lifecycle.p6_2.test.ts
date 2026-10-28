@@ -16,11 +16,10 @@ import { extname, join, relative, sep } from "node:path"
  *   1. No production file constructs `new IngestionLifecycle(...)` directly
  *      (only the factory in `pipeline.ts` may do so).
  *   2. HTTP/worker/CLI callers explicitly call `createIngestionLifecycle(db)`.
- *   3. `docRepo.activate()` appears ONLY in `lifecycle.ts` (auto branch)
- *      and `candidate_review_store.ts` (approve path — spec L1575).
- *   4. No production code hardcodes `SET candidate_state = 'approved'`
- *      (literal SQL) — the only path to `approved` is the review store's
- *      parameterized UPDATE.
+ *   3. `docRepo.activate()` appears ONLY in `lifecycle.ts` (auto branch);
+ *      the retired review store is a dormant module and is excluded.
+ *   4. No production file hardcodes `SET candidate_state = 'approved'`
+ *      (literal SQL) — activation now happens through the lifecycle.
  *   5. `SET active_doc_id =` appears ONLY in `doc_repo.ts` (activate method
  *      body) and `db.ts` (legacy schema migration) — never in HTTP/worker/
  *      CLI/pipeline/lifecycle code.
@@ -108,15 +107,16 @@ test("P6.2 caller audit: HTTP/worker/CLI callers explicitly use createIngestionL
   }
 })
 
-test("P6.2 explicit-deny: docRepo.activate() only in lifecycle auto-branch and review approve path", () => {
-  // The ONLY legitimate `docRepo.activate()` / `documentRepo.activate()`
-  // call sites in production code are:
-  //   1. src/ingestion/lifecycle.ts — auto mode branch (P6.1: else of
-  //      `activationMode === "review"`)
-  //   2. src/knowledge/candidate_review_store.ts — approve path (spec L1575:
-  //      "approve-activates" is the single legitimate terminal activation)
-  // No HTTP/worker/CLI/pipeline code may call activate() directly.
-  const files = listProductionTsFiles(SRC_DIR)
+test("P6.2 explicit-deny: docRepo.activate() only in the lifecycle auto-branch", () => {
+  // WD-05/WD-15 retired review mode: the ONLY legitimate `docRepo.activate()`
+  // call site in production is src/ingestion/lifecycle.ts, which claims the
+  // terminal activation on technical completion. The review store still
+  // contains its historical approve path but is dormant (no production
+  // importer), so it is excluded from the production scan. No HTTP/worker/
+  // CLI/pipeline code may call activate() directly.
+  const files = listProductionTsFiles(SRC_DIR, [
+    "knowledge/candidate_review_store.ts",
+  ])
   const offenders: string[] = []
   for (const file of files) {
     const source = readFileSync(file, "utf8")
@@ -124,12 +124,11 @@ test("P6.2 explicit-deny: docRepo.activate() only in lifecycle auto-branch and r
       offenders.push(relative(SRC_DIR, file).split(sep).join("/"))
     }
   }
-  const expected = ["ingestion/lifecycle.ts", "knowledge/candidate_review_store.ts"].sort()
   assert.deepEqual(
     offenders.sort(),
-    expected,
-    `docRepo.activate() must ONLY appear in lifecycle.ts (auto branch) and ` +
-      `candidate_review_store.ts (approve path). Found in: ${offenders.join(", ")}`
+    ["ingestion/lifecycle.ts"],
+    `docRepo.activate() must ONLY appear in lifecycle.ts (auto activation). ` +
+      `Found in: ${offenders.join(", ")}`
   )
 })
 

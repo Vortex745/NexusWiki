@@ -59,7 +59,7 @@ export type {
 } from "./docreader_pdf_types"
 export type { TextDecodeProvenance } from "./direct_text"
 export type { BoundedProcessInput } from "./process"
-export { isParserOverride, selectParser, selectParserRoute, SUPPORTED_DOCUMENT_EXTENSIONS } from "./router"
+export { isParserOverride, PARSER_OVERRIDE_VALUES, selectParser, selectParserRoute, SUPPORTED_DOCUMENT_EXTENSIONS } from "./router"
 export type {
   ParserDecision,
   ParserRouteInfo,

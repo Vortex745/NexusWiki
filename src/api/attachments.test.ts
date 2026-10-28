@@ -152,6 +152,33 @@ test("a percent-encoded UTF-8 attachment name round-trips through the header", a
   }
 })
 
+test("an unsupported x-parser override is refused with 400 before anything is stored", async () => {
+  const harness = buildHarness()
+  const { base, close } = await listen(harness.app)
+  try {
+    const response = await fetch(`${base}/api/chat/sessions/sess-parser/attachments`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/octet-stream",
+        "x-file-name": "policy.pdf",
+        "x-parser": "definitely-not-a-parser",
+      },
+      body: new Uint8Array([0x25, 0x50, 0x44, 0x46, 0x2d, 0x31, 0x2e, 0x34]),
+    })
+    assert.equal(response.status, 400)
+    const body = (await response.json()) as { error?: string }
+    assert.match(body.error ?? "", /x-parser must be one of:/)
+
+    const listed = await list(base, "sess-parser")
+    assert.deepEqual(
+      (listed.body as unknown as { attachments: unknown[] }).attachments,
+      [],
+    )
+  } finally {
+    await close()
+  }
+})
+
 test("limits and unsupported types answer per file, not as a failed batch", async () => {
   const harness = buildHarness()
   const { base, close } = await listen(harness.app)

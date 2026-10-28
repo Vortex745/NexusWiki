@@ -23,8 +23,8 @@
 
 import assert from "node:assert/strict"
 import test from "node:test"
-import { readFileSync, existsSync } from "node:fs"
-import { join } from "node:path"
+import { readFileSync, existsSync, readdirSync } from "node:fs"
+import { join, sep } from "node:path"
 
 const root = join(__dirname, "..", "..")
 const src = join(root, "src")
@@ -106,6 +106,17 @@ function listSourceFiles(): string[] {
 
 const SOURCE_FILES = listSourceFiles()
 
+/**
+ * Walk every production TypeScript file under src/ (excluding tests). The
+ * retired-completion scan needs the real tree: a dormant module could gain a
+ * production importer anywhere, not only in the audited subset above.
+ */
+function listAllSourceFiles(): string[] {
+  return (readdirSync(src, { recursive: true }) as string[])
+    .map((p) => p.split(sep).join("/"))
+    .filter((p) => p.endsWith(".ts") && !p.endsWith(".test.ts"))
+}
+
 // ============================================================
 // 1. Dormant surfaces — no non-test caller
 // ============================================================
@@ -146,6 +157,42 @@ test("Ticket 10 #1: stop_conditions (src/mastra/stop_conditions.ts) is dormant �
     "src/mastra/stop_conditions.ts must have zero non-test importers (dormant — not wired into release runner or production)",
   )
 })
+
+// WD-05/WD-15 retired the review workflow and the joint content/index
+// activation gate: new imports use `weknora-technical-v1` and activate on
+// technical completion. The modules stay on disk (dormant-surface policy is
+// non-destructive) but must never re-enter the production import graph.
+const RETIRED_COMPLETION_SURFACES = [
+  "knowledge/candidate_review_store.ts",
+  "ingestion/activation_gate.ts",
+  "ingestion/content_proof.ts",
+  "ingestion/chunk_coverage.ts",
+  "ingestion/index_verification.ts",
+  "ingestion/tracking/expected_chunk_repo.ts",
+] as const
+
+test("WD-05: retired review/quality-gate modules have no production importer", () => {
+  const retired = new Set<string>(RETIRED_COMPLETION_SURFACES)
+  const sourceFiles = listAllSourceFiles()
+  for (const surface of RETIRED_COMPLETION_SURFACES) {
+    assert.ok(
+      sourceFiles.includes(surface),
+      `src/${surface} must still exist — dormant policy forbids deleting retired surfaces`,
+    )
+    const stem = (surface.replace(/\.ts$/, "").split("/").pop() as string)
+    const importers = findNonTestImporters(
+      new RegExp(`from\\s+["'][^"']*/${stem}["']`),
+      sourceFiles.filter((file) => file !== surface),
+    )
+    assert.deepEqual(
+      importers.filter((file) => !retired.has(file)),
+      [],
+      `src/${surface} is dormant under weknora-technical-v1 — only tests and other ` +
+        `retired modules may import it (importers: ${importers.join(", ")})`,
+    )
+  }
+})
+
 
 // ============================================================
 // 2. Compatibility boundaries — barrel-exported but not production-wired

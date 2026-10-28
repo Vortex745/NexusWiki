@@ -8,7 +8,7 @@ import { createIngestionLifecycle } from "../ingestion/pipeline"
 import { taskTraceFromScope, type TaskTraceContext } from "../tracing/contract"
 import { requestScope } from "../tracing/express"
 import { detectTypeConflict } from "../ingestion/admission"
-import { selectParserRoute } from "../ingestion/parser"
+import { isParserOverride, PARSER_OVERRIDE_VALUES, selectParserRoute } from "../ingestion/parser"
 import type { SourceIdentityInput } from "../ingestion/source_identity"
 import { openDb } from "../ingestion/tracking"
 import type { DB } from "../ingestion/tracking/db"
@@ -69,7 +69,7 @@ interface IngestUrlRequestBody {
   url?: string
   mode?: "single" | "sitemap"
   title?: string
-  parserOverride?: "markitdown" | "marker" | "mineru" | "builtin-pdf"
+  parserOverride?: "markitdown" | "marker" | "mineru" | "builtin-pdf" | "ocr-api" | "docreader-pdf" | "direct-txt"
   maxPages?: number
   /**
    * Ticket 04 (KB-02B): the owning knowledge base, same contract as `/ingest`
@@ -98,7 +98,6 @@ function submissionTrace(res: Response): TaskTraceContext | undefined {
 export const rawIngestRouter = Router()
 
 const RAW_FILE_LIMIT = "20mb"
-const PARSER_TYPES = new Set(["markitdown", "marker", "mineru", "builtin-pdf"])
 const URL_FETCH_TIMEOUT_MS = 30_000
 const URL_FETCH_MAX_BYTES = 20 * 1024 * 1024 // 20MB，与单文件上传上限一致
 
@@ -384,9 +383,9 @@ rawIngestRouter.post(
       return res.status(400).json({ error: "x-file-name is required" })
     }
     const parserOverride = req.get("x-parser")?.trim().toLowerCase()
-    if (parserOverride && !PARSER_TYPES.has(parserOverride)) {
+    if (parserOverride && !isParserOverride(parserOverride)) {
       return res.status(400).json({
-        error: "x-parser must be markitdown, marker, mineru, or builtin-pdf",
+        error: `x-parser must be one of: ${PARSER_OVERRIDE_VALUES.join(", ")}`,
       })
     }
     // Ticket UT-05: admission judges the DECLARED type against the actual
@@ -547,8 +546,10 @@ router.post("/ingest/url", async (req: Request, res: Response) => {
 
   const mode = body.mode === "sitemap" ? "sitemap" : "single"
   const parserOverride = body.parserOverride
-  if (parserOverride && !PARSER_TYPES.has(parserOverride)) {
-    return res.status(400).json({ error: "parserOverride must be markitdown, marker, mineru, or builtin-pdf" })
+  if (parserOverride && !isParserOverride(parserOverride)) {
+    return res.status(400).json({
+      error: `parserOverride must be one of: ${PARSER_OVERRIDE_VALUES.join(", ")}`,
+    })
   }
 
   // Ticket 04 (KB-02B): resolve ownership BEFORE any outbound fetch. A rejected

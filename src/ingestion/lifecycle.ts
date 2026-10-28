@@ -48,6 +48,9 @@ const RUNNING_ABORT_CONTROLLERS = new Map<string, AbortController>()
 
 export type IngestionStageName = (typeof INGESTION_STAGE_NAMES)[number]
 
+/** The single technical-completion policy marker for new imports (WD tickets). */
+export const WEKNORA_TECHNICAL_POLICY_VERSION = "weknora-technical-v1"
+
 export function readProcessingPolicy(metadata: Record<string, unknown> | undefined): string | null {
   const system = metadata?.system
   if (!system || typeof system !== "object" || Array.isArray(system)) return null
@@ -605,7 +608,7 @@ export class IngestionLifecycle {
       activationBlockReason: this.docRepo.getActivationBlockReason(docId),
       activationWarnings: activationAcceptance?.warningCodes ?? [],
       activationPolicyVersion: activationAcceptance?.policyVersion ?? null,
-      candidateState: processingPolicy === "weknora-technical-v1"
+      candidateState: processingPolicy === WEKNORA_TECHNICAL_POLICY_VERSION
         ? null
         : this.docRepo.getOperationalState(docId)?.candidateState ?? null,
       processingPolicy,

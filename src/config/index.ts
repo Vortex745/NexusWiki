@@ -171,17 +171,18 @@ function required(key: string): string {
 }
 
 let _config: AppConfig | null = null
-let legacyIngestionEnvWarned = false
 
-function warnLegacyIngestionEnv(): void {
-  if (legacyIngestionEnvWarned) return
-  const legacy = ["ACTIVATION_MODE", "PDF_OCR_FALLBACK_ENABLED"]
-    .filter((key) => Boolean(process.env[key]?.trim()))
-  if (legacy.length === 0) return
-  legacyIngestionEnvWarned = true
-  console.warn(
-    `[config] ${legacy.join(", ")} retired; new imports use weknora-technical-v1 and activate on technical completion.`
-  )
+/**
+ * WD-05: `ACTIVATION_MODE` and `PDF_OCR_FALLBACK_ENABLED` are retired; new
+ * imports follow `weknora-technical-v1` and activate on technical completion.
+ * Config stays a pure reader — the composition root emits the one-time startup
+ * hint through the neutral logger.
+ */
+export function legacyIngestionEnvKeys(
+  env: NodeJS.ProcessEnv = process.env,
+): string[] {
+  return ["ACTIVATION_MODE", "PDF_OCR_FALLBACK_ENABLED"]
+    .filter((key) => Boolean(env[key]?.trim()))
 }
 
 export const DEFAULT_ES_CHUNK_INDEX = "kefu-rag-chunks"
@@ -261,7 +262,6 @@ function optionalPricingTable(): AppConfig["answerRunModelPricing"] {
 
 export function loadConfig(): AppConfig {
   if (_config) return _config
-  warnLegacyIngestionEnv()
   const openaiApiKey = required("OPENAI_API_KEY")
   const openaiBaseUrl = process.env.OPENAI_BASE_URL || ""
   const embeddingDimensions = process.env.EMBEDDING_DIMENSIONS

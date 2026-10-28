@@ -2,7 +2,7 @@ import "dotenv/config"
 import { createAnswerRuntime } from "./answer/runtime"
 import { startConversationGc } from "./answer/conversation_gc"
 import { SqliteConversationStore } from "./answer/conversation_store"
-import { loadConfig } from "./config"
+import { legacyIngestionEnvKeys, loadConfig } from "./config"
 import { defaultEnvFilePath } from "./config/env_file"
 import {
   validateAccessMode,
@@ -55,6 +55,16 @@ async function main() {
   const logs = createProcessLoggers(process.env)
   processLogs = logs
   installConsoleMirror(console, logs.systemFile)
+
+  // WD-05: one startup migration hint through the neutral logger; retired
+  // ingestion env vars are ignored, never silently kept in review mode.
+  const retiredIngestionEnv = legacyIngestionEnvKeys()
+  if (retiredIngestionEnv.length > 0) {
+    await logs.system.warn("config.legacy_env.retired", {
+      keys: retiredIngestionEnv,
+      replacement: "weknora-technical-v1",
+    })
+  }
 
   const cfg = loadConfig()
   console.log("[kefu-RAG] Config loaded", { esNode: cfg.esNode, neo4jUri: cfg.neo4jUri })
