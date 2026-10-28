@@ -1,0 +1,66 @@
+TAP version 13
+# (node:55032) ExperimentalWarning: localStorage is not available because --localstorage-file was not provided.
+# (Use `node --trace-warnings ...` to show where the warning was created)
+# Subtest: an authenticated user in another tenant cannot restore a private run
+ok 1 - an authenticated user in another tenant cannot restore a private run
+  ---
+  duration_ms: 103.7732
+  type: 'test'
+  ...
+# Subtest: the owner restores the complete ordered events of a locked session
+ok 2 - the owner restores the complete ordered events of a locked session
+  ---
+  duration_ms: 29.3226
+  type: 'test'
+  ...
+# Subtest: the owner can restore a session before any assistant or knowledge lock exists
+ok 3 - the owner can restore a session before any assistant or knowledge lock exists
+  ---
+  duration_ms: 29.1964
+  type: 'test'
+  ...
+# Subtest: another subject in the same tenant receives the same not-found response
+ok 4 - another subject in the same tenant receives the same not-found response
+  ---
+  duration_ms: 27.4123
+  type: 'test'
+  ...
+# Subtest: the same subject identifier in another tenant receives the same not-found response
+ok 5 - the same subject identifier in another tenant receives the same not-found response
+  ---
+  duration_ms: 22.6633
+  type: 'test'
+  ...
+# Subtest: a foreign user supplying the owner's identity in query parameters receives the same not-found response
+ok 6 - a foreign user supplying the owner's identity in query parameters receives the same not-found response
+  ---
+  duration_ms: 22.962
+  type: 'test'
+  ...
+# Subtest: unknown runs and persisted traces without a directory are indistinguishable
+ok 7 - unknown runs and persisted traces without a directory are indistinguishable
+  ---
+  duration_ms: 28.9675
+  type: 'test'
+  ...
+# Subtest: missing identity is rejected by the existing authentication gate
+ok 8 - missing identity is rejected by the existing authentication gate
+  ---
+  duration_ms: 25.7085
+  type: 'test'
+  ...
+# Subtest: an authenticated owner without chat scope is rejected before history is returned
+ok 9 - an authenticated owner without chat scope is rejected before history is returned
+  ---
+  duration_ms: 24.3338
+  type: 'test'
+  ...
+1..9
+# tests 9
+# suites 0
+# pass 9
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 4757.7894
