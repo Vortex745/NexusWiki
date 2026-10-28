@@ -110,6 +110,25 @@ export function traceStatusLabel(status?: string): string {
 
 /** Human-readable one-liner for a projected trace event, per stage. */
 export function traceEventLabel(event: TraceEvent): string {
+  // A degraded retrieval is a scope/channel fact, not the generic "found N
+  // materials" phrasing: keep the empty-scope and channel-failure facts apart.
+  if (event.stage === "retrieval" && Array.isArray(event.data?.degradedReasons)) {
+    const reasons = event.data.degradedReasons.filter(
+      (reason): reason is string => typeof reason === "string",
+    )
+    if (reasons.length > 0) {
+      const prefix = event.data.correction ? "补充检索" : "检索知识库"
+      const count =
+        typeof event.data.resultCount === "number" && Number.isInteger(event.data.resultCount)
+          ? ` · ${event.data.resultCount} 条结果`
+          : ""
+      const parts: string[] = []
+      if (reasons.includes("no_knowledge_scope")) parts.push("未指定知识范围")
+      const channelCount = reasons.filter((reason) => reason !== "no_knowledge_scope").length
+      if (channelCount > 0) parts.push(`${channelCount} 个通道降级`)
+      return `${prefix}${count}${parts.length ? ` · ${parts.join(" · ")}` : ""}`
+    }
+  }
   if (event.stage === "done") return traceStatusLabel(event.result?.status)
   return answerProcessEventLabel(event)
 }

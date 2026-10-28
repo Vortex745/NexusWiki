@@ -65,13 +65,13 @@ const ENABLED_ENV = {
 }
 
 const emptyEventsSource: AnswerEventsSource = async function* () {
-  yield terminalEvent("run-unused")
+  yield terminalEvent("run-unused", "sess-http")
 }
 
-function terminalEvent(runId: string): AnswerRunEvent {
+function terminalEvent(runId: string, sessionId: string): AnswerRunEvent {
   return {
     schemaVersion: 1,
-    sessionId: "sess-http",
+    sessionId,
     runId,
     createdAt: "2026-10-20T00:00:00.000Z",
     status: "completed",
@@ -94,10 +94,10 @@ function terminalEvent(runId: string): AnswerRunEvent {
   }
 }
 
-function progressEvent(runId: string): AnswerRunEvent {
+function progressEvent(runId: string, sessionId: string): AnswerRunEvent {
   return {
     schemaVersion: 1,
-    sessionId: "sess-http",
+    sessionId,
     runId,
     createdAt: "2026-10-20T00:00:00.000Z",
     status: "running",
@@ -280,11 +280,11 @@ test("LO-06-AC07: an abandoned SSE stream ends its scope exactly once as client_
   const exporter = new FakeExporter()
   const { runtime } = createTracingRuntime({ env: ENABLED_ENV, exporter })
   const source: AnswerEventsSource = async function* (_message, options) {
-    yield progressEvent(options.runId ?? "run-sse")
+    yield progressEvent(options.runId ?? "run-sse", options.sessionId ?? "sess-http")
     await new Promise<void>((resolve) => {
       options.signal?.addEventListener("abort", () => resolve(), { once: true })
     })
-    yield terminalEvent(options.runId ?? "run-sse")
+    yield terminalEvent(options.runId ?? "run-sse", options.sessionId ?? "sess-http")
   }
   const app = createApp({ db, logger: new SilentLogger(), tracing: runtime, eventsSource: source })
   const { server, port } = await listen(app)
@@ -325,7 +325,7 @@ test("LO-06-AC07: an idle request ends once with timeout and an error status", a
     await new Promise<void>(() => {
       // never resolves: only the request deadline can end it
     })
-    yield terminalEvent("run-hang")
+    yield terminalEvent("run-hang", "sess-http")
   }
   const app = createApp({
     db,
@@ -362,16 +362,17 @@ test("LO-09-AC01/AC02: a real chat run emits stage and tool spans under its requ
   const { runtime } = createTracingRuntime({ env: ENABLED_ENV, exporter })
   const source: AnswerEventsSource = async function* (_message, options) {
     const runId = options.runId ?? "run-l09"
-    yield progressEvent(runId)
+    const sessionId = options.sessionId ?? "sess-http"
+    yield progressEvent(runId, sessionId)
     yield {
-      ...progressEvent(runId),
+      ...progressEvent(runId, sessionId),
       stage: "retrieval",
       message: "retrieving",
       data: { complexLoop: true, iteration: 1, selectedTool: "semantic_lexical_hybrid", resultCount: 2 },
       eventId: `${runId}:2`,
       sequence: 2,
     } as AnswerRunEvent
-    const terminal = terminalEvent(runId) as Extract<AnswerRunEvent, { type: "done" }>
+    const terminal = terminalEvent(runId, sessionId) as Extract<AnswerRunEvent, { type: "done" }>
     yield {
       ...terminal,
       result: { ...terminal.result, status: "insufficient_evidence" },

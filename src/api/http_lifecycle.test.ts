@@ -54,10 +54,10 @@ async function listen(app: Express) {
   return { server, port: (server.address() as AddressInfo).port }
 }
 
-function terminalEvent(runId: string, reply: string): AnswerRunEvent {
+function terminalEvent(runId: string, sessionId: string, reply: string): AnswerRunEvent {
   return {
     schemaVersion: 1,
-    sessionId: "sess-http",
+    sessionId,
     runId,
     createdAt: "2026-10-20T00:00:00.000Z",
     status: "completed",
@@ -80,10 +80,10 @@ function terminalEvent(runId: string, reply: string): AnswerRunEvent {
   }
 }
 
-function progressEvent(runId: string): AnswerRunEvent {
+function progressEvent(runId: string, sessionId: string): AnswerRunEvent {
   return {
     schemaVersion: 1,
-    sessionId: "sess-http",
+    sessionId,
     runId,
     createdAt: "2026-10-20T00:00:00.000Z",
     status: "running",
@@ -108,8 +108,8 @@ function recordingSource(seen: Array<string | undefined>): AnswerEventsSource {
     // Yield one progress frame so the client receives bytes before the end.
     await Promise.resolve()
     seen.push(currentHttpLogContext()?.requestId)
-    yield progressEvent(options.runId ?? "run-http")
-    yield terminalEvent(options.runId ?? "run-http", `echo:${message}`)
+    yield progressEvent(options.runId ?? "run-http", options.sessionId ?? "sess-http")
+    yield terminalEvent(options.runId ?? "run-http", options.sessionId ?? "sess-http", `echo:${message}`)
   }
 }
 
@@ -118,7 +118,7 @@ function hangingSource(): AnswerEventsSource {
     await new Promise<void>(() => {
       // Never resolves and ignores abort: only the request timeout can end it.
     })
-    yield progressEvent("run-hang")
+    yield progressEvent("run-hang", "sess-hang")
   }
 }
 
@@ -200,11 +200,11 @@ test("LO-04-AC02/AC03: an abandoned SSE stream yields one client_closed record, 
   const db = openDb(":memory:")
   const { logger, destination } = buildLogger()
   const source: AnswerEventsSource = async function* (_message, options) {
-    yield progressEvent(options.runId ?? "run-abort")
+    yield progressEvent(options.runId ?? "run-abort", options.sessionId ?? "sess-http")
     await new Promise<void>((resolve) => {
       options.signal?.addEventListener("abort", () => resolve(), { once: true })
     })
-    yield terminalEvent(options.runId ?? "run-abort", "never delivered")
+    yield terminalEvent(options.runId ?? "run-abort", options.sessionId ?? "sess-http", "never delivered")
   }
   const app = createApp({ db, logger, eventsSource: source })
   const { server, port } = await listen(app)

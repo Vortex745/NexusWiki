@@ -45,9 +45,9 @@ class CaptureDestination extends EventEmitter implements LogDestination {
   }
 }
 
-const progressEvent = (runId: string): AnswerRunEvent => ({
+const progressEvent = (runId: string, sessionId: string): AnswerRunEvent => ({
   schemaVersion: 1,
-  sessionId: "log-session",
+  sessionId,
   runId,
   createdAt: new Date(0).toISOString(),
   status: "running",
@@ -64,9 +64,9 @@ const progressEvent = (runId: string): AnswerRunEvent => ({
   sequence: 0,
 })
 
-const terminalEvent = (runId: string): AnswerRunEvent => ({
+const terminalEvent = (runId: string, sessionId: string): AnswerRunEvent => ({
   schemaVersion: 1,
-  sessionId: "log-session",
+  sessionId,
   runId,
   createdAt: new Date(0).toISOString(),
   status: "completed",
@@ -112,7 +112,7 @@ function buildHarness(options: {
     eventsSource:
       options.eventsSource ??
       (async function* (_message, runOptions) {
-        yield terminalEvent(runOptions.runId ?? "run-default")
+        yield terminalEvent(runOptions.runId ?? "run-default", runOptions.sessionId ?? "log-session")
       }),
   })
   return {
@@ -270,11 +270,11 @@ test("a CORS preflight is transport, not a logged business request", async () =>
 
 test("an abandoned SSE stream logs exactly one client_closed terminal", async () => {
   const source: AnswerEventsSource = async function* (_message, runOptions) {
-    yield progressEvent(runOptions.runId ?? "run-abort")
+    yield progressEvent(runOptions.runId ?? "run-abort", runOptions.sessionId ?? "log-abort")
     await new Promise<void>((resolve) => {
       runOptions.signal?.addEventListener("abort", () => resolve(), { once: true })
     })
-    yield terminalEvent(runOptions.runId ?? "run-abort")
+    yield terminalEvent(runOptions.runId ?? "run-abort", runOptions.sessionId ?? "log-abort")
   }
   const harness = buildHarness({ eventsSource: source })
   const { server, port } = await listen(harness.app)

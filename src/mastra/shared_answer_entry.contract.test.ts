@@ -1508,7 +1508,7 @@ test("RE-03: an FAQ standard answer records the effort without a model call", as
     }))
     const done = terminals(events)
     assert.equal(done.length, 1)
-    assert.equal(done[0].result.reply, "九点到五点")
+    assert.match(done[0].result.reply, /^九点到五点 \[cite:ev_[0-9a-f]+\]$/)
     assert.equal(done[0].result.requestedReasoningEffort, "low")
     assert.equal(chat.calls.length, 0, "the standard answer never calls a model")
   } finally {

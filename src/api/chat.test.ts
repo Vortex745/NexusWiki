@@ -6,6 +6,7 @@ import { SqliteConversationHistoryStore } from "../answer/conversation_history_s
 import type { AnswerReference, AnswerRunEvent } from "../types"
 import { openDb } from "../ingestion/tracking/db"
 import { createApp } from "./server"
+import { SqliteSessionBinder } from "../access/session_binder"
 import type { AnswerEventsSource } from "./chat"
 
 const reference: AnswerReference = {
@@ -207,10 +208,11 @@ async function startChatHarness(options: {
       yield event
     }
   }
+  const binder = new SqliteSessionBinder(db)
   const sessionBinder = {
-    bindOrCheck: () => {
+    bindOrCheck: (sessionId: string, tenantId: string, subjectId: string) => {
       calls.binder += 1
-      return { ok: true as const }
+      return binder.bindOrCheck(sessionId, tenantId, subjectId)
     },
   }
   const directories = new SqliteConversationHistoryStore(db)

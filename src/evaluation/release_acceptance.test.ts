@@ -275,7 +275,7 @@ test("T17 #3: No answer_delta after terminal event (no late publication)", () =>
   const source = readFileSync(CHAT_EVENT_ADAPTER_SOURCE_PATH, "utf8")
   assert.match(source, /let terminalEmitted = false/, "adapter tracks terminal emission")
   assert.match(source, /if \(!terminalEmitted\)[\s\S]*terminalEmitted = true[\s\S]*yield event/, "terminal is emitted once")
-  const deltaLoopIdx = source.indexOf("for (const token of runnerOutput.tokens")
+  const deltaLoopIdx = source.indexOf("for (const token of publishableTokens")
   const publishTerminalIdx = source.indexOf("// GATE 5 — publish")
   assert.ok(deltaLoopIdx > -1, "answer_delta loop exists")
   assert.ok(publishTerminalIdx > deltaLoopIdx, "normal terminal follows all answer deltas")
