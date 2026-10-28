@@ -51,6 +51,10 @@ export interface AppConfig {
   parserTimeoutMs?: number
   parserInputLimitBytes?: number
   parserOutputLimitBytes?: number
+  /** DocReader gRPC address; only used by the PDF adapter and probe. */
+  docreaderAddr?: string
+  /** Total DocReader + required-OCR budget for one PDF parse, in milliseconds. */
+  docreaderTimeoutMs?: number
   /**
    * Ingestion speed: passages per embedding request (count bound) and per
    * request byte budget (UTF-8 bound). The byte cap is the safety net when a
@@ -341,6 +345,8 @@ export function loadConfig(): AppConfig {
     parserTimeoutMs: integerEnv("PARSER_TIMEOUT_MS", "positive", 120_000),
     parserInputLimitBytes: integerEnv("PARSER_INPUT_LIMIT_BYTES", "positive", 20 * 1024 * 1024),
     parserOutputLimitBytes: integerEnv("PARSER_OUTPUT_LIMIT_BYTES", "positive", 20 * 1024 * 1024),
+    docreaderAddr: process.env.DOCREADER_ADDR?.trim() || "127.0.0.1:50051",
+    docreaderTimeoutMs: integerEnv("DOCREADER_TIMEOUT_MS", "positive", 300_000),
     embeddingBatchMaxChunks: integerEnv("EMBEDDING_BATCH_MAX_CHUNKS", "positive", 64),
     embeddingBatchMaxBytes: integerEnv("EMBEDDING_BATCH_MAX_BYTES", "positive", 150 * 1024),
     ingestionConcurrency: integerEnv("INGESTION_CONCURRENCY", "positive", 2),

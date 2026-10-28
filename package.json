@@ -5,6 +5,9 @@
   "scripts": {
     "dev": "tsx src/index.ts",
     "build": "tsc",
+    "postbuild": "node scripts/copy-docreader-proto.cjs",
+    "docreader:check": "tsx scripts/docreader-probe.ts",
+    "test:docreader": "node --import tsx --import ./scripts/test-env.ts --test --test-concurrency=1 src/ingestion/parser/docreader*.test.ts",
     "dev:web": "vite",
     "build:web": "vite build",
     "preview:web": "vite preview",
@@ -34,6 +37,8 @@
     "@elastic/elasticsearch": "^9.4.2",
     "@fontsource-variable/geist": "^5.3.0",
     "@fontsource-variable/inter": "^5.3.0",
+    "@grpc/grpc-js": "^1.14.6",
+    "@grpc/proto-loader": "^0.8.1",
     "@llamaindex/env": "^0.1.30",
     "@mastra/core": "^1.51.0",
     "@mastra/mcp": "^1.17.1",
