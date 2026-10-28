@@ -576,6 +576,12 @@ export class PipelineStageRunner implements IngestionStageRunner {
             throw new Error("Document access metadata is required before chunk persistence")
           }
           const store = this.ensureStore()
+          const cleanupStore = store as unknown as {
+            deleteDocumentChunks?: (documentId: string, signal?: AbortSignal) => Promise<void>
+          }
+          if (typeof cleanupStore.deleteDocumentChunks === "function") {
+            await cleanupStore.deleteDocumentChunks(document.id, execution.signal)
+          }
           const metrics = await store.storeChunks(chunks, {
             tenantId: document.tenantId,
             allowedGroups: document.allowedGroups,

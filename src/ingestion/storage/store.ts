@@ -352,6 +352,24 @@ export class ESStore {
     }
   }
 
+  /** Remove a candidate's previous index artifacts before a retry re-stores. */
+  async deleteDocumentChunks(documentId: string, signal?: AbortSignal): Promise<void> {
+    if (!documentId) throw new Error("documentId is required")
+    try {
+      await this.client.deleteByQuery({
+        index: this.indexName,
+        query: { term: { documentId } },
+        refresh: true,
+        conflicts: "proceed",
+      }, { signal })
+    } catch (error) {
+      const status = (error as { meta?: { statusCode?: number } }).meta?.statusCode
+      const message = error instanceof Error ? error.message : String(error)
+      if (status === 404 || message.includes("index_not_found_exception")) return
+      throw error
+    }
+  }
+
   async storeChunks(
     chunks: Chunk[],
     accessMetadata: KnowledgeAccessMetadata,
@@ -656,6 +674,10 @@ export class IngestionStoreImpl {
       this.es = new ESStore()
       this.neo4j = new Neo4jStore()
     }
+  }
+
+  async deleteDocumentChunks(documentId: string, signal?: AbortSignal): Promise<void> {
+    return this.es.deleteDocumentChunks(documentId, signal)
   }
 
   async storeChunks(

@@ -272,3 +272,45 @@ test("the persistence stages inherit access metadata and reject missing metadata
     db.close()
   }
 })
+
+test("a candidate's old index chunks are cleared before re-storing", async () => {
+  const db = openDb(":memory:")
+  const calls: string[] = []
+  const store = {
+    async deleteDocumentChunks(documentId: string) { calls.push(`delete:${documentId}`) },
+    async storeChunks() { calls.push("store") },
+    async storeEntities() {},
+    async storeWikilinks() {},
+    get chunkIndexName() { return "test-chunks" },
+    async close() {},
+  } as unknown as IngestionStoreImpl
+  const runner = new PipelineStageRunner(db, undefined, store)
+  const document: Document = {
+    id: "doc-clean",
+    sourceId: "source-clean",
+    contentHash: "hash",
+    version: 1,
+    title: "Clean",
+    source: "clean.txt",
+    content: "body",
+    metadata: {},
+    createdAt: new Date(0),
+    tenantId: "tenant-a",
+    allowedGroups: [],
+    knowledgeBaseId: "kb-a",
+  }
+  try {
+    await runner.run(document, {
+      signal: new AbortController().signal,
+      executionId: "test-execution",
+      async runStage(_name, _input, operation, summarize) {
+        const result = await operation()
+        summarize(result)
+        return result
+      },
+    })
+    assert.deepEqual(calls, ["delete:doc-clean", "store"])
+  } finally {
+    db.close()
+  }
+})
