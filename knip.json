@@ -20,6 +20,7 @@
     "src/mastra/stop_conditions.ts",
     "src/answer/clarification_store.ts",
     "src/ingestion/index_verification.ts",
+    "src/ingestion/tracking/expected_chunk_repo.ts",
     "frontend/src/components/arc/scroll-area/**",
     "frontend/src/components/thread/ThinkingLoader.tsx",
     "frontend/src/hooks/use-highlighted-code.ts",

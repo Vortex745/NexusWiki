@@ -252,6 +252,8 @@ test("LO-05-AC09/AC10: only the adapter touches the vendor; the contract stays n
   assert.deepEqual(otelDeps.sort(), [
     // LO-19: the ALS context manager is part of the adapter, not business code.
     "@opentelemetry/context-async-hooks",
+    // Direct bounded-processor dependency; declaring it avoids a phantom import.
+    "@opentelemetry/core",
     "@opentelemetry/exporter-trace-otlp-proto",
     "@opentelemetry/resources",
     "@opentelemetry/sdk-trace-base",
