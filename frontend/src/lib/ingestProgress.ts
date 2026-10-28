@@ -281,72 +281,42 @@ export function deriveIngestProgress(payload: IngestStatus): ImportProgress {
       !latest || node.span.id > latest.span.id ? node : latest, null)
   const taskStatus = payload.task?.status
   const root = taskStatus === "pending" && latestRoot?.span.status === "done" ? null : latestRoot
-  // UT-26: the joint gate keeps stage success and ACTIVATION independent — a
-  // completed candidate with a gate denial (or held for business approval) is
-  // NOT a completion, whatever its document status says.
-  const blocked = payload.activationBlockReason != null && payload.activationBlockReason !== ""
+  // Technical completion is the terminal success state. Historical review
+  // holds are rendered from catalog rows, not from an active import poll.
   const status: ImportStatus = taskStatus === "cancelled" || payload.documentStatus === "cancelled"
     ? "cancelled"
     : taskStatus === "running" ? "processing"
     : taskStatus === "pending" ? "pending"
-    : payload.candidateState === "pending_review" ? "business_review"
-    : blocked && (payload.documentStatus === "completed" || taskStatus === "completed") ? "pending_review"
     : payload.documentStatus === "completed" || taskStatus === "completed" ? "completed"
     : payload.documentStatus === "failed" || taskStatus === "failed" ? "failed" : "pending"
-  // UT-26: outcome derived ONLY from structured fields — never from
-  // heuristics (extraction length, text presence, stage labels).
+  // Outcome derived ONLY from structured fields — never from heuristics.
   const failureCategory = payload.failure?.category ?? null
-  const blockReasons = blocked ? (payload.activationBlockReason as string).split(";").filter(Boolean) : []
-  const acceptanceWarnings = Array.isArray(payload.activationWarnings)
-    ? payload.activationWarnings.filter((warning): warning is string => typeof warning === "string")
-    : []
-  const acceptancePolicyVersion =
-    typeof payload.activationPolicyVersion === "string" ? payload.activationPolicyVersion : null
   const version = payload.documentVersion
   const outcome: ImportOutcome | null =
-    status === "pending_review"
+    status === "failed"
       ? {
-          state: "pending_review",
-          blockReasons,
+          state: failureCategory === "capability_missing" ? "capability_missing" : "failed",
+          blockReasons: [],
           activationWarnings: [],
           activationPolicyVersion: null,
-          allowedOperations: [],
+          allowedOperations: payload.failure?.allowedOperations ?? [],
           oldVersionUsable: version != null && !version.active && version.version > 1,
+          reasonCode: payload.failure?.reasonCode,
+          ...(payload.failure?.reasonCodes?.length ? { reasonCodes: payload.failure.reasonCodes } : {}),
+          ...(payload.failure?.userGuidance ? { userGuidance: payload.failure.userGuidance } : {}),
         }
-      : status === "business_review"
-        ? {
-            state: "business_review",
-            blockReasons: [],
-            activationWarnings: [],
-            activationPolicyVersion: null,
-            allowedOperations: [],
-            oldVersionUsable: version != null && !version.active && version.version > 1,
-          }
-        : status === "failed"
+      : status === "cancelled"
+        ? { state: "cancelled", blockReasons: [], activationWarnings: [], activationPolicyVersion: null, allowedOperations: [], oldVersionUsable: false }
+        : status === "completed"
           ? {
-              state: failureCategory === "capability_missing" ? "capability_missing" : "failed",
+              state: "completed",
               blockReasons: [],
               activationWarnings: [],
               activationPolicyVersion: null,
-              allowedOperations: payload.failure?.allowedOperations ?? [],
-              oldVersionUsable: version != null && !version.active && version.version > 1,
-              // Ticket 26: the raw evidence the failure copy keys off.
-              reasonCode: payload.failure?.reasonCode,
-              ...(payload.failure?.reasonCodes?.length ? { reasonCodes: payload.failure.reasonCodes } : {}),
-              ...(payload.failure?.userGuidance ? { userGuidance: payload.failure.userGuidance } : {}),
+              allowedOperations: [],
+              oldVersionUsable: false,
             }
-          : status === "cancelled"
-            ? { state: "cancelled", blockReasons: [], activationWarnings: [], activationPolicyVersion: null, allowedOperations: [], oldVersionUsable: false }
-            : status === "completed"
-              ? {
-                  state: "completed",
-                  blockReasons: [],
-                  activationWarnings: acceptanceWarnings,
-                  activationPolicyVersion: acceptancePolicyVersion,
-                  allowedOperations: [],
-                  oldVersionUsable: false,
-                }
-              : null
+          : null
   const retryAt = payload.task?.nextAttemptAt ?? null
   const waitingForRetry = status === "pending" && root?.span.status === "failed"
   const stages: Array<{
@@ -439,8 +409,6 @@ export function deriveIngestProgress(payload: IngestStatus): ImportProgress {
   // replace the file, already inside the mapped reasons).
   const describedFailure = failureRecord ? describeFailure(failureRecord) : null
   const summary = status === "completed" ? "处理完成"
-    : status === "pending_review" ? "处理完成，但内容待校验，尚未启用"
-    : status === "business_review" ? "处理完成，等待业务审批"
     : status === "cancelled" ? "已取消"
     : status === "failed" && failureRecord?.reasonCode === "pdf_quality_gate_rejected" ? "上传失败"
     : status === "failed" ? `${stages.find((stage) => stage.status === "failed")?.label ?? "处理"}失败`

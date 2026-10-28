@@ -123,7 +123,7 @@ function DocumentRow({
   doc: DocumentCatalogEntryPayload
   canAdmin: boolean
   busy: boolean
-  onAction: (action: () => Promise<void>, successText: string) => void
+  onAction: (action: () => Promise<unknown>, successText: string) => void
   onView: (doc: DocumentCatalogEntryPayload) => void
   onDelete: (doc: DocumentCatalogEntryPayload) => void
 }) {
@@ -257,7 +257,7 @@ function DocumentRow({
                   disabled={busy}
                   className={rowButtonClass}
                   onClick={() =>
-                    onAction(() => reprocessDocument(doc.docId), "已重新处理")
+                    onAction(() => reprocessDocument(doc.docId), "已创建新版本并开始处理")
                   }
                 >
                   重新处理
@@ -480,13 +480,19 @@ export function DocumentsDialog({
     )
   }
 
-  const runAction = (action: () => Promise<void>, successText: string) => {
+  const runAction = (action: () => Promise<unknown>, successText: string) => {
     setBusy(true)
     action()
-      .then(() => {
+      .then((result) => {
+        const newDocId = result && typeof result === "object" && "docId" in result &&
+          typeof (result as { docId?: unknown }).docId === "string"
+          ? (result as { docId: string }).docId
+          : null
         // An empty text means the action announced itself (a rename needs the
         // new name, which is only known inside the callback).
-        if (successText) showToast(successText)
+        if (successText) {
+          showToast(newDocId ? `${successText}（新版本 ${newDocId.slice(0, 8)}）` : successText)
+        }
         setRefreshTick((tick) => tick + 1)
       })
       .catch((err: unknown) => {

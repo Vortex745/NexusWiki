@@ -834,54 +834,46 @@ const allDone = () => [
   stage("storeChunks", "done"), stage("storeGraph", "done"),
 ]
 
-test("UT-26: a gate-blocked candidate renders as 待校验 with reasons and the old-version note", () => {
-  const blocked = payload(allDone())
-  blocked.documentStatus = "completed"
-  blocked.task = { status: "completed", failCount: 0, nextAttemptAt: null }
-  blocked.activationBlockReason = "activation_content_proof_pending_review"
-  blocked.documentVersion = { version: 2, contentHash: "hash", active: false }
-  const progress = deriveIngestProgress(blocked)
-  // A gate denial is NOT completion — no 100 percent, no success copy.
-  assert.equal(progress.status, "pending_review")
-  assert.match(progress.summary, /待校验/)
-  assert.match(progress.summary, /尚未启用/)
-  assert.doesNotMatch(progress.summary, /未替换现有版本/)
-  assert.notEqual(progress.percent, 100)
-  assert.equal(progress.outcome?.state, "pending_review")
-  // The module runs in a VM realm: compare arrays structurally via JSON.
-  assert.equal(
-    JSON.stringify(progress.outcome?.blockReasons),
-    JSON.stringify(["activation_content_proof_pending_review"]),
-  )
-  assert.equal(progress.outcome?.oldVersionUsable, true, "v2 blocked while v1 stays active")
+test("historical gate fields no longer block a new technical completion", () => {
+  const historical = payload(allDone())
+  historical.documentStatus = "completed"
+  historical.task = { status: "completed", failCount: 0, nextAttemptAt: null }
+  historical.activationBlockReason = "activation_content_proof_pending_review"
+  historical.documentVersion = { version: 2, contentHash: "hash", active: true }
+  const progress = deriveIngestProgress(historical)
+  assert.equal(progress.status, "completed")
+  assert.equal(progress.percent, 100)
+  assert.equal(progress.outcome?.state, "completed")
+  assert.equal(progress.outcome?.blockReasons.length, 0)
+
+  // The catalog keeps rendering the historical hold from its own row.
+  const held = deriveRecordView({
+    status: "completed",
+    candidateState: "approved",
+    active: false,
+    activationBlockReason: "activation_content_proof_pending_review",
+  })
+  assert.equal(held.state, "pending_review")
+  assert.equal(held.label, "待校验")
 })
 
-test("UT-26: unknown activation reasons are never mapped to completion", () => {
-  const unknown = payload(allDone())
-  unknown.documentStatus = "completed"
-  unknown.task = { status: "completed", failCount: 0, nextAttemptAt: null }
-  unknown.activationBlockReason = "activation_some_future_reason"
-  const progress = deriveIngestProgress(unknown)
-  assert.equal(progress.status, "pending_review")
-  assert.equal(
-    JSON.stringify(progress.outcome?.blockReasons),
-    JSON.stringify(["activation_some_future_reason"]),
-    "unmapped codes pass through verbatim",
-  )
-})
-
-test("UT-26: business review hold (candidate pending_review) renders as 待审中", () => {
+test("historical business-review rows still render without blocking new imports", () => {
   const review = payload(allDone())
   review.documentStatus = "completed"
   review.task = { status: "completed", failCount: 0, nextAttemptAt: null }
   review.candidateState = "pending_review"
-  review.documentVersion = { version: 1, contentHash: "hash", active: false }
+  review.documentVersion = { version: 1, contentHash: "hash", active: true }
   const progress = deriveIngestProgress(review)
-  assert.equal(progress.status, "business_review")
-  assert.match(progress.summary, /业务审批/)
-  assert.equal(progress.outcome?.state, "business_review")
-  // First upload (version 1): there IS no old version to point at.
-  assert.equal(progress.outcome?.oldVersionUsable, false)
+  assert.equal(progress.status, "completed")
+  assert.equal(progress.outcome?.state, "completed")
+
+  const historical = deriveRecordView({
+    status: "completed",
+    candidateState: "pending_review",
+    active: false,
+  })
+  assert.equal(historical.state, "business_review")
+  assert.equal(historical.label, "待审中")
 })
 
 test("UT-26: capability missing surfaces the machine-readable allowed operations", () => {
@@ -905,20 +897,18 @@ test("UT-26: capability missing surfaces the machine-readable allowed operations
   )
 })
 
-test("UT-26: the row shows the 待校验 badge, the reason copy and the old-version note", async () => {
+test("a completed import row shows 已完成 and offers no retry", async () => {
   const host = dialogHarness()
   await host.upload()
-  const blocked = payload(allDone())
-  blocked.documentStatus = "completed"
-  blocked.task = { status: "completed", failCount: 0, nextAttemptAt: null }
-  blocked.activationBlockReason = "activation_content_proof_pending_review"
-  blocked.documentVersion = { version: 2, contentHash: "hash", active: false }
-  await host.poll(blocked)
-  assert.equal(host.progress().progress.status, "pending_review")
-  assert.equal(host.hasText("待校验"), true, "the badge renders the hold state")
-  assert.equal(host.hasText("内容完整性待校验"), true, "the human-readable reason renders")
-  assert.equal(host.hasText("现有版本仍可正常使用"), true, "the old-version note renders")
-  assert.equal(host.hasText("重试"), false, "no meaningless retry on an unproven candidate")
+  const completed = payload(allDone())
+  completed.documentStatus = "completed"
+  completed.task = { status: "completed", failCount: 0, nextAttemptAt: null }
+  completed.documentVersion = { version: 2, contentHash: "hash", active: true }
+  await host.poll(completed)
+  assert.equal(host.progress().progress.status, "completed")
+  assert.equal(host.hasText("已完成"), true)
+  assert.equal(host.hasText("待校验"), false)
+  assert.equal(host.hasText("重试"), false)
 })
 
 test("UT-31: 上传记录 only reads ✅ when the active pointer holds the version", () => {
@@ -953,21 +943,20 @@ test("UT-31: 上传记录 only reads ✅ when the active pointer holds the versi
   assert.equal(inactive.label, "非活动版本")
 })
 
-test("UT-31: a review-held row folds after the read window and records 待校验", async () => {
+test("UT-31: a completed row folds after the read window and is filed as adopted", async () => {
   const host = dialogHarness()
   await host.upload()
-  const blocked = payload(allDone())
-  blocked.documentStatus = "completed"
-  blocked.task = { status: "completed", failCount: 0, nextAttemptAt: null }
-  blocked.activationBlockReason = "activation_content_proof_pending_review"
-  blocked.documentVersion = { version: 1, contentHash: "hash", active: false }
-  await host.poll(blocked)
-  assert.equal(host.progress().progress.status, "pending_review")
-  assert.equal(host.hasText("待校验"), true, "the held row still shows its live state")
+  const completed = payload(allDone())
+  completed.documentStatus = "completed"
+  completed.task = { status: "completed", failCount: 0, nextAttemptAt: null }
+  completed.documentVersion = { version: 1, contentHash: "hash", active: true }
+  await host.poll(completed)
+  assert.equal(host.progress().progress.status, "completed")
+  assert.equal(host.hasText("已完成"), true)
 
   host.fireCompletedHide()
   await settle()
-  assert.equal(host.hasText("test.pdf"), false, "the held row folds after the 5s read window")
+  assert.equal(host.hasText("test.pdf"), false, "the completed row folds after the 5s read window")
 
   host.setCatalogEntries([{
     docId: "doc-1",
@@ -978,9 +967,10 @@ test("UT-31: a review-held row folds after the read window and records 待校验
     mimeType: "application/pdf",
     status: "completed",
     candidateState: "approved",
+    processingPolicy: "weknora-technical-v1",
     version: 1,
-    active: false,
-    activationBlockReason: "activation_content_proof_pending_review",
+    active: true,
+    activationBlockReason: null,
     tags: [],
     folder: null,
     retired: false,
@@ -991,11 +981,11 @@ test("UT-31: a review-held row folds after the read window and records 待校验
   host.clickButton("刷新")
   await settle()
   assert.equal(host.hasText("test.pdf"), true, "the row is filed into the server catalog")
-  assert.equal(host.hasText("待校验"), true, "the record keeps the hold state")
-  assert.equal(host.hasText("已完成"), false, "a held candidate never renders as ✅")
+  assert.equal(host.hasText("已完成"), true, "the active pointer renders as ✅")
+  assert.equal(host.hasText("待校验"), false)
 })
 
-test("OCR 软提示完成行计成功，并显示未逐字核对的提示", async () => {
+test("OCR warnings are no longer approval hints on a new completion", async () => {
   const ocr = payload(allDone())
   ocr.documentStatus = "completed"
   ocr.task = { status: "completed", failCount: 0, nextAttemptAt: null }
@@ -1007,19 +997,15 @@ test("OCR 软提示完成行计成功，并显示未逐字核对的提示", asyn
   assert.equal(progress.status, "completed")
   assert.equal(progress.percent, 100)
   assert.equal(progress.outcome?.state, "completed")
-  assert.equal(
-    JSON.stringify(progress.outcome?.activationWarnings),
-    JSON.stringify(["structural_risk: ocr_content_unverified"]),
-  )
-  assert.equal(progress.outcome?.activationPolicyVersion, "ocr-advisory-v1")
-  assert.equal(progress.outcome?.oldVersionUsable, false)
+  assert.equal(progress.outcome?.activationWarnings.length, 0)
+  assert.equal(progress.outcome?.activationPolicyVersion, null)
 
   const host = dialogHarness()
   await host.upload()
   await host.poll(ocr)
   assert.equal(host.progress().progress.status, "completed")
   assert.equal(host.hasText("已完成"), true)
-  assert.equal(host.hasText("来自 OCR，未逐字核对"), true)
+  assert.equal(host.hasText("来自 OCR，未逐字核对"), false)
 })
 
 // ---------------------------------------------------------------------------

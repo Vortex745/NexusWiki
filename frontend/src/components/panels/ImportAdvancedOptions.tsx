@@ -39,7 +39,7 @@ export function ImportAdvancedOptions({
             ))}
           </UiSelect>
           <p className="text-[11px] text-faint/70">
-            默认提取 PDF 文字层；扫描件请选择 OCR API
+            自动解析按页识别文字层与扫描页；强制 OCR 将整份 PDF 作为扫描件处理。
           </p>
         </FormField>
         <FormField className="flex flex-col gap-1.5">

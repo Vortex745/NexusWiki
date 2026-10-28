@@ -72,12 +72,10 @@ export const IMPORT_FORMAT_GROUPS = [
 ] as const
 
 /** PDF parser overrides the backend accepts on `x-parser`; empty = auto
- * routing (the header is not sent). Mirrors src/api/ingest.ts:370. */
+ * routing (the header is not sent). Mirrors src/api/ingest.ts. */
 export const IMPORT_PARSER_OPTIONS = [
-  { value: "", label: "默认（自动路由）" },
-  { value: "markitdown", label: "markitdown" },
-  { value: "ocr-api", label: "OCR API（扫描件与复杂 PDF）" },
-  { value: "builtin-pdf", label: "builtin-pdf" },
+  { value: "", label: "自动解析" },
+  { value: "ocr-api", label: "强制 OCR" },
 ] as const
 
 export const MIME_BY_EXTENSION: Record<string, string> = {

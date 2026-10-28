@@ -182,9 +182,10 @@ export interface IngestStatus {
   activationWarnings?: string[]
   /** Policy version behind the recorded acceptance; null when none. */
   activationPolicyVersion?: string | null
-  /** UT-26: candidate pipeline state ('pending_review' = held for business
-   * approval under ACTIVATION_MODE=review). */
+  /** Historical review state; null for weknora-technical-v1 imports. */
   candidateState?: string | null
+  /** Server-owned processing policy for this import. */
+  processingPolicy?: string | null
   /** UT-26: machine-readable failure classification with allowed operations. */
   failure?: {
     category: string
@@ -1064,7 +1065,8 @@ export interface DocumentCatalogEntryPayload {
   fileName: string | null
   mimeType: string | null
   status: "pending" | "completed" | "failed" | "cancelled"
-  candidateState: string
+  candidateState: string | null
+  processingPolicy?: string | null
   version: number
   active: boolean
   /** Why activation was denied (";"-joined stable codes); null when active or
@@ -1182,23 +1184,27 @@ export class DocumentOperationError extends Error {
   }
 }
 
-async function documentCommand(docId: string, action: "retry" | "cancel" | "reprocess"): Promise<void> {
+async function documentCommand(
+  docId: string,
+  action: "retry" | "cancel" | "reprocess",
+): Promise<{ docId?: string }> {
   const response = await apiFetch(`/ingest/${encodeURIComponent(docId)}/${action}`, { method: "POST" })
   if (!response.ok) {
     const body = (await response.json().catch(() => ({}))) as { error?: string }
     throw new DocumentOperationError(body.error || `操作失败 (${response.status})`, response.status)
   }
+  return (await response.json().catch(() => ({}))) as { docId?: string }
 }
 
-export function retryDocument(docId: string): Promise<void> {
-  return documentCommand(docId, "retry")
+export async function retryDocument(docId: string): Promise<void> {
+  await documentCommand(docId, "retry")
 }
 
-export function cancelDocument(docId: string): Promise<void> {
-  return documentCommand(docId, "cancel")
+export async function cancelDocument(docId: string): Promise<void> {
+  await documentCommand(docId, "cancel")
 }
 
-export function reprocessDocument(docId: string): Promise<void> {
+export function reprocessDocument(docId: string): Promise<{ docId?: string }> {
   return documentCommand(docId, "reprocess")
 }
 
@@ -1249,7 +1255,8 @@ export interface DocumentVersionPayload {
   fileName: string | null
   mimeType: string
   status: string
-  candidateState: string
+  candidateState: string | null
+  processingPolicy?: string | null
   version: number
   active: boolean
   retired: boolean

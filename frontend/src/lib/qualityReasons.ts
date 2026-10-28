@@ -30,6 +30,17 @@ export type ClassificationReasonCode =
   | "ocr_api_transient_error"
   | "ocr_api_invalid_input_or_output"
   | "ocr_empty_page_unverified"
+  | "docreader_unavailable"
+  | "docreader_deadline_exceeded"
+  | "docreader_capability_missing"
+  | "docreader_message_too_large"
+  | "docreader_invalid_request"
+  | "docreader_parse_failed"
+  | "docreader_cancelled"
+  | "docreader_invalid_stream"
+  | "docreader_image_missing"
+  | "docreader_ocr_required"
+  | "docreader_no_extractable_text"
 
 /** Mirrors QUALITY_ISSUE_TYPES + the `quality_failed` fallback label (contract.ts). */
 export const QUALITY_FAIL_LABELS = [
@@ -165,6 +176,17 @@ const CLASSIFICATION_REASON_TEXT: Record<ClassificationReasonCode, string> = {
   ocr_api_transient_error: "OCR 服务暂时不可用，请等待自动重试",
   ocr_api_invalid_input_or_output: "OCR 服务无法处理该输入或返回了无效结果",
   ocr_empty_page_unverified: "OCR 返回了未验证的空内容；请核对原始页面并重新导出 PDF 后重试，空结果不代表页面已确认为空白",
+  docreader_unavailable: "DocReader 服务不可用；请确认本机 127.0.0.1:50051 已启动后重试",
+  docreader_deadline_exceeded: "PDF 解析超过总预算；请稍后重试或拆分文件",
+  docreader_capability_missing: "DocReader 缺少所需的 PDF 解析能力，请检查服务构建",
+  docreader_message_too_large: "PDF 页面超过 DocReader 消息上限，请压缩或拆分文件",
+  docreader_invalid_request: "DocReader 拒绝了该 PDF 输入",
+  docreader_parse_failed: "PDF 解析失败",
+  docreader_cancelled: "处理已取消",
+  docreader_invalid_stream: "DocReader 流式响应中断或不完整",
+  docreader_image_missing: "PDF 页面图片未完整传输",
+  docreader_ocr_required: "该 PDF 需要 OCR；请选择“强制 OCR”或配置 OCR 凭证",
+  docreader_no_extractable_text: "PDF 没有可索引文字；请确认文件内容或选择强制 OCR",
 }
 
 /** Ticket 17/26: the password / re-export guidance the frontend owns. */
@@ -186,6 +208,8 @@ export interface DescribedFailure {
 const SERVICE_FAULT_CODES: ReadonlySet<ClassificationReasonCode> = new Set([
   "transient_service_error",
   "ocr_api_transient_error",
+  "docreader_unavailable",
+  "docreader_deadline_exceeded",
 ] as ClassificationReasonCode[])
 
 /**
