@@ -28,7 +28,25 @@ export interface TraceEvent {
   round?: number
   durationMs?: number
   data?: Record<string, unknown>
-  result?: { status?: string; references?: Reference[] }
+  result?: {
+    status?: string
+    /**
+     * PL-01: the published reply of the terminal — for an unapproved knowledge
+     * draft this is the safe terminal text, never the draft itself.
+     */
+    reply?: string
+    references?: Reference[]
+    /**
+     * Ticket 31 (FAQ-01B): present only when the answer IS the stored
+     * standard answer of a unique normalized FAQ exact match.
+     */
+    faq?: { entryId: string; version: number; question: string }
+    /**
+     * Ticket 33 (MEM-01B): the long-term memories recalled into this run's
+     * prompts — informational trace, never a citation.
+     */
+    memoryUsed?: { ids: string[]; count: number }
+  }
   runId?: string
 }
 
@@ -39,7 +57,30 @@ export interface Reference {
   excerpt?: string
   sectionPath?: string[]
   page?: number
+  /**
+   * Ticket 13 (DOC-02): the exact document version + chunk a citation points
+   * at — the viewer opens that version from the citation path.
+   */
+  documentId?: string
+  chunkId?: string
   image?: { assetPath?: string; captions?: string[] }
+  /**
+   * Ticket 22 (ATT-01): "attachment" marks a TEMPORARY citation from a
+   * session attachment. It is not a knowledge-base document, so it is never
+   * presented as one and never opened through the document viewer.
+   * Ticket 31 (FAQ-01B): "faq" marks a STANDARD ANSWER citation from a
+   * versioned FAQ entry — labeled as such, never opened as a document.
+   * Ticket 36 (WEB-01): "web" marks WEB evidence with its own URL and fetch
+   * time — labeled as web, never opened through the document viewer.
+   */
+  origin?: "attachment" | "faq" | "web"
+  attachmentName?: string
+  /** Ticket 31 (FAQ-01B): which FAQ entry version this citation carries. */
+  faqEntryId?: string
+  faqVersion?: number
+  /** Ticket 36 (WEB-01): the page URL and server-side fetch time. */
+  webUrl?: string
+  webFetchedAt?: string
   [key: string]: unknown
 }
 
@@ -55,6 +96,16 @@ export interface Message {
   references: Reference[]
   traceStatus?: string
   prompt?: string
+  /**
+   * Ticket 31 (FAQ-01B): the FAQ entry/version this answer published
+   * directly (unique normalized exact match). Absent for every other answer.
+   */
+  faq?: { entryId: string; version: number; question: string }
+  /**
+   * Ticket 33 (MEM-01B): how many long-term memories were recalled into the
+   * run's prompts. Informational only — memory is never a citation.
+   */
+  memoryUsed?: { ids: string[]; count: number }
 }
 
 export interface Thread {
@@ -119,6 +170,8 @@ export interface CompleteReplyData {
   references?: Reference[]
   status?: string
   reply?: string
+  /** Ticket 31 (FAQ-01B): direct standard-answer hit, if any. */
+  faq?: { entryId: string; version: number; question: string }
 }
 
 export interface ProcessSseEventResult {
@@ -135,6 +188,14 @@ export interface Conversation {
   setActiveThread(threadId: string): void
   createThread(): Thread
   deleteThread(threadId: string): void
+  renameThread(threadId: string, title: string): void
+
+  /**
+   * Drops `messageId` and everything after it when `inclusive` is true;
+   * otherwise only the messages after it. Backs message editing (inclusive)
+   * and regeneration (exclusive).
+   */
+  truncateMessages(threadId: string, messageId: string, inclusive: boolean): void
 
   addUserMessage(threadId: string, input: AddUserMessageInput): Message
   startAssistantRun(threadId: string, input: StartAssistantRunInput): Message
@@ -146,7 +207,7 @@ export interface Conversation {
   processSseEvent(message: Message, data: SseEventData): ProcessSseEventResult
   finalizeStreamRun(message: Message): void
   finalizeAbortedRun(message: Message): void
-  finalizeConnectionError(message: Message): void
+  finalizeConnectionError(message: Message, detail?: string): void
   applyRunHistory(message: Message, history: RunHistory): void
   applyCompleteReply(
     message: Message,
@@ -161,6 +222,11 @@ export interface Conversation {
   startRun(): void
   completeRun(): void
   cancelRun(): void
+
+  getSidebarCollapsed(): boolean
+  setSidebarCollapsed(collapsed: boolean): void
+  getStreamEnabled(): boolean
+  setStreamEnabled(enabled: boolean): void
 }
 
 const STORAGE_KEY = "kefu-rag-ui-state-v2"
@@ -181,6 +247,40 @@ function createThreadInternal(now: () => Date): Thread {
     createdAt: iso,
     updatedAt: iso,
     messages: [],
+  }
+}
+
+/**
+ * Persisted UI state outlives the schema that wrote it. Messages saved before
+ * traceEvents/references existed (or by a partial write) arrive without those
+ * arrays; spreading them later throws and takes the whole app down.
+ */
+function normalizePersistedMessage(source: unknown): Message | null {
+  if (!source || typeof source !== "object") return null
+  const message = source as Message
+  if (typeof message.id !== "string" || message.id.length === 0) return null
+  return {
+    ...message,
+    traceEvents: normalizeTraceEvents(message.traceEvents),
+    references: Array.isArray(message.references) ? message.references : [],
+  }
+}
+
+function normalizePersistedThread(source: unknown, now: Date): Thread | null {
+  if (!source || typeof source !== "object") return null
+  const thread = source as Thread
+  if (typeof thread.id !== "string" || thread.id.length === 0) return null
+  const iso = now.toISOString()
+  return {
+    ...thread,
+    title: typeof thread.title === "string" ? thread.title : "新对话",
+    createdAt: typeof thread.createdAt === "string" ? thread.createdAt : iso,
+    updatedAt: typeof thread.updatedAt === "string" ? thread.updatedAt : iso,
+    messages: Array.isArray(thread.messages)
+      ? thread.messages
+          .map(normalizePersistedMessage)
+          .filter((message): message is Message => message !== null)
+      : [],
   }
 }
 
@@ -226,6 +326,24 @@ export function projectTraceEvents(events: TraceEvent[]): TraceEvent[] {
   )
 }
 
+/**
+ * PL-01: transport success is not answer success. Only these business terminals
+ * may carry draft facts into the visible bubble — for anything else the server
+ * publishes safe terminal text, and the bubble must not read as a reliable
+ * knowledge answer.
+ */
+const PUBLISHABLE_TERMINALS = new Set(["completed", "clarification_required"])
+
+function isUnapprovedTerminal(status: unknown): boolean {
+  // PL-01 AC03/AC04: cancelled is a non-answer too — the run ended without an
+  // approved knowledge answer, and the server publishes 本次回答已取消。 for it.
+  return (
+    typeof status === "string" &&
+    status.length > 0 &&
+    !PUBLISHABLE_TERMINALS.has(status)
+  )
+}
+
 export function mergeTraceEvent(message: Message, event: TraceEvent): void {
   if (!event || typeof event.eventId !== "string") return
   const byId = new Map((message.traceEvents || []).map((item) => [item.eventId, item]))
@@ -235,16 +353,28 @@ export function mergeTraceEvent(message: Message, event: TraceEvent): void {
 
   if (event.type === "done") {
     message.traceStatus = event.result?.status
+    // PL-01 AC03: streaming publishes the same single safe terminal text as
+    // JSON. Unapproved terminals carry no draft, so no fact text is appended.
+    if (
+      isUnapprovedTerminal(event.result?.status) &&
+      typeof event.result?.reply === "string" &&
+      event.result.reply.length > 0
+    ) {
+      message.content = event.result.reply
+    }
     message.references = Array.isArray(event.result?.references)
       ? event.result.references
       : message.references
+    // Ticket 31 (FAQ-01B): a direct FAQ hit labels the answer itself.
+    message.faq = event.result?.faq ?? undefined
+    // Ticket 33 (MEM-01B): the informational memory trace rides along.
+    message.memoryUsed = event.result?.memoryUsed ?? undefined
   }
 }
 
 /**
  * T57: reference.js helpers absorbed into Conversation. These format
  * reference metadata for display — section path, page number, image asset URL.
- * Previously lived in frontend/js/reference.js as window.ReferenceUi.
  */
 export function formatReferenceLocation(reference: Reference): string {
   const sectionPath = Array.isArray(reference?.sectionPath)
@@ -376,6 +506,24 @@ export class ConversationImpl implements Conversation {
     this.save()
   }
 
+  renameThread(threadId: string, title: string): void {
+    const thread = this.threads.find((t) => t.id === threadId)
+    if (!thread) return
+    const normalized = title.replace(/\s+/g, " ").trim()
+    thread.title = normalized || "新对话"
+    this.save()
+  }
+
+  truncateMessages(threadId: string, messageId: string, inclusive: boolean): void {
+    const thread = this.threads.find((t) => t.id === threadId)
+    if (!thread) return
+    const index = thread.messages.findIndex((m) => m.id === messageId)
+    if (index === -1) return
+    thread.messages.splice(inclusive ? index : index + 1)
+    thread.updatedAt = this.now().toISOString()
+    this.save()
+  }
+
   addUserMessage(threadId: string, input: AddUserMessageInput): Message {
     const thread = this.threads.find((t) => t.id === threadId)
     if (!thread) throw new Error(`thread ${threadId} not found`)
@@ -466,7 +614,8 @@ export class ConversationImpl implements Conversation {
     if (!message.content) {
       message.content = failed ? "处理请求时出现错误，请重试。" : "（回答内容为空）"
     }
-    message.status = failed ? "error" : "complete"
+    message.status =
+      failed || isUnapprovedTerminal(message.traceStatus) ? "error" : "complete"
   }
 
   /**
@@ -474,6 +623,12 @@ export class ConversationImpl implements Conversation {
    * fall back to "已停止生成。" only when no content was produced.
    */
   finalizeAbortedRun(message: Message): void {
+    // A transport abort can race with an already received business terminal.
+    if (message.traceEvents.some((event) => event.type === "done")) {
+      this.finalizeStreamRun(message)
+      return
+    }
+    message.traceStatus = "cancelled"
     if (!message.content) message.content = "已停止生成。"
     message.status = "complete"
   }
@@ -482,8 +637,11 @@ export class ConversationImpl implements Conversation {
    * T58: Network/connection error status policy — surface a friendly error
    * message and mark the run as errored.
    */
-  finalizeConnectionError(message: Message): void {
-    message.content = "连接服务器失败，请确认后端服务已启动后重试。"
+  finalizeConnectionError(message: Message, detail?: string): void {
+    // An HTTP refusal carries the server's own reason (e.g. a workspace with
+    // no chat model configured); only a transport failure falls back to the
+    // generic connection message.
+    message.content = detail?.trim() || "连接服务器失败，请确认后端服务已启动后重试。"
     message.status = "error"
   }
 
@@ -514,13 +672,17 @@ export class ConversationImpl implements Conversation {
     message.traceEvents = normalizeTraceEvents(data?.events)
     message.references = Array.isArray(data?.references) ? data.references : []
     message.traceStatus = data?.status
+    message.faq = data?.faq ?? undefined
     if (!ok) {
       message.content = "处理请求时出现错误，请重试。"
       message.status = "error"
       return { ok: false }
     }
     message.content = typeof data?.reply === "string" ? data.reply : "（回答内容为空）"
-    message.status = "complete"
+    // PL-01 AC03/AC05: a payload without a business terminal keeps the existing
+    // compatible display; a current-protocol terminal that did not approve the
+    // draft is never presented as a completed reliable answer.
+    message.status = isUnapprovedTerminal(data?.status) ? "error" : "complete"
     return { ok: true }
   }
 
@@ -535,11 +697,14 @@ export class ConversationImpl implements Conversation {
     const loaded = this.storage.load()
     if (!loaded) return fallbackState
     if (!Array.isArray(loaded.threads)) return fallbackState
-    if (loaded.threads.length === 0) return fallbackState
-    const activeThreadExists = loaded.threads.some((t) => t.id === loaded.activeThreadId)
+    const threads = loaded.threads
+      .map((thread) => normalizePersistedThread(thread, this.now()))
+      .filter((thread): thread is Thread => thread !== null)
+    if (threads.length === 0) return fallbackState
+    const activeThreadExists = threads.some((t) => t.id === loaded.activeThreadId)
     return {
-      threads: loaded.threads,
-      activeThreadId: activeThreadExists ? loaded.activeThreadId : loaded.threads[0].id,
+      threads,
+      activeThreadId: activeThreadExists ? loaded.activeThreadId : threads[0].id,
       streamEnabled: loaded.streamEnabled !== false,
       sidebarCollapsed: loaded.sidebarCollapsed === true,
     }

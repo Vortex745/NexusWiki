@@ -9,6 +9,9 @@
 //   "作为发布负责人，我希望 RAGAS/Langfuse 等非确定性信号不能覆盖
 //    确定性安全门。"
 //
+// 以上 L13/L77 为历史引文（原文保留）：引文中的 RAGAS shadow 已在 eval 改造
+// 票 17 删除，现在默认为旁路信号的只剩 Langfuse；信号契约本身仍对任意名称开放。
+//
 // Spec L14:
 //   "作为发布负责人，我希望生产探针缺失时 release gate 失败或明确阻断，
 //    而不是静默跳过。"
@@ -17,7 +20,7 @@
 // deterministic pieces (T17 ReleaseVerificationArtifact + P3 hard
 // invariants) into one auditable artifact, and explicitly accounts for:
 //   - Blocked items (P5.3/D-002 OIDC, P9.2/D-003 ES+Neo4j) — spec L14
-//   - Non-deterministic signals (RAGAS shadow, Langfuse) — spec L13, L77
+//   - Non-deterministic signals (Langfuse) — spec L13, L77
 //   - Rollback evidence — spec L77
 //
 // Design (karpathy-guidelines):
@@ -29,9 +32,9 @@
 //       releaseBlocked — operator prerequisites pending (spec L14)
 //
 // Red lines (ops.md):
-//   - Never treat RAGAS shadow or exporter availability as a substitute
-//     for deterministic hard gates (nonDeterministicSignals cannot flip
-//     deterministicGates.overallPassed).
+//   - Never treat a non-deterministic signal or exporter availability as a
+//     substitute for deterministic hard gates (nonDeterministicSignals cannot
+//     flip deterministicGates.overallPassed).
 //   - Never report local fake verification as production acceptance
 //     (blockedItems are explicit, not silently skipped).
 
@@ -105,26 +108,29 @@ export function defaultBlockedItems(): BlockedItem[] {
 
 /**
  * A non-deterministic signal that may report alongside the release artifact
- * but CANNOT override deterministic gate results (spec L13, L77). RAGAS
- * shadow and Langfuse are bypass-only reporters.
+ * but CANNOT override deterministic gate results (spec L13, L77). Every
+ * reporter is bypass-only.
  *
  * `canOverrideDeterministicGates` is a literal `false` so any code path that
  * tries to consult it as a gate is a type error.
+ *
+ * Ticket 15: `name` is open on purpose. The release path must not enumerate a
+ * specific evaluator, so retiring one never requires editing this contract —
+ * only the default list below changes.
  */
 export interface NonDeterministicSignal {
-  name: "ragas_shadow" | "langfuse"
+  name: string
   role: "bypass_only"
   canOverrideDeterministicGates: false
 }
 
 /**
- * Spec L13, L77: the canonical non-deterministic signal set. RAGAS shadow
- * and Langfuse are bypass-only — they report alongside the artifact but
- * cannot change deterministic gate pass/fail state.
+ * Spec L13, L77: the canonical non-deterministic signal set. These reporters
+ * are bypass-only — they report alongside the artifact but cannot change
+ * deterministic gate pass/fail state.
  */
 export function defaultNonDeterministicSignals(): NonDeterministicSignal[] {
   return [
-    { name: "ragas_shadow", role: "bypass_only", canOverrideDeterministicGates: false },
     { name: "langfuse", role: "bypass_only", canOverrideDeterministicGates: false },
   ]
 }
@@ -225,8 +231,8 @@ export interface P91ReleaseArtifact {
   blockedItems: BlockedItem[]
 
   /**
-   * Non-deterministic signals (spec L13, L77 — bypass-only). RAGAS shadow
-   * and Langfuse report alongside but cannot override deterministic gates.
+   * Non-deterministic signals (spec L13, L77 — bypass-only). Langfuse reports
+   * alongside but cannot override deterministic gates.
    */
   nonDeterministicSignals: NonDeterministicSignal[]
 
@@ -256,7 +262,7 @@ export interface P91ReleaseArtifact {
  *
  * Defaults:
  *   - blockedItems: defaultBlockedItems() (P5.3/D-002, P9.2/D-003)
- *   - nonDeterministicSignals: defaultNonDeterministicSignals() (ragas_shadow, langfuse)
+ *   - nonDeterministicSignals: defaultNonDeterministicSignals() (langfuse)
  *   - rollbackEvidence: defaultRollbackEvidence() (P9.1 rollback boundary)
  *
  * Computed fields:

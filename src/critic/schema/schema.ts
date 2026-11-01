@@ -1,16 +1,11 @@
 /**
  * P3.1 — Critic verdict schema and version pin.
  *
- * This module defines the *target* schema for a valid Critic verdict emitted
- * by `ValidatorImpl` (src/critic/validator/validator.ts). It is a
- * definition-only module: it does NOT replace the existing `CriticVerdict`
- * type in `src/types/agent.ts`, does NOT modify `ValidatorImpl`, and is NOT
- * wired into any production call path. Runtime enforcement is P3.2.
+ * ValidatorImpl validates provider output against this versioned boundary.
  *
  * Versioning contract:
- *   - `CRITIC_VERDICT_SCHEMA_VERSION` is the current (and only) supported
- *     schema version. A verdict without a matching `schemaVersion` is
- *     classified as `schema_version_mismatch` by `classifyCriticVerdict`.
+ *   - `CRITIC_VERDICT_SCHEMA_VERSION` is the current write version. The
+ *     classifier explicitly supports v1 and v2; other versions are rejected.
  *   - Future schema changes MUST bump this constant and add a new
  *     `CriticVerdictSchemaV<n>` alongside the legacy schema, so P3.2 can
  *     dispatch by version without silent drift.
@@ -38,12 +33,9 @@
 import { z } from "zod"
 
 /**
- * The current Critic verdict schema version. Pinned by P3.1.
- *
- * A verdict with `schemaVersion !== 1` (including absent, wrong type, or
- * unknown future versions) is rejected as `schema_version_mismatch`.
+ * Current write version. The v1 schema keeps its own literal pin.
  */
-export const CRITIC_VERDICT_SCHEMA_VERSION = 1 as const
+export const CRITIC_VERDICT_SCHEMA_VERSION = 2 as const
 
 /**
  * Zod schema for the `Query`-shaped `suggestion` field. Mirrors the
@@ -67,7 +59,7 @@ const QuerySchema = z.object({
  */
 export const CriticVerdictSchemaV1 = z
   .object({
-    schemaVersion: z.literal(CRITIC_VERDICT_SCHEMA_VERSION),
+    schemaVersion: z.literal(1),
     passed: z.boolean(),
     hallucination: z.boolean(),
     completeness: z.boolean(),
@@ -75,6 +67,17 @@ export const CriticVerdictSchemaV1 = z
     suggestion: QuerySchema.optional(),
   })
   .strict()
+
+const AnswerBasisSchema = z.object({
+  text: z.string().trim().min(1).max(240),
+  referenceIds: z.array(z.string().trim().min(1).max(200)).min(1).max(8),
+}).strict()
+
+/** A malformed optional summary is discarded locally; base verdict checks stay strict. */
+export const CriticVerdictSchemaV2 = CriticVerdictSchemaV1.extend({
+  schemaVersion: z.literal(2),
+  answerBasis: AnswerBasisSchema.optional().catch(undefined),
+})
 
 /**
  * The validated Critic verdict shape. This is the type P3.2 will require
@@ -86,7 +89,9 @@ export const CriticVerdictSchemaV1 = z
  * P3.1 can define the target without breaking current production callers
  * that consume the unversioned `CriticVerdict`.
  */
-export type VersionedCriticVerdict = z.infer<typeof CriticVerdictSchemaV1>
+export type VersionedCriticVerdict =
+  | z.infer<typeof CriticVerdictSchemaV1>
+  | z.infer<typeof CriticVerdictSchemaV2>
 
 /**
  * Maximum accepted raw response size in bytes (UTF-8). A Critic verdict is

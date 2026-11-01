@@ -6,7 +6,7 @@
 // Design (karpathy-guidelines):
 //   - validateArtifactSchema: structural validation + hash verification (tamper detection)
 //   - checkPromotion: semantic validation for production promotion (fail-closed)
-//   - Non-deterministic reports (RAGAS/Langfuse) are structurally separate and
+//   - Non-deterministic reports (Langfuse) are structurally separate and
 //     cannot flip a deterministic failure to pass.
 //   - checkPromotion only validates an existing artifact — it never reruns or
 //     mutates production systems.
@@ -186,7 +186,7 @@ export interface PromotionOptions {
  * Check whether an artifact can be promoted to production.
  *
  * Fail-closed: any unverified condition blocks promotion.
- * Non-deterministic reports (RAGAS/Langfuse) cannot flip a failure to pass.
+ * Non-deterministic reports (Langfuse) cannot flip a failure to pass.
  *
  * This function only validates — it never reruns or mutates production systems.
  */

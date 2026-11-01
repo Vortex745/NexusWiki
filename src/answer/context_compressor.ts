@@ -4,12 +4,58 @@ import type { Evidence, TokenUsage } from "../types"
 import {
   CONTEXT_INTRO,
   CONTEXT_SUFFIX,
+  TEMPORARY_CONTEXT_NOTE,
   modelTokenCount,
+  type ContextMaterial,
 } from "../retrieval/context/assembler"
 import {
-  formatEvidenceBlock,
   computeContextBudget,
+  computeMaterialBudget,
+  compressionMaterialFromContextMaterial,
+  compressionSourceText,
+  formatCompressedBlock,
+  formatEvidenceBlock,
+  type CompressionMaterialByEvidenceId,
+  type ContextBudgetBreakdown,
+  type MaterialBudgetBreakdown,
 } from "../retrieval/context/budget"
+
+/**
+ * PT-06:AC06 — one NON-EMPTY compressed output block and where it came from.
+ *
+ * `blockIndex` is the block's 0-based position among the emitted blocks of the
+ * compressed context, `evidenceId` the authorized source it was compressed
+ * from, `text` the body the model produced (the deterministic header is NOT
+ * part of it). This is the lineage the generation snapshot needs: a source is
+ * only "adopted as compressed" when it produced a non-empty block, and an empty
+ * or failed one is an omission instead.
+ */
+export interface ContextCompressionBlock {
+  blockIndex: number
+  evidenceId: string
+  documentId: string
+  chunkId: string
+  parentChunkId?: string
+  /** The authorized source identity as framed in the block header. */
+  source: string
+  /** The compressed body (no header, no trailing newline). */
+  text: string
+  /** The full emitted block, for byte-level cross-checks. */
+  block: string
+  tokens: number
+}
+
+/**
+ * PT-06:AC03/AC07 — why no compressed context was adopted. `within_budget` is
+ * not a failure: the real material fits, so the run must NOT pay for a model
+ * call. The rest are the documented refusals, each of which falls back to the
+ * in-budget deterministic context with the source records switched over.
+ */
+export type ContextCompressionRefusalReason =
+  | "within_budget"
+  | "all_groups_failed"
+  | "still_over_budget"
+  | "unknown_citation"
 
 /**
  * Ticket 61 / 04 (spec §2 L1748-1749): result of a successful Evidence-Context
@@ -45,6 +91,59 @@ export interface ContextCompressionResult {
   outputTokens: number
   /** Aggregated token usage from all per-group LLM calls (best-effort). */
   usage?: TokenUsage
+  /**
+   * PT-06:AC06 — which non-empty block came from which source, in output order.
+   * Present whenever a material-backed compression produced the context; the
+   * generation snapshot reads its adopted entries from here and never from the
+   * candidate list. Absent on the legacy preview path (no material to attribute).
+   */
+  blocks?: ContextCompressionBlock[]
+  /**
+   * PT-06:AC03 — the REAL material counts this compression was decided on
+   * (`candidateContextTokens` = candidate windows + all fixed framing).
+   */
+  budget?: MaterialBudgetBreakdown
+}
+
+/**
+ * PT-06 / PT-07:AC01/AC03/AC06/AC07 — the material-backed compression entry.
+ *
+ * One shared representation feeds the decision AND the model:
+ *   - the trigger is `computeMaterialBudget(material).overBudget`, i.e. the
+ *     per-parent candidate windows against the SAME budget — never the sum of
+ *     600-character display previews;
+ *   - each Evidence is shown with its COMPLETE chosen snippet plus its
+ *     authorized source identity;
+ *   - every non-empty output block records which source it came from;
+ *   - under budget ⇒ no model call at all (the deterministic context is used
+ *     and no extra round is paid for);
+ *   - any refusal (`all_groups_failed` / `still_over_budget` /
+ *     `unknown_citation`) returns `result: null` with the reason, so the caller
+ *     falls back to the in-budget deterministic context and switches its source
+ *     records over to that context instead of leaving them pointing at
+ *     compressed ids that were never used.
+ */
+export interface ContextMaterialCompressionInput {
+  evidence: Evidence[]
+  query: string
+  material: ContextMaterial
+  /** Defaults to the material's own budget, then to 6000. Never raised here. */
+  maxContextTokens?: number
+  countTokens?: (text: string) => number
+  signal?: AbortSignal
+}
+
+export interface ContextMaterialCompressionOutcome {
+  /** `null` on every refusal — the caller keeps the deterministic context. */
+  result: ContextCompressionResult | null
+  refusal?: ContextCompressionRefusalReason
+  budget: MaterialBudgetBreakdown
+  /**
+   * PT-06:AC06 — the text each Evidence was really shown. Captured so a
+   * regression can prove the fact past character 600 reached the model instead
+   * of trusting the prompt template.
+   */
+  sourceTexts: Array<{ evidenceId: string; text: string; fromMaterial: boolean }>
 }
 
 /**
@@ -104,6 +203,18 @@ export interface ContextCompressor {
     },
     signal?: AbortSignal
   ): Promise<ContextCompressionResult | null>
+  /**
+   * PT-06 / PT-07 — the material-backed entry point both knowledge runners use.
+   *
+   * OPTIONAL so a preview-only compressor (the complex loop's observation
+   * adapter, an older injected fake, `runComplexLoop`'s own loop contract)
+   * keeps working through `compress` — but a caller that has an assembler
+   * material result should prefer this: `compress` decides on the 600-character
+   * preview sum, which PT-06 proved is not an upper bound on the material.
+   */
+  compressMaterial?(
+    input: ContextMaterialCompressionInput
+  ): Promise<ContextMaterialCompressionOutcome>
 }
 
 function extractUsage(res: OpenAI.Chat.Completions.ChatCompletion): TokenUsage | undefined {
@@ -231,6 +342,119 @@ export class ContextCompressorImpl implements ContextCompressor {
   }
 
   /**
+   * PT-06 / PT-07 (AC01/AC03/AC04/AC06/AC07) — compress the REAL material.
+   *
+   * The trigger is the assembler's candidate-window count against the same
+   * budget (`computeMaterialBudget`), never the 600-character preview sum, so a
+   * 30,000-token parent is no longer invisible. Each Evidence is shown with its
+   * complete chosen snippet, and every non-empty output block records the source
+   * it came from. Cancellation and the run's resource budget are honored
+   * through the same `chat.completions.create` seam + `signal` as every other
+   * model call (AC10): `RunBudgetExceededError` carries `name === "AbortError"`
+   * and is re-thrown, not swallowed.
+   */
+  async compressMaterial(
+    input: ContextMaterialCompressionInput
+  ): Promise<ContextMaterialCompressionOutcome> {
+    const countTokens = input.countTokens ?? modelTokenCount
+    const maxContextTokens =
+      input.maxContextTokens ?? input.material.maxContextTokens ?? 6_000
+    const budget = computeMaterialBudget(input.material, {
+      maxContextTokens,
+      countTokens,
+    })
+
+    const materialText = compressionMaterialFromContextMaterial(input.material)
+    const sourceTexts = input.evidence.map((ev) => ({
+      evidenceId: ev.id,
+      text: compressionSourceText(ev, materialText),
+      fromMaterial: materialText.has(ev.id),
+    }))
+
+    // PT-06:AC03 — the authorized material already fits: spend no model call.
+    if (!budget.overBudget) {
+      return { result: null, refusal: "within_budget", budget, sourceTexts }
+    }
+
+    const groupResults = await Promise.all(
+      input.evidence.map((ev, index) =>
+        this.compressGroup(ev, input.query, input.signal, sourceTexts[index]!.text)
+      )
+    )
+
+    const retained: string[] = []
+    const dropped: string[] = []
+    const emitted: ContextCompressionBlock[] = []
+    const usages: (TokenUsage | undefined)[] = []
+
+    for (let i = 0; i < input.evidence.length; i += 1) {
+      const groupResult = groupResults[i]
+      const evidence = input.evidence[i]!
+      if (groupResult === null) {
+        dropped.push(evidence.id)
+        continue
+      }
+      const material = materialText.get(evidence.id)
+      emitted.push({
+        blockIndex: emitted.length,
+        evidenceId: evidence.id,
+        documentId: material?.documentId ?? evidence.documentId,
+        chunkId: material?.chunkId ?? evidence.chunkId,
+        ...(material?.parentChunkId !== undefined
+          ? { parentChunkId: material.parentChunkId }
+          : {}),
+        source: evidence.source,
+        text: groupResult.content,
+        block: groupResult.block,
+        tokens: countTokens(groupResult.content),
+      })
+      retained.push(evidence.id)
+      usages.push(groupResult.usage)
+    }
+
+    const refusal = (
+      reason: ContextCompressionRefusalReason
+    ): ContextMaterialCompressionOutcome => ({
+      result: null,
+      refusal: reason,
+      budget,
+      sourceTexts,
+    })
+
+    // PT-06:AC07 — all groups failed: deterministic fallback, no lineage.
+    if (emitted.length === 0) return refusal("all_groups_failed")
+
+    // PT-06:AC04 — the fixed text is part of the count, note included.
+    const intro = input.material.temporaryAttachment
+      ? `${CONTEXT_INTRO}${TEMPORARY_CONTEXT_NOTE}`
+      : CONTEXT_INTRO
+    const context = intro + emitted.map((block) => block.block).join("") + CONTEXT_SUFFIX
+    const outputTokens = countTokens(context)
+    if (outputTokens > maxContextTokens) return refusal("still_over_budget")
+
+    const knownIds = new Set(input.evidence.map((ev) => ev.id))
+    for (const match of context.matchAll(/\[cite:([^\]]+)\]/g)) {
+      if (!knownIds.has(match[1]!)) return refusal("unknown_citation")
+    }
+
+    return {
+      result: {
+        context,
+        tokenCount: outputTokens,
+        retainedEvidenceIds: retained,
+        droppedEvidenceIds: dropped,
+        inputTokens: budget.candidateContextTokens,
+        outputTokens,
+        usage: aggregateUsage(usages),
+        blocks: emitted,
+        budget,
+      },
+      budget,
+      sourceTexts,
+    }
+  }
+
+  /**
    * Compress a single Evidence group into a block string. Returns `null` on
    * any failure (empty/invalid/timed-out/exception). `AbortError` is re-thrown
    * to preserve user-cancellation; all other errors are swallowed.
@@ -240,13 +464,20 @@ export class ContextCompressorImpl implements ContextCompressor {
    * followed by the LLM-produced compressed content and a trailing newline.
    * The LLM is explicitly instructed NOT to include any citation markers or
    * source headers — only the compressed content body.
+   *
+   * `sourceText` is the COMPLETE authorized material for this Evidence
+   * (PT-06:AC06). When omitted the legacy 600-character display preview is used,
+   * which is why `compressMaterial` always passes the real snippet: a fact past
+   * character 600 cannot be summarized out of a text the model never saw.
    */
   private async compressGroup(
     evidence: Evidence,
     query: string,
-    signal?: AbortSignal
-  ): Promise<{ block: string; usage?: TokenUsage } | null> {
+    signal: AbortSignal | undefined,
+    sourceText?: string
+  ): Promise<{ block: string; content: string; usage?: TokenUsage } | null> {
     try {
+      const material = sourceText ?? evidence.excerpt
       const res = await this.client.chat.completions.create({
         model: this.model,
         max_tokens: this.maxTokensPerGroup,
@@ -268,7 +499,7 @@ export class ContextCompressorImpl implements ContextCompressor {
               `证据ID:${evidence.id}\n` +
               `来源:${evidence.source}\n` +
               `标题:${evidence.title}\n` +
-              `文档片段:${evidence.excerpt}\n\n` +
+              `文档片段:${material}\n\n` +
               `请压缩上述文档片段为与用户问题相关的关键事实块。`,
           },
         ],
@@ -281,11 +512,13 @@ export class ContextCompressorImpl implements ContextCompressor {
       // Citation identities").
       if (/\[cite:[^\]]+\]/.test(content)) return null
       // Generate the deterministic header ourselves — the LLM only produced the
-      // compressed content body. This guarantees the header is always correct
-      // and the LLM cannot corrupt the citation/source format.
-      const header = `[cite:${evidence.id}] [来源: ${evidence.source}]\n`
+      // compressed content body. This guarantees the header is always correct,
+      // carries the authorized source identity (a session attachment stays
+      // labelled as a temporary reference), and the LLM cannot corrupt the
+      // citation/source format.
       return {
-        block: `${header}${content}\n`,
+        block: formatCompressedBlock(evidence, content),
+        content,
         usage: extractUsage(res),
       }
     } catch (err) {

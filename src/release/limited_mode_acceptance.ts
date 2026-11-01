@@ -60,7 +60,7 @@ import {
  * (spec AC2: "Critical identity, retrieval, cancellation, Citation, budget,
  * and shutdown probes pass against the running candidate").
  *
- * Non-critical probes (chat_embedding_providers, markitdown, marker, mineru,
+ * Non-critical probes (chat_embedding_providers, markitdown, ocr-api,
  * langfuse) are deliberately excluded — they belong in the full smoke profile
  * (Ticket 06) and are not part of the candidate-acceptance gate.
  */

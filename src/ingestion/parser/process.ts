@@ -38,6 +38,20 @@ async function boundedDirectorySize(root: string, limit: number): Promise<number
   return total
 }
 
+function structuredStdoutError(chunks: Buffer[]): string | undefined {
+  try {
+    const parsed = JSON.parse(Buffer.concat(chunks).toString("utf8")) as unknown
+    const error =
+      parsed && typeof parsed === "object" && !Array.isArray(parsed)
+        ? (parsed as { error?: unknown }).error
+        : undefined
+    if (typeof error === "string" && error.trim()) return error.trim()
+  } catch {
+    // not JSON — fall back to the stderr summary
+  }
+  return undefined
+}
+
 function safeSummary(
   head: Buffer,
   tail: Buffer,
@@ -70,10 +84,15 @@ export function runBoundedProcess(input: BoundedProcessInput): Promise<string> {
     let artifactTimer: ReturnType<typeof setInterval> | undefined
     const stdout: Buffer[] = []
 
+    // Every parser here is a Python tool (markitdown / marker / mineru). On a
+    // non-UTF-8 Windows host the child inherits the ANSI codepage (cp936 on a
+    // zh-CN install), so Chinese text reaches us as GBK bytes and the UTF-8
+    // gate in `normalize` rejects the document as malformed.
     const child = spawn(input.command, input.args, {
       cwd: input.cwd,
       shell: false,
       windowsHide: true,
+      env: { ...process.env, PYTHONUTF8: "1", PYTHONIOENCODING: "utf-8" },
       stdio: ["ignore", "pipe", "pipe"],
     })
 
@@ -162,7 +181,12 @@ export function runBoundedProcess(input: BoundedProcessInput): Promise<string> {
         return
       }
       if (code !== 0) {
-        const summary = safeSummary(
+        // Extractor scripts report open/decode complaints as a structured
+        // {"error": ...} JSON on stdout before exiting non-zero; that
+        // machine-readable summary beats the raw stderr tail, which may be
+        // a bare traceback no classifier can match.
+        const structured = structuredStdoutError(stdout)
+        const summary = structured ?? safeSummary(
           stderrHead,
           stderrTail,
           stderrBytes,

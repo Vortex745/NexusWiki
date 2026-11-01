@@ -1,0 +1,4 @@
+# Preserve authored PDF fixture bytes on Windows checkout.
+/golden/**/*.pdf binary
+# Captured raw logs are evidence, not source-code whitespace.
+/docs/evidence/**/*.log -diff

@@ -45,10 +45,12 @@ import type {
   RetrievalTraceData,
   ContextTraceData,
   ValidationTraceData,
+  ReasoningEffort,
 } from "../types"
 import type { AnswerRunOptions, AnswerRunObserver } from "../answer/generation"
 import type { AccessContext } from "../access/context"
 import { singleTenantAccessContext } from "../access/context"
+import type { RetrievalScope } from "../types/retrieval_scope"
 import {
   createRunContext,
   hasRunResourceBudgetFailure,
@@ -58,6 +60,11 @@ import {
   type RunResourceBudgetOptions,
 } from "../runtime/run_context"
 import { withBudget } from "../runtime/deadline"
+import {
+  isDraftPublishable,
+  publicTerminalCopy,
+} from "../answer/terminal_copy"
+import { bindAnswerBasis } from "./answer_basis"
 
 /**
  * Transport-level event source signature — structurally identical to
@@ -116,9 +123,73 @@ export interface MastraRunnerInput {
   sessionId: string
   signal: AbortSignal
   accessContext: AccessContext
+  /** Ticket 05 (KB-03A): server-computed knowledge scope, forwarded verbatim
+   * from `AnswerRunOptions.retrievalScope`. Omitted when the run carries no
+   * knowledge scope — the retrieval channels then keep their unfiltered reads. */
+  retrievalScope?: RetrievalScope
+  /** Ticket 19 (AST-01B): the transport-resolved assistant version snapshot
+   * (prompt + rerank binding), forwarded verbatim — runners never read raw
+   * request fields for the assistant overlay. */
+  assistant?: import("../assistants/assistant_service").AssistantRunSnapshot
+  /**
+   * Ticket 33 (MEM-01B): false disables long-term memory recall for this
+   * run (narrowing-only transport flag). The memory-recall wrapper reads it;
+   * runners receive the RECALLED memories via {@link longTermMemories}.
+   */
+  useMemory?: boolean
+  /**
+   * Ticket 36 (WEB-01): true opts this run into web search (configured
+   * Tavily). Forwarded verbatim from the transport's opt-in flag; runners
+   * pass it to the searcher's web channel. URL reads from message-supplied
+   * links never depend on this flag.
+   */
+  useWeb?: boolean
+  /**
+   * Ticket 33 (MEM-01B): the owner-scoped long-term memories recalled into
+   * this run, injected by the memory-recall wrapper. Runners render them
+   * through `renderMemoryPromptSuffix` — never as evidence or citations.
+   */
+  longTermMemories?: import("./memory_prompt").RecalledMemory[]
+  /** Explicit saved-memory inspection query; bypasses knowledge retrieval. */
+  memoryIntent?: boolean
+  /**
+   * The run's frozen reasoning-effort request, forwarded verbatim from
+   * `AnswerRunOptions`. Absent means the run never asked — no runner may
+   * invent a value, and the provider payload keeps its old shape.
+   */
+  reasoningEffort?: ReasoningEffort
   /** Route preparation produced once by the dispatch runner. Standalone
    * route runners may omit it and perform their own ownership check. */
   preparedRoute?: PreparedMastraRoute
+  /** Live streaming hook. Runners that stream tokens call it as each token
+   * arrives; the adapter turns these into answer_delta events with
+   * arrival-order sequence numbers while the runner is still executing.
+   * The output `tokens` array stays authoritative for the final replay —
+   * the adapter subtracts tokens already published live. Optional: runners
+   * that omit the hook keep the buffered end-of-run replay. */
+  onAnswerDelta?: (token: string) => void
+  /**
+   * Real stage boundaries and known results while the runner is in flight.
+   * A one-argument call remains a running opener. The final aggregated traces
+   * stay authoritative; live validation details never publish answerBasis.
+   */
+  onStageProgress?: <S extends ProgressStage>(stage: S, details?: StageProgressDetails<S>) => void
+}
+
+/** The four stages a progress event can report on. */
+export type ProgressStage = "route" | "retrieval" | "context" | "validation"
+
+export interface StageProgressData {
+  route: RouteTraceData
+  retrieval: RetrievalTraceData
+  context: ContextTraceData
+  validation: ValidationTraceData
+}
+
+export interface StageProgressDetails<S extends ProgressStage> {
+  status?: "running" | "completed" | "failed"
+  round?: number
+  data?: StageProgressData[S]
 }
 
 export interface PreparedMastraRoute {
@@ -154,6 +225,18 @@ export interface MastraRunnerOutput {
   summarizationDurationMs?: AnswerRunResult["summarizationDurationMs"]
   summarizationCheckpoint?: AnswerRunResult["summarizationCheckpoint"]
   summarizationOutcome?: AnswerRunResult["summarizationOutcome"]
+  /**
+   * Ticket 31 (FAQ-01B): present only when the run was answered directly by
+   * a unique normalized FAQ exact match. Copied onto the done event's result
+   * so transports can label the standard answer.
+   */
+  faq?: AnswerRunResult["faq"]
+  /**
+   * Ticket 33 (MEM-01B): the long-term memories recalled into this run's
+   * prompts (absent when memory is disabled, unwired or empty). Copied onto
+   * the done event's result — informational trace, never a citation.
+   */
+  memoryUsed?: AnswerRunResult["memoryUsed"]
 }
 
 /**
@@ -212,6 +295,8 @@ export function validateChatRequest(input: ChatRequestShape): {
 function makeBaseEvent(args: {
   runId: string
   sessionId: string
+  /** Eval refactor Ticket 01: stamped on the event when the caller set it. */
+  caseId?: string
   sequence: number
   stage: AnswerRunStage
   status: AnswerRunEvent["status"]
@@ -223,6 +308,7 @@ function makeBaseEvent(args: {
     schemaVersion: 1,
     sessionId: args.sessionId,
     runId: args.runId,
+    ...(args.caseId !== undefined ? { caseId: args.caseId } : {}),
     eventId: `${args.runId}:${args.sequence}`,
     sequence: args.sequence,
     createdAt: now,
@@ -248,6 +334,17 @@ function makeAnswerDeltaEvent(
   token: string
 ): AnswerRunEvent {
   return { ...base, type: "answer_delta", stage: "answer", token } as AnswerRunEvent
+}
+
+/**
+ * Progress message per stage. Live and post-run events for a stage share one
+ * message so the two are indistinguishable apart from their payload data.
+ */
+const STAGE_PROGRESS_MESSAGE: Record<ProgressStage, string> = {
+  route: "Routing query",
+  retrieval: "Retrieving evidence",
+  context: "Contextualizing",
+  validation: "Validating draft",
 }
 
 function makeDoneEvent(
@@ -347,6 +444,10 @@ export function createMastraChatEventAdapter(
     const accessContext: AccessContext =
       runOptions?.accessContext ?? singleTenantAccessContext()
 
+    // Eval refactor Ticket 01: optional case correlation stamped on every
+    // event (normal chat leaves it undefined — payload unchanged).
+    const caseId = runOptions?.caseId
+
     // T03 §7 checkpoint 1: before LLM call. (Moved inside try block so an
     // already-aborted signal produces a cancelled terminal event instead of
     // throwing out of the generator — T05 #5.)
@@ -357,6 +458,11 @@ export function createMastraChatEventAdapter(
     let terminalEmitted = false
     let traceFailure: unknown
     let runContext: RunContext | undefined
+    const stageRounds: Partial<Record<ProgressStage, number>> = {}
+    let initialRetrievalRound: number | undefined
+    const stageStatuses = new Map<string, AnswerRunEvent["status"]>()
+    const stageKey = (stage: ProgressStage, round: number, data: StageProgressData[ProgressStage]): string =>
+      `${stage}:${round}:${stage === "context" ? (data as ContextTraceData).phase ?? "assembly" : ""}`
     const nextSequence = () => ++sequence
 
     /**
@@ -395,11 +501,20 @@ export function createMastraChatEventAdapter(
       const base = makeBaseEvent({
         runId,
         sessionId,
+        caseId,
         sequence: nextSequence(),
         stage,
         status: "completed",
         runStartedAt,
       })
+      base.round = stage === "validation"
+        ? (data as ValidationTraceData).round ?? stageRounds[stage] ?? 0
+        : stage === "retrieval"
+          ? initialRetrievalRound ?? 0
+        : stageRounds[stage] ?? 0
+      // A final trace enriches the actual stage result; it cannot turn a
+      // reported provider failure into a successful completion.
+      if (stageStatuses.get(stageKey(stage, base.round, data)) === "failed") base.status = "failed"
       const event = makeProgressEvent(base, {
         type: "progress",
         stage,
@@ -426,36 +541,175 @@ export function createMastraChatEventAdapter(
       // When budgetMs is omitted: pass `signal` directly (pre-P7.2
       // behavior — backward compat).
       let runnerOutput: MastraRunnerOutput
-      if (budgetMs !== undefined || resourceBudget !== undefined) {
-        const ctx: RunContext = createRunContext({
-          budgetMs: budgetMs ?? Number.POSITIVE_INFINITY,
-          externalSignal: signal,
-          resourceBudget,
-        })
-        runContext = ctx
-        runnerOutput = await runWithRunContext(
-          ctx,
-          () => withBudget(
-            (ctxSignal) =>
-              runner({
-                message: validatedMessage,
-                runId,
-                sessionId,
-                signal: ctxSignal,
-                accessContext,
-              }),
-            ctx
-          )
-        )
-      } else {
-        runnerOutput = await runner({
+      // Live signal bridge: streaming runners publish tokens through
+      // input.onAnswerDelta and settled stages through input.onStageProgress as
+      // they happen; the adapter drains that queue and yields events while the
+      // runner is still executing, so the transport sees true in-run progress
+      // instead of one final burst. One ordered queue keeps a stage event from
+      // overtaking the tokens that were produced before it. Tokens already
+      // published live are subtracted from the runnerOutput.tokens replay —
+      // runners that ignore the hook keep the buffered end-of-run replay.
+      type LiveSignal =
+        | { kind: "delta"; token: string }
+        | { kind: "stage"; stage: ProgressStage; details?: StageProgressDetails<ProgressStage> }
+      const liveSignals: LiveSignal[] = []
+      let deltasPublished = 0
+      let runnerSettled = false
+      let runnerFailed = false
+      let runnerSignal = signal
+      let wakeDrainer: (() => void) | null = null
+      const wake = (): void => {
+        wakeDrainer?.()
+        wakeDrainer = null
+      }
+      const onAnswerDelta = (token: string): void => {
+        if (terminalEmitted || runnerSettled || runnerSignal.aborted) return
+        liveSignals.push({ kind: "delta", token })
+        wake()
+      }
+      const onStageProgress: NonNullable<MastraRunnerInput["onStageProgress"]> = (
+        stage, details
+      ): void => {
+        if (terminalEmitted || runnerSettled || runnerSignal.aborted) return
+        // Only final business completion can publish a model basis. Copy the
+        // payload now so a runner cannot mutate a queued validation record.
+        const data = details?.data ? { ...details.data } : undefined
+        if (data) delete (data as ValidationTraceData).answerBasis
+        liveSignals.push({ kind: "stage", stage, details: { ...details, data } })
+        wake()
+      }
+      const markRunnerSettled = (): void => {
+        runnerSettled = true
+        wake()
+      }
+      const invokeRunner = (ctxSignal: AbortSignal): Promise<MastraRunnerOutput> => {
+        runnerSignal = ctxSignal
+        return runner({
           message: validatedMessage,
           runId,
           sessionId,
-          signal,
+          signal: ctxSignal,
           accessContext,
+          // Ticket 05 (KB-03A): the transport already resolved the request's
+          // knowledge selection against the caller's identity — forward the
+          // server-computed scope, never the raw request field.
+          ...(runOptions?.retrievalScope
+            ? { retrievalScope: runOptions.retrievalScope }
+            : {}),
+          // Ticket 19 (AST-01B): the server-resolved assistant snapshot.
+          ...(runOptions?.assistant ? { assistant: runOptions.assistant } : {}),
+          // Ticket 33 (MEM-01B): the narrowing-only memory disable flag.
+          ...(runOptions?.useMemory === false ? { useMemory: false } : {}),
+          // Ticket 36 (WEB-01): the explicit web-search opt-in flag.
+          ...(runOptions?.useWeb === true ? { useWeb: true } : {}),
+          // The run's frozen reasoning-effort request (omitted = never asked).
+          ...(runOptions?.reasoningEffort
+            ? { reasoningEffort: runOptions.reasoningEffort }
+            : {}),
+          onAnswerDelta,
+          onStageProgress,
         })
       }
+
+      // Early route progress: lights up downstream thinking UIs during the
+      // route/retrieval latency window instead of after the whole run.
+      if (!terminalEmitted) {
+        const base = makeBaseEvent({
+          runId,
+          sessionId,
+          caseId,
+          sequence: nextSequence(),
+          stage: "route",
+          status: "running",
+          runStartedAt,
+        })
+        const event = makeProgressEvent(base, {
+          type: "progress",
+          stage: "route",
+          message: "Routing query",
+          data: {} as RouteTraceData,
+        })
+        notifyObservers(event)
+        yield event
+      }
+
+      const runnerPromise = (async (): Promise<MastraRunnerOutput> => {
+        if (budgetMs !== undefined || resourceBudget !== undefined) {
+          const ctx: RunContext = createRunContext({
+            budgetMs: budgetMs ?? Number.POSITIVE_INFINITY,
+            externalSignal: signal,
+            resourceBudget,
+          })
+          runContext = ctx
+          return runWithRunContext(
+            ctx,
+            () => withBudget((ctxSignal) => invokeRunner(ctxSignal), ctx)
+          )
+        }
+        return invokeRunner(signal)
+      })()
+      runnerPromise.then(markRunnerSettled, () => {
+        runnerFailed = true
+        markRunnerSettled()
+      })
+      // Drain live signals until the runner settles and the queue empties.
+      while (true) {
+        if (runnerSignal.aborted && (!runnerSettled || runnerFailed)) {
+          liveSignals.length = 0
+          await runnerPromise
+          checkAbort(runnerSignal, "live event publication")
+        }
+        const signal = liveSignals.shift()
+        if (signal) {
+          if (signal.kind === "delta") {
+            deltasPublished += 1
+            const base = makeBaseEvent({
+              runId,
+              sessionId,
+              caseId,
+              sequence: nextSequence(),
+              stage: "answer",
+              status: "running",
+              runStartedAt,
+            })
+            const event = makeAnswerDeltaEvent(base, signal.token)
+            notifyObservers(event)
+            yield event
+          } else {
+            const base = makeBaseEvent({
+              runId,
+              sessionId,
+              caseId,
+              sequence: nextSequence(),
+              stage: signal.stage,
+              status: signal.details?.status ?? "running",
+              runStartedAt,
+            })
+            base.round = signal.details?.round ?? 0
+            stageRounds[signal.stage] = base.round
+            if (signal.stage === "retrieval") initialRetrievalRound ??= base.round
+            stageStatuses.set(stageKey(signal.stage, base.round, signal.details?.data ?? {}), base.status)
+            const event = makeProgressEvent(base, {
+              type: "progress",
+              stage: signal.stage,
+              message: STAGE_PROGRESS_MESSAGE[signal.stage],
+              data: (signal.details?.data ?? {}) as RouteTraceData &
+                RetrievalTraceData &
+                ContextTraceData &
+                ValidationTraceData,
+            })
+            notifyObservers(event)
+            yield event
+          }
+          continue
+        }
+        if (runnerSettled) break
+        await new Promise<void>((resolve) => {
+          wakeDrainer = resolve
+        })
+      }
+
+      runnerOutput = await runnerPromise
 
       // The runner owns route/retrieval/context execution and persistence.
       // Once it returns, its output is authoritative: a later transport abort
@@ -471,18 +725,31 @@ export function createMastraChatEventAdapter(
 
       // GATE 4 — validation (Critic per T03 §6).
       if (Object.keys(runnerOutput.validationTrace).length > 0) {
+        const { answerBasis, ...validationTrace } = runnerOutput.validationTrace
+        const publicBasis = runnerOutput.status === "completed" && validationTrace.passed === true
+          ? bindAnswerBasis(answerBasis, runnerOutput.references)
+          : undefined
         yield* emitProgress(
           "validation",
           "Validating draft",
-          runnerOutput.validationTrace
+          { ...validationTrace, ...(publicBasis ? { answerBasis: publicBasis } : {}) }
         )
       }
 
-      // Only validated tokens are publishable knowledge output.
-      for (const token of runnerOutput.tokens) {
+      // Only validated tokens are publishable knowledge output. A terminal that
+      // did not approve the draft publishes none of them, even when the runner
+      // still hands back the generated text (it cannot retract it) — the done
+      // event's public terminal copy is the only text that surface carries.
+      // Tokens that were already streamed live are skipped — replay covers
+      // runners that ignored the onAnswerDelta hook (deltasPublished === 0).
+      const publishableTokens = isDraftPublishable(runnerOutput.status)
+        ? runnerOutput.tokens.slice(deltasPublished)
+        : []
+      for (const token of publishableTokens) {
         const base = makeBaseEvent({
           runId,
           sessionId,
+          caseId,
           sequence: nextSequence(),
           stage: "answer",
           status: "running",
@@ -502,6 +769,7 @@ export function createMastraChatEventAdapter(
         const base = makeBaseEvent({
           runId,
           sessionId,
+          caseId,
           sequence: nextSequence(),
           stage: "done",
           status: terminalStatusToRunStatus(runnerOutput.status),
@@ -509,14 +777,29 @@ export function createMastraChatEventAdapter(
         })
         const event = makeDoneEvent(base, {
           runId,
-          reply: runnerOutput.reply,
+          // PL-01: the transport republishes nothing the runner did not approve.
+          // Any other business terminal (including one this protocol does not
+          // define) publishes the safe terminal text and no citations.
+          reply: isDraftPublishable(runnerOutput.status)
+            ? runnerOutput.reply
+            : publicTerminalCopy(runnerOutput.status),
           status: runnerOutput.status,
-          references: runnerOutput.references,
+          references: isDraftPublishable(runnerOutput.status)
+            ? runnerOutput.references
+            : [],
           degradation: runnerOutput.degradation,
           summarizationUsage: runnerOutput.summarizationUsage,
           summarizationDurationMs: runnerOutput.summarizationDurationMs,
           summarizationCheckpoint: runnerOutput.summarizationCheckpoint,
           summarizationOutcome: runnerOutput.summarizationOutcome,
+          ...(runnerOutput.faq ? { faq: runnerOutput.faq } : {}),
+          ...(runnerOutput.memoryUsed ? { memoryUsed: runnerOutput.memoryUsed } : {}),
+          // The request-side record: stamped from the run's own frozen choice
+          // on EVERY outcome (FAQ, clarification and pre-generation failures
+          // included), never inferred from the terminal status.
+          ...(runOptions?.reasoningEffort
+            ? { requestedReasoningEffort: runOptions.reasoningEffort }
+            : {}),
         })
         notifyObservers(event)
         yield event
@@ -546,6 +829,7 @@ export function createMastraChatEventAdapter(
         const base = makeBaseEvent({
           runId,
           sessionId,
+          caseId,
           sequence: nextSequence(),
           stage: "done",
           status: isAbort ? "cancelled" : "failed",
@@ -553,18 +837,26 @@ export function createMastraChatEventAdapter(
         })
         const event = makeDoneEvent(base, {
           runId,
-          reply: "",
+          // PL-01 AC04: a cancelled or provider-failed run publishes its own
+          // defined terminal copy here too — an empty reply left the streaming
+          // client with a placeholder that differed from the JSON transport.
+          reply: publicTerminalCopy(isAbort ? "cancelled" : "provider_error"),
           status: isAbort ? "cancelled" : "provider_error",
           references: [],
           degradation: {
             status: "insufficient",
             unavailableChannels: [],
+            // DR-22: a provider failure is a provider failure. It used to be
+            // labelled `no_cited_claims`, which claims the answer was rejected
+            // for missing citations — something that never ran. The terminal
+            // status (`provider_error`) is the honest reason here.
             reason: isResourceBudgetError
               ? "resource_budget_exceeded"
-              : isAbort
-                ? undefined
-                : "no_cited_claims",
+              : undefined,
           },
+          ...(runOptions?.reasoningEffort
+            ? { requestedReasoningEffort: runOptions.reasoningEffort }
+            : {}),
         })
         notifyObservers(event)
         yield event

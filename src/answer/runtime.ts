@@ -1,12 +1,19 @@
-import { Client } from "@elastic/elasticsearch"
+import { type Client } from "@elastic/elasticsearch"
 import neo4j from "neo4j-driver"
-import OpenAI from "openai"
+import { type OpenAI } from "openai"
 import { type AppConfig, loadConfig } from "../config"
+import {
+  createElasticsearchClient,
+  createOpenAIClient,
+  type ElasticsearchNodeOptions,
+  type OpenAIClientOptions,
+} from "../clients"
 import {
   createProcessRuntime,
   type ProcessRuntime,
   type RuntimeClientFactory,
 } from "../runtime/process_runtime"
+import type { TracingRuntime } from "../tracing/contract"
 import {
   NoopLangfuseExporter,
   createLangfuseExporter,
@@ -17,19 +24,9 @@ import {
 import { AnswerTraceRepository } from "./trace_repository"
 
 export interface AnswerClientFactory {
-  createChatClient(options: {
-    apiKey: string
-    baseURL?: string
-    timeout?: number
-    maxRetries?: number
-  }): OpenAI
-  createEmbeddingClient(options: {
-    apiKey: string
-    baseURL?: string
-    timeout?: number
-    maxRetries?: number
-  }): OpenAI
-  createElasticsearchClient(options: { node: string; apiKey?: string }): Client
+  createChatClient(options: OpenAIClientOptions): OpenAI
+  createEmbeddingClient(options: OpenAIClientOptions): OpenAI
+  createElasticsearchClient(options: ElasticsearchNodeOptions): Client
   createNeo4jDriver?(options: {
     uri: string
     user: string
@@ -38,20 +35,13 @@ export interface AnswerClientFactory {
 }
 
 const defaultClientFactory: AnswerClientFactory = {
-  createChatClient: (options) => new OpenAI(options),
-  createEmbeddingClient: (options) => new OpenAI(options),
-  createElasticsearchClient: ({ node, apiKey }) => new Client({
-    node,
-    ...(apiKey ? { auth: { apiKey } } : {}),
-    // ES client v9 ↔ server v8/v7 compat: pin media-type headers to
-    // compatible-with=8 (mirrors process_runtime.ts + store.ts). Without
-    // this, the worker's knowledge-retrieval ES queries fail with
-    // media_type_header_exception, breaking the entire chat SSE flow.
-    headers: {
-      accept: "application/vnd.elasticsearch+json; compatible-with=8",
-      "content-type": "application/vnd.elasticsearch+json; compatible-with=8",
-    },
-  }),
+  createChatClient: (options) => createOpenAIClient(options),
+  createEmbeddingClient: (options) => createOpenAIClient(options),
+  // ES client v9 ↔ server v8/v7 compat headers come from the shared
+  // `createElasticsearchClient` (see src/clients.ts). Without them, the
+  // worker's knowledge-retrieval ES queries fail with
+  // media_type_header_exception, breaking the entire chat SSE flow.
+  createElasticsearchClient: (options) => createElasticsearchClient(options),
 }
 
 export class AnswerRuntime {
@@ -61,7 +51,9 @@ export class AnswerRuntime {
   constructor(
     readonly processRuntime: ProcessRuntime,
     traceRepository?: AnswerTraceRepository,
-    langfuseExporter?: LangfuseExporter
+    langfuseExporter?: LangfuseExporter,
+    /** LO-12: exposed so the retrieval stack can observe rerank calls. */
+    readonly tracing?: TracingRuntime,
   ) {
     this.traceRepository = traceRepository ?? new AnswerTraceRepository(processRuntime.db)
     this.langfuseExporter = langfuseExporter ?? new NoopLangfuseExporter()
@@ -90,10 +82,12 @@ export function createAnswerRuntime(
   config: AppConfig = loadConfig(),
   clientFactory: AnswerClientFactory = defaultClientFactory,
   langfuseClient?: LangfuseClient,
+  tracing?: TracingRuntime,
 ): AnswerRuntime {
   const processRuntime = createProcessRuntime(
     config,
-    adaptToRuntimeFactory(clientFactory)
+    adaptToRuntimeFactory(clientFactory),
+    tracing ? { tracing } : {},
   )
   const traceRepository = new AnswerTraceRepository(processRuntime.db)
   const hasPublicKey = !!config.langfusePublicKey?.trim()
@@ -113,5 +107,5 @@ export function createAnswerRuntime(
     langfuseClient,
     { chatModel: config.openaiChatModel },
   )
-  return new AnswerRuntime(processRuntime, traceRepository, langfuseExporter)
+  return new AnswerRuntime(processRuntime, traceRepository, langfuseExporter, tracing)
 }

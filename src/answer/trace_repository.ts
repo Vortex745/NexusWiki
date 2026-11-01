@@ -80,4 +80,25 @@ export class AnswerTraceRepository implements AnswerRunObserver {
     }
   }
 
+  /**
+   * DR-18: a run is readable only by the (tenant, subject) that bound its
+   * session. An unknown run id, another tenant's run and a same-tenant peer's
+   * run are all the same `null` — the HTTP layer returns one identical 404.
+   */
+  getRunForOwner(runId: string, tenantId: string, subjectId: string): AnswerRunHistory | null {
+    const rows = this.db.prepare(
+      `SELECT e.session_id, e.event_json
+       FROM answer_run_events e
+       JOIN session_bindings b ON b.session_id = e.session_id
+       WHERE e.run_id = ? AND b.tenant_id = ? AND b.subject_id = ?
+       ORDER BY e.sequence ASC`
+    ).all(runId, tenantId, subjectId) as StoredEvent[]
+    if (rows.length === 0) return null
+    return {
+      runId,
+      sessionId: rows[0].session_id,
+      events: rows.map(({ event_json }) => JSON.parse(event_json) as AnswerRunEvent),
+    }
+  }
+
 }

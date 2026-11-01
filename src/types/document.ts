@@ -19,6 +19,12 @@ export interface Document {
    */
   tenantId?: string
   allowedGroups?: string[]
+  /**
+   * Ticket 03 (KB-02A): the knowledge base that owns this document. Optional
+   * on the type so existing test mocks don't break; the SQLite row is
+   * NOT NULL and repo reads always populate it.
+   */
+  knowledgeBaseId?: string
 }
 
 export interface Chunk {
@@ -52,6 +58,12 @@ export interface Wikilink {
     chunkId: string
     tenantId?: string
     allowedGroups?: string[]
+    /**
+     * Ticket 03 (KB-02A): the knowledge base of the contributing chunk,
+     * appended as the 6th element of the persisted provenance array.
+     * Optional so 2/4-element legacy entries still parse.
+     */
+    knowledgeBaseId?: string
   }>
 }
 
@@ -73,4 +85,6 @@ export interface PageIndexNode {
    */
   tenantId?: string
   allowedGroups?: string[]
+  /** Ticket 03 (KB-02A): the knowledge base that owns this document. */
+  knowledgeBaseId?: string
 }

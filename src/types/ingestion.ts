@@ -34,6 +34,13 @@ export interface IngestionTask {
   failCount: number
   status: TaskStatus
   claimedAt: string | null
+  /**
+   * Ticket 25: the durable execution identity that owns this claim. Minted at
+   * claim time (and re-minted by stale-claim recovery), it fences every write:
+   * finalize/failure recording only land for the owning execution, so a
+   * cancelled or superseded run cannot persist results over a newer one.
+   */
+  executionId: string | null
   nextAttemptAt: string | null
   enqueuedAt: string
 }

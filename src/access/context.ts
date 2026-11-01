@@ -1,6 +1,6 @@
 /**
  * Ticket 05 P1: Access Context — the request-level identity envelope that
- * flows through Answer runs, Ingestion tasks, and (future) Handoff/Feedback.
+ * flows through Answer runs, Ingestion tasks, and Handoff cases.
  *
  * The composition root produces exactly one AccessContext per request via
  * `createAccessContext`. In `single_tenant` mode (the default) the context
@@ -21,6 +21,22 @@ export interface AccessContext {
   subjectId: string
   groups: string[]
   scopes: Scope[]
+  /**
+   * The human-facing account ID carried by a locally authenticated token.
+   * Absent for the deterministic single-tenant context and for external OIDC
+   * tokens that do not publish a name claim.
+   */
+  displayName?: string
+  /**
+   * AC-01 (admin console): true only for the deployment operator. The
+   * deterministic single-tenant context IS the operator; a token identity
+   * carries the flag through its groups (the demo-admins group for local
+   * sign-in). Absent/undefined reads as NOT an operator, so a hand-built
+   * context fails closed instead of silently widening the admin console.
+   * This is a separate axis from `scopes`/`role`: registered users keep the
+   * platform `admin` scope and still do not become operators.
+   */
+  operator?: boolean
 }
 
 /** Deterministic single-tenant identity. Never caller-supplied. */
@@ -40,7 +56,25 @@ export function singleTenantAccessContext(): AccessContext {
     subjectId: SINGLE_TENANT_SUBJECT,
     groups: [],
     scopes: [...ALL_LOCAL_SCOPES],
+    // A single-tenant deployment has exactly one identity, and it is the
+    // deployment operator: the token-less context must keep reaching the
+    // operator-only surfaces (log opener, demo-config, source sync) it used
+    // through the admin scope.
+    operator: true,
   }
+}
+
+/**
+ * Ticket 01 (IAM-01): the coarse role the UI and the demo sign-in flow reason
+ * about. It is DERIVED from the granted scopes — `admin` is the only scope
+ * that unlocks mutations, so it is the only role distinction the server
+ * makes. Finer distinctions (technical reader vs policy reader) are carried
+ * by `groups`, which is the isolation axis.
+ */
+export type AccessRole = "admin" | "reader"
+
+export function accessRole(context: AccessContext): AccessRole {
+  return context.scopes.includes("admin") ? "admin" : "reader"
 }
 
 export type AccessContextOptions =

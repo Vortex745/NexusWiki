@@ -53,7 +53,7 @@
  * `src/mastra/*` (dependency direction: Types -> ... -> Runtime -> UI).
  */
 
-import { CriticVerdictSchemaV1, CRITIC_VERDICT_MAX_BYTES } from "./schema"
+import { CriticVerdictSchemaV1, CriticVerdictSchemaV2, CRITIC_VERDICT_MAX_BYTES } from "./schema"
 import {
   CRITIC_VERDICT_RECOGNIZED_KEYS,
   type CriticVerdictClassification,
@@ -136,8 +136,12 @@ export function classifyCriticVerdict(
     }
   }
 
-  // 6. Zod schema validation.
-  const result = CriticVerdictSchemaV1.safeParse(parsed)
+  // 6. Dispatch only explicitly supported versions; never reinterpret drift.
+  if (root.schemaVersion !== 1 && root.schemaVersion !== 2) {
+    return { kind: "invalid", reason: "schema_version_mismatch", details: "schemaVersion must be 1 or 2" }
+  }
+  const schema = root.schemaVersion === 1 ? CriticVerdictSchemaV1 : CriticVerdictSchemaV2
+  const result = schema.safeParse(parsed)
   if (result.success) {
     return { kind: "valid", verdict: result.data }
   }

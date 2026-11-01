@@ -43,6 +43,7 @@ import type { Request } from "express"
 import type { AccessContext, IdentityAdapter, Scope } from "../access/context"
 import type { OidcConfig, ClaimMapping } from "./oidc_config"
 import { decodeJwtUnsafe, validateClaims, type JwtClaims } from "./claims"
+import { DEMO_ADMIN_GROUP } from "./demo_accounts"
 
 /** Known scope strings that may appear in a JWT `scope` claim (OAuth2 space-separated). */
 const KNOWN_SCOPES: ReadonlySet<string> = new Set(["chat", "ingest", "review", "admin"])
@@ -102,11 +103,18 @@ export function accessContextFromClaims(
   // identity — fail closed (→ 401). The claim-mapping is configurable, so
   // a deployment that uses "sub" for tenant (non-standard) is supported.
   if (!tenantId || !subjectId) return null
+  const displayName = stringClaim(claims, "name")
+  const groups = groupsFromClaims(claims, mapping.groupsClaim)
   return {
     tenantId,
     subjectId,
-    groups: groupsFromClaims(claims, mapping.groupsClaim),
+    groups,
     scopes: scopesFromClaims(claims),
+    // AC-01: the operator boundary rides on the existing group marker. An
+    // external identity source must publish the equivalent group/claim to
+    // reach the admin console — there is no silent fallback to scopes.
+    operator: groups.includes(DEMO_ADMIN_GROUP),
+    ...(displayName ? { displayName } : {}),
   }
 }
 

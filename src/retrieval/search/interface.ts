@@ -1,5 +1,6 @@
 import type { Query, RetrievalResult } from "../../types"
 import type { AccessContext } from "../../access/context"
+import type { RetrievalScope } from "../../types/retrieval_scope"
 
 export type RetrievalChannel = RetrievalResult["source"]
 
@@ -14,6 +15,35 @@ export interface SearchOptions {
    */
   accessContext?: AccessContext
   /**
+   * Ticket 05 (KB-03A): the knowledge-base scope of this retrieval request,
+   * computed by the server from the request's knowledge selection and the
+   * caller's identity (`createRetrievalScopeResolver`). Channels that enforce
+   * it filter their reads by `knowledgeBaseId`.
+   *
+   * Undefined means "this caller carries no knowledge scope" — legacy paths
+   * (release probes, isolated evaluation runs, bare Searcher tests) keep their
+   * unfiltered reads. `{ knowledgeBaseIds: [] }` is the explicit "no knowledge
+   * context": it must yield no evidence, never everything.
+   */
+  retrievalScope?: RetrievalScope
+  /**
+   * Ticket 22 (ATT-01): the session whose temporary attachments may join this
+   * search. The server derives it from the run's own session id — a caller
+   * cannot name another session, and the attachment channel itself only ever
+   * reads that session's rows. Absent → no attachment channel at all, which
+   * is every non-chat caller (evaluation, probes, laboratory).
+   */
+  attachments?: { sessionId: string }
+  /**
+   * Ticket 36 (WEB-01): true when the run explicitly opted into web search
+   * (the transport's `useWeb` flag). Like the attachment channel, the web
+   * channel is not part of the caller's channel selection — it runs when the
+   * composition wired a web-evidence adapter AND (the run requested web
+   * search OR the query text carries a URL). Runners forward the run's flag;
+   * nothing else can set it.
+   */
+  webRequested?: boolean
+  /**
    * Ticket 06: Select an allowed subset of retrieval channels to execute.
    * Undefined/omitted → execute all four channels (backward compat with
    * pre-Ticket 06 callers). Non-empty array of known channels → execute
@@ -23,6 +53,13 @@ export interface SearchOptions {
    * (e.g. skip PageIndex for a non-page-oriented query).
    */
   channels?: RetrievalChannel[]
+  /**
+   * Ticket 14 (RET-01): request a read-only debug trace. The SAME search
+   * implementation runs (no separate debug pipeline); when true the outcome
+   * carries a `debug` trace with per-channel raw ranks, the fused order, the
+   * reranked order and elapsed times. The Answer path never sets this.
+   */
+  debug?: boolean
   /**
    * P7.2: Optional AbortSignal honored at retrieval stage boundaries
    * (before channel dispatch, after Promise.allSettled, after rerank).
@@ -46,6 +83,93 @@ export interface GraphBudget {
   candidates: number
 }
 
+/**
+ * Eval refactor Ticket 03: how the published (post-fusion) evidence ordering
+ * was produced. This is the honest score source of the ranking — evaluation
+ * (tickets 06/13) must not present a fused fallback as a dedicated-rerank
+ * result.
+ */
+export interface RetrievalOrdering {
+  /** "dedicated_rerank" → the configured web reranker scored this ordering;
+   *  "fused" → the RRF-fused order was published unchanged. */
+  source: "dedicated_rerank" | "fused"
+  /** Why the fused order was published. Absent for dedicated_rerank. */
+  reason?: "not_configured" | "below_threshold" | "unavailable"
+}
+
+/**
+ * Dedicated rerank boundary: transport + protocol live in the adapter, the
+ * searcher only sees "reorder or throw". Implementations MUST rethrow
+ * cancellation (AbortError) instead of swallowing it, and MUST reject on
+ * malformed responses (illegal index, non-finite score) rather than
+ * degrading silently.
+ */
+export interface Reranker {
+  /** Provider model identity (no credentials). */
+  readonly model: string
+  rerank(
+    query: string,
+    results: RetrievalResult[],
+    signal?: AbortSignal
+  ): Promise<RetrievalResult[]>
+}
+
+/**
+ * Thrown when a rerank seam has no dedicated reranker configured. Kept
+ * distinct from a provider failure so the published ordering can say
+ * "not_configured" instead of "unavailable".
+ */
+export class RerankerNotConfiguredError extends Error {
+  constructor(
+    message = "dedicated reranker is not configured (set RERANK_API_KEY and RERANK_BASE_URL)"
+  ) {
+    super(message)
+    this.name = "RerankerNotConfiguredError"
+  }
+}
+
+/**
+ * Ticket 14 (RET-01): stage-level debug trace of one search run. Ranks are
+ * 1-based positions as each stage published them; raw channel scores are the
+ * channels' own scores, fused candidates are rank-based (RRF sums are
+ * internal), reranked candidates carry the reranker's scores.
+ */
+export interface DebugCandidate {
+  rank: number
+  chunkId: string
+  documentId: string
+  title: string
+  excerpt: string
+  score: number | null
+}
+
+export interface DebugChannelStage {
+  channel: RetrievalChannel
+  ok: boolean
+  error?: string
+  elapsedMs: number
+  candidates: DebugCandidate[]
+}
+
+export interface RetrievalDebugTrace {
+  channels: DebugChannelStage[]
+  /** RRF fusion — also the dedup point (raw → distinct candidates). */
+  fused: {
+    elapsedMs: number
+    rawCandidateCount: number
+    distinctCount: number
+    candidates: DebugCandidate[]
+  }
+  rerank?: {
+    applied: boolean
+    /** "below_threshold" | "not_configured" | "unavailable" when not applied. */
+    reason?: string
+    elapsedMs: number
+    candidates?: DebugCandidate[]
+  }
+  totalMs: number
+}
+
 export interface SearchOutcome {
   status: "ok" | "degraded" | "insufficient"
   results: RetrievalResult[]
@@ -60,7 +184,21 @@ export interface SearchOutcome {
    */
   unselectedChannels?: RetrievalChannel[]
   degradationReasons?: string[]
+  /**
+   * Ticket 36 (WEB-01): bounded web-channel note. Present when the web
+   * channel ran and had something honest to report (e.g. `web_unconfigured`
+   * plus which URL was policy-denied). Absent when web never ran or reported
+   * nothing.
+   */
+  webDetail?: string
   graphBudget?: GraphBudget
+  /**
+   * Ticket 03: score source of `results`. Always present on a real result
+   * set; omitted on the `insufficient` early return (no results to rank).
+   */
+  ordering?: RetrievalOrdering
+  /** Ticket 14 (RET-01): present only when SearchOptions.debug was set. */
+  debug?: RetrievalDebugTrace
 }
 
 export interface Searcher {

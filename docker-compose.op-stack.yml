@@ -1,102 +1,291 @@
 # Operator-provisioned local stack for retrieval and Langfuse.
 # Usage:
 #   docker compose -f docker-compose.op-stack.yml up -d elasticsearch neo4j
-#   docker compose -f docker-compose.op-stack.yml up -d langfuse
+#   docker compose -f docker-compose.op-stack.yml --profile observability up -d
 #   docker compose -f docker-compose.op-stack.yml down
 #
 # Service mapping to OP blockers:
-#   - elasticsearch: OP-03 (retrieval stack) — port 9200
-#   - neo4j:         OP-03 (retrieval stack) — port 7687
-#   - langfuse:      OP-05 (observability) — port 3000
-#   - langfuse-pg:   OP-05 (Langfuse persistence) — port 5432
+#   - elasticsearch: OP-03 (retrieval stack) — host port 9201
+#   - neo4j:         OP-03 (retrieval stack) — host port 17687
+#   - langfuse:      OP-05 (observability) — port 3000 (v3 web, accepts OTLP)
+#   - langfuse-worker: OP-05 (v3 ingestion worker: S3 + Redis → ClickHouse)
+#   - langfuse-pg / -redis / -clickhouse / -minio: OP-05 persistence + queue + object store
 #
 # After starting:
-#   - ES:      curl http://localhost:9200/_cluster/health
-#   - Neo4j:   cypher -u neo4j -p localpassword bolt://localhost:7687 "RETURN 1"
-#   - Langfuse: open http://localhost:3000 (initial setup creates admin + project keys)
+#   - ES:      curl http://localhost:9201/_cluster/health
+#   - Neo4j:   cypher -u neo4j -p localpassword bolt://localhost:17687 "RETURN 1"
+#   - Langfuse: open http://localhost:3000 (headless init below creates the
+#     org/project/keys; no UI first-run step needed)
+#
+# Langfuse v3 is required for OTel: OTLP ingestion ships from v3.22.0 and the
+# v2 line has no /api/public/otel endpoint (verified 2026-10-20, LO-01).
+# OTLP/HTTP only (no gRPC), endpoint http://localhost:3000/api/public/otel,
+# headers Authorization: Basic <base64(pk:sk)> and x-langfuse-ingestion-version: 4.
 #
 # Env wiring (set in shell before running release probes):
-#   - NEO4J_URI=bolt://localhost:7687
+#   - NEO4J_URI=bolt://localhost:17687
 #   - NEO4J_USER=neo4j
 #   - NEO4J_PASSWORD=localpassword
 #   - LANGFUSE_BASE_URL=http://localhost:3000
 #   - LANGFUSE_PUBLIC_KEY=pk-lf-...  (from Langfuse UI after project creation)
 #   - LANGFUSE_SECRET_KEY=sk-lf-...  (from Langfuse UI after project creation)
 
+x-service-defaults: &service-defaults
+  restart: unless-stopped
+  stop_grace_period: 40s
+  logging:
+    driver: json-file
+    options:
+      max-size: "10m"
+      max-file: "3"
+
 services:
   elasticsearch:
+    <<: *service-defaults
     image: docker.elastic.co/elasticsearch/elasticsearch:9.0.2
     container_name: op-local-es
     environment:
       - discovery.type=single-node
       - xpack.security.enabled=false
       - ES_JAVA_OPTS=-Xms512m -Xmx512m
-      - cluster.routing.allocation.disk.threshold_enabled=false
     ports:
-      - "9200:9200"
+      # Host 9200 is taken by an unrelated local stack (smartcs-elasticsearch);
+      # publish ours on 9201 and point ES_NODE at it.
+      - "127.0.0.1:${ES_HOST_PORT:-9201}:9200"
+    volumes:
+      - op-es-data:/usr/share/elasticsearch/data
+    cpus: 2.0
+    mem_limit: 1536m
     healthcheck:
-      test: ["CMD-SHELL", "curl -sf http://localhost:9200/_cluster/health | grep -E '\"status\":\"(green|yellow)\"'"]
+      test: ["CMD-SHELL", "curl -fsS 'http://localhost:9200/_cluster/health?wait_for_status=yellow&timeout=3s' >/dev/null"]
       interval: 5s
       timeout: 5s
       retries: 30
       start_period: 40s
 
   neo4j:
+    <<: *service-defaults
     image: neo4j:5.26
     container_name: op-local-neo4j
     environment:
-      - NEO4J_AUTH=neo4j/localpassword
+      - NEO4J_AUTH=neo4j/${NEO4J_PASSWORD:-localpassword}
       - NEO4J_PLUGINS=["apoc"]
       - NEO4J_server_memory_heap_initial__size=512m
       - NEO4J_server_memory_heap_max__size=512m
+      - NEO4J_server_memory_pagecache_size=256m
     ports:
-      - "7474:7474"
-      - "7687:7687"
+      # Windows Hyper-V reserved ranges (netsh excludedportrange) cover 7474
+      # and 7687 on this host; publish on 17474/17687 and point NEO4J_URI at
+      # bolt://localhost:17687.
+      - "127.0.0.1:${NEO4J_HTTP_HOST_PORT:-17474}:7474"
+      - "127.0.0.1:${NEO4J_BOLT_HOST_PORT:-17687}:7687"
+    volumes:
+      - op-neo4j-data:/data
+      - op-neo4j-logs:/logs
+    cpus: 1.0
+    mem_limit: 1536m
     healthcheck:
-      test: ["CMD-SHELL", "wget -q -O - http://localhost:7474/ >/dev/null 2>&1 || exit 1"]
-      interval: 5s
-      timeout: 5s
+      test: ["CMD-SHELL", "cypher-shell -u neo4j -p \"$${NEO4J_AUTH#*/}\" 'RETURN 1' >/dev/null 2>&1"]
+      # cypher-shell starts a JVM; avoid doing that every five seconds.
+      interval: 30s
+      timeout: 20s
       retries: 30
       start_period: 40s
 
   langfuse-pg:
+    <<: *service-defaults
+    profiles: [observability]
     image: postgres:16-alpine
     container_name: op-local-langfuse-pg
     environment:
       POSTGRES_USER: langfuse
       POSTGRES_PASSWORD: langfuse
       POSTGRES_DB: langfuse
-    ports:
-      - "5432:5432"
+    # No host port publish: Langfuse reaches PG over the compose network only,
+    # and the host 5432 is occupied by an unrelated local Postgres/WSL service.
     volumes:
-      - op-langfuse-pg-data:/var/lib/postgresql/data
+      # Fresh volume for the v3 line: v3 moves traces/observations to
+      # ClickHouse, so a v2 Postgres dataset is not a migration source we need
+      # locally (all v2 traces were synthetic probes). The old volume stays
+      # untouched for rollback.
+      - op-langfuse-pg-data-v3:/var/lib/postgresql/data
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U langfuse -d langfuse"]
       interval: 5s
       timeout: 5s
       retries: 10
 
+  langfuse-redis:
+    <<: *service-defaults
+    profiles: [observability]
+    image: redis:7-alpine
+    container_name: op-local-langfuse-redis
+    command: ["redis-server", "--requirepass", "op-local-redis-pass", "--appendonly", "yes"]
+    volumes:
+      - op-langfuse-redis-data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli -a op-local-redis-pass ping | grep -q PONG"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  langfuse-clickhouse:
+    <<: *service-defaults
+    profiles: [observability]
+    image: clickhouse/clickhouse-server:24.3
+    container_name: op-local-langfuse-clickhouse
+    environment:
+      CLICKHOUSE_USER: clickhouse
+      CLICKHOUSE_PASSWORD: op-local-clickhouse-pass
+      CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: "1"
+    volumes:
+      - op-langfuse-clickhouse-data:/var/lib/clickhouse
+    ulimits:
+      nofile:
+        soft: 262144
+        hard: 262144
+    healthcheck:
+      test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://localhost:8123/ping || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 20s
+
+  langfuse-minio:
+    <<: *service-defaults
+    profiles: [observability]
+    # Keep the locally verified image; upgrades are explicit, not mutable latest.
+    image: ${MINIO_IMAGE:-minio/minio@sha256:14cea493d9a34af32f524e538b8346cf79f3321eff8e708c1e2960462bd8936e}
+    container_name: op-local-langfuse-minio
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: minio
+      MINIO_ROOT_PASSWORD: op-local-minio-pass
+    ports:
+      # Browser-facing media endpoint: LANGFUSE_S3_MEDIA_UPLOAD_ENDPOINT must
+      # use the host side (localhost:9090) because the UI uploads directly.
+      - "127.0.0.1:${LANGFUSE_MEDIA_HOST_PORT:-9090}:9000"
+      - "127.0.0.1:9091:9001"
+    volumes:
+      - op-langfuse-minio-data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:9000/minio/health/live || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+
+  langfuse-minio-init:
+    profiles: [observability]
+    # Creates the event/media buckets once. Without it v3 web answers every
+    # ingestion with 500 "Failed to upload JSON to S3" (bucket missing).
+    image: ${MINIO_MC_IMAGE:-minio/mc@sha256:a7fe349ef4bd8521fb8497f55c6042871b2ae640607cf99d9bede5e9bdf11727}
+    container_name: op-local-langfuse-minio-init
+    depends_on:
+      langfuse-minio:
+        condition: service_healthy
+    entrypoint:
+      - /bin/sh
+      - -c
+      - >-
+        mc alias set local http://langfuse-minio:9000 minio op-local-minio-pass &&
+        mc mb --ignore-existing local/langfuse &&
+        echo "buckets ready"
+    restart: "no"
+
   langfuse:
-    image: langfuse/langfuse:latest
+    <<: *service-defaults
+    profiles: [observability]
+    # v3 line: OTLP ingestion (HTTP/protobuf) arrived in 3.22.0 and is the
+    # reason for this upgrade — v2 has no /api/public/otel endpoint at all.
+    image: langfuse/langfuse:3
     container_name: op-local-langfuse
     depends_on:
       langfuse-pg:
         condition: service_healthy
-    environment:
+      langfuse-redis:
+        condition: service_healthy
+      langfuse-clickhouse:
+        condition: service_healthy
+      langfuse-minio:
+        condition: service_healthy
+      langfuse-minio-init:
+        condition: service_completed_successfully
+      langfuse-worker:
+        condition: service_started
+    environment: &langfuse-env
       DATABASE_URL: postgresql://langfuse:langfuse@langfuse-pg:5432/langfuse
-      NEXTAUTH_URL: http://localhost:3000
+      NEXTAUTH_URL: ${LANGFUSE_PUBLIC_URL:-http://localhost:3000}
       NEXTAUTH_SECRET: op-local-secret-change-me
       SALT: op-local-salt-change-me
-      CLICKHOUSE_URL: ""
+      ENCRYPTION_KEY: 6d3f9a1c4b7e2f8a5c0d9e6b3a7f1c4d8e2b5a9f6c3d0e7b4a1f8c5d2e9b6a3f
       TELEMETRY_ENABLED: "false"
+      LANGFUSE_DEFAULT_PROJECT_ID: answer-runs
+      CLICKHOUSE_URL: http://langfuse-clickhouse:8123
+      CLICKHOUSE_MIGRATION_URL: clickhouse://langfuse-clickhouse:9000
+      CLICKHOUSE_USER: clickhouse
+      CLICKHOUSE_PASSWORD: op-local-clickhouse-pass
+      CLICKHOUSE_CLUSTER_ENABLED: "false"
+      REDIS_CONNECTION_STRING: redis://:op-local-redis-pass@langfuse-redis:6379
+      LANGFUSE_S3_EVENT_UPLOAD_BUCKET: langfuse
+      LANGFUSE_S3_EVENT_UPLOAD_REGION: auto
+      LANGFUSE_S3_EVENT_UPLOAD_ACCESS_KEY_ID: minio
+      LANGFUSE_S3_EVENT_UPLOAD_SECRET_ACCESS_KEY: op-local-minio-pass
+      LANGFUSE_S3_EVENT_UPLOAD_ENDPOINT: http://langfuse-minio:9000
+      LANGFUSE_S3_EVENT_UPLOAD_FORCE_PATH_STYLE: "true"
+      LANGFUSE_S3_EVENT_UPLOAD_PREFIX: events/
+      LANGFUSE_S3_MEDIA_UPLOAD_BUCKET: langfuse
+      LANGFUSE_S3_MEDIA_UPLOAD_REGION: auto
+      LANGFUSE_S3_MEDIA_UPLOAD_ACCESS_KEY_ID: minio
+      LANGFUSE_S3_MEDIA_UPLOAD_SECRET_ACCESS_KEY: op-local-minio-pass
+      LANGFUSE_S3_MEDIA_UPLOAD_ENDPOINT: ${LANGFUSE_MEDIA_PUBLIC_URL:-http://localhost:9090}
+      LANGFUSE_S3_MEDIA_UPLOAD_FORCE_PATH_STYLE: "true"
+      LANGFUSE_S3_MEDIA_UPLOAD_PREFIX: media/
+      # Headless initialization: deterministic org/project/keys on a clean stack
+      # so probes and CI do not depend on clicking through the first-run UI.
+      LANGFUSE_INIT_ORG_ID: op-local
+      LANGFUSE_INIT_ORG_NAME: op-local
+      LANGFUSE_INIT_PROJECT_ID: answer-runs
+      LANGFUSE_INIT_PROJECT_NAME: answer-runs
+      LANGFUSE_INIT_PROJECT_PUBLIC_KEY: pk-lf-lo01-probe
+      LANGFUSE_INIT_PROJECT_SECRET_KEY: sk-lf-lo01-probe
+      LANGFUSE_INIT_USER_EMAIL: probe@op.local
+      LANGFUSE_INIT_USER_NAME: probe
+      LANGFUSE_INIT_USER_PASSWORD: probe-password-123
     ports:
-      - "3000:3000"
+      - "127.0.0.1:${LANGFUSE_HOST_PORT:-3000}:3000"
     healthcheck:
       test: ["CMD-SHELL", "node -e \"fetch('http://localhost:3000/api/public/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))\""]
       interval: 10s
       timeout: 5s
-      retries: 30
-      start_period: 30s
+      retries: 40
+      start_period: 40s
+
+  langfuse-worker:
+    <<: *service-defaults
+    profiles: [observability]
+    # v3 moves ingestion off the request path: web writes events to S3 + Redis,
+    # the worker writes them to ClickHouse. Without it the UI/API stay empty.
+    image: langfuse/langfuse-worker:3
+    container_name: op-local-langfuse-worker
+    depends_on:
+      langfuse-pg:
+        condition: service_healthy
+      langfuse-redis:
+        condition: service_healthy
+      langfuse-clickhouse:
+        condition: service_healthy
+      langfuse-minio:
+        condition: service_healthy
+      langfuse-minio-init:
+        condition: service_completed_successfully
+    environment: *langfuse-env
 
 volumes:
+  op-es-data:
+  op-neo4j-data:
+  op-neo4j-logs:
   op-langfuse-pg-data:
+  op-langfuse-pg-data-v3:
+  op-langfuse-redis-data:
+  op-langfuse-clickhouse-data:
+  op-langfuse-minio-data:

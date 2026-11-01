@@ -1,18 +1,29 @@
 import { v5 as uuid } from "uuid"
+import { createHash } from "node:crypto"
 import type { Document, Chunk, NormalizedBlock } from "../../types"
+import { normalizeMarkItDown } from "../parser/normalize"
+import { prepareChunkingBlocks, type ChunkingStrategy, type ChunkingTier } from "./strategy"
 
 const MAX_CHUNK_SIZE = 1500
-const MAX_CHILD_CHUNK_SIZE = 750
-const MIN_CHUNK_SIZE = 200
+const MAX_CHILD_CHUNK_SIZE = 512
+const CHUNK_OVERLAP = 80
+const MIN_CHUNK_SIZE = 80
 const SEMANTIC_SIMILARITY_THRESHOLD = 0.15
 
 export class RecursiveChunker {
+  constructor(private readonly strategy: ChunkingStrategy = "auto") {}
+
   async chunk(doc: Document, blocks?: NormalizedBlock[]): Promise<Chunk[]> {
-    if (blocks) return this.chunkBlocks(doc, blocks)
+    if (!blocks && doc.content.trim()) blocks = normalizeMarkItDown(doc.content, doc.id)
+    if (blocks) {
+      const prepared = prepareChunkingBlocks(blocks, this.strategy)
+      return this.chunkBlocks(doc, prepared.blocks, prepared.tier)
+    }
 
     const segments = this.split(doc.content)
+    const contentHash = createHash("sha256").update(doc.content).digest("hex")
     return segments.map((text, i) => ({
-      id: uuid(`kefu-rag:chunk:${doc.id}:child:${doc.content}:${i}:${text}`, uuid.URL),
+      id: uuid(`kefu-rag:chunk:${doc.id}:child:${contentHash}:${i}:${text}`, uuid.URL),
       documentId: doc.id,
       content: text,
       childrenIds: [],
@@ -27,8 +38,9 @@ export class RecursiveChunker {
     }))
   }
 
-  private chunkBlocks(doc: Document, blocks: NormalizedBlock[]): Chunk[] {
+  private chunkBlocks(doc: Document, blocks: NormalizedBlock[], tier: ChunkingTier): Chunk[] {
     const sourceContent = blocks.map(({ text }) => text).join("\n\n")
+    const sourceHash = createHash("sha256").update(sourceContent).digest("hex")
     const groups: NormalizedBlock[][] = []
 
     for (const block of blocks) {
@@ -49,7 +61,7 @@ export class RecursiveChunker {
       const sectionPath = group[0].sectionPath
       const parentContent = group.map(({ text }) => text).join("\n\n")
       const parentId = uuid(
-        `kefu-rag:chunk:${doc.id}:parent:${groupIndex}:${sourceContent}:${this.sectionKey(group[0])}:${parentContent}`,
+        `kefu-rag:chunk:${doc.id}:parent:${groupIndex}:${sourceHash}:${this.sectionKey(group[0])}:${parentContent}`,
         uuid.URL
       )
       const textRuns: NormalizedBlock[][] = []
@@ -63,12 +75,14 @@ export class RecursiveChunker {
         }
       }
       if (textRun.length > 0) textRuns.push(textRun)
-      const children = textRuns.flatMap((run) => this.splitBlocks(run))
+      const children = textRuns.flatMap((run) =>
+        this.mergeSmallSegments(this.splitBlocks(run))
+      )
         .map(({ text, blocks: segmentBlocks }) => {
         const index = childIndex
         childIndex += 1
         return {
-          id: uuid(`kefu-rag:chunk:${doc.id}:child:${sourceContent}:${index}:${text}`, uuid.URL),
+          id: uuid(`kefu-rag:chunk:${doc.id}:child:${sourceHash}:${index}:${text}`, uuid.URL),
           documentId: doc.id,
           content: text,
           parentId,
@@ -81,6 +95,8 @@ export class RecursiveChunker {
             sourceId: doc.sourceId,
             documentVersion: doc.version,
             sectionPath,
+            chunkingStrategy: tier,
+            contextHeader: sectionPath.join(" > "),
             normalizedBlocks: segmentBlocks.map((block) => {
               const continuation = emittedStructure.has(block.id)
               emittedStructure.add(block.id)
@@ -136,6 +152,8 @@ export class RecursiveChunker {
             documentVersion: doc.version,
             page: block.page,
             sectionPath: block.sectionPath,
+            chunkingStrategy: tier,
+            contextHeader: block.sectionPath.join(" > "),
             image,
             assetStatus: typeof image.assetId === "string"
               ? "available"
@@ -177,12 +195,63 @@ export class RecursiveChunker {
           sourceId: doc.sourceId,
           documentVersion: doc.version,
           sectionPath,
+          chunkingStrategy: tier,
+          contextHeader: sectionPath.join(" > "),
           normalizedBlocks: [],
         },
       })
     }
 
     return chunks
+  }
+
+  /**
+   * Merge undersized segments into their neighbours so degenerate fragments
+   * (e.g. a two-character TOC label) never reach the index. Merging runs per
+   * text run only — never across an image boundary. A segment that continues
+   * the previous segment's block rejoins without a separator so split block
+   * text reconstructs exactly; otherwise "\n\n" joins distinct blocks. Size
+   * limits win: no merge may push a segment past MAX_CHUNK_SIZE.
+   */
+  private mergeSmallSegments(
+    segments: Array<{ text: string; blocks: NormalizedBlock[] }>
+  ): Array<{ text: string; blocks: NormalizedBlock[] }> {
+    const mergeInto = (
+      target: { text: string; blocks: NormalizedBlock[] },
+      incoming: { text: string; blocks: NormalizedBlock[] }
+    ): void => {
+      const lastBlockId = target.blocks.at(-1)?.id
+      const separator =
+        lastBlockId && lastBlockId === incoming.blocks[0]?.id ? "" : "\n\n"
+      target.text += separator + incoming.text
+      for (const block of incoming.blocks) {
+        if (!target.blocks.some(({ id }) => id === block.id)) {
+          target.blocks.push(block)
+        }
+      }
+    }
+
+    const result: Array<{ text: string; blocks: NormalizedBlock[] }> = []
+    for (const segment of segments) {
+      if (segment.text.length < MIN_CHUNK_SIZE && result.length > 0) {
+        const previous = result[result.length - 1]
+        if (previous.text.length + segment.text.length + 2 <= MAX_CHUNK_SIZE) {
+          mergeInto(previous, segment)
+          continue
+        }
+      }
+      result.push({ text: segment.text, blocks: [...segment.blocks] })
+    }
+    if (result.length > 1 && result.at(-1)!.text.length < MIN_CHUNK_SIZE) {
+      const last = result.pop()!
+      const previous = result.at(-1)!
+      if (previous.text.length + last.text.length + 2 <= MAX_CHUNK_SIZE) {
+        mergeInto(previous, last)
+      } else {
+        result.push(last)
+      }
+    }
+    return result
   }
 
   private sectionKey(block: NormalizedBlock): string {
@@ -209,7 +278,7 @@ export class RecursiveChunker {
     }
 
     for (const block of blocks) {
-      for (const piece of this.splitLongText(block.text)) {
+      for (const piece of this.splitBlockText(block)) {
         let separator = text && lastBlockId !== block.id ? "\n\n" : ""
         const semanticBreak = text.length >= MIN_CHUNK_SIZE
           && lastBlockId !== block.id
@@ -230,7 +299,7 @@ export class RecursiveChunker {
     return result
   }
 
-  private splitLongText(text: string): string[] {
+  private splitLongText(text: string, boundaries?: string[]): string[] {
     const pieces: string[] = []
     let offset = 0
     while (offset < text.length) {
@@ -241,30 +310,68 @@ export class RecursiveChunker {
       }
 
       const targetWindow = text.slice(offset, offset + MAX_CHILD_CHUNK_SIZE)
-      let length = this.safeBoundary(targetWindow)
-      if (length === 0) {
-        const hardWindow = text.slice(offset, offset + MAX_CHUNK_SIZE)
-        length = this.safeBoundary(hardWindow)
-      }
-      if (length === 0) {
-        if (remaining <= MAX_CHUNK_SIZE) {
-          pieces.push(text.slice(offset))
-          break
-        }
-        throw new Error(
-          `Normalized block exceeds ${MAX_CHUNK_SIZE} characters without a safe semantic boundary`
-        )
-      }
+      const length = this.safeBoundary(targetWindow, boundaries) || MAX_CHILD_CHUNK_SIZE
       pieces.push(text.slice(offset, offset + length))
-      offset += length
+      offset += Math.max(length - CHUNK_OVERLAP, 1)
     }
     return pieces
   }
 
-  private safeBoundary(text: string): number {
-    const boundaries = ["\n\n", "\n", "。", "！", "？", ". ", "! ", "? ", " ", "\t"]
+  private splitBlockText(block: NormalizedBlock): string[] {
+    // Tables stay atomic below the child size limit — a pipe-delimited table
+    // split mid-row yields fragments that are useless for retrieval. Beyond
+    // that, UT-14: an oversized table splits at ROW boundaries and every
+    // continuation piece repeats the header lines, so the header-value
+    // relation survives in each chunk instead of living only in the first.
+    if (block.type === "table") {
+      if (block.text.length <= MAX_CHUNK_SIZE) {
+        return [block.text]
+      }
+      return this.splitTableText(block.text)
+    }
+    return this.splitLongText(block.text)
+  }
+
+  /**
+   * UT-14: split an oversized markdown table at row boundaries, repeating the
+   * header (and its separator line) on every piece. Rows are packed greedily
+   * so each piece stays within the child size budget where possible; a single
+   * row longer than the budget is emitted alone (the token-limit net in
+   * limits.ts guards the embedding path).
+   */
+  private splitTableText(text: string): string[] {
+    const lines = text.split("\n")
+    const isSeparator = (line: string): boolean =>
+      /^\s*\|?[\s:|-]+\|?\s*$/.test(line) && line.includes("-")
+    let headerLines: string[] = []
+    if (lines.length >= 2 && isSeparator(lines[1])) {
+      headerLines = [lines[0], lines[1]]
+    } else if (lines[0]?.includes("|")) {
+      headerLines = [lines[0]]
+    }
+    const bodyLines = lines.slice(headerLines.length)
+    const headerPrefix = headerLines.length > 0 ? `${headerLines.join("\n")}\n` : ""
+    const headerBudget = headerPrefix.length
+
+    const pieces: string[] = []
+    let current = ""
+    for (const line of bodyLines) {
+      const candidate = current ? `${current}\n${line}` : line
+      if (current && headerBudget + candidate.length + 1 > MAX_CHILD_CHUNK_SIZE) {
+        pieces.push(`${headerPrefix}${current}`)
+        current = line
+      } else {
+        current = candidate
+      }
+    }
+    if (current) pieces.push(`${headerPrefix}${current}`)
+    return pieces
+  }
+
+  private safeBoundary(text: string, boundaries?: string[]): number {
+    const candidates = boundaries ?? ["\n\n", "\n", "。", "！", "？", ". ", "! ", "? ", " ", "\t"]
     let length = 0
-    for (const boundary of boundaries) {
+    for (const boundary of candidates) {
       const index = text.lastIndexOf(boundary)
       if (index >= MIN_CHUNK_SIZE) {
         length = Math.max(length, index + boundary.length)
@@ -310,37 +417,6 @@ export class RecursiveChunker {
   }
 
   private split(text: string): string[] {
-    const paragraphs = text.split(/\n\s*\n/)
-    const chunks: string[] = []
-    let buffer = ""
-
-    for (const p of paragraphs) {
-      const trimmed = p.trim()
-      if (!trimmed) continue
-
-      if (buffer.length + trimmed.length > MAX_CHUNK_SIZE) {
-        if (buffer) chunks.push(buffer.trim())
-        buffer = trimmed.length > MAX_CHUNK_SIZE
-          ? trimmed.slice(0, MAX_CHUNK_SIZE)
-          : trimmed
-      } else {
-        buffer += (buffer ? "\n\n" : "") + trimmed
-      }
-    }
-    if (buffer) chunks.push(buffer.trim())
-
-    return this.mergeSmall(chunks)
-  }
-
-  private mergeSmall(chunks: string[]): string[] {
-    const result: string[] = []
-    for (const c of chunks) {
-      if (result.length > 0 && result[result.length - 1].length < MIN_CHUNK_SIZE) {
-        result[result.length - 1] += "\n\n" + c
-      } else {
-        result.push(c)
-      }
-    }
-    return result
+    return this.splitLongText(text.trim())
   }
 }

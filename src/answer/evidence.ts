@@ -83,6 +83,75 @@ function graphPath(metadata: Record<string, unknown>): string[] | undefined {
   return [...metadata.graphPath]
 }
 
+/**
+ * Ticket 22 (ATT-01): attachment provenance, or undefined for knowledge. The
+ * fields are only emitted when the chunk really is a session attachment, so
+ * every pre-existing evidence shape is untouched.
+ */
+function attachmentProvenance(
+  metadata: Record<string, unknown>
+): Pick<Evidence, "origin" | "attachmentId" | "attachmentName" | "attachmentSessionId"> | undefined {
+  if (metadata.origin !== "attachment") return undefined
+  const attachmentId = typeof metadata.attachmentId === "string" ? metadata.attachmentId : undefined
+  const attachmentName = typeof metadata.attachmentName === "string"
+    ? metadata.attachmentName
+    : undefined
+  const attachmentSessionId = typeof metadata.attachmentSessionId === "string"
+    ? metadata.attachmentSessionId
+    : undefined
+  return {
+    origin: "attachment",
+    ...(attachmentId ? { attachmentId } : {}),
+    ...(attachmentName ? { attachmentName } : {}),
+    ...(attachmentSessionId ? { attachmentSessionId } : {}),
+  }
+}
+
+/**
+ * Ticket 31 (FAQ-01B): FAQ provenance, or undefined otherwise. Mirrors
+ * {@link attachmentProvenance}: the fields are only emitted when the chunk
+ * really is a FAQ standard answer, so every pre-existing evidence shape is
+ * untouched and a FAQ citation stays distinguishable from knowledge-base
+ * documents and memory context.
+ */
+function faqProvenance(
+  metadata: Record<string, unknown>
+): Pick<Evidence, "origin" | "faqEntryId" | "faqVersion"> | undefined {
+  if (metadata.origin !== "faq") return undefined
+  const faqEntryId = typeof metadata.faqEntryId === "string" ? metadata.faqEntryId : undefined
+  const faqVersion = Number.isInteger(metadata.faqVersion) &&
+      (metadata.faqVersion as number) > 0
+    ? metadata.faqVersion as number
+    : undefined
+  return {
+    origin: "faq",
+    ...(faqEntryId ? { faqEntryId } : {}),
+    ...(faqVersion ? { faqVersion } : {}),
+  }
+}
+
+/**
+ * Ticket 36 (WEB-01): web provenance, or undefined otherwise. Mirrors
+ * {@link attachmentProvenance} / {@link faqProvenance}: the fields are only
+ * emitted when the chunk really is web evidence, so a web citation always
+ * carries its URL and the server-side fetch time and stays distinguishable
+ * from knowledge-base documents, FAQ standard answers and session
+ * attachments.
+ */
+function webProvenance(
+  metadata: Record<string, unknown>
+): Pick<Evidence, "origin" | "webUrl" | "webFetchedAt"> | undefined {
+  if (metadata.origin !== "web") return undefined
+  const webUrl = typeof metadata.webUrl === "string" ? metadata.webUrl : undefined
+  const webFetchedAt = typeof metadata.fetchedAt === "string" ? metadata.fetchedAt : undefined
+  if (!webUrl) return undefined
+  return {
+    origin: "web",
+    webUrl,
+    ...(webFetchedAt ? { webFetchedAt } : {}),
+  }
+}
+
 export function buildEvidence(results: RetrievalResult[]): Evidence[] {
   const evidence = new Map<string, Evidence>()
   for (const result of results) {
@@ -117,6 +186,16 @@ export function buildEvidence(results: RetrievalResult[]): Evidence[] {
     const location = blockLocation(metadata)
     const path = graphPath(metadata)
     const image = imageReference(metadata)
+    // Ticket 22 (ATT-01): a session attachment is TEMPORARY context. Its
+    // provenance travels with the citation so no layer mistakes it for a
+    // knowledge-base document.
+    // Ticket 31 (FAQ-01B): a FAQ entry version is a STANDARD ANSWER. Its
+    // provenance travels the same way so no layer presents it as a document.
+    // Ticket 36 (WEB-01): a web result is EXTERNAL evidence with its own URL
+    // and fetch time — never a knowledge-base document either.
+    const attachment = attachmentProvenance(metadata)
+    const faq = faqProvenance(metadata)
+    const web = webProvenance(metadata)
     evidence.set(key, {
       id: stableEvidenceId(result),
       documentId: result.chunk.documentId,
@@ -128,6 +207,9 @@ export function buildEvidence(results: RetrievalResult[]): Evidence[] {
       chunkId: result.chunk.id,
       title: typeof metadata.title === "string" ? metadata.title : "Untitled",
       source: typeof metadata.source === "string" ? metadata.source : "unknown",
+      ...(attachment ?? {}),
+      ...(faq ?? {}),
+      ...(web ?? {}),
       ...location,
       ...(image ? { image } : {}),
       excerpt: result.chunk.content.slice(0, EXCERPT_LIMIT),

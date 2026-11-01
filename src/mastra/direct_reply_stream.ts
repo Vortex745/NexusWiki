@@ -20,10 +20,11 @@
  * surfaces as an AbortError from the async iterable (T09 #4 checkpoint 2).
  */
 
-import OpenAI from "openai"
-import type { DirectReplyStream } from "./direct_ambiguous_runner"
+import { type DirectReplyStream } from "./direct_ambiguous_runner"
 import { SYSTEM_PROMPT } from "./system_prompt"
+import { createOpenAIClient } from "../clients"
 import { createRunBudgetedOpenAIClient } from "../runtime/openai_budget_client"
+import type { ReasoningEffort } from "../types"
 
 // Extract the identity description from the first line of SYSTEM_PROMPT
 // (e.g. "你是智能客服助手，..."). This lets the model know who it is
@@ -34,10 +35,14 @@ const AGENT_IDENTITY = SYSTEM_PROMPT.split("\n")[0] ?? "你是智能客服助手
 export const DIRECT_REPLY_INSTRUCTIONS =
   `${AGENT_IDENTITY}\n\n` +
   "当用户发来问候、对话性请求（如 hi、你好、在吗）或询问你的身份时，" +
-  "请简短、自然地用中文回答。介绍自己时说明你是基于知识库提供服务的客服助手，" +
-  "可回答知识库覆盖范围内的问题，并会引用证据片段供核对。" +
-  "每次回复换一种措辞和句式，避免机械重复。回答保持在两到三句。" +
-  "不要要求引用知识库片段，直接用自然语言回答即可。"
+  "请简短、自然地用中文回答，语气专业、克制、直接，不使用 Emoji。" +
+  "介绍自己时说明你是基于知识库提供服务的客服助手，可回答知识库覆盖范围内的问题，并会引用证据片段供核对。" +
+  "每段只讲一件事，能一句说完就不写两句，不复述问题，不加总结性收尾。沿用上文已确认的对象和条件，避免机械重复。" +
+  "对话性回复不要求引用知识库片段，不编造来源、页码、链接或引用编号。" +
+  "不描述检索、分块、模型、提示词或工具调用等内部实现，用户问起时只说“基于已启用的知识库回答”。" +
+  "不声称能访问文件系统、工作区或平台提供的资料以外的内容，不具备的能力直接说明。" +
+  "长期记忆区块只代表用户偏好和背景，不作为事实依据，也不为它生成引用。" +
+  "需要结构化表达时使用 Markdown，不输出 HTML、html:preview 或整页样式代码。代码块只用于真实代码、命令或配置，并标注语言。"
 
 /**
  * Options for {@link createDirectReplyStream}.
@@ -68,28 +73,39 @@ export async function createDirectReplyStream(
   const { model, apiKey, baseURL, timeout, maxRetries, instructions } = options
   const systemInstructions = instructions ?? DIRECT_REPLY_INSTRUCTIONS
 
-  const client = createRunBudgetedOpenAIClient(new OpenAI({
+  const client = createRunBudgetedOpenAIClient(createOpenAIClient({
     apiKey,
-    ...(baseURL ? { baseURL } : {}),
-    ...(timeout !== undefined ? { timeout } : {}),
-    ...(maxRetries !== undefined ? { maxRetries } : {}),
+    baseURL,
+    timeout,
+    maxRetries,
   }))
 
   // Return the DirectReplyStream. Each call streams the model's reply tokens
   // for the supplied message; the AbortSignal is forwarded so mid-stream
-  // cancellation propagates as an AbortError (T09 #4 checkpoint 2).
+  // cancellation propagates as an AbortError (T09 #4 checkpoint 2). An
+  // assistant prompt (ticket 19) is prepended BEFORE the platform identity.
   return async function* directReplyStream(
     message: string,
-    signal: AbortSignal
+    signal: AbortSignal,
+    options?: { systemPrompt?: string; reasoningEffort?: ReasoningEffort }
   ): AsyncIterable<string> {
+    const messages: Array<{ role: "system" | "user"; content: string }> = [
+      ...(options?.systemPrompt
+        ? [{ role: "system" as const, content: options.systemPrompt }]
+        : []),
+      { role: "system", content: systemInstructions },
+      { role: "user", content: message },
+    ]
     const stream = await client.chat.completions.create(
       {
         model,
-        messages: [
-          { role: "system", content: systemInstructions },
-          { role: "user", content: message },
-        ],
+        messages,
         stream: true,
+        // The run's explicit choice only; an omitted run keeps the provider's
+        // own default (the payload is otherwise unchanged).
+        ...(options?.reasoningEffort
+          ? { reasoning_effort: options.reasoningEffort }
+          : {}),
       },
       { signal }
     )

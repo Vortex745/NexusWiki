@@ -9,6 +9,7 @@ export {
   CRITIC_VERDICT_SCHEMA_VERSION,
   CRITIC_VERDICT_MAX_BYTES,
   CriticVerdictSchemaV1,
+  CriticVerdictSchemaV2,
   type VersionedCriticVerdict,
 } from "./schema"
 

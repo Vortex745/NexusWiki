@@ -1,9 +1,12 @@
 import type { DB } from "../ingestion/tracking/db"
 import { DocumentRepo } from "../ingestion/tracking/doc_repo"
+import { ACTIVATION_POLICY_VERSION, evaluateActivationGate } from "../ingestion/activation_gate"
+import { WikiStore } from "../wiki/store"
 import type {
   DocumentCandidateState,
   ReviewDecision,
 } from "../types/governance"
+import type { TaskTraceContext } from "../tracing/contract"
 
 /**
  * Ticket 11 Phase E P3 (spec §11 L1573-1575, L1580): CandidateReviewStore.
@@ -104,7 +107,8 @@ export interface CandidateReviewStore {
     tenantId: string,
     decision: ReviewDecision,
     reason: string,
-    actor: string
+    actor: string,
+    trace?: TaskTraceContext
   ): ReviewResult | null
 }
 
@@ -183,7 +187,8 @@ export class SqliteCandidateReviewStore implements CandidateReviewStore {
     tenantId: string,
     decision: ReviewDecision,
     reason: string,
-    actor: string
+    actor: string,
+    trace?: TaskTraceContext
   ): ReviewResult | null {
     const existing = this.db.prepare(
       `SELECT doc_id, tenant_id, source_id, candidate_state,
@@ -237,12 +242,42 @@ export class SqliteCandidateReviewStore implements CandidateReviewStore {
     // existing activation-order protection per spec L1575). This is a
     // conditional UPDATE — only changes active_doc_id if this doc's
     // activation_order is higher than the current active.
+    // Ticket UT-04: human approval cannot bypass the joint activation gate —
+    // a candidate without complete content-integrity and index evidence is
+    // approved for business review but stays inactive with a recorded reason.
     let activatedAsActive = false
     if (decision === "approve" && existing.source_id) {
-      const beforeActive = this.getActiveDocId(existing.source_id)
-      this.documentRepo.activate(docId)
-      const afterActive = this.getActiveDocId(existing.source_id)
-      activatedAsActive = afterActive === docId && beforeActive !== docId
+      const gate = evaluateActivationGate(this.documentRepo.getCandidateEvidence(docId))
+      if (!gate.passed) {
+        this.documentRepo.recordActivationBlock(docId, gate.reason ?? "activation_gate_denied")
+      } else {
+        const beforeActive = this.getActiveDocId(existing.source_id)
+        this.documentRepo.activate(docId)
+        this.documentRepo.clearActivationBlock(docId)
+        const afterActive = this.getActiveDocId(existing.source_id)
+        if (afterActive === docId) {
+          // Same acceptance fact as the automatic path: only an active pointer
+          // to THIS version records the policy decision.
+          this.documentRepo.recordActivationAcceptance(docId, {
+            policyVersion: gate.policyVersion ?? ACTIVATION_POLICY_VERSION,
+            warningCodes: gate.warningCodes,
+            evaluatedAt: reviewedAt,
+          })
+        }
+        activatedAsActive = afterActive === docId && beforeActive !== docId
+        if (activatedAsActive) {
+          const document = this.documentRepo.get(docId)
+          if (document) {
+            const wiki = new WikiStore(this.db, this.now)
+            if (wiki.enabled(tenantId, document.knowledgeBaseId ?? "")) {
+              // C4: the approval is an operator action — its wiki job
+              // continues the reviewing request's trace.
+              wiki.enqueue(tenantId, document.knowledgeBaseId ?? "", docId,
+                existing.source_id, "ingest", trace)
+            }
+          }
+        }
+      }
     }
 
     return {

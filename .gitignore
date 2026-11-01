@@ -1,39 +1,100 @@
-node_modules/
-dist/
-.env
-*.log
-*.err
-.DS_Store
-# Added by code-review-graph
-.code-review-graph/
-# Ticket 04: release-time evidence artifacts — must not dirty the trusted worktree
-.release-artifacts/
+# Public repository: runtime/build inputs and the two entry documents only.
+# New top-level files stay local until explicitly added to this list.
+/*
+!/.gitignore
+!/.gitattributes
+!/.dockerignore
+!/.env.example
+!/AGENTS.md
+!/README.md
+!/package.json
+!/package-lock.json
+!/tsconfig.json
+!/tsconfig.web.json
+!/vite.config.ts
+!/Dockerfile
+!/docker-compose.yml
+!/docker-compose.docreader.yml
+!/docker-compose.op-stack.yml
+!/src/
+!/frontend/
+!/scripts/
+!/docker/
 
-# Agent task state and scratch work
-.omx/
-.scratch/
+# Frontend and container inputs.
+/frontend/*
+!/frontend/index.html
+!/frontend/src/
+!/frontend/public/
+/docker/*
+!/docker/nginx.conf
+!/docker/requirements.txt
 
-# Non-runtime documentation and development-tool instructions
-*.md
-# Locally-retained planning/reference docs (kept on disk, not tracked)
-LANGFUSE-V4-MIGRATION.md
-MEMORY.md
-.cursorrules
-.windsurfrules
-.mcp.json
-opencode.jsonc
+# Runtime parsing, setup, diagnostics, migration, and promotion checks.
+/scripts/*
+!/scripts/builtin_pdf_extract.py
+!/scripts/builtin_pdf_preview.py
+!/scripts/copy-docreader-proto.cjs
+!/scripts/demo-rebuild.ts
+!/scripts/demo-reset.ts
+!/scripts/demo-seed.ts
+!/scripts/docreader-probe.ts
+!/scripts/migrate-chunk-index.ts
+!/scripts/release-promotion-check.ts
 
-# Test sources, end-to-end scenarios, and captured test output
+# Development-only sources and reports remain on this machine.
 **/*.test.*
 **/*.spec.*
-src/evaluation/test-fixtures/
-e2e/
-test*.txt
-full_test*.txt
-release-verification-*.json
-console.log('observability
-
-# Design artifacts outside the runtime surface
+/src/evaluation/test-fixtures/
+/src/mcp/fixtures/
+*.md
 *.drawio
 *.drawio.png
-/rag-*.png
+*.visual-check.*
+*.tsbuildinfo
+*.pyc
+*.pyo
+coverage/
+__pycache__/
+.pytest_cache/
+node_modules/
+dist/
+.DS_Store
+
+# Never publish runtime state, credentials, or browser profiles, even if
+# accidentally created inside one of the allowed source directories.
+.env
+.env.*
+*.env
+*.env.*
+.npmrc
+.pypirc
+.netrc
+*.pem
+*.key
+*.p12
+*.pfx
+*.keystore
+*.db
+*.db-*
+*.sqlite
+*.sqlite-*
+*.sqlite3
+*.sqlite3-*
+*.log
+*.err
+*.har
+data/
+logs/
+.tmp*/
+chrome-profile/
+Cookies
+Cookies-journal
+Login Data*
+Local State
+local-oidc-key.json
+
+# Explicit public documentation and environment template exceptions.
+!/.env.example
+!/AGENTS.md
+!/README.md

@@ -1,0 +1,1193 @@
+@import "tailwindcss";
+@import "@fontsource-variable/geist";
+@import "@fontsource-variable/inter";
+
+/* Existing theme ownership uses the .dark class on <html>. */
+@custom-variant dark (&:where(.dark, .dark *));
+
+/* App aliases resolve onto the Arc foundation tokens (foundation.css). The
+   names are the application's own vocabulary; foundation owns the values and
+   flips them for dark mode via [data-theme]. */
+@theme {
+  --font-sans:
+    Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+    "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+  /* Mono carries machine-generated identifiers only: file names, commands,
+     diff counts, sequence numbers, timings. */
+  --font-mono:
+    "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas,
+    monospace;
+
+  --color-canvas: var(--background);
+  --color-surface: var(--surface);
+  --color-surface-raised: var(--surface-raised);
+  --color-surface-muted: var(--surface-muted);
+  --color-surface-subtle: var(--surface-muted);
+  --color-line: var(--border);
+  --color-ink: var(--foreground);
+
+  --color-faint: var(--text-muted);
+
+  --color-on-primary: var(--accent-foreground);
+  --color-primary-hover: var(--accent-strong);
+
+  --color-brand: var(--foreground);
+  --color-brand-hover: var(--foreground);
+  --color-brand-subtle: var(--surface-muted);
+  --color-brand-line: var(--border);
+  --color-accent: var(--accent);
+  --color-accent-subtle: var(--accent-subtle);
+
+  /* Status colors remain semantic aliases for existing business states. */
+  --color-danger: #b91c1c;
+  --color-danger-subtle: #fef2f2;
+  --color-danger-line: #fecaca;
+  --color-success: #15803d;
+  --color-success-subtle: #f0fdf4;
+  --color-warning: #b45309;
+  --color-warning-subtle: #fffbeb;
+  --color-warning-line: #fde68a;
+
+  /* Recessed surfaces do not float, so the old 1px drop shadows are gone; the
+     hairline border each one already carries is what separates them. Dialogs
+     keep real elevation because they genuinely leave the page — and the shadow
+     stays border-free on purpose: all 16 shadow-dialog call sites already set
+     `border border-line`, so a hairline here would stack into a 2px line. */
+  --shadow-card: none;
+  --shadow-dialog: 0 20px 45px -15px rgb(13 13 13 / 0.14);
+
+  --radius-window: var(--radius-xl);
+  --radius-bubble: var(--radius-xl);
+  /* Every modal panel used to hard-code `rounded-xl`, so the corner could not be
+     moved without touching 15 files. Exposed as `rounded-dialog`. */
+  --radius-dialog: var(--radius-xl);
+
+  --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
+  --ease-drawer: cubic-bezier(0.32, 0.72, 0, 1);
+
+  --animate-pop-in: pop-in 250ms var(--ease-out) both;
+
+  /* Streaming text: each revealed token resolves through opacity + blur.
+     `--stream-fade` is coupled to REVEAL_TOKEN_MS in src/frontend/stream_reveal.ts:
+     fade / step = how many tokens are mid-animation at once, and that ratio is what
+     reads as words arriving (~6-7) rather than one blurred band (~16). Change one and
+     you have to change the other. */
+  --stream-fade: 150ms;
+  --stream-blur: 1px;
+  --stream-ease: cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+@layer base {
+  .dark {
+    /* Foundation flips the neutral ramp via [data-theme="dark"]; only the
+       app-owned status palette and dialog shadow need an explicit dark value. */
+    --color-danger: #f87171;
+    --color-danger-subtle: #2a1515;
+    --color-danger-line: #7f1d1d;
+    --color-success: #4ade80;
+    --color-success-subtle: #12241a;
+    --color-warning: #fbbf24;
+    --color-warning-subtle: #2a200d;
+    --color-warning-line: #78350f;
+
+    --shadow-dialog: 0 20px 45px -15px rgb(0 0 0 / 0.6);
+  }
+
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+
+  body {
+    @apply overflow-hidden font-sans text-sm leading-6 antialiased bg-canvas text-ink;
+  }
+
+  button,
+  textarea,
+  input {
+    letter-spacing: -0.01em;
+  }
+
+  /* 38 text controls, 3 of which set a placeholder colour: the rest were on the
+     UA default, a fixed grey that does not flip with the theme. `faint` is the
+     placeholder-tier token (index.css:47), so this makes all of them theme-aware
+     in one place. Utilities like `placeholder:text-brand` still win on
+     specificity; `opacity` is reset because Firefox dims the colour itself. */
+  ::placeholder {
+    color: var(--color-faint);
+    opacity: 1;
+  }
+
+  /* Only the box: lucide glyphs carry their paint (stroke="currentColor") on
+     their own root svg, so no stroke default is inherited here. */
+  svg {
+    @apply size-[16px] shrink-0;
+  }
+
+  [hidden] {
+    display: none !important;
+  }
+
+  ::selection {
+    @apply bg-ink text-canvas;
+  }
+  * {
+    @apply border-line outline-accent/50;
+  }
+  html {
+    @apply font-sans;
+  }
+}
+
+/* The citation chip arrives mid-sentence, so it has to land like an object
+   rather than fade in flat: scale from 0.95 alongside the opacity. */
+@keyframes pop-in {
+  from {
+    opacity: 0;
+    transform: scale(0.95);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+/* Tail caret while an answer streams. This replaces the spinner + shimmer
+   label that used to fill the gap before the first token arrived. */
+@keyframes caret-blink {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.15;
+  }
+}
+
+/* The running step's only live signal. `running` and `completed` share the same
+   fill, so without this arc "happening now" and "already done" are the same
+   pixel. Linear is deliberate: a spinner is the one place a constant-speed
+   curve belongs. */
+.t-trace-spin {
+  animation: trace-spin 900ms linear infinite;
+}
+
+@keyframes trace-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* Connect only recorded steps; the last marker has no implied next stage. */
+.answer-process-step:not(:last-child)::before {
+  content: "";
+  position: absolute;
+  left: 7.5px;
+  top: 22px;
+  bottom: 0;
+  width: 1px;
+  background: var(--color-line);
+}
+
+/* Pixel-grid loader cells. The per-cell animation is authored inline in
+   ThinkingLoader.tsx because each cell needs its own delay; this only owns the
+   pulse shape. Cells hold dark, flash lit for ~20% of the cycle, then wait —
+   the staggered delays are what make the wavefront read as movement. */
+@keyframes pixel-on {
+  0%,
+  55%,
+  100% {
+    opacity: 0.15;
+  }
+  18%,
+  38% {
+    opacity: 1;
+  }
+}
+
+/* Shimmering status label: a highlight band swept across clipped text.
+   `muted` at the shoulders and `ink` at the centre keeps the label legible
+   between passes — the old shimmer used `faint`, which measured 2.77:1. */
+.t-shimmer-label {
+  font-size: 13px;
+  font-weight: 500;
+  color: transparent;
+  background-image: linear-gradient(
+    90deg,
+    var(--text-muted) 35%,
+    var(--color-ink) 50%,
+    var(--text-muted) 65%
+  );
+  background-size: 200% 100%;
+  background-repeat: no-repeat;
+  -webkit-background-clip: text;
+  background-clip: text;
+  animation: shimmer-text 1400ms linear infinite;
+}
+@keyframes shimmer-text {
+  0% {
+    background-position: 150% center;
+  }
+  100% {
+    background-position: -50% center;
+  }
+}
+
+/* transitions.dev — Shimmer text. The base layer holds the muted tone; the
+   ::before layer paints the moving ink band onto the same glyphs. */
+:root {
+  --shimmer-dur: 2000ms;
+  --shimmer-base: var(--text-muted);
+  --shimmer-highlight: var(--color-ink);
+  --shimmer-band: 400%;
+  --shimmer-ease: linear;
+}
+.t-shimmer {
+  position: relative;
+  display: inline-block;
+  color: var(--shimmer-base);
+}
+.t-shimmer::before {
+  content: attr(data-text);
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background-image: linear-gradient(
+    90deg,
+    transparent 0%,
+    transparent 40%,
+    var(--shimmer-highlight) 50%,
+    transparent 60%,
+    transparent 100%
+  );
+  background-size: var(--shimmer-band) 100%;
+  background-repeat: no-repeat;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  -webkit-text-fill-color: transparent;
+  animation: t-shimmer var(--shimmer-dur) var(--shimmer-ease) infinite;
+}
+@keyframes t-shimmer {
+  0% {
+    background-position: 100% 0;
+  }
+  100% {
+    background-position: 0% 0;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .t-shimmer::before {
+    animation: none !important;
+  }
+}
+
+.t-caret {
+  display: inline-block;
+  width: 2px;
+  height: 0.75em;
+  margin-left: 2px;
+  vertical-align: -0.05em;
+  border-radius: 9999px;
+  background: currentColor;
+  animation: caret-blink 1s steps(2, jump-none) infinite;
+}
+
+.trace-panel {
+  opacity: 0;
+  transform: translateX(100%);
+  transition-property: opacity, transform;
+  transition-duration: 220ms;
+  transition-timing-function: var(--ease-out);
+}
+.trace-panel[data-open="true"] {
+  opacity: 1;
+  transform: translateX(0);
+}
+
+/* Sidebar motion follows the reference rail: the shell eases between its two
+   desktop widths while copy fades and slides out of the same layout slot.
+   Keeping the nodes mounted avoids a hard cut when the rail changes state. */
+.sidebar-shell {
+  width: 100%;
+  min-width: 0;
+  padding-inline: 0.75rem;
+}
+.sidebar-shell[data-collapsed="true"] {
+  width: 100%;
+  min-width: 0;
+  padding-inline: 0.25rem;
+}
+.sidebar-shell .sidebar-brand {
+  overflow: hidden;
+  max-width: 12rem;
+  opacity: 1;
+  transition-property: max-width, opacity, translate;
+  transition-duration: 180ms;
+  transition-timing-function: cubic-bezier(0.16, 1, 0.3, 1);
+}
+.sidebar-shell[data-collapsed="true"] .sidebar-brand {
+  max-width: 0;
+  opacity: 0;
+  translate: -0.5rem 0;
+}
+.sidebar-shell .sidebar-copy {
+  min-width: 0;
+  overflow: hidden;
+  opacity: 1;
+  translate: 0 0;
+  transition-property: max-width, opacity, translate, margin, padding;
+  transition-duration: 180ms;
+  transition-timing-function: cubic-bezier(0.16, 1, 0.3, 1);
+}
+.sidebar-shell:not([data-collapsed="true"]) .sidebar-copy {
+  max-width: 15rem;
+}
+.sidebar-shell[data-collapsed="true"] .sidebar-copy {
+  max-width: 0;
+  margin-left: 0;
+  margin-right: 0;
+  padding-left: 0;
+  padding-right: 0;
+  /* The badge copies are pill-bordered; 1px each side still measured 1.6px of
+     width at max-width 0, enough to pull its row half a pixel off centre. */
+  border-inline-width: 0;
+  opacity: 0;
+  translate: -0.5rem 0;
+  pointer-events: none;
+}
+/* A zero-width flex item is still charged the row's column-gap, so a row
+   holding one hidden copy sat 8px and a row holding two sat 16px wider than
+   the icon alone — `justify-center` then missed the rail's centre line by half
+   the difference (one gap for one copy, two for two). The gap carrier is
+   whichever element directly parents the copies: the Arc button nests its
+   label in an inner slot span, so the selector must not name a tag. */
+.sidebar-shell[data-collapsed="true"] :has(> .sidebar-copy) {
+  column-gap: 0;
+}
+.sidebar-shell .sidebar-module {
+  overflow: hidden;
+  max-height: 28rem;
+  /* The sidebar body is a column flex container, and these modules were
+     shrinking below their own content and clipping it silently (`overflow:
+     hidden`) once the knowledge-base tree grew past a few rows. They must keep
+     their height; the 最近对话 list below is the one with `overflow-y-auto` and
+     `flex-1`, so it is what absorbs a short window. */
+  flex-shrink: 0;
+  opacity: 1;
+  transition-property: max-height, opacity, margin, transform;
+  transition-duration: 180ms;
+  transition-timing-function: cubic-bezier(0.16, 1, 0.3, 1);
+}
+/* The knowledge tree can outgrow the module cap, so it scrolls inside its own
+   frame. The bar is hidden on purpose: wheel, trackpad and keyboard still work. */
+.sidebar-shell .sidebar-module.sidebar-module-scroll {
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: none;
+}
+.sidebar-shell .sidebar-module.sidebar-module-scroll::-webkit-scrollbar {
+  display: none;
+}
+.sidebar-shell[data-collapsed="true"] .sidebar-module.sidebar-module-scroll {
+  overflow: hidden;
+}
+/* Only the knowledge tree gives up height. It is the one module with its own
+   scroll frame, so a short window shrinks it instead of pushing the expert
+   picker past the sidebar's bottom edge. The floor keeps a couple of rows
+   reachable; the whole shell only scrolls below that. */
+.sidebar-shell:not([data-collapsed="true"]) .sidebar-module.sidebar-module-shrink {
+  flex-shrink: 1;
+  min-height: 3.5rem;
+}
+/* The recent list keeps its header, search row and one full row even when
+   every flexible pixel is gone; without this floor it collapses to 0 and the
+   header paints over the utility row. 4.75rem = 36px header + 4px gap + 36px
+   row. The thread list itself keeps its own scrollbar. */
+.sidebar-shell:not([data-collapsed="true"]) .sidebar-recent {
+  min-height: 4.75rem;
+}
+/* The expert picker keeps the sidebar's small section label while the rows and
+   the travelling highlight stay entirely Arc-owned. Rows share the sidebar's
+   edges like every control above them. */
+/* The sidebar renders the section title (a fold button); the legend stays for
+   the fieldset's accessible name only. */
+.expert-radio fieldset > legend {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
+}
+.expert-radio fieldset label {
+  min-width: 0;
+  /* 5px keeps the row at 36px — the height of the sidebar's controls. */
+  padding-block: 5px;
+}
+.expert-radio fieldset label > span:last-child {
+  min-width: 0;
+  flex: 1;
+}
+.expert-radio fieldset label strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.sidebar-shell[data-collapsed="true"] .sidebar-module {
+  max-height: 0;
+  margin-top: 0;
+  opacity: 0;
+  transform: translateX(-0.5rem);
+  pointer-events: none;
+}
+.sidebar-shell[data-collapsed="true"] .sidebar-primary {
+  gap: 0.5rem;
+}
+.sidebar-shell[data-collapsed="true"] .sidebar-recent {
+  margin-top: 0.75rem;
+}
+.sidebar-shell[data-collapsed="true"] .sidebar-search-row {
+  margin-bottom: 0.5rem;
+}
+.sidebar-shell .sidebar-search-label {
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+  transition-property: opacity, translate;
+  transition-duration: 180ms;
+  transition-timing-function: cubic-bezier(0.16, 1, 0.3, 1);
+}
+.sidebar-shell[data-collapsed="true"] .sidebar-search-label {
+  opacity: 0;
+  translate: -0.5rem 0;
+}
+/* The search lane runs one step tighter than the component's toolbar default:
+   a 36px circle — the sidebar's own control height — with a 14px glyph. */
+.sidebar-search-lane {
+  --control-height-md: 2.25rem;
+  --es-glyph-half: 7px;
+}
+/* The sidebar's inline disclosure: the 工作区 panel and the 知识库 section both
+   use it. It is not a popover — it grows the sidebar's own flow, so the reveal
+   is the grid track (0fr → 1fr) and the content below travels to make room
+   instead of snapping down. Exit is shorter than enter and carries no stagger —
+   closing should read as one motion, opening as the groups arriving in order. */
+.sidebar-disclosure {
+  display: grid;
+  grid-template-rows: 0fr;
+  margin-top: 0;
+  opacity: 0;
+  pointer-events: none;
+  transition-property: grid-template-rows, margin-top, opacity;
+  transition-duration: 150ms;
+  transition-timing-function: var(--ease-out);
+}
+.sidebar-disclosure[data-open="true"] {
+  grid-template-rows: 1fr;
+  /* Replaces the parent's `gap-1`, which a zero-height item would still be
+     charged and leave 4px of dead space at rest. */
+  margin-top: 0.25rem;
+  opacity: 1;
+  pointer-events: auto;
+  transition-duration: 200ms;
+}
+/* min-height:0 is what lets the track reach zero; overflow:hidden both clips the
+   panel's border at 0 height and opts the item out of its automatic minimum. */
+.sidebar-disclosure > div {
+  min-height: 0;
+  overflow: hidden;
+}
+/* Folder children in the knowledge selector: same disclosure contract as the
+   sections above — the grid track grows and the rows below travel. The folder
+   chevron already rotates 200ms; without this the list teleports while it
+   turns. `inert` on the closed wrapper keeps hidden rows out of the tab order,
+   so no pointer-events hack is needed here. */
+.sidebar-folder-tree {
+  display: grid;
+  grid-template-rows: 0fr;
+  transition-property: grid-template-rows;
+  transition-duration: 200ms;
+  transition-timing-function: var(--ease-out);
+}
+.sidebar-folder-tree[data-open="true"] {
+  grid-template-rows: 1fr;
+}
+.sidebar-folder-tree > div {
+  min-height: 0;
+  overflow: hidden;
+}
+/* A knowledge base's document rows: the same fold, plus a short fade-and-rise
+   cascade so the list reads as arriving rather than being pasted in. The delay
+   follows DOM position via --kb-doc-index (set inline by Sidebar.tsx); closing
+   drops the animation entirely, so the fold exits as one motion. */
+.kb-doc-list > li {
+  animation: kb-doc-item-in 200ms var(--ease-out) both;
+  animation-delay: calc(var(--kb-doc-index, 0) * 18ms + 30ms);
+}
+@keyframes kb-doc-item-in {
+  from {
+    opacity: 0;
+    translate: 0 3px;
+  }
+  to {
+    opacity: 1;
+    translate: 0 0;
+  }
+}
+#workspace-menu > * {
+  opacity: 0;
+  translate: 0 4px;
+  transition-property: opacity, translate;
+  transition-duration: 150ms;
+  transition-timing-function: var(--ease-out);
+}
+.sidebar-disclosure[data-open="true"] #workspace-menu > * {
+  opacity: 1;
+  translate: 0 0;
+  transition-duration: 180ms;
+  /* Cascade by DOM position: every row renders (a missing scope disables it
+     rather than dropping it), so nth-child always counts what shows. */
+  transition-delay: 40ms;
+}
+.sidebar-disclosure[data-open="true"] #workspace-menu > :nth-child(2) {
+  transition-delay: 80ms;
+}
+.sidebar-disclosure[data-open="true"] #workspace-menu > :nth-child(3) {
+  transition-delay: 120ms;
+}
+
+@media (max-width: 767px) {
+  .sidebar-shell,
+  .sidebar-shell[data-collapsed="true"] {
+    width: 100%;
+    min-width: 0;
+    padding-inline: 0.75rem;
+    transition-property: transform;
+    transition-duration: 180ms;
+    transition-timing-function: var(--ease-out);
+  }
+}
+
+/* ---------------------------------------------------------------------------
+   transitions.dev component — t-stream.
+   Streaming words use a mount animation (not the JS replay transition) so
+   React can render them incrementally: each new word span mounts and resolves
+   through opacity + blur exactly once; stable spans never remount, never
+   replay. Rehype plugin in MarkdownText.tsx wraps words only while running.
+--------------------------------------------------------------------------- */
+.t-stream-w {
+  animation: t-stream-in var(--stream-fade) var(--stream-ease) both;
+}
+@keyframes t-stream-in {
+  from {
+    opacity: 0;
+    filter: blur(var(--stream-blur));
+  }
+  to {
+    opacity: 1;
+    filter: blur(0);
+  }
+}
+
+/* The action bar hands over when the answer has finished landing, not when the
+   transport closes — the knowledge routes deliver the whole reply and the
+   terminal frame together, so the run is already over while the reveal types.
+   Unlayered so it outranks the `opacity-100` utility, and a browser without
+   `:has()` simply keeps the previous run-status gate. */
+.assistant-turn:has([data-stream-revealing="true"]) .assistant-actions {
+  opacity: 0;
+  pointer-events: none;
+}
+
+/* Hide the scrollbar, keep the scroll. A chat viewport's bar is 15px of chrome
+   that competes with the content and never tells the user anything they can't
+   see; `overflow-y: auto` still works, the wheel, the trackpad, keyboard and
+   the jump-to-bottom button all still scroll, and the bar reappears on the
+   platforms that draw overlay scrollbars anyway. Unlayered on purpose:
+   `::-webkit-scrollbar` is a pseudo-element, so no Tailwind utility competes
+   with it, and the two engine prefixes are the whole job. */
+.scrollbar-hidden {
+  scrollbar-width: none;
+}
+.scrollbar-hidden::-webkit-scrollbar {
+  display: none;
+}
+
+/* The Arc card quick look grows into its own scrolling panel. It carries the
+   same native bar the app already hides elsewhere, so the panel opts out
+   through the portal attribute the card sets on it. */
+[data-framer-portal-id] {
+  scrollbar-width: none;
+}
+[data-framer-portal-id]::-webkit-scrollbar {
+  display: none;
+}
+
+/* Markdown inside assistant bubbles — restrained prose sized to the bubble. */
+@layer components {
+  .markdown-body {
+    @apply text-sm leading-7 text-ink;
+  }
+  .markdown-body > *:first-child {
+    margin-top: 0;
+  }
+  .markdown-body > *:last-child {
+    margin-bottom: 0;
+  }
+  .markdown-body p {
+    @apply my-2;
+  }
+  .markdown-body h1,
+  .markdown-body h2,
+  .markdown-body h3,
+  .markdown-body h4 {
+    @apply mb-2 mt-4 font-semibold text-ink;
+  }
+  .markdown-body h1 {
+    @apply text-lg;
+  }
+  .markdown-body h2 {
+    @apply text-base;
+  }
+  .markdown-body h3 {
+    @apply text-sm;
+  }
+  .markdown-body ul {
+    @apply my-2 list-disc pl-5;
+  }
+  .markdown-body ol {
+    @apply my-2 list-decimal pl-5;
+  }
+  .markdown-body li {
+    @apply my-0.5;
+  }
+  .markdown-body a {
+    @apply text-brand underline underline-offset-2;
+  }
+  .markdown-body blockquote {
+    @apply my-2 border-l-2 border-brand-line pl-3 text-faint;
+  }
+  .markdown-body code {
+    @apply rounded bg-surface-subtle px-1 py-0.5 font-mono text-[0.85em] text-ink;
+  }
+  .markdown-body pre {
+    @apply my-3 overflow-x-auto rounded-lg bg-neutral-900 p-3 text-neutral-100;
+  }
+  .markdown-body pre code {
+    @apply bg-transparent p-0 text-neutral-100;
+  }
+  .markdown-body table {
+    @apply my-3 w-full border-collapse text-sm;
+  }
+  .markdown-body th,
+  .markdown-body td {
+    @apply border border-line px-2 py-1 text-left;
+  }
+  .markdown-body th {
+    @apply bg-surface-subtle font-semibold;
+  }
+  .markdown-body hr {
+    @apply my-4 border-line;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+  }
+
+  /* Select dropdown panel: keep the fade, drop the scale travel. The scale
+     declaration stays away from any transform:none in the same block (minifier
+     folding trap, see MEMORY.md). */
+  [role="listbox"] {
+    transition-property: opacity !important;
+    scale: none !important;
+  }
+
+  .trace-panel {
+    transition-duration: 1ms;
+  }
+
+  .trace-panel[data-open="false"] {
+    transform: none;
+  }
+
+  [data-attachment-chip] {
+    transition-duration: 1ms !important;
+  }
+
+  [data-attachment-chip][data-exiting="true"] {
+    transition-property: opacity !important;
+  }
+
+  div[data-attachment-chip][data-exiting="true"] {
+    scale: none !important;
+  }
+
+  [data-trace-status] {
+    transition-property: opacity !important;
+    transition-duration: 1ms !important;
+  }
+
+  span[data-trace-status] {
+    scale: none !important;
+  }
+
+  /* Toast: keep the fade, drop the slide. */
+  .toast {
+    translate: -50% 0 !important;
+    transition-property: opacity !important;
+  }
+
+  /* Press feedback is scale-based motion (v4 native `scale` property); pin it
+     to identity but keep the color response so the click still reads. The
+     declaration must stay LONE: paired with `transform: none`, the minifier
+     folds both into `transform: scale(1)`, which no longer overrides `scale`. */
+  button:active {
+    scale: none !important;
+  }
+
+  /* Chevron rotations and the mobile drawer's slide are transform-based
+     movement — freeze them under reduced motion. */
+  [class*="transition-transform"] {
+    transition: none !important;
+  }
+
+  /* ScrollToBottom shrinks through `scale` when disabled — pin it the same
+     way, also as a lone declaration (see button:active above). */
+  button:disabled {
+    scale: none !important;
+  }
+
+  /* Tooltips scale in from their trigger — neutralize `scale` so only the
+     opacity fade remains (lone declaration, same minifier trap as above). */
+  [role="tooltip"] {
+    scale: none !important;
+  }
+
+  /* transitions.dev guards — keep content legible, drop the motion. */
+  .t-stream-w {
+    animation: none !important;
+    filter: none !important;
+    opacity: 1 !important;
+  }
+  /* Freeze the running arc into a closed ring rather than deleting it: it is the
+     only thing that separates a running step from a completed one, and reduced
+     motion must cost the user information. */
+  .t-trace-spin {
+    animation: none !important;
+    border-color: var(--color-primary) !important;
+  }
+  /* A blinking caret is motion, not feedback — freeze it lit rather than
+     hiding it, since it is the only running indicator left. */
+  .t-caret {
+    animation: none !important;
+    opacity: 1 !important;
+  }
+  .animate-pop-in {
+    animation: none !important;
+  }
+  .t-pixel-cell {
+    animation: none !important;
+  }
+  /* The row highlight travels between rows, and its geometry is set inline in
+     Sidebar.tsx — this class is the only handle the stylesheet has on it. Freeze
+     the travel; the fill itself stays, because it is a highlight and not motion. */
+  .t-row-glider {
+    transition-duration: 1ms !important;
+  }
+  .sidebar-shell,
+  .sidebar-shell[data-collapsed="true"] {
+    transition-duration: 1ms !important;
+  }
+  .sidebar-shell .sidebar-copy,
+  .sidebar-shell .sidebar-module,
+  .sidebar-search-label {
+    transition-duration: 1ms !important;
+  }
+  .sidebar-shell[data-collapsed="true"] .sidebar-copy {
+    translate: none !important;
+  }
+  .sidebar-shell[data-collapsed="true"] .sidebar-module {
+    transform: none !important;
+  }
+  /* The disclosure keeps its show/hide (opacity still flips) but stops growing:
+     the height track and the 4px rise are both movement. */
+  .sidebar-disclosure,
+  .sidebar-disclosure[data-open="true"],
+  .sidebar-folder-tree,
+  .sidebar-folder-tree[data-open="true"],
+  #workspace-menu > * {
+    transition-duration: 1ms !important;
+    transition-delay: 0ms !important;
+  }
+  .kb-doc-list > li {
+    animation: none !important;
+  }
+  #workspace-menu > * {
+    translate: none !important;
+  }
+  /* Restore an opaque fill: the shimmer effect paints clipped text through a
+     transparent colour, so killing the animation alone would leave the label
+     invisible. */
+  .t-shimmer-label {
+    animation: none !important;
+    color: var(--text-muted) !important;
+    -webkit-text-fill-color: var(--text-muted) !important;
+  }
+}
+
+@theme inline {
+  --font-heading: var(--font-display);
+  --font-sans:
+    "Geist Variable", ui-sans-serif, system-ui, -apple-system, "Segoe UI",
+    "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+  /* App-owned radius scale (base 0.625rem); the rounded-* utilities resolve
+     against it. */
+  --radius-sm: calc(var(--radius-base) * 0.6);
+  --radius-md: calc(var(--radius-base) * 0.8);
+  --radius-lg: var(--radius-base);
+  --radius-xl: calc(var(--radius-base) * 1.4);
+  --radius-2xl: calc(var(--radius-base) * 1.8);
+  --radius-3xl: calc(var(--radius-base) * 2.2);
+  --radius-4xl: calc(var(--radius-base) * 2.6);
+}
+
+:root {
+  --radius-base: 0.625rem;
+}
+
+/* Shared motion: Radix owns presence/focus; CSS only presents the state.
+   Surfaces opt in with data-motion-surface (dialog content/overlay, sheet). */
+:root {
+  --motion-panel: 250ms;
+  --motion-feedback: 120ms;
+  --motion-reduced: 100ms;
+}
+
+:is([data-motion-surface="dialog-overlay"], [data-motion-surface="sheet-overlay"])[data-state="open"] {
+  animation: surface-fade-in var(--motion-panel) var(--ease-out) both;
+}
+:is([data-motion-surface="dialog-overlay"], [data-motion-surface="sheet-overlay"])[data-state="closed"] {
+  animation: surface-fade-out var(--motion-panel) var(--ease-out) both;
+}
+[data-motion-surface="dialog"][data-state="open"] {
+  animation: surface-in var(--motion-panel) var(--ease-out) both;
+}
+[data-motion-surface="dialog"][data-state="closed"] {
+  animation: surface-out var(--motion-panel) var(--ease-out) both;
+}
+[data-motion-surface="sheet"][data-side="left"] {
+  --sheet-edge: translateX(-100%);
+}
+[data-motion-surface="sheet"][data-side="right"] {
+  --sheet-edge: translateX(100%);
+}
+[data-motion-surface="sheet"][data-side="top"] {
+  --sheet-edge: translateY(-100%);
+}
+[data-motion-surface="sheet"][data-side="bottom"] {
+  --sheet-edge: translateY(100%);
+}
+[data-motion-surface="sheet"][data-state="open"] {
+  animation: sheet-in var(--motion-panel) var(--ease-drawer) both;
+}
+[data-motion-surface="sheet"][data-state="closed"] {
+  animation: sheet-out var(--motion-panel) var(--ease-drawer) both;
+}
+@keyframes surface-in {
+  from { opacity: 0; transform: scale(0.96); }
+  to { opacity: 1; transform: scale(1); }
+}
+@keyframes surface-out {
+  from { opacity: 1; transform: scale(1); }
+  to { opacity: 0; transform: scale(0.96); }
+}
+@keyframes surface-fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+@keyframes surface-fade-out {
+  from { opacity: 1; }
+  to { opacity: 0; }
+}
+@keyframes sheet-in {
+  from { transform: var(--sheet-edge); }
+  to { transform: translate(0); }
+}
+@keyframes sheet-out {
+  from { transform: translate(0); }
+  to { transform: var(--sheet-edge); }
+}
+
+[data-slot="copy-feedback"] {
+  display: inline-grid;
+  width: 1rem;
+  height: 1rem;
+}
+[data-copy-glyph] {
+  grid-area: 1 / 1;
+  transition: opacity var(--motion-feedback) var(--ease-out);
+}
+[data-copy-glyph="check"],
+[data-copied="true"] > [data-copy-glyph="copy"] {
+  opacity: 0;
+}
+[data-copied="true"] > [data-copy-glyph="check"] {
+  opacity: 1;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :is([data-motion-surface="dialog"], [data-motion-surface="sheet"])[data-state="open"] {
+    animation-name: surface-fade-in;
+  }
+  :is([data-motion-surface="dialog"], [data-motion-surface="sheet"])[data-state="closed"] {
+    animation-name: surface-fade-out;
+  }
+  :is([data-motion-surface="dialog"], [data-motion-surface="sheet"], [data-motion-surface="dialog-overlay"], [data-motion-surface="sheet-overlay"])[data-state] {
+    animation-duration: var(--motion-reduced);
+  }
+  [data-copy-glyph] {
+    transition-duration: var(--motion-reduced);
+  }
+}
+
+/* A keyboard action never waits for decorative motion, including Escape while
+   an entrance is playing. Do not suppress focus or change any input events. */
+html:not([data-motion-input="pointer"]) :is(
+  [data-motion-surface="dialog"], [data-motion-surface="dialog-overlay"],
+  [data-motion-surface="sheet"], [data-motion-surface="sheet-overlay"],
+  [data-copy-glyph],
+  .trace-panel
+) {
+  animation: none !important;
+  transition: none !important;
+}
+/* The same semantic palette serves the application and generated components. */
+@layer base {
+  button:not(:disabled),
+  [role="button"]:not([aria-disabled="true"]) {
+    cursor: pointer;
+  }
+}
+
+/* ---------------------------------------------------------------------------
+   Vendored scroll-fade + shimmer utilities (from the shadcn tailwind
+   stylesheet, re-owned). The chat scroller and attachment rail fade their
+   overflow edges; streaming labels shimmer.
+   --------------------------------------------------------------------------- */
+@property --scroll-fade-b {
+  syntax: "<length-percentage>";
+  inherits: false;
+  initial-value: 0px;
+}
+@property --scroll-fade-s {
+  syntax: "<length-percentage>";
+  inherits: false;
+  initial-value: 0px;
+}
+@property --scroll-fade-e {
+  syntax: "<length-percentage>";
+  inherits: false;
+  initial-value: 0px;
+}
+
+@theme inline {
+  @keyframes scroll-fade-reveal-b {
+    from {
+      --scroll-fade-b: var(--_scroll-fade-size-b, var(--scroll-fade-size, min(12%, calc(var(--spacing) * 10))));
+    }
+    to {
+      --scroll-fade-b: 0px;
+    }
+  }
+  @keyframes scroll-fade-reveal-s {
+    from {
+      --scroll-fade-s: 0px;
+    }
+    to {
+      --scroll-fade-s: var(--_scroll-fade-size-s, var(--scroll-fade-size, min(12%, calc(var(--spacing) * 10))));
+    }
+  }
+  @keyframes scroll-fade-reveal-e {
+    from {
+      --scroll-fade-e: var(--_scroll-fade-size-e, var(--scroll-fade-size, min(12%, calc(var(--spacing) * 10))));
+    }
+    to {
+      --scroll-fade-e: 0px;
+    }
+  }
+}
+
+@utility scroll-fade-b {
+  --_scroll-fade-size-b: var(
+    --scroll-fade-b-size,
+    var(--scroll-fade-size, min(12%, calc(var(--spacing) * 10)))
+  );
+  --scroll-fade-mask: linear-gradient(
+    to bottom,
+    #000 0,
+    #000 calc(100% - var(--scroll-fade-b, 0px)),
+    transparent 100%
+  );
+  -webkit-mask-image: var(--scroll-fade-mask);
+  mask-image: var(--scroll-fade-mask);
+  -webkit-mask-composite: source-in;
+  mask-composite: intersect;
+  -webkit-mask-repeat: no-repeat;
+  mask-repeat: no-repeat;
+
+  @supports (animation-timeline: scroll()) {
+    animation: scroll-fade-reveal-b 1ms ease-in-out;
+    animation-timeline: scroll(self y);
+    animation-range: calc(
+        100% - var(--scroll-fade-reveal, calc(var(--spacing) * 24))
+      )
+      100%;
+    animation-fill-mode: both;
+  }
+
+  @supports not (animation-timeline: scroll()) {
+    --scroll-fade-b: var(--_scroll-fade-size-b);
+  }
+}
+
+@utility scroll-fade-x {
+  --_scroll-fade-size-s: var(
+    --scroll-fade-s-size,
+    var(--scroll-fade-size, min(12%, calc(var(--spacing) * 10)))
+  );
+  --_scroll-fade-size-e: var(
+    --scroll-fade-e-size,
+    var(--scroll-fade-size, min(12%, calc(var(--spacing) * 10)))
+  );
+  --scroll-fade-inline: linear-gradient(
+    to right,
+    transparent 0,
+    #000 var(--scroll-fade-s, 0px),
+    #000 calc(100% - var(--scroll-fade-e, 0px)),
+    transparent 100%
+  );
+  &:where([dir="rtl"], [dir="rtl"] *) {
+    --scroll-fade-inline: linear-gradient(
+      to left,
+      transparent 0,
+      #000 var(--scroll-fade-s, 0px),
+      #000 calc(100% - var(--scroll-fade-e, 0px)),
+      transparent 100%
+    );
+  }
+  -webkit-mask-image: var(--scroll-fade-mask, var(--scroll-fade-inline));
+  mask-image: var(--scroll-fade-mask, var(--scroll-fade-inline));
+  -webkit-mask-composite: source-in;
+  mask-composite: intersect;
+  -webkit-mask-repeat: no-repeat;
+  mask-repeat: no-repeat;
+
+  @supports (animation-timeline: scroll()) {
+    animation:
+      scroll-fade-reveal-s 1ms ease-in-out,
+      scroll-fade-reveal-e 1ms ease-in-out;
+    animation-timeline: scroll(self inline), scroll(self inline);
+    animation-range:
+      0 var(--scroll-fade-reveal, calc(var(--spacing) * 24)),
+      calc(100% - var(--scroll-fade-reveal, calc(var(--spacing) * 24))) 100%;
+    animation-fill-mode: both;
+  }
+
+  @supports not (animation-timeline: scroll()) {
+    --scroll-fade-s: var(--_scroll-fade-size-s);
+    --scroll-fade-e: var(--_scroll-fade-size-e);
+  }
+}
+
+@utility shimmer {
+  --_spread: var(--shimmer-spread, calc(3ch + 40px));
+  --_base: currentColor;
+  --_highlight: var(
+    --shimmer-color,
+    oklch(from currentColor l c h / calc(alpha* 0.2))
+  );
+
+  background-image: var(
+    --shimmer-image,
+    linear-gradient(
+      calc(90deg + var(--shimmer-angle)),
+      var(--_base) calc(50% - var(--_spread)),
+      color-mix(in oklch, var(--_highlight), var(--_base) 50%)
+        calc(50% - var(--_spread) * 0.5),
+      var(--_highlight) 50%,
+      color-mix(in oklch, var(--_highlight), var(--_base) 50%)
+        calc(50% + var(--_spread) * 0.5),
+      var(--_base) calc(50% + var(--_spread))
+    )
+  );
+  background-repeat: no-repeat;
+  background-size: calc(200% + var(--_spread) * 2) 100%;
+  background-position: 0 0;
+  background-clip: text;
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: var(--shimmer-text-fill, transparent);
+  animation: shimmer-text var(--shimmer-duration, 2s) linear infinite;
+
+  @media (prefers-reduced-motion: reduce) {
+    animation: none;
+    background-image: none;
+    -webkit-text-fill-color: currentColor;
+  }
+}
+
+@utility shimmer-none {
+  --shimmer-image: none;
+  --shimmer-text-fill: currentColor;
+}
+
+@utility no-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+
+  &::-webkit-scrollbar {
+    display: none;
+  }
+}
+
+/* The chat viewport stays invisible until the provider applied its default
+   scroll position, so a fresh thread never paints mid-scroll. */
+[data-slot="message-scroller-viewport"][data-pending-scroll] {
+  visibility: hidden;
+}
+
+/* Arc's theme-reveal page transition. The Theme Switch only reports the change;
+   this layer owns the new-theme wipe that the component demo shows. */
+html[data-theme-motion]::view-transition-old(root) {
+  animation: none;
+}
+
+html[data-theme-motion]::view-transition-new(root) {
+  animation-name: theme-reveal;
+  animation-duration: 0.38s;
+  animation-timing-function: cubic-bezier(0.22, 1, 0.36, 1);
+  animation-fill-mode: both;
+}
+
+@keyframes theme-reveal {
+  0% {
+    clip-path: inset(0px 100% 0px 0px);
+  }
+  100% {
+    clip-path: inset(0px);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html[data-theme-motion]::view-transition-old(root),
+  html[data-theme-motion]::view-transition-new(root) {
+    animation-duration: 0.01ms !important;
+  }
+}

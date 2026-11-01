@@ -1,0 +1,27 @@
+# Only application/build inputs enter the context. Local .env, databases,
+# node_modules, Git history, plans, logs and scratch files never enter an image.
+**
+!package.json
+!package-lock.json
+!tsconfig.json
+!tsconfig.web.json
+!vite.config.ts
+!src/
+!src/**
+!frontend/
+!frontend/**
+!scripts/
+!scripts/copy-docreader-proto.cjs
+!scripts/builtin_pdf_extract.py
+!scripts/builtin_pdf_preview.py
+!docker/
+!docker/nginx.conf
+!docker/requirements.txt
+**/*.test.*
+**/*.spec.*
+**/__pycache__/
+src/evaluation/test-fixtures/
+src/mcp/fixtures/
+**/*.md
+**/.env*
+**/node_modules/

@@ -48,9 +48,10 @@ import type { Router } from "../retrieval/router/interface"
 import type { ConversationStore } from "../answer/conversation_store"
 import type { Summarizer } from "../answer/summarizer"
 import type { AccessContext } from "../access/context"
-import type { TokenUsage } from "../types"
+import type { TokenUsage, ReasoningEffort } from "../types"
 import type { MastraMemoryAdapter } from "./memory_adapter"
 import { formatMemoryAsContext } from "./memory_adapter"
+import { renderMemoryPromptSuffix } from "./memory_prompt"
 
 /**
  * Error thrown when the route decision is not supported by T09's
@@ -80,7 +81,12 @@ export class RouteNotSupportedError extends Error {
  */
 export type DirectReplyStream = (
   message: string,
-  signal: AbortSignal
+  signal: AbortSignal,
+  /** Ticket 19 (AST-01B): the assistant's own prompt, prepended as a leading
+   * system message when present (the snapshot is transport-resolved).
+   * The same object carries the run's frozen reasoning-effort request — both
+   * are generation parameters, so they ride one optional third argument. */
+  options?: { systemPrompt?: string; reasoningEffort?: ReasoningEffort }
 ) => AsyncIterable<string>
 
 /**
@@ -127,13 +133,11 @@ export interface DirectAmbiguousMastraRunnerDeps {
 }
 
 /**
- * Clarification reply for the ambiguous route. Matches the legacy reply in
- * `src/answer/generation.ts:659` exactly so terminal behavior is preserved
- * (T09 #2: "Ambiguous requests produce the same clarification state,
- * persistence, expiry, and terminal behavior as the legacy path").
+ * Clarification reply for the ambiguous route. Terminal behavior (clarification
+ * state, persistence, expiry — T09 #2) is unchanged by the wording; the copy is
+ * user-facing so it stays in Chinese per the product language policy.
  */
-const AMBIGUOUS_CLARIFICATION_REPLY =
-  "I need more context to answer. Could you please provide more details?"
+const AMBIGUOUS_CLARIFICATION_REPLY = "请补充问题所指的具体对象或参数（例如具体政策、系统或流程），我才能继续回答。"
 
 function checkAbort(signal: AbortSignal, checkpoint: string): void {
   if (!signal.aborted) return
@@ -238,7 +242,11 @@ export function createDirectAmbiguousMastraRunner(
     // `Router.decide` takes a `Query` ({ text: string, ... }); wrap the chat
     // message into a minimal Query object. Legacy generation.ts does the same
     // wrapping before calling the Router.
-    const decision = input.preparedRoute?.decision ?? await router.decide({ text: effectiveMessage })
+    const decision = input.preparedRoute?.decision ?? (
+      input.memoryIntent
+        ? "direct"
+        : await router.decide({ text: effectiveMessage })
+    )
 
     // Ownership guard (T09 #5): simple/complex routes are not owned here.
     if (decision === "simple" || decision === "complex") {
@@ -308,9 +316,24 @@ export function createDirectAmbiguousMastraRunner(
       ? `${contextPrefix}\n\n${effectiveMessage}`
       : effectiveMessage
 
+    // Ticket 33 (MEM-01B): recalled long-term memories ride the system prompt
+    // as clearly-labeled background — never evidence, never citations.
+    const memorySuffix = renderMemoryPromptSuffix(input.longTermMemories)
+    const memoryQueryPrompt = input.memoryIntent
+      ? "\n\n[长期记忆查询约束] 用户正在询问已保存的长期记忆。只能根据下方长期记忆区块回答；如果区块为空，明确说明当前没有可用的长期记忆。不得根据常识猜测，也不得生成或展示任何引用。"
+      : ""
+    const systemPrompt = [input.assistant?.systemPrompt, memoryQueryPrompt, memorySuffix]
+      .filter((part): part is string => Boolean(part))
+      .join("")
     const tokens: string[] = []
-    for await (const token of streamDirectReply(promptMessage, input.signal)) {
+    for await (const token of streamDirectReply(promptMessage, input.signal, {
+      ...(systemPrompt ? { systemPrompt } : {}),
+      ...(input.reasoningEffort ? { reasoningEffort: input.reasoningEffort } : {}),
+    })) {
       tokens.push(token)
+      // Direct route has no critic gate before publication (T09 §13) — push
+      // each token to the transport live so the answer streams in real time.
+      input.onAnswerDelta?.(token)
     }
     const reply = tokens.join("")
 

@@ -23,8 +23,6 @@ import type {
   HardInvariantResult,
   ModelJudgeScore,
   QualityMetricResult,
-  RagasArtifactSection,
-  RagasShadowArtifactSection,
 } from "./types"
 
 const REGRESSION_THRESHOLD = 1.20 // spec L1560: "more than 20%"
@@ -112,22 +110,6 @@ export function buildArtifact(input: {
   repositoryRevision: string
   providerModelIds: { chat: string; embedding: string; evaluator?: string }
   modelJudgeScores?: ModelJudgeScore[]
-  /**
-   * Ticket 15: optional RAGAS section. When provided, the artifact includes
-   * per-case RAGAS outcomes, aggregate values, evaluator model IDs and runtime
-   * version info. Structurally separate from hardInvariants/qualityMetrics
-   * (criterion #5) — RAGAS results cannot change the passed/failed state of
-   * deterministic gates.
-   */
-  ragas?: RagasArtifactSection
-  /**
-   * Ticket 16: optional RAGAS shadow baseline section. When provided, the
-   * artifact includes the shadow baseline + optional comparison vs a checked-in
-   * baseline. Structurally separate from `aggregateMetrics.baseline` (latency/
-   * token) and `ragas` (per-case outcomes from T15). NON-BLOCKING (criterion
-   * #6) — shadow regressions cannot change deterministic gate pass/fail state.
-   */
-  ragasShadow?: RagasShadowArtifactSection
   generatedAt?: string
 }): EvaluationArtifact {
   const aggregateMetrics: EvaluationArtifact["aggregateMetrics"] = {
@@ -146,12 +128,6 @@ export function buildArtifact(input: {
     generatedAt: input.generatedAt ?? new Date().toISOString(),
     aggregateMetrics,
     perCaseStatus: input.results,
-  }
-  if (input.ragas !== undefined) {
-    artifact.ragas = input.ragas
-  }
-  if (input.ragasShadow !== undefined) {
-    artifact.ragasShadow = input.ragasShadow
   }
   return artifact
 }

@@ -1,29 +1,137 @@
+import { resolveChunkIndexName } from "../../config"
+import type { TracingRuntime } from "../../tracing/contract"
 import type { Client } from "@elastic/elasticsearch"
 import type OpenAI from "openai"
 import type { Driver } from "neo4j-driver"
-import { getDriver } from "../../graph"
-import type { PageIndexRepository } from "../../ingestion/tracking/page_index_repo"
+import { int as neo4jInt } from "neo4j-driver"
+import { createDriver } from "../../graph"
+import type {
+  PageIndexNodeEligibility,
+  PageIndexRepository,
+} from "../../ingestion/tracking/page_index_repo"
 import type { ActiveVersionRepository } from "../../ingestion/tracking/active_version_repo"
 import type { AccessContext } from "../../access/context"
 import type { Query, RetrievalResult, Chunk } from "../../types"
+import type { RetrievalScope } from "../../types/retrieval_scope"
 import type {
+  AttachmentSearchOperations,
+  FaqEvidenceOperations,
+  WebEvidenceOperations,
+} from "../../types/retrieval"
+import { containsWebUrl } from "../../web/web_evidence"
+import type {
+  DebugCandidate,
+  Reranker,
   RetrievalChannel,
+  RetrievalDebugTrace,
+  RetrievalOrdering,
   SearchOptions,
   SearchOutcome,
   Searcher,
 } from "./interface"
-import { ALL_RETRIEVAL_CHANNELS, validateChannelSelection } from "./interface"
+import {
+  ALL_RETRIEVAL_CHANNELS,
+  RerankerNotConfiguredError,
+  validateChannelSelection,
+} from "./interface"
 import { rrf } from "./rrf"
-import { rerank } from "./reranker"
 
-const INDEX_NAME = "kefu-rag-chunks"
 const CHANNEL_TOP_K = 5
 const RESULT_TOP_K = 10
+
+/**
+ * Ticket UT-04: documentId value that can never match a real document, used
+ * when the active-version filter is wired but ZERO documents are active. The
+ * previous behavior dropped the filter entirely on an empty active set, which
+ * let the first unverified (never-activated) candidates leak into retrieval —
+ * exactly the leak this fail-closed filter closes.
+ */
+export const NO_ACTIVE_DOCUMENT_SENTINEL = "__no_active_document__"
+
+/**
+ * UT-04: the active-version terms filter is fail-closed — an empty active set
+ * hides everything instead of disabling the filter. Pure helper so the
+ * contract is unit-testable without Elasticsearch.
+ */
+export function activeTermsFilterFor(activeDocIds: readonly string[]): Array<Record<string, unknown>> {
+  return [{
+    terms: {
+      documentId: activeDocIds.length > 0
+        ? [...activeDocIds]
+        : [NO_ACTIVE_DOCUMENT_SENTINEL],
+    },
+  }]
+}
+
+/**
+ * Eval refactor Ticket 03 — explicit small-candidate policy: a single
+ * candidate has no ordering to decide, so the fused order is published with
+ * an honest `below_threshold` label. Two or more candidates are always sent
+ * to the configured dedicated reranker (there is no Chat-scoring path).
+ */
+const RERANK_MIN_CANDIDATES = 2
 const GRAPH_CANDIDATE_MULTIPLIER = 4
 const GRAPH_HOPS = 1
+/**
+ * PT-10 (audit finding F1): the ceiling itself is unchanged — five nodes per
+ * PageIndex lookup. What changed is WHO may occupy those five slots: the
+ * eligibility axes below are resolved by the repository's own query before
+ * `ORDER BY document_id, node_id LIMIT 5`, so material from another tenant,
+ * another knowledge base, an invisible group or a non-active version can no
+ * longer push an eligible target out of the run. Raising this number would not
+ * fix that — it would only read more ineligible material.
+ */
 const PAGE_INDEX_NODE_LIMIT = 5
+/**
+ * Ticket 31 (FAQ-01B): at most this many FAQ entries join one search as
+ * evidence — a standard-answer channel, not a second result set.
+ */
+const FAQ_EVIDENCE_LIMIT = 3
 
-function childFilter() {
+/**
+ * Ticket 36 (WEB-01): the web channel is a bounded CONTEXT source, not a
+ * second result set — at most this many web results join one search.
+ */
+const WEB_EVIDENCE_LIMIT = 4
+
+function abortError(message: string): Error {
+  const err = new Error(message)
+  err.name = "AbortError"
+  return err
+}
+
+/**
+ * Race a promise against an optional AbortSignal so a hung call (e.g. a
+ * Neo4j `session.run` that has no native signal support) cannot hold the
+ * retrieval stage open past the run deadline. The underlying promise is
+ * NOT cancelled — callers must still release resources (session.close in
+ * a finally block) — but the awaiting stage rejects promptly, converging
+ * cancellation to the single AbortError terminal.
+ */
+function raceAbort<T>(
+  promise: Promise<T>,
+  signal: AbortSignal | undefined,
+  message: string
+): Promise<T> {
+  if (!signal) return promise
+  if (signal.aborted) return Promise.reject(abortError(message))
+  return new Promise<T>((resolve, reject) => {
+    const onAbort = () => reject(abortError(message))
+    signal.addEventListener("abort", onAbort, { once: true })
+    promise.then(
+      (value) => {
+        signal.removeEventListener("abort", onAbort)
+        resolve(value)
+      },
+      (error) => {
+        signal.removeEventListener("abort", onAbort)
+        reject(error)
+      },
+    )
+  })
+}
+
+export function childFilter() {
   return {
     bool: {
       minimum_should_match: 1,
@@ -52,7 +160,7 @@ function childFilter() {
  *   for an empty-array keyword field, so `must_not: exists` matches
  *   tenant-wide chunks reliably.
  */
-function accessContextFilter(ac?: AccessContext): Array<Record<string, unknown>> {
+export function accessContextFilter(ac?: AccessContext): Array<Record<string, unknown>> {
   if (!ac) return []
   const filters: Array<Record<string, unknown>> = [
     { term: { tenantId: ac.tenantId } },
@@ -69,6 +177,61 @@ function accessContextFilter(ac?: AccessContext): Array<Record<string, unknown>>
     })
   }
   return filters
+}
+
+/**
+ * Ticket 05 (KB-03A): the knowledge-base dimension of a chunk filter.
+ *
+ * - No scope → no clause. A caller that carries no knowledge scope (legacy
+ *   release probes, isolated evaluation runs) keeps its previous behavior.
+ * - Scope with ids → one `terms` clause on the `knowledgeBaseId` keyword that
+ *   ingestion stamps on every chunk (spec §8.1 L239).
+ * - Scope with zero ids → also no clause HERE, because
+ *   {@link hasNoKnowledgeContext} already made the channel return no evidence
+ *   before any query was built. An empty scope must never degrade into an
+ *   unfiltered read.
+ */
+export function knowledgeBaseFilter(scope?: RetrievalScope): Array<Record<string, unknown>> {
+  if (!scope || scope.knowledgeBaseIds.length === 0) return []
+  return [{ terms: { knowledgeBaseId: [...scope.knowledgeBaseIds] } }]
+}
+
+/**
+ * Ticket 05 (KB-03A, spec §8.1 L242): an explicit empty scope is "no knowledge
+ * context" — a legal answer that means "search nothing", never "search
+ * everything". Channels that enforce scope return zero evidence immediately,
+ * before any embedding or search call is issued.
+ */
+function hasNoKnowledgeContext(scope?: RetrievalScope): boolean {
+  return scope !== undefined && scope.knowledgeBaseIds.length === 0
+}
+
+/**
+ * Ticket 06 (KB-03B): the knowledge-base dimension of an application-layer
+ * filter over KB-tagged records — graph relation provenance and PageIndex
+ * nodes. Graph entities are shared across knowledge bases, so the relation
+ * records beneath them are what carries ownership; each one must be
+ * authorized on its own or a shared entity would leak another knowledge
+ * base's relations and supporting documents.
+ *
+ * - No scope → no filtering. A caller that carries no knowledge scope
+ *   (legacy release probes, isolated evaluation runs) keeps its previous
+ *   behavior.
+ * - Scope present → a record survives only when it is tagged with a
+ *   knowledgeBaseId inside the scope. An untagged record cannot be
+ *   authorized, so it is dropped (fail-closed) — mirroring the ES `terms`
+ *   clause, which can never match a document whose knowledgeBaseId field is
+ *   missing.
+ */
+export function filterByKnowledgeBase<T extends { knowledgeBaseId?: string }>(
+  items: T[],
+  scope?: RetrievalScope
+): T[] {
+  if (!scope) return items
+  const allowed = new Set(scope.knowledgeBaseIds)
+  return items.filter((item) =>
+    item.knowledgeBaseId !== undefined && allowed.has(item.knowledgeBaseId)
+  )
 }
 
 /**
@@ -114,7 +277,7 @@ function filterNodesByAccessContext<N extends { tenantId?: string; allowedGroups
  *   filterNodesByAccessContext (empty caller groups = tenant-wide;
  *   empty provenance groups = tenant-wide chunk; otherwise intersect).
  */
-function filterProvenanceByAccessContext<P extends { tenantId?: string; allowedGroups?: string[] }>(
+export function filterProvenanceByAccessContext<P extends { tenantId?: string; allowedGroups?: string[] }>(
   provenance: P[],
   ac?: AccessContext
 ): P[] {
@@ -130,41 +293,112 @@ function filterProvenanceByAccessContext<P extends { tenantId?: string; allowedG
 }
 
 export interface SearchOperations {
-  vectorSearch(query: Query, topK: number, hypothesis?: string, accessContext?: AccessContext, signal?: AbortSignal): Promise<RetrievalResult[]>
-  bm25Search(query: Query, topK: number, accessContext?: AccessContext, signal?: AbortSignal): Promise<RetrievalResult[]>
-  graphSearch(query: Query, topK: number, seeds?: string[], accessContext?: AccessContext, signal?: AbortSignal): Promise<RetrievalResult[]>
-  pageIndexSearch(query: Query, topK: number, accessContext?: AccessContext, signal?: AbortSignal): Promise<RetrievalResult[]>
+  vectorSearch(query: Query, topK: number, hypothesis?: string, accessContext?: AccessContext, retrievalScope?: RetrievalScope, signal?: AbortSignal): Promise<RetrievalResult[]>
+  bm25Search(query: Query, topK: number, accessContext?: AccessContext, retrievalScope?: RetrievalScope, signal?: AbortSignal): Promise<RetrievalResult[]>
+  graphSearch(query: Query, topK: number, seeds?: string[], accessContext?: AccessContext, retrievalScope?: RetrievalScope, signal?: AbortSignal): Promise<RetrievalResult[]>
+  pageIndexSearch(query: Query, topK: number, accessContext?: AccessContext, retrievalScope?: RetrievalScope, signal?: AbortSignal): Promise<RetrievalResult[]>
   rerank(query: string, results: RetrievalResult[], signal?: AbortSignal): Promise<RetrievalResult[]>
-  loadParents(identities: Array<{ documentId: string; id: string }>, accessContext?: AccessContext, signal?: AbortSignal): Promise<Chunk[]>
+  loadParents(identities: Array<{ documentId: string; id: string }>, accessContext?: AccessContext, retrievalScope?: RetrievalScope, signal?: AbortSignal): Promise<Chunk[]>
 }
 
 export interface RuntimeSearchDependencies {
   es: Client
-  chatClient: OpenAI
+  /**
+   * @deprecated Eval refactor Ticket 03: the Chat-per-fragment rerank was the
+   * only consumer of this client and has been removed. Accepted (and ignored)
+   * so existing construction sites keep compiling; do not add new readers.
+   */
+  chatClient?: OpenAI
   embeddingClient: OpenAI
-  chatModel: string
+  /**
+   * @deprecated See {@link RuntimeSearchDependencies.chatClient}.
+   */
+  chatModel?: string
   embeddingModel: string
   graphDriver?: Driver
   pageIndexRepo?: PageIndexRepository
   activeVersionRepo?: ActiveVersionRepository
+  /** Eval refactor Ticket 02: chunk index searched. Omitted → the business
+   * index (legacy default). */
+  indexName?: string
+  /** Eval refactor Ticket 03: dedicated reranker. Omitted → retrieval
+   * publishes the fused order and reports `rerank reason: not_configured`
+   * (degraded status) instead of falling back to any other scorer. */
+  reranker?: Reranker
 }
 
 export class RuntimeSearchOperations implements SearchOperations {
   constructor(private dependencies: RuntimeSearchDependencies) {}
 
+  private get indexName(): string {
+    return resolveChunkIndexName(this.dependencies.indexName)
+  }
+
   private activeTermsFilter(): Array<Record<string, unknown>> {
     const repo = this.dependencies.activeVersionRepo
     if (!repo) return []
-    const docIds = repo.getActiveDocIds()
-    return docIds.length > 0 ? [{ terms: { documentId: docIds } }] : []
+    return activeTermsFilterFor(repo.getActiveDocIds())
   }
 
-  async vectorSearch(query: Query, topK: number, hypothesis?: string, accessContext?: AccessContext, signal?: AbortSignal): Promise<RetrievalResult[]> {
+  /**
+   * PT-10 (audit finding F1): the eligibility axes the bounded PageIndex node
+   * selection resolves inside its own SQL, before the ceiling is applied.
+   *
+   * The rules are NOT new — each axis is the one already enforced afterwards by
+   * `filterNodesByAccessContext` / `filterByKnowledgeBase` and by the hydration
+   * filters (`accessContextFilter`, `knowledgeBaseFilter`,
+   * `activeTermsFilterFor`), so the pre-selection decision and the re-check can
+   * never disagree.
+   *
+   * Axes are only ever ADDED from what the caller actually carries, which keeps
+   * the three existing behaviors distinguishable:
+   *  - no AccessContext → no tenant/group axis (legacy single-tenant callers);
+   *    an AccessContext is always tenant-bound, so an `admin` scope gains
+   *    neither cross-tenant nor cross-knowledge-base reach;
+   *  - no RetrievalScope → no knowledge axis (a legacy read spans bases), while
+   *    an explicit EMPTY scope never reaches the repository at all —
+   *    `hasNoKnowledgeContext` short-circuits the channel first;
+   *  - no active-version repository → no active axis (an evaluation scope owns a
+   *    dedicated ephemeral index and must keep reading its whole corpus);
+   *    a wired repository → active versions only, so a configured-but-empty
+   *    active set legitimately selects nothing instead of collapsing into the
+   *    unconfigured default.
+   *
+   * Returns `undefined` when nothing is known, so a legacy caller emits exactly
+   * the pre-existing two-argument read.
+   */
+  private pageIndexEligibility(
+    accessContext?: AccessContext,
+    retrievalScope?: RetrievalScope
+  ): PageIndexNodeEligibility | undefined {
+    const eligibility: PageIndexNodeEligibility = {}
+    if (accessContext) {
+      eligibility.tenantId = accessContext.tenantId
+      eligibility.callerGroups = accessContext.groups
+    }
+    if (retrievalScope) {
+      eligibility.knowledgeBaseIds = retrievalScope.knowledgeBaseIds
+    }
+    if (this.dependencies.activeVersionRepo) {
+      eligibility.restrictToActiveDocumentVersions = true
+    }
+    return Object.keys(eligibility).length > 0 ? eligibility : undefined
+  }
+
+  async vectorSearch(query: Query, topK: number, hypothesis?: string, accessContext?: AccessContext, retrievalScope?: RetrievalScope, signal?: AbortSignal): Promise<RetrievalResult[]> {
+    // Ticket 05 (KB-03A): an explicit empty scope means "no knowledge
+    // context" — answer with no evidence, and do not even spend an embedding
+    // call on it.
+    if (hasNoKnowledgeContext(retrievalScope)) return []
     const embedInput = hypothesis && hypothesis.trim() ? hypothesis : query.text
     const emb = await this.dependencies.embeddingClient.embeddings.create(
       {
         model: this.dependencies.embeddingModel,
         input: embedInput,
+        // Float encoding: the SDK's base64 default can yield truncated
+        // vectors on some providers (see store.ts) — the query vector must
+        // live in the same 1024-dim space as the indexed chunks.
+        encoding_format: "float",
       },
       { signal }
     )
@@ -172,9 +406,10 @@ export class RuntimeSearchOperations implements SearchOperations {
       childFilter(),
       ...this.activeTermsFilter(),
       ...accessContextFilter(accessContext),
+      ...knowledgeBaseFilter(retrievalScope),
     ]
     const res = await this.dependencies.es.search({
-      index: INDEX_NAME,
+      index: this.indexName,
       knn: {
         field: "embedding",
         query_vector: emb.data[0].embedding,
@@ -194,9 +429,11 @@ export class RuntimeSearchOperations implements SearchOperations {
     }))
   }
 
-  async bm25Search(query: Query, topK: number, accessContext?: AccessContext, signal?: AbortSignal): Promise<RetrievalResult[]> {
+  async bm25Search(query: Query, topK: number, accessContext?: AccessContext, retrievalScope?: RetrievalScope, signal?: AbortSignal): Promise<RetrievalResult[]> {
+    // Ticket 05 (KB-03A): empty scope = no knowledge context, no query.
+    if (hasNoKnowledgeContext(retrievalScope)) return []
     const res = await this.dependencies.es.search({
-      index: INDEX_NAME,
+      index: this.indexName,
       query: {
         bool: {
           must: [{ match: { content: query.text } }],
@@ -204,6 +441,7 @@ export class RuntimeSearchOperations implements SearchOperations {
             childFilter(),
             ...this.activeTermsFilter(),
             ...accessContextFilter(accessContext),
+            ...knowledgeBaseFilter(retrievalScope),
           ],
         },
       },
@@ -218,8 +456,13 @@ export class RuntimeSearchOperations implements SearchOperations {
     }))
   }
 
-  async graphSearch(query: Query, topK: number, seeds?: string[], accessContext?: AccessContext, signal?: AbortSignal): Promise<RetrievalResult[]> {
-    const driver = this.dependencies.graphDriver ?? getDriver()
+  async graphSearch(query: Query, topK: number, seeds?: string[], accessContext?: AccessContext, retrievalScope?: RetrievalScope, signal?: AbortSignal): Promise<RetrievalResult[]> {
+    // Ticket 06 (KB-03B): an explicit empty scope means "no knowledge
+    // context" — no Neo4j session, no ES query, no evidence.
+    if (hasNoKnowledgeContext(retrievalScope)) return []
+    // createDriver() lazily initializes the singleton (idempotent) so a fresh
+    // server process can serve graph queries without a prior ingestion run.
+    const driver = this.dependencies.graphDriver ?? createDriver()
     const session = driver.session()
     const candidateLimit = topK * GRAPH_CANDIDATE_MULTIPLIER
     const graphQuery = query.text.normalize("NFKC").trim().toLowerCase().slice(0, 512)
@@ -228,8 +471,9 @@ export class RuntimeSearchOperations implements SearchOperations {
       ? seeds.map((s) => String(s)).filter((s) => s.length > 0).slice(0, 16)
       : []
     try {
-      const res = await session.run(
-        `MATCH (e:Entity)
+      const res = await raceAbort(
+        session.run(
+          `MATCH (e:Entity)
            WHERE toLower($query) CONTAINS toLower(e.name)
               OR any(a IN e.aliases WHERE toLower($query) CONTAINS toLower(a))
               OR any(term IN $queryTerms WHERE
@@ -259,9 +503,14 @@ export class RuntimeSearchOperations implements SearchOperations {
           query: graphQuery,
           queryTerms,
           seeds: seedList,
-          entityLimit: candidateLimit,
-          relationshipLimit: candidateLimit,
+          // Neo4j LIMIT parameters must be driver Integers — a plain JS number
+          // serializes as Float (e.g. 20.0) and the server rejects it.
+          entityLimit: neo4jInt(candidateLimit),
+          relationshipLimit: neo4jInt(candidateLimit),
         }
+        ),
+        signal,
+        "Answer run cancelled during graph query"
       )
       const names = [...new Set(
         res.records.flatMap((record) => record.get("names") as string[])
@@ -276,9 +525,12 @@ export class RuntimeSearchOperations implements SearchOperations {
           const weight = typeof rawWeight === "number" && Number.isFinite(rawWeight)
             ? Math.max(0, Math.min(1, rawWeight))
             : 0.5
-          const provenance = filterProvenanceByAccessContext(
-            parseGraphProvenance(rawProvenance),
-            accessContext
+          const provenance = filterByKnowledgeBase(
+            filterProvenanceByAccessContext(
+              parseGraphProvenance(rawProvenance),
+              accessContext
+            ),
+            retrievalScope
           )
           return values.flatMap((value) => {
             if (typeof value !== "string") return []
@@ -313,7 +565,7 @@ export class RuntimeSearchOperations implements SearchOperations {
       })
 
       const esRes = await this.dependencies.es.search({
-        index: INDEX_NAME,
+        index: this.indexName,
         query: provenance.length > 0
           ? {
               bool: {
@@ -326,7 +578,10 @@ export class RuntimeSearchOperations implements SearchOperations {
               ],
             },
           })),
-          filter: [childFilter(), ...this.activeTermsFilter(), ...accessContextFilter(accessContext)],
+          // Ticket 06 (KB-03B): hydration re-checks the knowledge scope so a
+          // candidate is Evidence only after it resolves to a chunk the scope
+          // still owns.
+          filter: [childFilter(), ...this.activeTermsFilter(), ...accessContextFilter(accessContext), ...knowledgeBaseFilter(retrievalScope)],
               },
             }
           : {
@@ -334,7 +589,9 @@ export class RuntimeSearchOperations implements SearchOperations {
                 must: [{ multi_match: { query: names.join(" "), fields: ["content"] } }],
                 // P2.2: fallback path mirrors primary path ACL + active-version
                 // filters (closes GRAPH_RETRIEVAL_FALLBACK_BYPASS).
-                filter: [childFilter(), ...this.activeTermsFilter(), ...accessContextFilter(accessContext)],
+                // Ticket 06 (KB-03B): fallback hydration carries the knowledge
+                // scope too.
+                filter: [childFilter(), ...this.activeTermsFilter(), ...accessContextFilter(accessContext), ...knowledgeBaseFilter(retrievalScope)],
               },
             },
         size: topK,
@@ -369,11 +626,26 @@ export class RuntimeSearchOperations implements SearchOperations {
     }
   }
 
-  async pageIndexSearch(query: Query, topK: number, accessContext?: AccessContext, signal?: AbortSignal): Promise<RetrievalResult[]> {
+  async pageIndexSearch(query: Query, topK: number, accessContext?: AccessContext, retrievalScope?: RetrievalScope, signal?: AbortSignal): Promise<RetrievalResult[]> {
+    // Ticket 06 (KB-03B): an explicit empty scope means "no knowledge
+    // context" — no node lookup, no ES query.
+    if (hasNoKnowledgeContext(retrievalScope)) return []
     const repo = this.dependencies.pageIndexRepo
     if (!repo) throw new Error("pageIndex repository unavailable")
-    const allNodes = repo.searchNodes(query.text, PAGE_INDEX_NODE_LIMIT)
-    const nodes = filterNodesByAccessContext(allNodes, accessContext)
+    // PT-10 (F1): eligibility is part of the bounded selection, so the five
+    // slots are spent on nodes this caller may actually read.
+    const allNodes = repo.searchNodes(
+      query.text,
+      PAGE_INDEX_NODE_LIMIT,
+      this.pageIndexEligibility(accessContext, retrievalScope)
+    )
+    // Defense in depth, deliberately kept: the application-layer filters still
+    // run, so a repository that ignored the eligibility argument — or a row that
+    // lost eligibility between the query and this line — cannot reach hydration.
+    const nodes = filterByKnowledgeBase(
+      filterNodesByAccessContext(allNodes, accessContext),
+      retrievalScope
+    )
     if (nodes.length === 0) return []
     const seen = new Set<string>()
     const unique = nodes.flatMap((node) =>
@@ -386,7 +658,7 @@ export class RuntimeSearchOperations implements SearchOperations {
     }).slice(0, topK)
     if (unique.length === 0) return []
     const esRes = await this.dependencies.es.search({
-      index: INDEX_NAME,
+      index: this.indexName,
       query: {
         bool: {
           minimum_should_match: 1,
@@ -402,6 +674,8 @@ export class RuntimeSearchOperations implements SearchOperations {
             childFilter(),
             ...this.activeTermsFilter(),
             ...accessContextFilter(accessContext),
+            // Ticket 06 (KB-03B): chunk hydration re-checks the knowledge scope.
+            ...knowledgeBaseFilter(retrievalScope),
           ],
         },
       },
@@ -417,24 +691,36 @@ export class RuntimeSearchOperations implements SearchOperations {
   }
 
   async rerank(query: string, results: RetrievalResult[], signal?: AbortSignal): Promise<RetrievalResult[]> {
-    return rerank(
-      this.dependencies.chatClient,
-      this.dependencies.chatModel,
-      query,
-      results,
-      signal
-    )
+    const reranker = this.dependencies.reranker
+    if (!reranker) {
+      // No dedicated reranker configured. Treated exactly like a provider
+      // failure so the caller degrades visibly — never silently.
+      throw new RerankerNotConfiguredError()
+    }
+    return reranker.rerank(query, results, signal)
   }
 
   async loadParents(
     identities: Array<{ documentId: string; id: string }>,
     accessContext?: AccessContext,
+    retrievalScope?: RetrievalScope,
     signal?: AbortSignal
   ): Promise<Chunk[]> {
     if (identities.length === 0) return []
-    const aclFilters = accessContextFilter(accessContext)
+    // Ticket 07 (KB-03C): an explicit empty scope means "no knowledge
+    // context" — parent expansion returns nothing even on a direct call
+    // (the dispatch layer already short-circuits before reaching here).
+    if (hasNoKnowledgeContext(retrievalScope)) return []
+    // Ticket 07 (KB-03C): parent expansion identities derive from already
+    // scope-filtered children, but the ES query re-checks the knowledge scope
+    // (like it re-checks the AccessContext) so a stale or collided identity
+    // can never reintroduce content filtered from primary retrieval.
+    const aclFilters = [
+      ...accessContextFilter(accessContext),
+      ...knowledgeBaseFilter(retrievalScope),
+    ]
     const res = await this.dependencies.es.search({
-      index: INDEX_NAME,
+      index: this.indexName,
       query: {
         bool: {
           minimum_should_match: 1,
@@ -457,7 +743,7 @@ export class RuntimeSearchOperations implements SearchOperations {
   }
 }
 
-function parseGraphProvenance(values: unknown): NonNullable<
+export function parseGraphProvenance(values: unknown): NonNullable<
   RetrievalResult["wikilinks"][number]["provenance"]
 > {
   if (!Array.isArray(values)) return []
@@ -481,11 +767,34 @@ function parseGraphProvenance(values: unknown): NonNullable<
               tenantId: parsed[2],
               allowedGroups: parsed[3],
             }
-          : null
+          // Ticket 03 (KB-02A): current writers append knowledgeBaseId as the
+          // 6th element (index 5); the leading five keep their meaning. The
+          // 2/4-element legacy branches above are untouched.
+          : parsed.length === 6 &&
+              parsed.slice(0, 3).every((part) => typeof part === "string") &&
+              Array.isArray(parsed[3]) &&
+              parsed[3].every((part) => typeof part === "string") &&
+              typeof parsed[5] === "string"
+            ? {
+                documentId: parsed[0],
+                chunkId: parsed[1],
+                tenantId: parsed[2],
+                allowedGroups: parsed[3],
+                knowledgeBaseId: parsed[5],
+              }
+            : null
       if (!item) continue
       const key = `${item.documentId}\0${item.chunkId}`
       const existing = provenance.get(key)
-      if (!existing || (existing.tenantId === undefined && item.tenantId !== undefined)) {
+      // Ticket 06 (KB-03B): the same chunk can appear once untagged and once
+      // tagged when a re-ingestion appends to the same relation (store.ts
+      // MERGE dedups by the JSON string only). The most-tagged record must
+      // win — a 4-element entry outranking a 6-element one would make an
+      // in-scope chunk unselectable under an explicit knowledge scope.
+      const tagRank = (entry: { tenantId?: string; knowledgeBaseId?: string }) =>
+        (entry.tenantId !== undefined ? 1 : 0) +
+        (entry.knowledgeBaseId !== undefined ? 1 : 0)
+      if (!existing || tagRank(item) > tagRank(existing)) {
         provenance.set(key, item)
       }
     } catch {
@@ -495,13 +804,87 @@ function parseGraphProvenance(values: unknown): NonNullable<
   return [...provenance.values()]
 }
 
+const RETRIEVAL_PREVIEW_RESULTS = 25
+const RETRIEVAL_PREVIEW_CHARS = 160
+
+/** LO-12: bounded retrieval preview (25 results × 160 chars). */
+export function retrievalPreview(results: RetrievalResult[]): string[] {
+  return results.slice(0, RETRIEVAL_PREVIEW_RESULTS).map((result) => {
+    const content = result.chunk?.content ?? ""
+    return content.length > RETRIEVAL_PREVIEW_CHARS ? content.slice(0, RETRIEVAL_PREVIEW_CHARS) : content
+  })
+}
+
 export class SearcherImpl implements Searcher {
-  constructor(private operations: SearchOperations) {}
+  constructor(
+    private operations: SearchOperations,
+    /**
+     * Ticket 22 (ATT-01): the session-scoped attachment channel. Optional —
+     * a deployment without attachments (or an evaluation scope) simply has no
+     * attachment evidence, and a search without `options.attachments` never
+     * calls it at all.
+     */
+    private attachments?: AttachmentSearchOperations,
+    /**
+     * Ticket 31 (FAQ-01B): the knowledge-scoped FAQ evidence channel.
+     * Optional — a composition without the FAQ service (evaluation scopes,
+     * probes) never runs it. Unlike attachments, FAQ entries live INSIDE
+     * knowledge bases, so an explicit empty knowledge scope has no FAQ
+     * channel either.
+     */
+    private faqEvidence?: FaqEvidenceOperations,
+    /**
+     * Ticket 36 (WEB-01): the web-evidence adapter. Optional — a composition
+     * without it (evaluation scopes, probes) never fetches URLs or calls
+     * Tavily. The channel runs when the query text carries a URL (safe
+     * server-side fetch of what the user pasted) or the run opted into
+     * configured web search (`webRequested`).
+     */
+    private webEvidence?: WebEvidenceOperations,
+    /**
+     * LO-12: retrieval preview observation. Optional — with tracing off the
+     * searcher behaves exactly as before.
+     */
+    private tracing?: TracingRuntime,
+  ) {}
 
   async search(query: Query, options?: SearchOptions): Promise<SearchOutcome> {
+    const operation = this.tracing?.startOperation("retrieval.search", {
+      "retrieval.query_length": query.text.length,
+    })
+    operation?.setAttributes({ "langfuse.observation.input": query.text })
+    try {
+      const outcome = await this.searchInternal(query, options)
+      operation?.end({
+        outcome: "ok",
+        attributes: {
+          "retrieval.status": outcome.status,
+          "retrieval.result_count": outcome.results.length,
+          // Bounded preview: 25 results × 160 chars, never the full corpus.
+          "langfuse.observation.output": JSON.stringify(retrievalPreview(outcome.results)),
+        },
+      })
+      return outcome
+    } catch (error) {
+      operation?.end({
+        outcome: "error",
+        message: error instanceof Error ? error.message.slice(0, 200) : "retrieval failed",
+      })
+      throw error
+    }
+  }
+
+  private async searchInternal(query: Query, options?: SearchOptions): Promise<SearchOutcome> {
     const hypothesis = options?.hypothesis
     const graphSeeds = options?.graphSeeds
     const accessContext = options?.accessContext
+    // Ticket 22 (ATT-01): the run's own session. It is the ONLY input to the
+    // attachment channel, so this search can only ever see this session's
+    // temporary files.
+    const attachmentSessionId = options?.attachments?.sessionId
+    // Ticket 05 (KB-03A): the server-computed knowledge scope. Vector and BM25
+    // enforce it here; graph and PageIndex follow in Ticket 06.
+    const retrievalScope = options?.retrievalScope
     // P7.2: honor cancellation at retrieval stage boundaries. When the
     // signal is already aborted at entry, reject immediately — no ES/Neo4j
     // queries are issued. Mid-run aborts are checked after allSettled and
@@ -519,28 +902,172 @@ export class SearcherImpl implements Searcher {
     const unselectedChannels = ALL_RETRIEVAL_CHANNELS.filter(
       (ch) => !selectedSet.has(ch)
     )
+    // Ticket 14 (RET-01): the debug trace — the same implementation runs, only
+    // instrumented. Ranks are 1-based stage positions.
+    const debug = options?.debug === true
+    const searchStarted = performance.now()
+    const channelStages: RetrievalDebugTrace["channels"] = []
+    const debugCandidate = (result: RetrievalResult, rank: number, score: number | null): DebugCandidate => ({
+      rank,
+      chunkId: result.chunk.id,
+      documentId: result.chunk.documentId,
+      title: typeof result.chunk.metadata.title === "string"
+        ? (result.chunk.metadata.title as string).slice(0, 200)
+        : "",
+      excerpt: result.chunk.content.slice(0, 300),
+      score,
+    })
+    // Ticket 05 (KB-03A): an explicit empty scope means "no knowledge context",
+    // and that promise belongs to the whole search, not to two of its four
+    // channels. Graph and PageIndex receive their own knowledge filter in
+    // Ticket 06, so dispatching them here would answer from knowledge the
+    // caller explicitly excluded. Nothing is queried at all; the outcome is the
+    // same honest "insufficient" a caller gets when every channel fails, and
+    // the existing Answer path turns it into an honest refusal. This guard is
+    // what makes the empty-scope contract fail-closed rather than best-effort.
+    // Ticket 22 (ATT-01): a session-scoped attachment channel is the ONE
+    // exception to the empty-knowledge-context guard. "No knowledge context"
+    // says nothing about the caller's OWN temporary files: an empty knowledge
+    // selection with attachments still answers from those attachments alone,
+    // and the knowledge channels still return nothing.
+    const attachmentRunner =
+      attachmentSessionId && this.attachments && accessContext
+        ? {
+            name: "attachment" as const,
+            run: () =>
+              this.attachments!.search({
+                sessionId: attachmentSessionId,
+                tenantId: accessContext.tenantId,
+                subjectId: accessContext.subjectId,
+                query: query.text,
+                limit: CHANNEL_TOP_K,
+              }),
+          }
+        : undefined
+    // Ticket 31 (FAQ-01B): the FAQ channel runs only inside a real knowledge
+    // scope — FAQ entries are knowledge, so "no knowledge context" excludes
+    // them too (unlike the attachment exception above). Merged BEFORE fusion
+    // and rerank so the published ordering stays honest about what scored it.
+    const faqRunner =
+      this.faqEvidence && accessContext && retrievalScope && !hasNoKnowledgeContext(retrievalScope)
+        ? {
+            name: "faq" as const,
+            run: () =>
+              this.faqEvidence!.search({
+                tenantId: accessContext.tenantId,
+                knowledgeBaseIds: [...retrievalScope.knowledgeBaseIds],
+                query: query.text,
+                limit: FAQ_EVIDENCE_LIMIT,
+              }),
+          }
+        : undefined
+    // Ticket 36 (WEB-01): the web channel runs when the composition wired a
+    // web adapter AND the run carries web intent — a URL in the query text
+    // (the user's own pasted link, fetched server-side through the shared
+    // safe fetcher) or an explicit web-search opt-in. Like attachments, it is
+    // NOT knowledge: an empty knowledge scope does not exclude it, and a web
+    // result alone can legitimately be the remaining evidence.
+    const webRequested = options?.webRequested === true
+    let webUnconfiguredDetail: string | undefined
+    const webRunner =
+      this.webEvidence && (webRequested || containsWebUrl(query.text))
+        ? {
+            name: "web" as const,
+            run: async (): Promise<RetrievalResult[]> => {
+              const outcome = await this.webEvidence!.search({
+                message: query.text,
+                query: query.text,
+                requested: webRequested,
+                ...(signal ? { signal } : {}),
+              })
+              if (outcome.status === "unconfigured") {
+                webUnconfiguredDetail = outcome.detail ?? "web search is not configured"
+              }
+              return outcome.results.slice(0, WEB_EVIDENCE_LIMIT)
+            },
+          }
+        : undefined
+    if (hasNoKnowledgeContext(retrievalScope) && !attachmentRunner && !webRunner) {
+      return {
+        status: "insufficient",
+        results: [],
+        // No channel failed — none ran. Reporting them as unavailable would
+        // blame the channels for a scope decision the caller made.
+        unavailableChannels: [],
+        // DR-22: an empty scope is not an outage. The explicit reason lets the
+        // trace distinguish "nothing was read" from "every channel failed".
+        degradationReasons: ["no_knowledge_scope"],
+        ...(unselectedChannels.length > 0 ? { unselectedChannels } : {}),
+        ...(debug ? { debug: { channels: [], fused: { elapsedMs: 0, rawCandidateCount: 0, distinctCount: 0, candidates: [] }, totalMs: performance.now() - searchStarted } } : {}),
+      }
+    }
     const allChannelRunners: Array<{
       name: RetrievalChannel
       run: () => Promise<RetrievalResult[]>
     }> = [
       {
         name: "vector",
-        run: () => this.operations.vectorSearch(query, CHANNEL_TOP_K, hypothesis, accessContext, signal),
+        run: () => this.operations.vectorSearch(query, CHANNEL_TOP_K, hypothesis, accessContext, retrievalScope, signal),
       },
       {
         name: "bm25",
-        run: () => this.operations.bm25Search(query, CHANNEL_TOP_K, accessContext, signal),
+        run: () => this.operations.bm25Search(query, CHANNEL_TOP_K, accessContext, retrievalScope, signal),
       },
       {
         name: "graph",
-        run: () => this.operations.graphSearch(query, CHANNEL_TOP_K, graphSeeds, accessContext, signal),
+        run: () => this.operations.graphSearch(query, CHANNEL_TOP_K, graphSeeds, accessContext, retrievalScope, signal),
       },
       {
         name: "pageIndex",
-        run: () => this.operations.pageIndexSearch(query, CHANNEL_TOP_K, accessContext, signal),
+        run: () => this.operations.pageIndexSearch(query, CHANNEL_TOP_K, accessContext, retrievalScope, signal),
       },
     ]
-    const channelRunners = allChannelRunners.filter(({ name }) => selectedSet.has(name))
+    const selectedRunners = allChannelRunners.filter(({ name }) => selectedSet.has(name))
+    // Ticket 22 (ATT-01): the attachment channel runs whenever the run
+    // carries a session — it is not part of the caller's channel selection,
+    // because it is not knowledge the caller may or may not read: it is the
+    // caller's OWN temporary context.
+    // Ticket 31 (FAQ-01B): same for the FAQ channel — it is not selectable;
+    // it runs exactly when the run has a live knowledge scope to read FAQ
+    // entries from.
+    const runnersToRun = [
+      ...selectedRunners,
+      ...(attachmentRunner ? [attachmentRunner] : []),
+      ...(faqRunner ? [faqRunner] : []),
+      ...(webRunner ? [webRunner] : []),
+    ]
+    const channelRunners = runnersToRun
+      .map(({ name, run }) => ({
+        name,
+        run: async (): Promise<RetrievalResult[]> => {
+          if (!debug) return run()
+          // Ticket 14 (RET-01): time the channel and record its raw ranks.
+          const started = performance.now()
+          try {
+            const value = await run()
+            channelStages.push({
+              channel: name,
+              ok: true,
+              elapsedMs: performance.now() - started,
+              candidates: value
+                .filter(({ chunk }) => chunk.metadata.kind !== "parent")
+                .map((result, index) => debugCandidate(result, index + 1, result.score)),
+            })
+            return value
+          } catch (error) {
+            channelStages.push({
+              channel: name,
+              ok: false,
+              // Ticket 14 (RET-01): bounded — driver messages can embed
+              // endpoints; the trace is bounded like every other field.
+              error: (error instanceof Error ? error.message : String(error)).slice(0, 200),
+              elapsedMs: performance.now() - started,
+              candidates: [],
+            })
+            throw error
+          }
+        },
+      }))
     const settled = await Promise.allSettled(channelRunners.map(({ run }) => run()))
     // P7.2: if the signal aborted while channel fetches were in flight,
     // stop downstream work (rerank/parent-load) at this boundary.
@@ -577,18 +1104,81 @@ export class SearcherImpl implements Searcher {
         ...(unselectedChannels.length > 0
           ? { unselectedChannels }
           : {}),
+        ...(debug
+          ? {
+              debug: {
+                channels: orderedStages(channelStages),
+                fused: { elapsedMs: 0, rawCandidateCount: 0, distinctCount: 0, candidates: [] },
+                totalMs: performance.now() - searchStarted,
+              },
+            }
+          : {}),
+      }
+    }
+    // Ticket 05's empty-scope promise still holds: an empty knowledge scope
+    // with NO useful attachment evidence stays the honest "insufficient", not
+    // a silent "ok" with nothing in it. (The attachment channel was the only
+    // reason this search skipped the early return.)
+    if (hasNoKnowledgeContext(retrievalScope) && resultSets.every((set) => set.length === 0)) {
+      return {
+        status: "insufficient",
+        results: [],
+        unavailableChannels,
+        // DR-22: same explicit scope decision as the early return above.
+        degradationReasons: ["no_knowledge_scope"],
+        ...(unselectedChannels.length > 0 ? { unselectedChannels } : {}),
+        ...(debug
+          ? {
+              debug: {
+                channels: orderedStages(channelStages),
+                fused: { elapsedMs: 0, rawCandidateCount: 0, distinctCount: 0, candidates: [] },
+                totalMs: performance.now() - searchStarted,
+              },
+            }
+          : {}),
       }
     }
 
+    const fusionStarted = performance.now()
     const fused = rrf(resultSets)
+    const fusionElapsed = performance.now() - fusionStarted
+    // Ticket 03: the published ordering carries its own score source. A fused
+    // fallback is never presented as a dedicated-rerank result.
     let reranked = fused
     let rerankerFailed = false
-    try {
-      reranked = await this.operations.rerank(query.text, fused, signal)
-    } catch (error) {
-      rerankerFailed = true
-      const message = error instanceof Error ? error.message : String(error)
-      console.warn("[search] reranker unavailable:", message)
+    let ordering: RetrievalOrdering
+    let rerankStage: RetrievalDebugTrace["rerank"]
+    if (fused.length < RERANK_MIN_CANDIDATES) {
+      ordering = { source: "fused", reason: "below_threshold" }
+      rerankStage = debug
+        ? { applied: false, reason: "below_threshold", elapsedMs: 0 }
+        : undefined
+    } else {
+      const rerankStarted = performance.now()
+      try {
+        reranked = await this.operations.rerank(query.text, fused, signal)
+        ordering = { source: "dedicated_rerank" }
+        rerankStage = debug
+          ? {
+              applied: true,
+              elapsedMs: performance.now() - rerankStarted,
+              candidates: reranked.map((result, index) => debugCandidate(result, index + 1, result.score)),
+            }
+          : undefined
+      } catch (error) {
+        // P7.2: a cancellation that fires mid-rerank must terminate the run,
+        // not degrade to "reranker unavailable" — aborts are rethrown so the
+        // run converges to the single AbortError terminal.
+        if (signal?.aborted) throw error
+        rerankerFailed = true
+        const reason = error instanceof RerankerNotConfiguredError ? "not_configured" : "unavailable"
+        ordering = { source: "fused", reason }
+        rerankStage = debug
+          ? { applied: false, reason, elapsedMs: performance.now() - rerankStarted }
+          : undefined
+        const message = error instanceof Error ? error.message : String(error)
+        console.warn("[search] reranker unavailable:", message)
+      }
     }
     const results = reranked.slice(0, RESULT_TOP_K)
     const identities = [...new Map(
@@ -602,8 +1192,12 @@ export class SearcherImpl implements Searcher {
     let parentExpansionFailed = false
     let parents: Chunk[] = []
     try {
-      parents = await this.operations.loadParents(identities, accessContext, signal)
+      parents = await this.operations.loadParents(identities, accessContext, retrievalScope, signal)
     } catch (error) {
+      // P7.2: same boundary as rerank — a mid-parent-load cancellation
+      // terminates the run instead of degrading to
+      // "parent expansion unavailable".
+      if (signal?.aborted) throw error
       parentExpansionFailed = true
       const message = error instanceof Error ? error.message : String(error)
       console.warn("[search] parent expansion unavailable:", message)
@@ -635,20 +1229,66 @@ export class SearcherImpl implements Searcher {
       : undefined
     const degradationReasons: string[] = []
     if (parentExpansionFailed) degradationReasons.push("parent_expansion_unavailable")
-    if (rerankerFailed) degradationReasons.push("reranker_unavailable")
+    // DR-22: a missing rerank configuration and a provider failure are different
+    // facts. The published ordering already carries `not_configured` vs
+    // `unavailable`; the trace reason must agree with it instead of collapsing
+    // both into one "unavailable" string.
+    if (rerankerFailed) {
+      degradationReasons.push(
+        ordering.source === "fused" && ordering.reason === "not_configured"
+          ? "reranker_not_configured"
+          : "reranker_unavailable"
+      )
+    }
+    // Ticket 36 (WEB-01): web search that was asked for but not configured is
+    // reported honestly — it is an absence of capability, not a channel
+    // failure, so the other channels are unaffected and the status only
+    // degrades when this search actually carried web intent.
+    const webUnconfigured = webUnconfiguredDetail !== undefined
+    if (webUnconfigured) degradationReasons.push("web_unconfigured")
     return {
-      status: unavailableChannels.length === 0 && !parentExpansionFailed && !rerankerFailed
+      status: unavailableChannels.length === 0 && !parentExpansionFailed && !rerankerFailed && !webUnconfigured
         ? "ok"
         : "degraded",
       results,
       unavailableChannels,
+      ordering,
       ...(graphBudget ? { graphBudget } : {}),
       ...(degradationReasons.length > 0
         ? { degradationReasons }
         : {}),
+      ...(webUnconfiguredDetail !== undefined
+        ? { webDetail: webUnconfiguredDetail }
+        : {}),
       ...(unselectedChannels.length > 0
         ? { unselectedChannels }
         : {}),
+      ...(debug
+        ? {
+            debug: {
+              channels: orderedStages(channelStages),
+              fused: {
+                elapsedMs: fusionElapsed,
+                rawCandidateCount: resultSets.reduce((sum, set) => sum + set.length, 0),
+                distinctCount: fused.length,
+                candidates: fused.map((result, index) => debugCandidate(result, index + 1, null)),
+              },
+              ...(rerankStage ? { rerank: rerankStage } : {}),
+              totalMs: performance.now() - searchStarted,
+            },
+          }
+        : {}),
     }
   }
+}
+
+/**
+ * Ticket 14 (RET-01): channels run concurrently, so the trace is assembled in
+ * the declared channel order, not completion order.
+ */
+function orderedStages(stages: RetrievalDebugTrace["channels"]): RetrievalDebugTrace["channels"] {
+  const order = new Map(ALL_RETRIEVAL_CHANNELS.map((channel, index) => [channel, index]))
+  return [...stages].sort(
+    (left, right) => (order.get(left.channel) ?? 0) - (order.get(right.channel) ?? 0)
+  )
 }

@@ -1,0 +1,46 @@
+services:
+  docreader:
+    image: agentic-rag-docreader:256a3f296686
+    build:
+      context: ${DOCREADER_BUILD_CONTEXT:-https://github.com/Tencent/WeKnora.git#256a3f2966866337f7dc3c5fcc10037f2ae18d52}
+      dockerfile: docker/Dockerfile.docreader
+    container_name: agentic-rag-docreader
+    ports:
+      - "127.0.0.1:50051:50051"
+    environment:
+      TZ: Asia/Shanghai
+      DOCREADER_IMAGE_OUTPUT_DIR: /tmp/docreader
+      DOCREADER_GRPC_MAX_WORKERS: "2"
+      DOCREADER_GRPC_MAX_FILE_SIZE_MB: "20"
+      DOCREADER_PDF_RENDER_MAX_WORKERS: "1"
+      DOCREADER_PDF_RENDER_PARALLELISM: "1"
+      DOCREADER_PDF_RENDER_DPI: "200"
+      DOCREADER_PDF_JPEG_QUALITY: "85"
+      DOCREADER_PDF_RENDER_MAX_EDGE: "2000"
+      GRPC_TLS_ENABLED: "false"
+      GRPC_AUTH_TOKEN: ""
+    healthcheck:
+      test:
+        - CMD
+        - /app/.venv/bin/python
+        - -c
+        - "import grpc; c=grpc.insecure_channel('127.0.0.1:50051'); c.unary_unary('/docreader.DocReader/ListEngines')(b'', timeout=3); c.close()"
+      interval: 15s
+      timeout: 5s
+      retries: 20
+      start_period: 60s
+    cpus: 2.0
+    mem_limit: 2g
+    init: true
+    restart: unless-stopped
+    stop_grace_period: 40s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    volumes:
+      - docreader-tmp:/tmp/docreader
+
+volumes:
+  docreader-tmp:

@@ -1,0 +1,876 @@
+import { createHash } from "node:crypto"
+import { accessSync, constants } from "node:fs"
+import { mkdtemp, rm, writeFile } from "node:fs/promises"
+import { tmpdir } from "node:os"
+import { join, resolve } from "node:path"
+import type { NormalizedBlock, NormalizedBlockType } from "../../types"
+import type { ParseDocumentInput } from "./markitdown"
+import type { PdfEvidenceException, PdfPageTextRecord } from "../page_evidence/page_evidence"
+import { runBoundedProcess } from "./process"
+
+export interface BuiltinPdfParserOptions {
+  command: string
+  commandArgs?: string[]
+  scriptPath?: string
+  timeoutMs: number
+  inputLimitBytes: number
+  outputLimitBytes: number
+}
+
+interface RawOutlineEntry {
+  level: number
+  title: string
+  page: number
+}
+
+interface RawBlock {
+  page: number
+  text: string
+  bbox: [number, number, number, number]
+  fontSize: number
+  bold: boolean
+}
+
+interface RawTable {
+  page: number
+  bbox: [number, number, number, number]
+  markdown: string
+}
+
+interface BuiltinPdfOutput {
+  version: 1
+  pageCount: number
+  outline: RawOutlineEntry[]
+  blocks: RawBlock[]
+  tables: RawTable[]
+  warnings: string[]
+  stats: { textChars: number; pagesWithText: number }
+}
+
+/**
+ * The extractor script ships with the repository under `scripts/`. The
+ * module layout differs between tsx (src/ingestion/parser) and the compiled
+ * build (dist/ingestion/parser), so resolve from the module directory and
+ * fall back to the process working directory.
+ */
+function resolveDefaultScriptPath(): string {
+  const relative = join("scripts", "builtin_pdf_extract.py")
+  const candidates = [
+    resolve(__dirname, "..", "..", "..", relative),
+    resolve(process.cwd(), relative),
+  ]
+  for (const candidate of candidates) {
+    try {
+      accessSync(candidate, constants.R_OK)
+      return candidate
+    } catch {
+      continue
+    }
+  }
+  return candidates[0]
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === "object" && !Array.isArray(value)
+}
+
+function finiteNumber(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value)
+}
+
+function boundingBox(value: unknown): [number, number, number, number] | undefined {
+  if (
+    Array.isArray(value) &&
+    value.length === 4 &&
+    value.every(finiteNumber)
+  ) {
+    return value as [number, number, number, number]
+  }
+  return undefined
+}
+
+function blockId(
+  documentId: string,
+  index: number,
+  type: NormalizedBlockType,
+  text: string
+): string {
+  return createHash("sha256")
+    .update(`${documentId}\0${index}\0${type}\0${text}`, "utf8")
+    .digest("hex")
+}
+
+function isDotLeaderRow(text: string): boolean {
+  const normalized = text.replace(/\s+/g, " ").trim()
+  if (normalized.length < 8) return false
+  // A TOC row: a title followed by a run of dot leaders and a page number.
+  if (!/[.·•]{3,}/.test(normalized)) return false
+  if (!/\d{1,4}$/.test(normalized)) return false
+  const dots = (normalized.match(/[.·•]/g) ?? []).length
+  return dots / normalized.length >= 0.25
+}
+
+function repairDotLeaderRow(text: string): string {
+  return text
+    .replace(/\s*[.·•](?:\s*[.·•]){2,}\s*/g, " … ")
+    .replace(/[ \t]{2,}/g, " ")
+    .trim()
+}
+
+function repairDotLeadersMultiline(text: string): string {
+  return text.split("\n").map(repairDotLeaderRow).join("\n")
+}
+
+function parseOutline(value: unknown): RawOutlineEntry[] {
+  if (value === undefined) return []
+  if (!Array.isArray(value)) {
+    throw new Error("malformed builtin-pdf output: outline must be an array")
+  }
+  const entries: RawOutlineEntry[] = []
+  for (const item of value) {
+    if (
+      !isRecord(item) ||
+      !Number.isInteger(item.level) ||
+      (item.level as number) < 1 ||
+      (item.level as number) > 6 ||
+      typeof item.title !== "string" ||
+      !item.title.trim() ||
+      !Number.isInteger(item.page) ||
+      (item.page as number) < 1
+    ) {
+      throw new Error("malformed builtin-pdf output: invalid outline entry")
+    }
+    entries.push({
+      level: item.level as number,
+      title: (item.title as string).trim(),
+      page: item.page as number,
+    })
+  }
+  return entries
+}
+
+function parseBlocks(value: unknown): RawBlock[] {
+  if (!Array.isArray(value)) {
+    throw new Error("malformed builtin-pdf output: blocks must be an array")
+  }
+  const blocks: RawBlock[] = []
+  for (const item of value) {
+    const bbox = isRecord(item) ? boundingBox(item.bbox) : undefined
+    if (
+      !isRecord(item) ||
+      !Number.isInteger(item.page) ||
+      (item.page as number) < 1 ||
+      typeof item.text !== "string" ||
+      !item.text.trim() ||
+      !bbox ||
+      !finiteNumber(item.fontSize) ||
+      typeof item.bold !== "boolean"
+    ) {
+      throw new Error("malformed builtin-pdf output: invalid block entry")
+    }
+    blocks.push({
+      page: item.page as number,
+      text: (item.text as string).trim(),
+      bbox,
+      fontSize: item.fontSize as number,
+      bold: item.bold as boolean,
+    })
+  }
+  return blocks
+}
+
+function parseTables(value: unknown): RawTable[] {
+  if (value === undefined) return []
+  if (!Array.isArray(value)) {
+    throw new Error("malformed builtin-pdf output: tables must be an array")
+  }
+  const tables: RawTable[] = []
+  for (const item of value) {
+    const bbox = isRecord(item) ? boundingBox(item.bbox) : undefined
+    if (
+      !isRecord(item) ||
+      !Number.isInteger(item.page) ||
+      (item.page as number) < 1 ||
+      typeof item.markdown !== "string" ||
+      !item.markdown.trim() ||
+      !bbox
+    ) {
+      throw new Error("malformed builtin-pdf output: invalid table entry")
+    }
+    tables.push({
+      page: item.page as number,
+      bbox,
+      markdown: (item.markdown as string).trim(),
+    })
+  }
+  return tables
+}
+
+function parseOutput(value: unknown): BuiltinPdfOutput {
+  if (!isRecord(value)) {
+    throw new Error("malformed builtin-pdf output: expected a JSON object")
+  }
+  if (value.version !== 1 || !Number.isInteger(value.pageCount)) {
+    throw new Error("malformed builtin-pdf output: unsupported payload shape")
+  }
+  const statsValue = isRecord(value.stats) ? value.stats : {}
+  return {
+    version: 1,
+    pageCount: value.pageCount as number,
+    outline: parseOutline(value.outline),
+    blocks: parseBlocks(value.blocks),
+    tables: parseTables(value.tables),
+    warnings: Array.isArray(value.warnings)
+      ? value.warnings.filter((warning): warning is string => typeof warning === "string")
+      : [],
+    stats: {
+      textChars: finiteNumber(statsValue.textChars) ? statsValue.textChars : 0,
+      pagesWithText: finiteNumber(statsValue.pagesWithText)
+        ? statsValue.pagesWithText
+        : 0,
+    },
+  }
+}
+
+function headingLevelsBySize(blocks: RawBlock[]): Map<number, number> {
+  // Cluster the font sizes that are meaningfully larger than the body size
+  // and map each to a heading level (1 = largest). The body size is the size
+  // carrying the most text.
+  const charsBySize = new Map<number, number>()
+  for (const block of blocks) {
+    if (block.fontSize <= 0) continue
+    charsBySize.set(
+      block.fontSize,
+      (charsBySize.get(block.fontSize) ?? 0) + block.text.length
+    )
+  }
+  if (charsBySize.size === 0) return new Map()
+  const bodySize = [...charsBySize.entries()].sort((a, b) => b[1] - a[1])[0][0]
+  const candidateSizes = [
+    ...new Set(
+      blocks
+        .filter((block) => block.fontSize >= bodySize * 1.2 && block.text.length <= 80)
+        .map((block) => block.fontSize)
+    ),
+  ].sort((a, b) => b - a)
+  const levels = new Map<number, number>()
+  candidateSizes.forEach((size, index) => {
+    levels.set(size, Math.min(index + 1, 6))
+  })
+  return levels
+}
+
+function headingLevelFor(
+  block: RawBlock,
+  levelsBySize: Map<number, number>
+): number | null {
+  if (block.text.length > 80) return null
+  const level = levelsBySize.get(block.fontSize)
+  if (level === undefined) return null
+  // Reject sentences mistaken for headings — heading lines rarely end with
+  // sentence punctuation.
+  if (/[。！？!?.;；]$/.test(block.text.trim())) return null
+  return level
+}
+
+class OutlineCursor {
+  private readonly sorted: RawOutlineEntry[]
+  private readonly stack: RawOutlineEntry[] = []
+  private cursor = 0
+
+  constructor(outline: RawOutlineEntry[]) {
+    this.sorted = [...outline].sort((a, b) => a.page - b.page)
+  }
+
+  advance(page: number): string[] {
+    while (this.cursor < this.sorted.length && this.sorted[this.cursor].page <= page) {
+      const entry = this.sorted[this.cursor]
+      while (
+        this.stack.length > 0 &&
+        this.stack[this.stack.length - 1].level >= entry.level
+      ) {
+        this.stack.pop()
+      }
+      this.stack.push(entry)
+      this.cursor += 1
+    }
+    return this.stack.map(({ title }) => title)
+  }
+}
+
+function intersectionArea(
+  a: [number, number, number, number],
+  b: [number, number, number, number]
+): number {
+  const x = Math.max(0, Math.min(a[2], b[2]) - Math.max(a[0], b[0]))
+  const y = Math.max(0, Math.min(a[3], b[3]) - Math.max(a[1], b[1]))
+  return x * y
+}
+
+function boxArea(a: [number, number, number, number]): number {
+  return Math.max(0, a[2] - a[0]) * Math.max(0, a[3] - a[1])
+}
+
+// ---------------------------------------------------------------------------
+// Ticket UT-12: structural risk flags — explicit pending-review reasons for
+// anything whose completeness cannot be confirmed (candidate tables, column
+// layouts, pages without a text layer), the parser's own capability gaps,
+// the detectors' miss risks, and the exclusion audit trail (empty: this path
+// excludes nothing; a future exclusion must register its rule version and a
+// reversible mapping here).
+// ---------------------------------------------------------------------------
+
+export interface StructureRiskFlags {
+  /** 存在无法确认完整性的结构风险 → 待校验。 */
+  reviewRequired: boolean
+  /** 稳定待校验理由码（供 UT-15 内容结论消费）。 */
+  reviewReasons: string[]
+  /** 检测为可能分栏的页（阅读顺序未验证）。 */
+  possibleColumnPages: number[]
+  /** 无文本块的页（真实空白 / 扫描 / 非文本内容——原因未知，不伪造）。 */
+  pagesWithoutTextBlocks: number[]
+  /** 检测到的候选表格（markdown 转换未经等价验证）。 */
+  candidateTables: number
+  /** 区域与正文块重叠的候选表格数。 */
+  tablesOverlappingText: number
+  /** 解析器能力缺口（如实声明——未检测到不等于不存在）。 */
+  capabilityGaps: string[]
+  /** 检测器边界与漏判风险记录。 */
+  detectorLimits: string[]
+  /** 排除规则审计：本路径当前无任何排除（疑似冗余一律保留）。 */
+  exclusionRules: string[]
+}
+
+export function analyzeStructureRisks(value: unknown): StructureRiskFlags {
+  const output = parseOutput(value)
+
+  const pagesWithTextBlocks = new Set(output.blocks.map((block) => block.page))
+  const pagesWithoutTextBlocks: number[] = []
+  for (let page = 1; page <= output.pageCount; page += 1) {
+    if (!pagesWithTextBlocks.has(page)) pagesWithoutTextBlocks.push(page)
+  }
+
+  // 分栏启发式：存在一条竖直分割线 s，使 ≥2 个文本块整体位于左侧、≥2 个
+  // 整体位于右侧，且左右块在竖直方向有交叠 → 可能分栏（阅读顺序未验证）。
+  // 漏判风险：跨栏通栏元素或相触的栏会漏检（记录在 detectorLimits）。
+  const possibleColumnPages: number[] = []
+  const pages = [...pagesWithTextBlocks].sort((a, b) => a - b)
+  for (const page of pages) {
+    const pageBlocks = output.blocks.filter((block) => block.page === page)
+    const edges = [
+      ...new Set([
+        ...pageBlocks.map((block) => block.bbox[0]),
+        ...pageBlocks.map((block) => block.bbox[2]),
+      ]),
+    ].sort((a, b) => a - b)
+    let flagged = false
+    const splitCandidates: number[] = []
+    for (let i = 0; i < edges.length; i += 1) {
+      splitCandidates.push(edges[i])
+      if (i + 1 < edges.length && edges[i + 1] - edges[i] > 1) {
+        splitCandidates.push((edges[i] + edges[i + 1]) / 2)
+      }
+    }
+    for (const s of splitCandidates) {
+      const strictlyLeft = pageBlocks.filter((block) => block.bbox[2] < s)
+      const strictlyRight = pageBlocks.filter((block) => block.bbox[0] > s)
+      if (strictlyLeft.length < 2 || strictlyRight.length < 2) continue
+      const verticalOverlap = strictlyLeft.some((leftBlock) =>
+        strictlyRight.some((rightBlock) =>
+          Math.min(leftBlock.bbox[3], rightBlock.bbox[3]) -
+            Math.max(leftBlock.bbox[1], rightBlock.bbox[1]) > 0
+        )
+      )
+      if (verticalOverlap) {
+        flagged = true
+        break
+      }
+    }
+    if (flagged) possibleColumnPages.push(page)
+  }
+
+  let tablesOverlappingText = 0
+  for (const table of output.tables) {
+    const overlapped = output.blocks.some(
+      (block) =>
+        boxArea(block.bbox) > 0 &&
+        intersectionArea(block.bbox, table.bbox) / boxArea(block.bbox) >= 0.5
+    )
+    if (overlapped) tablesOverlappingText += 1
+  }
+
+  const reviewReasons: string[] = []
+  if (possibleColumnPages.length > 0) {
+    reviewReasons.push("columns_reading_order_unverified")
+  }
+  if (pagesWithoutTextBlocks.length > 0) {
+    reviewReasons.push("pages_without_text_layer_or_empty")
+  }
+  if (output.tables.length > 0) {
+    reviewReasons.push("candidate_table_conversion_unverified")
+  }
+  if (tablesOverlappingText > 0) {
+    reviewReasons.push("table_text_overlap_preserved_for_review")
+  }
+
+  return {
+    reviewRequired: reviewReasons.length > 0,
+    reviewReasons,
+    possibleColumnPages,
+    pagesWithoutTextBlocks,
+    candidateTables: output.tables.length,
+    tablesOverlappingText,
+    capabilityGaps: [
+      "formula/equation content is not extracted (no equation evidence channel)",
+      "image semantics and asset evidence are not captured (image presence has no evidence channel)",
+      "no OCR: pages without a text layer are not read",
+    ],
+    detectorLimits: [
+      "column detection needs a real gutter: a multi-column layout whose column x-ranges touch (or a full-width element bridging them) is merged and NOT flagged",
+      "a page without text blocks is recorded without a cause — genuinely empty pages and non-text (scanned/drawn) content cannot be distinguished without OCR",
+    ],
+    exclusionRules: [],
+  }
+}
+
+/**
+ * Ticket 05: the page-aligned reading of the SAME validated extraction
+ * payload. Where `normalizeBuiltinPdf` fails on a document with no text (that
+ * document has nothing to index), this reading keeps going: every declared page
+ * gets its own text record — empty where the text layer is absent — and the
+ * reasons stay as evidence instead of collapsing into one generic error.
+ */
+export const BUILTIN_PDF_TEXT_LAYER_ABSENT = "text_layer_absent"
+
+export class BuiltinPdfTextLayerAbsentError extends Error {
+  readonly code = BUILTIN_PDF_TEXT_LAYER_ABSENT
+
+  constructor(
+    readonly pageCount: number,
+    readonly pagesWithoutTextBlocks: readonly number[]
+  ) {
+    super(
+      "malformed builtin-pdf output: no text blocks (the PDF likely has no text layer; use ocr-api)"
+    )
+    this.name = "BuiltinPdfTextLayerAbsentError"
+  }
+}
+
+export interface BuiltinPdfPageTextReading {
+  schemaVersion: 1
+  pageCount: number
+  /** Pages whose read produced any content — text spans or a detected table. */
+  pagesWithText: number
+  /** Exactly one record per declared page, in page order, textless pages included. */
+  pageTexts: PdfPageTextRecord[]
+  /** The extraction payload's own coverage warnings, verbatim. */
+  documentWarnings: string[]
+  /** Why the extraction produced nothing, when it did — retained, not collapsed. */
+  exceptions: PdfEvidenceException[]
+}
+
+function parseExtractionInput(value: unknown): unknown {
+  if (typeof value !== "string") return value
+  try {
+    return JSON.parse(value)
+  } catch (error) {
+    throw new Error(
+      `malformed builtin-pdf output: ${error instanceof Error ? error.message : String(error)}`
+    )
+  }
+}
+
+export function readBuiltinPdfPageTexts(
+  value: unknown
+): BuiltinPdfPageTextReading {
+  const output = parseOutput(parseExtractionInput(value))
+
+  const textByPage = new Map<number, string[]>()
+  const tableByPage = new Map<number, string[]>()
+  const pagesWithBlocks = new Set<number>()
+  for (const block of output.blocks) {
+    const existing = textByPage.get(block.page) ?? []
+    existing.push(block.text)
+    textByPage.set(block.page, existing)
+    pagesWithBlocks.add(block.page)
+  }
+  for (const table of output.tables) {
+    const existing = tableByPage.get(table.page) ?? []
+    existing.push(table.markdown)
+    tableByPage.set(table.page, existing)
+  }
+
+  const pageTexts: PdfPageTextRecord[] = []
+  const exceptions: PdfEvidenceException[] = []
+  const documentWarnings = [...output.warnings]
+  let pagesWithText = 0
+
+  if (output.pageCount < 1) {
+    exceptions.push({
+      page: null,
+      code: "no_pages_declared",
+      message: "the extraction payload declares no pages",
+      stage: "text_extraction",
+    })
+    return { schemaVersion: 1, pageCount: output.pageCount, pagesWithText: 0, pageTexts, documentWarnings, exceptions }
+  }
+
+  for (let page = 1; page <= output.pageCount; page += 1) {
+    const blocks = textByPage.get(page) ?? []
+    const tables = tableByPage.get(page) ?? []
+    const parts = [...blocks, ...tables]
+    const text = parts.join("\n\n")
+    if (text) pagesWithText += 1
+    pageTexts.push({
+      page,
+      text,
+      blockCount: blocks.length,
+      tableCount: tables.length,
+      textChars: text.length,
+      status: text ? "extracted" : "text_layer_absent",
+      // Declared from what this extractor actually read on this page.
+      textLayerAbsent: text === "",
+      warnings: [],
+      exceptions: [],
+    })
+  }
+
+  if (output.blocks.length === 0 && output.tables.length === 0) {
+    exceptions.push({
+      page: null,
+      code: "no_text_blocks_in_extraction",
+      message: `the extractor read ${output.pageCount} page(s) and found no text layer content on any of them; the document needs the OCR decision, not an empty-document failure`,
+      stage: "text_extraction",
+    })
+  }
+  if (Number.isInteger(output.stats.pagesWithText) && output.stats.pagesWithText !== pagesWithBlocks.size) {
+    // The script counts pages carrying text spans; this reading counts pages
+    // carrying any content (text spans or a detected table). A disagreement
+    // between the two is kept as evidence, not silently resolved.
+    documentWarnings.push(
+      `extractor stats report ${output.stats.pagesWithText} pages with text spans while the block list carries ${pagesWithBlocks.size}`
+    )
+  }
+
+  return {
+    schemaVersion: 1,
+    pageCount: output.pageCount,
+    pagesWithText,
+    pageTexts,
+    documentWarnings,
+    exceptions,
+  }
+}
+
+export function normalizeBuiltinPdf(
+  value: unknown,
+  documentId: string
+): NormalizedBlock[] {
+  const output = parseOutput(parseExtractionInput(value))
+  if (output.blocks.length === 0) {
+    const pagesWithContent = new Set(
+      [...output.blocks.map((block) => block.page), ...output.tables.map((table) => table.page)]
+    )
+    const withoutText: number[] = []
+    for (let page = 1; page <= output.pageCount; page += 1) {
+      if (!pagesWithContent.has(page)) withoutText.push(page)
+    }
+    throw new BuiltinPdfTextLayerAbsentError(output.pageCount, withoutText)
+  }
+
+  const tablesByPage = new Map<number, RawTable[]>()
+  for (const table of output.tables) {
+    const existing = tablesByPage.get(table.page) ?? []
+    existing.push(table)
+    tablesByPage.set(table.page, existing)
+  }
+  const blocksByPage = new Map<number, RawBlock[]>()
+  for (const block of output.blocks) {
+    const existing = blocksByPage.get(block.page) ?? []
+    existing.push(block)
+    blocksByPage.set(block.page, existing)
+  }
+
+  const levelsBySize = headingLevelsBySize(output.blocks)
+  const cursor = new OutlineCursor(output.outline)
+  const fallbackHeadings: Array<{ level: number; text: string }> = []
+
+  const blocks: NormalizedBlock[] = []
+  const addBlock = (
+    type: NormalizedBlockType,
+    text: string,
+    page: number,
+    extras: Partial<NormalizedBlock> = {}
+  ): void => {
+    const index = blocks.length
+    const outlineSection = cursor.advance(page)
+    const headingLevel = extras.headingLevel
+    if (type === "heading" && headingLevel) {
+      while (
+        fallbackHeadings.at(-1)?.level &&
+        fallbackHeadings.at(-1)!.level >= headingLevel
+      ) {
+        fallbackHeadings.pop()
+      }
+      fallbackHeadings.push({ level: headingLevel, text })
+    }
+    blocks.push({
+      id: blockId(documentId, index, type, text),
+      index,
+      type,
+      text,
+      ...(headingLevel ? { headingLevel } : {}),
+      page,
+      sectionPath:
+        outlineSection.length > 0
+          ? outlineSection
+          : fallbackHeadings.map(({ text: headingText }) => headingText),
+      metadata: {},
+      provenance: { parser: "builtin-pdf", adapter: "script" },
+      ...extras,
+    })
+  }
+
+  // UT-11: a text block that shares its region with a detected table is
+  // PRESERVED as body text (the conservative rule — suspected captions,
+  // footnotes and side notes are never swallowed because a table extraction
+  // succeeded), and the overlap relation is recorded on BOTH sides so the
+  // duplication is auditable instead of silently resolved. The original text
+  // of every transform stays reachable in the extraction evidence rawExtraction.
+  const tablesByTextOverlap = new Set<string>()
+
+  const pages = [...blocksByPage.keys()].sort((a, b) => a - b)
+  for (const page of pages) {
+    const pageBlocks = [...(blocksByPage.get(page) ?? [])].sort((a, b) =>
+      a.bbox[1] === b.bbox[1] ? a.bbox[0] - b.bbox[0] : a.bbox[1] - b.bbox[1]
+    )
+    const pageTables = tablesByPage.get(page) ?? []
+
+    for (const block of pageBlocks) {
+      const coveringTable = pageTables.find(
+        (table) =>
+          boxArea(block.bbox) > 0 &&
+          intersectionArea(block.bbox, table.bbox) / boxArea(block.bbox) >= 0.5
+      )
+      if (coveringTable) {
+        tablesByTextOverlap.add(`${page}:${coveringTable.bbox.join(",")}`)
+      }
+      const transforms: string[] = []
+      let headingLevel = headingLevelFor(block, levelsBySize) ?? undefined
+      if (isDotLeaderRow(block.text)) {
+        headingLevel = undefined
+      }
+      let text = block.text
+      const repaired = repairDotLeaderRow(block.text)
+      if (repaired !== text) {
+        transforms.push("dot_leader_normalized")
+        text = repaired
+      }
+      if (!text) continue
+      addBlock(headingLevel ? "heading" : "paragraph", text, page, {
+        headingLevel,
+        metadata: {
+          fontSize: block.fontSize,
+          ...(block.bold ? { bold: true } : {}),
+          ...(transforms.length > 0 ? { transforms } : {}),
+          ...(coveringTable
+            ? {
+                overlapsTable: {
+                  bbox: coveringTable.bbox,
+                  note: "text block shares its region with a detected table; kept as body text (conservative preserve)",
+                },
+              }
+            : {}),
+        },
+      })
+    }
+
+    // Every detected table is emitted — including ones whose region overlaps
+    // text blocks, which used to be the only ones emitted (with the text
+    // suppressed). The header-value structure stays queryable; the overlap
+    // relation is recorded instead of guessing which side to drop.
+    for (const table of pageTables) {
+      const key = `${page}:${table.bbox.join(",")}`
+      const markdown = repairDotLeadersMultiline(table.markdown)
+      const tableTransforms: string[] = []
+      if (markdown !== table.markdown) {
+        tableTransforms.push("dot_leader_normalized_multiline")
+      }
+      addBlock("table", markdown, page, {
+        table: { markdown },
+        metadata: {
+          source: "pymupdf-find_tables",
+          ...(tablesByTextOverlap.has(key) ? { overlappedByText: true } : {}),
+          ...(tableTransforms.length > 0 ? { transforms: tableTransforms } : {}),
+        },
+      })
+    }
+  }
+
+  if (blocks.length === 0) {
+    throw new Error("malformed builtin-pdf output: no normalized blocks")
+  }
+  return blocks
+}
+
+function wrapParserFailure(error: unknown): Error {
+  const message = error instanceof Error ? error.message : String(error)
+  if (message.startsWith("Parser executable is unavailable:")) {
+    return new Error(
+      `builtin-pdf executable is unavailable. Configure PYTHON_COMMAND. ${message}`
+    )
+  }
+  // The extractor script reports open/decode complaints ("cannot open
+  // PDF: ...", "cannot read PDF pages: ...") as a structured error exit;
+  // re-emit them under the malformed-output marker so classification lands
+  // in permanent_input with protection guidance. Timeout and cancel
+  // messages never carry those shapes and keep their own semantics.
+  if (/cannot (?:open|read) PDF/.test(message)) {
+    return new Error(
+      `builtin-pdf failed: malformed builtin-pdf output: the file could not be opened or decoded (${message})`
+    )
+  }
+  if (message.startsWith("builtin-pdf failed:")) {
+    return error instanceof Error ? error : new Error(message)
+  }
+  return new Error(`builtin-pdf failed: ${message}`)
+}
+
+export class BuiltinPdfParser {
+  readonly type = "builtin-pdf" as const
+  private lastSummary: {
+    warnings: string[]
+    pageCount: number | null
+    textChars: number | null
+    pagesWithText: number | null
+    risks?: StructureRiskFlags
+  } | null = null
+
+  constructor(private options: BuiltinPdfParserOptions) {}
+
+  static defaultScriptPath(): string {
+    return resolveDefaultScriptPath()
+  }
+
+  async parse(input: ParseDocumentInput): Promise<NormalizedBlock[]> {
+    try {
+      const raw = await this.parseRaw(input)
+      return this.normalizeRaw(raw, input.documentId)
+    } catch (error) {
+      throw wrapParserFailure(error)
+    }
+  }
+
+  /**
+   * Ticket UT-09 truth seam: run the extraction script exactly like parse()
+   * but return the RAW stdout (the extraction JSON) so the pipeline can
+   * persist durable extraction evidence. No behavior change for parse().
+   */
+  async parseRaw(
+    input: Omit<ParseDocumentInput, "documentId">
+  ): Promise<string> {
+    if (input.content.length > this.options.inputLimitBytes) {
+      throw new Error(
+        `builtin-pdf input exceeded ${this.options.inputLimitBytes} bytes`
+      )
+    }
+
+    const scriptPath = this.options.scriptPath ?? resolveDefaultScriptPath()
+    const workspace = await mkdtemp(join(tmpdir(), "kefu-rag-builtin-pdf-"))
+    const sourcePath = join(workspace, "input.pdf")
+    try {
+      await writeFile(sourcePath, input.content, { flag: "wx" })
+      // The pipeline's truth seam calls parseRaw directly — the same
+      // failure wrapping as parse() must apply here, or script complaints
+      // reach the classifier bare and land in the unclassified bucket.
+      let raw: string
+      try {
+        raw = await runBoundedProcess({
+          command: this.options.command,
+          args: [...(this.options.commandArgs ?? []), scriptPath, sourcePath],
+          cwd: workspace,
+          timeoutMs: this.options.timeoutMs,
+          outputLimitBytes: this.options.outputLimitBytes,
+          signal: input.signal,
+        })
+      } catch (error) {
+        throw wrapParserFailure(error)
+      }
+      // UT-11: capture the extraction summary (coverage warnings, per-file
+      // stats) for extractionProvenance — normalizeRaw drops nothing, but the
+      // document state and the durable evidence must carry the warnings too.
+      this.lastSummary = null
+      try {
+        const parsed = JSON.parse(raw) as {
+          warnings?: unknown
+          pageCount?: unknown
+          stats?: { textChars?: unknown; pagesWithText?: unknown }
+        }
+        this.lastSummary = {
+          warnings: Array.isArray(parsed.warnings)
+            ? parsed.warnings.filter(
+                (warning): warning is string => typeof warning === "string"
+              )
+            : [],
+          pageCount: Number.isInteger(parsed.pageCount)
+            ? (parsed.pageCount as number)
+            : null,
+          textChars:
+            typeof parsed.stats?.textChars === "number"
+              ? parsed.stats.textChars
+              : null,
+          pagesWithText:
+            typeof parsed.stats?.pagesWithText === "number"
+              ? parsed.stats.pagesWithText
+              : null,
+        }
+      } catch {
+        // normalizeRaw re-validates the same payload and will fail loudly on
+        // malformed output; provenance stays null rather than guessed.
+      }
+      return raw
+    } finally {
+      await rm(workspace, { recursive: true, force: true })
+    }
+  }
+
+  /** UT-09: normalize a raw extraction JSON string into blocks. */
+  normalizeRaw(raw: string, documentId: string): NormalizedBlock[] {
+    let parsed: unknown
+    try {
+      parsed = JSON.parse(raw)
+    } catch (error) {
+      throw new Error(
+        `malformed builtin-pdf output: ${error instanceof Error ? error.message : String(error)}`
+      )
+    }
+    // UT-12: structural risk flags ride the same provenance channel —
+    // computed from the validated payload, stored for extractionProvenance.
+    try {
+      this.lastSummary = this.lastSummary ?? {
+        warnings: [],
+        pageCount: null,
+        textChars: null,
+        pagesWithText: null,
+      }
+      this.lastSummary.risks = analyzeStructureRisks(parsed)
+    } catch {
+      // malformed payload — normalizeBuiltinPdf below fails loudly; no
+      // fabricated risk record.
+    }
+    return normalizeBuiltinPdf(parsed, documentId)
+  }
+
+  /**
+   * UT-11: extraction-level provenance of the last parseRaw — the extraction
+   * payload's own coverage warnings and per-file stats, merged by the pipeline
+   * into document metadata.system.extraction and the durable evidence record.
+   */
+  extractionProvenance(): { metadata: Record<string, unknown>; warnings: string[] } | null {
+    if (!this.lastSummary) return null
+    return {
+      metadata: { extraction: { ...this.lastSummary } },
+      warnings: [...this.lastSummary.warnings],
+    }
+  }
+}

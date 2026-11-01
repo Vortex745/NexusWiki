@@ -1,58 +1,143 @@
 import "dotenv/config"
+import { dirname, join } from "node:path"
 import { createAnswerRuntime } from "./answer/runtime"
 import { startConversationGc } from "./answer/conversation_gc"
 import { SqliteConversationStore } from "./answer/conversation_store"
-import { loadConfig } from "./config"
-import { validateAccessMode, type IdentityAdapter } from "./access/context"
+import { legacyIngestionEnvKeys, loadConfig } from "./config"
+import { defaultEnvFilePath } from "./config/env_file"
+import {
+  validateAccessMode,
+  SINGLE_TENANT_TENANT,
+  type IdentityAdapter,
+} from "./access/context"
 import {
   loadOidcConfig,
   JoseIdentityAdapter,
+  DEFAULT_CLAIM_MAPPING,
+  DEFAULT_CLOCK_SKEW_SECONDS,
+  DEMO_TENANT_ID,
+  startDemoOidcIssuer,
+  type DemoOidcIssuerHandle,
 } from "./identity"
+import { LocalAuthService, SqliteLocalUserStore } from "./identity/local_users"
+import type { LocalAuthOptions } from "./api/session"
+import { SqliteKnowledgeBaseRepo } from "./knowledge/knowledge_base_repo"
+import { KnowledgeBaseServiceImpl } from "./knowledge/knowledge_base_service"
+import { knowledgeBaseEmbeddingProfile } from "./types/knowledge_base"
 import { startServer } from "./api"
 import { startWorker } from "./api/worker"
 import { closeDriver } from "./graph"
 import { createShutdownController, installSignalHandlers } from "./shutdown"
+import { createTracingRuntime } from "./tracing/composition"
+import {
+  configureIngestionStoreResolver,
+  configureIngestionTracing,
+} from "./ingestion/storage"
+import { createWorkspaceIngestionStoreResolver } from "./ingestion/storage/workspace_store"
+import { WorkspaceModelProfileStore } from "./models/workspace_profiles"
+import { configureDecisionTracing } from "./runtime/decision_call"
 import { createMastraRuntimeBoundary } from "./mastra/runtime_boundary"
-import { createMastraChatEventAdapter } from "./mastra/chat_event_adapter"
-import { createDirectAmbiguousMastraRunner } from "./mastra/direct_ambiguous_runner"
-import { createSimpleKnowledgeMastraRunner } from "./mastra/simple_knowledge_runner"
-import { createComplexKnowledgeMastraRunner } from "./mastra/complex_knowledge_runner"
-import { createRouteDispatchRunner } from "./mastra/route_dispatch_runner"
-import { createMastraWorkflowRunner } from "./mastra/workflow_runner"
-import { createDirectReplyStream } from "./mastra/direct_reply_stream"
-import { createMastraMemoryAdapter } from "./mastra/memory_adapter"
+import { createSharedAnswerEntry } from "./mastra/shared_answer_entry"
+import { WorkspaceAnswerEntries } from "./mastra/workspace_answer_entries"
+import { registerBuiltinTools } from "./tools/knowledge_tools"
+import { ToolRegistry } from "./tools/invocation"
+import { createMcpToolBridge } from "./mcp/tool_bridge"
+import { DocumentRepo } from "./ingestion/tracking/doc_repo"
+import { PageIndexRepository } from "./ingestion/tracking/page_index_repo"
+import { createSessionAttachmentService } from "./attachments/session_attachment_service"
+import { FaqEntryServiceImpl } from "./faq/faq_entry_service"
+import { SqliteFaqEntryRepo } from "./faq/faq_entry_repo"
+import { MemoryProfileStore } from "./memory/memory_profile_store"
 import { readMastraRuntimeMode } from "./mastra/runtime_mode"
 import {
   MASTRA_PROMOTION_ARTIFACT_ENV,
   assertRuntimeModeStartupAllowed,
 } from "./mastra/promotion_gate"
-import { RouterImpl } from "./retrieval/router/router"
-import { RuntimeSearchOperations, SearcherImpl } from "./retrieval/search/searcher"
-import { ContextAssemblerImpl } from "./retrieval/context/assembler"
-import { ValidatorImpl } from "./critic/validator/validator"
-import { RePlannerImpl } from "./critic/replanner/replanner"
-import { PlannerImpl } from "./retrieval/planner/planner"
-import { ComplexLoopControllerImpl } from "./retrieval/complex_loop"
-import { ToolSelectorImpl } from "./retrieval/tool_selector"
-import { OpenAIAnswerModel, type AnswerRunObserver } from "./answer/generation"
-import { ContextualizerImpl } from "./answer/contextualizer"
-import { SummarizerImpl } from "./answer/summarizer"
-import { ContextCompressorImpl } from "./answer/context_compressor"
-import { SqliteHandoffStore } from "./answer/handoff_store"
-import { langfuseObserver, NoopLangfuseExporter } from "./answer/langfuse_exporter"
-import { PageIndexRepository } from "./ingestion/tracking/page_index_repo"
-import { ActiveVersionRepository } from "./ingestion/tracking/active_version_repo"
-import type { AccessContext } from "./access/context"
-import type { AgentMessage } from "./types"
-import {
-  createModelCostEstimator,
-  DEFAULT_RUN_BUDGET_MS,
-  type RunResourceBudgetOptions,
-} from "./runtime/run_context"
+import { createRealLangfuseClient } from "./answer/langfuse_client"
+import { createWebEvidenceOperations } from "./web/web_evidence"
+import { createProcessLoggers, type ProcessLoggers } from "./logging/composition"
+import { installConsoleMirror } from "./logging/console_mirror"
+
+/** LF-05: held at module scope so the startup-failure path can flush and close. */
+let processLogs: ProcessLoggers | undefined
 
 async function main() {
+  // LF-05: the log runtime is built before config and before the first startup
+  // message, so every `console.*` below (including a config failure) reaches
+  // `system-YYYY-MM-DD.log`. stdout stays the existing single-line JSON.
+  const logs = createProcessLoggers(process.env)
+  processLogs = logs
+  installConsoleMirror(console, logs.systemFile)
+
+  // WD-05: one startup migration hint through the neutral logger; retired
+  // ingestion env vars are ignored, never silently kept in review mode.
+  const retiredIngestionEnv = legacyIngestionEnvKeys()
+  if (retiredIngestionEnv.length > 0) {
+    await logs.system.warn("config.legacy_env.retired", {
+      keys: retiredIngestionEnv,
+      replacement: "weknora-technical-v1",
+    })
+  }
+
   const cfg = loadConfig()
+  if (cfg.decisionProviderMigration) {
+    await logs.system.warn("config.decision_provider.migrated", {
+      from: "clef",
+      to: cfg.decisionProvider,
+    })
+  }
   console.log("[kefu-RAG] Config loaded", { esNode: cfg.esNode, neo4jUri: cfg.neo4jUri })
+
+  const runtimeMode = readMastraRuntimeMode()
+  assertRuntimeModeStartupAllowed(
+    runtimeMode,
+    process.env[MASTRA_PROMOTION_ARTIFACT_ENV]
+  )
+
+  // LO-05/LO-06: one tracing runtime for the whole process, built before the
+  // model clients so their observation seam can use it.
+  const { runtime: tracingRuntime, config: tracingConfig } = createTracingRuntime(process.env)
+  // LO-11: the ingestion store builds its own embedding client; hand it the
+  // same runtime so ingestion embeddings are observed too.
+  configureIngestionTracing(tracingRuntime)
+  configureDecisionTracing(tracingRuntime)
+  console.log(
+    tracingConfig.enabled
+      ? `[kefu-RAG] tracing enabled (sampleRate=${tracingConfig.sampleRate}) → OTLP ${process.env.LANGFUSE_BASE_URL}`
+      : `[kefu-RAG] tracing off (${tracingConfig.reason})`,
+  )
+
+  // createAnswerRuntime owns shared SQLite, ES, Neo4j and OpenAI adapters.
+  // Langfuse export activates only when both LANGFUSE_* keys are set —
+  // createRealLangfuseClient returns undefined otherwise (Noop disabled mode).
+  const answerRuntime = createAnswerRuntime(
+    cfg,
+    undefined,
+    createRealLangfuseClient({
+      publicKey: cfg.langfusePublicKey,
+      secretKey: cfg.langfuseSecretKey,
+      ...(cfg.langfuseBaseUrl ? { baseUrl: cfg.langfuseBaseUrl } : {}),
+    }),
+    tracingRuntime,
+  )
+
+  // Private workspaces own their embedding configuration and physical vector
+  // index. The ingestion pipeline resolves the store from the document's
+  // knowledge base so one worker can serve every workspace.
+  const workspaceProfiles = new WorkspaceModelProfileStore(
+    answerRuntime.processRuntime.db,
+    cfg,
+    { envPath: defaultEnvFilePath() },
+  )
+  configureIngestionStoreResolver(
+    createWorkspaceIngestionStoreResolver({
+      db: answerRuntime.processRuntime.db,
+      config: cfg,
+      profiles: workspaceProfiles,
+      elasticsearch: answerRuntime.processRuntime.elasticsearch,
+      graphDriver: answerRuntime.processRuntime.neo4jDriver,
+    }),
+  )
 
   // Ticket 05: build the OIDC config + concrete IdentityAdapter from the
   // environment. In single_tenant mode loadOidcConfig returns a noop config
@@ -62,7 +147,49 @@ async function main() {
   // issuer, audience, algorithm, expiry, and not-before validation in one
   // trust boundary. Remote JWKS caching, cooldown, and key rotation are
   // handled by jose internally — no manual cache warming needed.
-  const oidcConfig = loadOidcConfig(process.env, cfg.accessMode)
+  //
+  // Ticket 01 (IAM-01): when DEMO_OIDC=1 the local issuer takes over. It
+  // starts on loopback, mints tokens only for the administrator's special ID
+  // and the users registered into this process's database, and the adapter
+  // verifies against ITS JWKS. `loadConfig` already reports the demo as
+  // enforced access mode (the demo flag wins over ACCESS_MODE on purpose: a
+  // demo that silently fell back to single-tenant would defeat the security
+  // flow), so the enforced identity path is what the server mounts. The auth
+  // service is created here, next to the runtime, so the sign-in proxy and
+  // the issuer share ONE user registry.
+  let demoIssuer: DemoOidcIssuerHandle | undefined
+  let demoAuth: LocalAuthOptions | undefined
+  let oidcConfig = loadOidcConfig(process.env, cfg.accessMode)
+  if (cfg.demoOidc) {
+    const localAuth = new LocalAuthService(
+      new SqliteLocalUserStore(answerRuntime.processRuntime.db),
+      { adminId: cfg.adminLoginId, adminPassword: cfg.adminLoginPassword },
+    )
+    demoIssuer = await startDemoOidcIssuer({
+      port: cfg.demoOidcPort,
+      audience: cfg.demoOidcAudience,
+      // Keep the signing key beside the process database: cached browser
+      // sessions survive a backend restart instead of expiring every deploy.
+      keyPath: join(dirname(cfg.sqlitePath), "local-oidc-key.json"),
+      resolveClaims: (account) => localAuth.claimsForAccount(account),
+    })
+    oidcConfig = {
+      kind: "active",
+      issuer: demoIssuer.issuer,
+      audience: cfg.demoOidcAudience,
+      jwksEndpoint: demoIssuer.jwksEndpoint,
+      claimMapping: DEFAULT_CLAIM_MAPPING,
+      clockSkewSeconds: DEFAULT_CLOCK_SKEW_SECONDS,
+    }
+    demoAuth = {
+      tokenEndpoint: demoIssuer.tokenEndpoint,
+      tokenAuth: demoIssuer.tokenAuth,
+      localAuth,
+    }
+    console.log(
+      `[kefu-RAG] Local sign-in ready on ${demoIssuer.issuer} — admin ID: ${cfg.adminLoginId}, registered users can sign in with their own ID`
+    )
+  }
   let identityAdapter: IdentityAdapter | undefined
   if (cfg.accessMode === "enforced") {
     identityAdapter = new JoseIdentityAdapter({ config: oidcConfig })
@@ -73,190 +200,168 @@ async function main() {
   // with code 1, no server, no worker. With the P5.2 adapter wired, enforced
   // mode passes the startup gate; the runtime fail-closed still lives in
   // createAccessMiddleware (enforced + adapter.resolve()=null → 401).
-  validateAccessMode({ accessMode: cfg.accessMode, ...(identityAdapter ? { adapter: identityAdapter } : {}) })
+  validateAccessMode({
+    accessMode: cfg.accessMode,
+    ...(identityAdapter ? { adapter: identityAdapter } : {}),
+  })
 
-  const runtimeMode = readMastraRuntimeMode()
-  assertRuntimeModeStartupAllowed(
-    runtimeMode,
-    process.env[MASTRA_PROMOTION_ARTIFACT_ENV]
+  // Ticket 02 (KB-01, spec §8.1 L241): every tenant owns exactly one default
+  // knowledge base, and startup creates it for the tenants this process serves.
+  // Repeated startup inserts nothing — the default id is derived from the
+  // tenant id, so this is a read on the second run. A tenant that only appears
+  // later (an enforced deployment with arbitrary OIDC tenants) gets its default
+  // on first use, through the same deterministic path.
+  const knowledgeBases = new KnowledgeBaseServiceImpl(
+    new SqliteKnowledgeBaseRepo(answerRuntime.processRuntime.db),
+    knowledgeBaseEmbeddingProfile(cfg.embeddingModel, cfg.embeddingDimensions)
   )
-
-  // createAnswerRuntime owns shared SQLite, ES, Neo4j and OpenAI adapters.
-  const answerRuntime = createAnswerRuntime(cfg)
-
-  // Ticket 09: wire the real Mastra runner for direct + ambiguous routes.
-  // The runner is composed of:
-  //   - RouterImpl (domain Router — T03 §2.3 deterministic GATE 0)
-  //   - createDirectReplyStream (real Mastra core Agent — ESM-only devDep)
-  //   - createDirectAmbiguousMastraRunner (T09 route-aware runner)
-  //   - createMastraChatEventAdapter (T05 adapter — 6-stage event emission)
-  //
-  // The boundary's `eventsSource` is the single injection point passed to
-  // `startServer` (T07 §3.4 single-publisher invariant). `close()` is a no-op
-  // in T09 — the Mastra core Agent has no explicit cleanup hook (the
-  // underlying OpenAI client is closed by ProcessRuntime.close()).
-  const { chatClient, embeddingClient, elasticsearch, db } = answerRuntime.processRuntime
-  const router = new RouterImpl(chatClient, cfg.openaiChatModel)
-  const conversationStore = new SqliteConversationStore(db)
-  const resolveTenantId = (accessContext: AccessContext) => accessContext.tenantId
-  const streamDirectReply = await createDirectReplyStream({
-    model: cfg.openaiChatModel,
-    apiKey: cfg.openaiApiKey,
-    ...(cfg.openaiBaseUrl ? { baseURL: cfg.openaiBaseUrl } : {}),
-    timeout: cfg.openaiRequestTimeoutMs,
-    maxRetries: cfg.openaiMaxRetries,
-  })
-  // Ticket 10 — Conversation Memory adapter. Pure pass-through to the
-  // existing ConversationStore (T04 section 3 contract). The runner uses
-  // this to load memory before streaming (prepend context prefix) and to
-  // save validated turns after the direct route completes. Ambiguous route
-  // does NOT use the adapter (clarification is not a completed turn).
-  const memoryAdapter = createMastraMemoryAdapter({ conversationStore })
-  const summarizer = new SummarizerImpl(chatClient, cfg.openaiChatModel)
-
-  // Ticket 09 — direct + ambiguous route runner. HandoffStore is NOT wired
-  // here — direct + ambiguous routes don't use Handoff; T12 (complex route)
-  // will wire it when it migrates.
-  const directAmbiguousRunner = createDirectAmbiguousMastraRunner({
-    router,
-    streamDirectReply,
-    conversationStore,
-    resolveTenantId,
-    memoryAdapter,
-    summarizer,
-  })
-
-  // The Mastra runners reuse the existing retrieval, validation, memory,
-  // handoff, and summarization components from the composition root.
-  const searchOperations = new RuntimeSearchOperations({
-    es: elasticsearch,
-    chatClient,
-    embeddingClient,
-    chatModel: cfg.openaiChatModel,
-    embeddingModel: cfg.embeddingModel,
-    pageIndexRepo: new PageIndexRepository(db),
-    activeVersionRepo: new ActiveVersionRepository(db),
-  })
-  const answerModel = new OpenAIAnswerModel(chatClient, cfg.openaiChatModel)
-  const contextualizer = new ContextualizerImpl(chatClient, cfg.openaiChatModel)
-  const simpleRunner = createSimpleKnowledgeMastraRunner({
-    router,
-    createSearcher: () => new SearcherImpl(searchOperations),
-    assembler: new ContextAssemblerImpl(),
-    validator: new ValidatorImpl(chatClient, cfg.openaiChatModel),
-    replanner: new RePlannerImpl(),
-    streamAnswerDraft: (messages: AgentMessage[], signal: AbortSignal) =>
-      answerModel.stream(messages, signal),
-    toolSelector: new ToolSelectorImpl(chatClient, cfg.openaiChatModel),
-    conversationStore,
-    contextualizer,
-    summarizer,
-    compressor: new ContextCompressorImpl(chatClient, cfg.openaiChatModel),
-    handoffStore: new SqliteHandoffStore(db),
-    resolveTenantId,
-  })
-
-  // Ticket 12 — complex knowledge route runner. Mirrors the T11 simple
-  // runner construction pattern: reuses the SAME domain retrieval/Evidence/
-  // Context/Citation/Critic/correction/Handoff/Summarizer components, plus
-  // the T08 ComplexLoopController (bounded LLM-driven retrieval-tool loop,
-  // <=3 iterations / <=4 tool calls) and the domain Planner (multi-query
-  // decomposition fallback when complexLoopController is absent at runtime).
-  // The runner's dual-path GATE 1 prefers runComplexLoop (T08 §13) and
-  // falls back to planner.decompose — both paths produce Evidence that
-  // flows through the same Context → Draft → Citation → Critic loop.
-  // T09 §13 correction-round reuse: the correction round reuses
-  // runComplexLoop with shared budgets + priorToolCalls (dedup state).
-  const complexLoopController = new ComplexLoopControllerImpl(
-    chatClient,
-    cfg.openaiChatModel
-  )
-  const planner = new PlannerImpl(chatClient, cfg.openaiChatModel)
-  const complexRunner = createComplexKnowledgeMastraRunner({
-    router,
-    createSearcher: () => new SearcherImpl(searchOperations),
-    assembler: new ContextAssemblerImpl(),
-    validator: new ValidatorImpl(chatClient, cfg.openaiChatModel),
-    replanner: new RePlannerImpl(),
-    streamAnswerDraft: (messages: AgentMessage[], signal: AbortSignal) =>
-      answerModel.stream(messages, signal),
-    planner,
-    complexLoopController,
-    conversationStore,
-    contextualizer,
-    summarizer,
-    compressor: new ContextCompressorImpl(chatClient, cfg.openaiChatModel),
-    handoffStore: new SqliteHandoffStore(db),
-    resolveTenantId,
-  })
-
-  // Ticket 11 + Ticket 12 — route dispatch runner composes T09 + T11 + T12
-  // into a single route-aware MastraRunner. simple → simpleRunner;
-  // direct/ambiguous → directAmbiguousRunner; complex → complexRunner
-  // (T12, in-process). Dispatch owns conversation preparation and the single
-  // authoritative route decision, then invokes exactly one route owner.
-  const dispatchRunner = createRouteDispatchRunner({
-    router,
-    simpleRunner,
-    directAmbiguousRunner,
-    complexRunner,
-    conversationStore,
-    contextualizer,
-    resolveTenantId,
-  })
-  const runner = await createMastraWorkflowRunner(dispatchRunner)
-
-  // The adapter calls each observer before yielding. Observer order matches
-  // T06 §5.3: traceRepository (hard) then langfuseObserver (soft).
-  // The langfuseObserver is only attached when Langfuse export is Real
-  // (not Noop) — keeps the observer list minimal when Langfuse is disabled
-  // (T06 §4.3 Noop default).
-  const mastraObservers: AnswerRunObserver[] = []
-  if (!(answerRuntime.langfuseExporter instanceof NoopLangfuseExporter)) {
-    mastraObservers.push(langfuseObserver(answerRuntime.langfuseExporter))
+  const startupTenants = cfg.demoOidc ? [DEMO_TENANT_ID] : [SINGLE_TENANT_TENANT]
+  for (const tenantId of startupTenants) {
+    const knowledgeBase = knowledgeBases.ensureDefault(tenantId)
+    console.log(
+      `[kefu-RAG] default knowledge base ready for tenant ${tenantId}: ${knowledgeBase.id}`
+    )
   }
-  const resourceBudgetLimits = {
-    ...(cfg.answerRunMaxModelCalls !== undefined
-      ? { maxModelCalls: cfg.answerRunMaxModelCalls }
-      : {}),
-    ...(cfg.answerRunMaxTokens !== undefined
-      ? { maxTokens: cfg.answerRunMaxTokens }
-      : {}),
-    ...(cfg.answerRunMaxCostMicros !== undefined
-      ? { maxCostMicros: cfg.answerRunMaxCostMicros }
-      : {}),
+
+  // Eval refactor Ticket 01: the shared Answer run entry owns the full
+  // production composition (direct/simple/complex/ambiguous routing,
+  // retrieval, Critic/Replan, observer fanout, budgets). Normal chat wires
+  // it through the Mastra runtime boundary into the HTTP server — the
+  // single injection point passed to `startServer` (T07 §3.4
+  // single-publisher invariant).
+  // Ticket 22 (ATT-01): ONE attachment service for the whole process — the
+  // upload routes write it and the answer runs read it. Session-scoped, so a
+  // run can only ever retrieve the attachments of its own conversation.
+  const attachments = createSessionAttachmentService(answerRuntime.processRuntime.db)
+
+  // Ticket 31 (FAQ-01B): ONE FAQ service for the answer path — exact matches
+  // answer directly, fuzzy matches join retrieval as evidence. Rows are
+  // versioned in the process db and seeded with the demo dataset.
+  const faqService = new FaqEntryServiceImpl({
+    repo: new SqliteFaqEntryRepo(answerRuntime.processRuntime.db),
+  })
+  // Long-term memory (2026-10-30): ONE account profile store for the answer
+  // path — recall reads the owner's three-section profile. It shares the
+  // process db with the management routes' own instance.
+  const memoryProfileStore = new MemoryProfileStore({
+    db: answerRuntime.processRuntime.db,
+  })
+
+  const webOperations = createWebEvidenceOperations({
+    ...(cfg.tavilyApiKey ? { tavilyApiKey: cfg.tavilyApiKey } : {}),
+  })
+  // ONE read-only tool runtime for every entry: a private workspace must not
+  // spawn another MCP capability child just because its model settings differ.
+  const sharedRegistry = registerBuiltinTools(new ToolRegistry(), {
+    db: answerRuntime.processRuntime.db,
+    documentRepo: new DocumentRepo(answerRuntime.processRuntime.db),
+    pageIndexRepo: new PageIndexRepository(answerRuntime.processRuntime.db),
+  })
+  const sharedToolRuntime: import("./mastra/answer_route_stack").AnswerToolRuntime = {
+    registry: sharedRegistry,
+    mcpBridge: await createMcpToolBridge({
+      registry: sharedRegistry,
+      config: cfg,
+    }).catch((error: unknown) => {
+      console.warn(
+        "[mcp] capability bridge failed to compose (chat runs without MCP tools):",
+        error instanceof Error ? error.message : String(error)
+      )
+      return null
+    }),
   }
-  const resourceBudget: RunResourceBudgetOptions | undefined =
-    Object.keys(resourceBudgetLimits).length > 0 || cfg.answerRunModelPricing
-      ? {
-          ...(Object.keys(resourceBudgetLimits).length > 0
-            ? { limits: resourceBudgetLimits }
-            : {}),
-          ...(cfg.answerRunModelPricing
-            ? { estimateCostMicros: createModelCostEstimator(cfg.answerRunModelPricing) }
-            : {}),
-        }
-      : undefined
-  const mastraSource = createMastraChatEventAdapter({
-    runner,
-    traceObserver: answerRuntime.traceRepository,
-    observers: mastraObservers,
-    budgetMs: DEFAULT_RUN_BUDGET_MS,
-    resourceBudget,
+
+  const baseEntryOptions = {
+    // LG-05-AC10: with the HTTP root owning the run, the legacy exporter must
+    // not publish a second trace. SQLite consumption (traceObserver) is
+    // untouched either way.
+    legacyLangfuseObserver: !tracingConfig.enabled,
+    // Whole-run deadline budget. ANSWER_RUN_BUDGET_MS existed as dead config
+    // for normal chat: the entry's injectable seam was never fed from the
+    // composition root, so every run kept the 30s DEFAULT_RUN_BUDGET_MS and
+    // complex multi-tool loops were cancelled mid-flight (observed live: a
+    // complex-routed question died at exactly 30.04s with status=cancelled).
+    ...(cfg.answerRunBudgetMs !== undefined
+      ? { budgetMs: cfg.answerRunBudgetMs }
+      : {}),
+    // The retrieval channel that reads this session's temporary attachments.
+    attachments,
+    // Ticket 31 (FAQ-01B): the FAQ standard-answer channel.
+    faq: faqService,
+    // Long-term memory (2026-10-30): scoped account-profile recall.
+    memoryProfiles: memoryProfileStore,
+    // Ticket 36 (WEB-01): the web-evidence channel — safe URL reads of the
+    // user's own pasted links + optional configured Tavily search (server-
+    // side key). Runs only when the composition wires it, so probes never
+    // touch the network.
+    web: webOperations,
+  }
+
+  const sharedAnswerEntry = await createSharedAnswerEntry({
+    config: cfg,
+    answerRuntime,
+    toolRuntime: sharedToolRuntime,
+    ...baseEntryOptions,
+  })
+  // Private workspaces run with their own credentials and vector index; the
+  // demo/single-tenant path falls through to the shared entry above.
+  const workspaceAnswerEntries = new WorkspaceAnswerEntries({
+    baseConfig: cfg,
+    answerRuntime,
+    profiles: workspaceProfiles,
+    sharedEntry: sharedAnswerEntry,
+    baseOptions: baseEntryOptions,
+    toolRuntime: sharedToolRuntime,
   })
   console.log("[kefu-RAG] Mastra runner wired — direct + ambiguous + simple + complex knowledge routes enabled with Conversation Memory + Handoff + Observer fanout")
 
   const mastraBoundary = createMastraRuntimeBoundary({
-    mastraSource,
+    mastraSource: workspaceAnswerEntries.eventsSource,
     modeReader: () => runtimeMode,
   })
 
-  const { server, processRuntime } = await startServer(
-    3001,
+  const {
+    server,
+    processRuntime,
+    logger: runtimeLogger,
+  } = await startServer(
+    Number(process.env.API_PORT ?? 3001),
     mastraBoundary.eventsSource,
-    identityAdapter
+    identityAdapter,
+    {
+      // Ticket 01 wiring fix: the session router reads options.demoAuth — the
+      // spread leaked the three fields as top-level options and the sign-in
+      // flow never came up (the root cause recorded in TD-24-01).
+      ...(demoAuth ? { demoAuth } : {}),
+      // LF-05: the system logger built above is the process's only log runtime;
+      // without this injection startServer would build a stdout-only logger.
+      logger: logs.system,
+      // LF-07: Answer run metadata goes to the Agent file only (never stdout).
+      agentLogger: logs.agent,
+      // Ticket 22 (ATT-01): the routes and the runs share ONE instance.
+      attachments,
+      // Ticket 35 (TOOL-01B): the MCP capability invocation seam.
+      ...(sharedAnswerEntry.mcp ? { mcpCapabilities: sharedAnswerEntry.mcp } : {}),
+      // The reasoning-effort capability THIS composition resolved — the
+      // transport must publish this exact frozen object, never re-read .env.
+      reasoningCapability: sharedAnswerEntry.reasoningCapability,
+      // A private workspace may run a different chat model.
+      reasoningCapabilityFor: (ctx) => workspaceAnswerEntries.capabilityFor(ctx),
+      // LO-06: the single tracing runtime built above.
+      tracing: tracingRuntime,
+      // Model settings saves write provider credentials here; detection and
+      // probes read it immediately, the pipeline picks it up on next start.
+      envFilePath: defaultEnvFilePath(),
+    }
   )
-  const worker = startWorker({ db: processRuntime.db })
+  const worker = startWorker({
+    db: processRuntime.db,
+    wikiChatClient: processRuntime.chatClient,
+    wikiElasticsearch: processRuntime.elasticsearch,
+    // LO-13: the worker executes persistent tasks under the same runtime, so a
+    // submitted task continues its trace instead of opening a second one.
+    tracing: tracingRuntime,
+  })
 
   // Ticket 08 P6 (spec §7 L1535): conversation GC — scheduled job that purges
   // sessions inactive for >conversationTtlDays. Uses the SAME db as the answer
@@ -278,6 +383,7 @@ async function main() {
     worker,
     conversationGc,
     server,
+    ...(demoIssuer ? { demoIssuer } : {}),
     runtime: {
       close: async () => {
         // T12 (spec issue #12 criterion #6): flush pending Langfuse events
@@ -290,6 +396,21 @@ async function main() {
         // Close the Mastra runtime boundary after ProcessRuntime so in-flight
         // streams have already been cancelled by the upstream close cascade.
         await mastraBoundary.close()
+        // LO-05: flush spans within a bounded budget. A timed-out flush is
+        // reported, not retried forever, and never blocks the closes below.
+        const tracingShutdown = await tracingRuntime.shutdown(2_000)
+        if (tracingShutdown.timedOut) {
+          console.error(
+            `[shutdown] tracing flush timed out; dropped ${tracingShutdown.droppedPending} pending spans`,
+          )
+        }
+        // LO-03: flush the runtime logger LAST so the closes above still
+        // produce diagnostics, then drain the pipe within its own budget.
+        await runtimeLogger.close()
+        // LF-05: after the HTTP server and background runtime have stopped,
+        // close the file runtime last so every accepted line (including the
+        // request terminals above) is flushed and both daily files are closed.
+        await logs.close()
       },
     },
     // P8.2 (Debt #3 fix): close the legacy graph Neo4j driver singleton.
@@ -305,7 +426,14 @@ async function main() {
   installSignalHandlers(shutdownController)
 }
 
-main().catch((err) => {
+main().catch(async (err) => {
   console.error("[kefu-RAG] Startup failed:", err)
+  // LF-05: the mirror already queued this failure for the system file; flush
+  // it before exiting. A logging failure must not replace the startup error.
+  try {
+    await processLogs?.close()
+  } catch {
+    // stderr already carries the original failure.
+  }
   process.exit(1)
 })

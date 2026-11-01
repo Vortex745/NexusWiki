@@ -42,7 +42,8 @@ import type { Router } from "../retrieval/router/interface"
 import type { ConversationStore } from "../answer/conversation_store"
 import type { Contextualizer } from "../answer/contextualizer"
 import type { AccessContext } from "../access/context"
-import type { TokenUsage } from "../types"
+import type { RoutingModelDetails, TokenUsage } from "../types"
+import { isLongTermMemoryQuery } from "./memory_prompt"
 
 /**
  * Dependencies for the route dispatch runner. All sub-runners are pre-built
@@ -74,7 +75,12 @@ function abortError(checkpoint: string): Error {
 }
 
 function abortable<T>(operation: Promise<T>, signal: AbortSignal): Promise<T> {
-  if (signal.aborted) return Promise.reject(abortError("route dispatch guard"))
+  if (signal.aborted) {
+    // The operation may have synchronously aborted the run while reserving
+    // its call budget. Consume its rejection even when cancellation wins.
+    void operation.catch(() => {})
+    return Promise.reject(abortError("route dispatch guard"))
+  }
   return new Promise<T>((resolve, reject) => {
     const onAbort = () => reject(abortError("route dispatch race"))
     signal.addEventListener("abort", onAbort, { once: true })
@@ -163,10 +169,19 @@ export function createRouteDispatchRunner(
       }
     }
 
-    const decision = await abortable(
-      router.decide({ text: contextualizedQuery }),
-      input.signal
-    )
+    const memoryIntent =
+      isLongTermMemoryQuery(effectiveMessage) ||
+      isLongTermMemoryQuery(contextualizedQuery)
+    let routingModel: RoutingModelDetails | undefined
+    const decision = memoryIntent
+      ? "direct" as const
+      : await abortable(
+          router.decide({ text: contextualizedQuery }, {
+            signal: input.signal,
+            onDecision: (details) => { routingModel = details },
+          }),
+          input.signal
+        )
     // P7.3 peek-then-ack: claim (destructive) the pending clarification now
     // that the route decision is authoritative. Non-ambiguous routes claim
     // because the owner (in dispatch mode with preparedRoute set) does not
@@ -189,13 +204,19 @@ export function createRouteDispatchRunner(
         contextualizedQuery,
         routeTrace: {
           decision,
+          ...(memoryIntent ? { memoryIntent: true } : {}),
+          ...(routingModel ? { routingModel } : {}),
           contextualizationOutcome,
           ...(contextualizationFailure ? { contextualizationFailure } : {}),
           ...(contextualizationUsage ? { contextualizationUsage } : {}),
           ...(contextualizationDurationMs != null ? { contextualizationDurationMs } : {}),
         },
       },
+      ...(memoryIntent ? { memoryIntent: true } : {}),
     }
+    // Routing is now authoritative. The selected owner announces retrieval
+    // only when its retrieval work actually starts.
+    input.onStageProgress?.("route", { status: "completed", data: ownerInput.preparedRoute!.routeTrace })
 
     if (decision === "simple") return simpleRunner(ownerInput)
     if (decision === "direct" || decision === "ambiguous") {

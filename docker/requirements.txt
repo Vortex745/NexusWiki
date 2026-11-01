@@ -1,0 +1,4 @@
+# Match the parser versions already used by this project. Office converters
+# only: no audio transcription, Azure client, or local OCR model downloads.
+PyMuPDF==1.28.0
+markitdown[docx,xlsx,xls,pptx]==0.1.5

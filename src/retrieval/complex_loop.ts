@@ -2,10 +2,32 @@ import type OpenAI from "openai"
 
 import type { RetrievalResult } from "../types"
 import type { AccessContext } from "../access/context"
+import type { RetrievalScope } from "../types/retrieval_scope"
 import type { Searcher, SearchOptions, RetrievalChannel } from "./search/interface"
+// PT-02 AC06: the loop builds its observation Evidence with the AUTHORITATIVE
+// builder, not a local stand-in. The previous local version invented
+// `ev_<documentId>_<chunkId>` ids and dropped provenance, so a loop observation
+// cited a temporary session attachment — whose `chunk.documentId` IS its
+// attachmentId — with an identity the route never publishes, which reads back
+// as a knowledge-base document. `../answer/evidence` depends on nothing above
+// the retrieval layer, so sharing it introduces no cycle.
+import { buildEvidence, citationIdsByChunk } from "../answer/evidence"
+// PT-07 AC09 — the loop's observation compression is decided by the SAME shared
+// material entry point the knowledge runners use. Importing it here (rather
+// than writing a second "does this fit?" rule) is the point of the ticket: the
+// loop and the final answer can then never disagree about what the same
+// material costs against the same budget. `../answer/context_pipeline` only
+// depends on the retrieval/context layer below, so this adds no cycle.
+import { prepareGenerationContext } from "../answer/context_pipeline"
+import type { ContextCompressor } from "../answer/context_compressor"
+import type {
+  ContextMaterial,
+  ContextMaterialOptions,
+} from "./context/assembler"
 import {
   RETRIEVAL_TOOLS,
   validateToolArgs,
+  resolveToolApplicability,
   toolToSearchOptions,
   type RetrievalToolName,
   type RetrievalToolArgs,
@@ -121,6 +143,8 @@ export interface ComplexLoopToolCallTrace {
   resultCount: number
   /** Channels that were unavailable during this call. */
   unavailableChannels: RetrievalChannel[]
+  /** DR-22: non-channel failure reasons reported by the executed search. */
+  degradationReasons?: string[]
   /** Search call duration in ms (0 if duplicate). */
   durationMs: number
   /** Whether observation compression ran after this call. */
@@ -131,6 +155,14 @@ export interface ComplexLoopToolCallTrace {
   compressionDroppedEvidenceIds?: string[]
   /** Present when the LLM's tool choice was a fallback. */
   fallbackReason?: string
+  /**
+   * Ticket 34 (TOOL-01A): present when the call did NOT execute because the
+   * tool-invocation boundary refused it (unknown tool, not allowlisted,
+   * invalid arguments) or bounded it (timeout, failure). Absent for executed
+   * calls (outcome ok is implied) and duplicates.
+   */
+  toolOutcome?: "unknown_tool" | "policy_denied" | "invalid_args" | "timeout" | "failed"
+  toolOutcomeError?: string
 }
 
 export interface ComplexLoopResult {
@@ -157,6 +189,18 @@ export interface ComplexLoopAssembler {
     results: RetrievalResult[],
     citationIds?: ReadonlyMap<string, string>
   ): Promise<string>
+  /**
+   * PT-07 AC09 — OPTIONAL, exactly like `ContextAssembler.assembleMaterial`:
+   * a string-only assembler (the loop's older test fakes, any pre-ticket caller)
+   * keeps compiling and keeps the legacy preview accounting, while the real
+   * `ContextAssemblerImpl` reports the complete authorized material so the
+   * observation's budget decision is made on the real counts.
+   */
+  assembleMaterial?(
+    results: RetrievalResult[],
+    citationIds?: ReadonlyMap<string, string>,
+    options?: ContextMaterialOptions
+  ): Promise<ContextMaterial>
 }
 
 // ---------------------------------------------------------------------------
@@ -180,6 +224,59 @@ export interface ComplexLoopCompressor {
   } | null>
 }
 
+/**
+ * PT-07 AC01/AC03/AC09/AC10 — the material-backed observation compressor the
+ * complex runner supplies to `runComplexLoop`.
+ *
+ * Before this adapter the loop's observation was compressed on the sum of the
+ * 600-character display previews (finding F4): a 30,000-token parent looked
+ * cheap, no compression ran, and the tail of the material — where the audited
+ * "关键例外" lives — never reached the model that writes the next tool decision.
+ *
+ * The adapter adds no second rule. It hands the loop's own accumulated results
+ * to the ONE shared entry point (`prepareGenerationContext`, PT-06), which
+ *   - assembles the complete authorized material through the wired assembler's
+ *     `assembleMaterial` when it has one (and falls back to the legacy string
+ *     contract, reporting `preview_only`, when it does not);
+ *   - triggers compression only when the per-parent candidate windows plus all
+ *     fixed framing exceed the SAME budget the final answer is measured against;
+ *   - pays no model call when the material already fits;
+ *   - returns `null` on every refusal (`all_groups_failed`,
+ *     `still_over_budget`, `unknown_citation`, `provider_error`), which is the
+ *     loop's documented signal to keep its deterministic observation text;
+ *   - re-throws `AbortError`, so a cancelled or budget-exhausted run still
+ *     cancels through the same seam.
+ *
+ * Nothing here touches the loop's iteration/tool-call budgets or its ACL: the
+ * adapter is only called at the observation point the loop already had.
+ */
+export function createComplexLoopObservationCompressor(deps: {
+  assembler: ComplexLoopAssembler
+  compressor: ContextCompressor
+  maxContextTokens?: number
+}): ComplexLoopCompressor {
+  const maxContextTokens = deps.maxContextTokens ?? 6_000
+  return {
+    async compress(results, query, budget, signal) {
+      const evidence = buildEvidence(results)
+      const prepared = await prepareGenerationContext({
+        assembler: deps.assembler,
+        results,
+        citationIds: citationIdsByChunk(evidence),
+        evidence,
+        query,
+        compressor: deps.compressor,
+        // Never raised above the run's budget here — the caller's number wins.
+        maxContextTokens: budget.maxContextTokens ?? maxContextTokens,
+        ...(signal ? { signal } : {}),
+      })
+      // Only an ADOPTED compression is published to the loop; every refusal
+      // leaves `compression` null and the loop keeps its in-budget text.
+      return prepared.compression
+    },
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Loop entry point
 // ---------------------------------------------------------------------------
@@ -190,12 +287,56 @@ export interface ComplexLoopDeps {
   assembler: ComplexLoopAssembler
   /** Optional compressor for bounding observation memory (criterion #5). */
   compressor?: ComplexLoopCompressor
+  /**
+   * Ticket 34 (TOOL-01A): the schema-validated tool-invocation boundary.
+   * When wired, every loop tool call executes THROUGH it — strict argument
+   * validation, the run's allowlist, a per-call deadline and trace records —
+   * instead of hitting the searcher directly. Absent → the legacy direct
+   * search path (backward compat with pre-ticket callers and tests).
+   */
+  toolInvoker?: ToolInvoker
 }
+
+/**
+ * Ticket 34 (TOOL-01A): the loop-facing shape of one validated tool call.
+ * `ok` carries the search outcome; every refusal/failure carries a bounded
+ * reason and records a trace entry instead of executing.
+ */
+export type ToolInvoker = (
+  call: { tool: RetrievalToolName; args: RetrievalToolArgs }
+) => Promise<
+  | {
+      outcome: "ok"
+      results: RetrievalResult[]
+      unavailableChannels: RetrievalChannel[]
+      /** DR-22: non-channel failures (e.g. `reranker_unavailable`) from the search. */
+      degradationReasons?: string[]
+      observation?: string
+    }
+  | { outcome: "unknown_tool" | "policy_denied" | "invalid_args" | "timeout" | "failed"; error?: string }
+>
 
 export interface ComplexLoopInput {
   query: string
   coverageCriteria?: string[]
   accessContext?: AccessContext
+  /** Ticket 05 (KB-03A): server-computed knowledge scope, forwarded to every
+   * `searcher.search()` the loop issues. Omitted when the run carries none. */
+  retrievalScope?: RetrievalScope
+  /**
+   * PT-02 (ATT on the complex route): the run's OWN session, forwarded verbatim
+   * to every search the loop issues — the loop cannot read another session's
+   * attachments and a caller without a session opens no attachment channel.
+   * Same option shape as `SearchOptions.attachments`.
+   */
+  attachments?: { sessionId: string }
+  /**
+   * PT-03 (WEB on the complex route): the run's explicit web-search opt-in
+   * (the transport's `useWeb`), forwarded to every search the loop issues.
+   * A URL pasted in the query text still follows the existing read/reject
+   * policy either way.
+   */
+  webRequested?: boolean
   signal?: AbortSignal
   /**
    * Ticket 09 (spec §13 correction-round reuse): remaining iteration budget
@@ -274,7 +415,13 @@ const STOP_LOOP_TOOL = {
   },
 }
 
-const COMPLEX_LOOP_TOOLS = [...RETRIEVAL_TOOLS, STOP_LOOP_TOOL]
+const COMPLEX_LOOP_TOOLS = [...RETRIEVAL_TOOLS,
+  ...["wiki_search", "wiki_read_page"].map((name) => ({ type: "function" as const,
+    function: { name, description: name === "wiki_search"
+      ? "Search Wiki topics and retrieve their original source evidence."
+      : "Read a Wiki page and its original evidence. query must be an exact page slug returned by wiki_search.",
+    parameters: { type: "object", properties: { query: { type: "string" } },
+      required: ["query"], additionalProperties: false } } })), STOP_LOOP_TOOL]
 
 const COMPLEX_LOOP_SYSTEM_PROMPT =
   "You are a retrieval planner for a knowledge-grounded answer system. " +
@@ -284,7 +431,9 @@ const COMPLEX_LOOP_SYSTEM_PROMPT =
   "Available retrieval tools (call ONE per turn):\n" +
   "- semantic_lexical_hybrid({query}): vector + BM25 hybrid search — best for factual/keyword queries\n" +
   "- graph_navigation({query, seeds?}): knowledge-graph traversal — best for multi-hop relational queries\n" +
-  "- pageindex_hierarchy({query}): PageIndex hierarchical lookup — best for page-oriented queries\n\n" +
+  "- pageindex_hierarchy({query}): PageIndex hierarchical lookup — ONLY for questions naming a page, section, chapter, or table-of-contents location; definitional, conceptual and general-procedure questions use semantic_lexical_hybrid\n\n" +
+  "- wiki_search({query}): search reusable Wiki topics and their source evidence\n" +
+  "- wiki_read_page({query}): read a Wiki page using its exact slug from wiki_search\n\n" +
   "Stop tool:\n" +
   "- stop_loop({reason: \"evidence-sufficient\"}): stop the loop because observations cover the question. " +
   "NOTE: this does NOT bypass downstream Citation/Critic gates — they still run after the loop terminates.\n\n" +
@@ -460,6 +609,7 @@ export async function runComplexLoop(
 
   const toolCalls: ComplexLoopToolCallTrace[] = []
   const accumulatedResults: RetrievalResult[] = []
+  const toolObservations: string[] = []
   let stopReason: ComplexLoopStopReason = "iteration-budget"
   let finalObservation = ""
   let iterationsExecuted = 0
@@ -487,9 +637,19 @@ export async function runComplexLoop(
       break
     }
 
-    // 3. Normalize + dedup check (criterion #3)
-    const tool = decision.tool!
-    const args = decision.args!
+    // 3. Executor-side applicability gate (DR-12): the same intent semantics
+    // the prompts state, applied BEFORE this iteration can call any tool. An
+    // inapplicable PageIndex pick becomes the default hybrid tool with the
+    // original query, so the misselection never reaches a provider.
+    const applicable = resolveToolApplicability({
+      tool: decision.tool!,
+      args: decision.args!,
+    })
+    const tool = applicable.selection.tool
+    const args = applicable.selection.args
+    const fallbackReason = applicable.reason ?? decision.fallbackReason
+
+    // 4. Normalize + dedup check (criterion #3)
     const normalized = normalizeToolCall(tool, args)
     const isDuplicate = state.priorToolCalls.some(
       (c) => c.tool === normalized.tool && c.argsKey === normalized.argsKey
@@ -507,7 +667,7 @@ export async function runComplexLoop(
         unavailableChannels: [],
         durationMs: 0,
         compressionRan: false,
-        ...(decision.fallbackReason ? { fallbackReason: decision.fallbackReason } : {}),
+        ...(fallbackReason ? { fallbackReason } : {}),
       })
       continue
     }
@@ -519,19 +679,67 @@ export async function runComplexLoop(
       break
     }
 
-    // 6. Execute retrieval
+    // 6. Execute retrieval — through the schema-validated tool boundary when
+    // wired (ticket 34); legacy direct search otherwise. A refusal
+    // (unknown/policy/invalid args) records a trace entry and lets the loop
+    // continue so the LLM can correct; a bounded failure (timeout/failed)
+    // stops the loop with the traceable provider-failure terminal.
     const searchStartedAt = Date.now()
     let outcome
-    try {
-      const searchOptions: SearchOptions = {
-        ...toolToSearchOptions({ tool, args }),
-        ...(input.accessContext ? { accessContext: input.accessContext } : {}),
+    if (deps.toolInvoker) {
+      const invocation = await deps.toolInvoker({ tool, args })
+      if (invocation.outcome !== "ok") {
+        const bounded =
+          invocation.outcome === "timeout" || invocation.outcome === "failed"
+        toolCalls.push({
+          tool,
+          args,
+          argsKey: normalized.argsKey,
+          duplicate: false,
+          resultCount: 0,
+          unavailableChannels: [],
+          durationMs: Date.now() - searchStartedAt,
+          compressionRan: false,
+          toolOutcome: invocation.outcome,
+          ...(invocation.error ? { toolOutcomeError: invocation.error.slice(0, 200) } : {}),
+        })
+        if (bounded) {
+          stopReason = "provider-failure"
+          break
+        }
+        continue
       }
-      outcome = await deps.searcher.search({ text: args.query }, searchOptions)
-    } catch (err) {
-      if (err instanceof Error && err.name === "AbortError") throw err
-      stopReason = "provider-failure"
-      break
+      outcome = {
+        results: invocation.results,
+        unavailableChannels: invocation.unavailableChannels,
+        ...(invocation.degradationReasons?.length
+          ? { degradationReasons: invocation.degradationReasons }
+          : {}),
+      }
+      if (invocation.observation) toolObservations.push(invocation.observation.slice(0, 4000))
+    } else {
+      try {
+        const searchOptions: SearchOptions = {
+          ...toolToSearchOptions({ tool, args }),
+          ...(input.accessContext ? { accessContext: input.accessContext } : {}),
+          // Ticket 05 (KB-03A): every loop iteration stays inside the run's
+          // server-computed knowledge scope.
+          ...(input.retrievalScope ? { retrievalScope: input.retrievalScope } : {}),
+          // PT-02 / PT-03: the loop's own searches read the run's session and
+          // carry its web intent, so the first retrieval, every tool iteration
+          // and a gap re-check all use the SAME bound identity — never a
+          // rebuilt, wider one. PT-02 AC04/AC06, PT-03 AC06.
+          ...(input.attachments ? { attachments: input.attachments } : {}),
+          ...(input.webRequested === true ? { webRequested: true } : {}),
+          // P7.2: the run's cancellation reaches each retrieval stage.
+          ...(input.signal ? { signal: input.signal } : {}),
+        }
+        outcome = await deps.searcher.search({ text: args.query }, searchOptions)
+      } catch (err) {
+        if (err instanceof Error && err.name === "AbortError") throw err
+        stopReason = "provider-failure"
+        break
+      }
     }
     const durationMs = Date.now() - searchStartedAt
 
@@ -556,12 +764,18 @@ export async function runComplexLoop(
     }
 
     // 8. Build observation context (deterministic + compressed — criterion #5)
-    const evidence = buildEvidenceForLoop(accumulatedResults)
+    //
+    // PT-02 AC06: the loop cites with the AUTHORITATIVE Evidence identity
+    // (`buildEvidence`), not a locally invented `ev_<documentId>_<chunkId>`.
+    // A loop observation whose ids drift from the ids the route publishes
+    // resolves a temporary attachment (whose `documentId` IS its
+    // attachmentId) as if it were a knowledge-base document.
+    const evidence = buildEvidence(accumulatedResults)
     state.accumulatedEvidenceIds = evidence.map((e) => e.id)
 
     let observationContext: string
     try {
-      const citationIds = citationIdsByChunkForLoop(evidence)
+      const citationIds = citationIdsByChunk(evidence)
       observationContext = await deps.assembler.assemble(accumulatedResults, citationIds)
     } catch (err) {
       if (err instanceof Error && err.name === "AbortError") throw err
@@ -600,8 +814,8 @@ export async function runComplexLoop(
     }
 
     // 9. Update state
-    state.observations = observationContext
-    finalObservation = observationContext
+    state.observations = [...toolObservations, observationContext].join("\n\n")
+    finalObservation = state.observations
 
     toolCalls.push({
       tool,
@@ -610,6 +824,9 @@ export async function runComplexLoop(
       duplicate: false,
       resultCount: outcome.results.length,
       unavailableChannels: outcome.unavailableChannels,
+      ...(outcome.degradationReasons?.length
+        ? { degradationReasons: outcome.degradationReasons }
+        : {}),
       durationMs,
       compressionRan,
       ...(compressionInputTokens !== undefined ? { compressionInputTokens } : {}),
@@ -620,7 +837,7 @@ export async function runComplexLoop(
       ...(compressionDroppedEvidenceIds !== undefined
         ? { compressionDroppedEvidenceIds }
         : {}),
-      ...(decision.fallbackReason ? { fallbackReason: decision.fallbackReason } : {}),
+      ...(fallbackReason ? { fallbackReason } : {}),
     })
   }
 
@@ -643,51 +860,13 @@ export async function runComplexLoop(
 }
 
 // ---------------------------------------------------------------------------
-// Helpers — local minimal versions to avoid circular imports
+// Helpers
 // ---------------------------------------------------------------------------
-
-/**
- * Minimal Evidence shape for the loop's observation building. We only need
- * `id` for the trace and `chunk.documentId`/`chunk.id` for citation map.
- * The full Evidence construction is deferred to generation.ts (which has
- * the authoritative `buildEvidence` from `../answer/evidence`).
- *
- * The loop produces this minimal shape so the compressor (which expects
- * `Evidence[]`) can be invoked. generation.ts will rebuild authoritative
- * Evidence from `results` after the loop terminates.
- */
-function buildEvidenceForLoop(
-  results: RetrievalResult[]
-): Array<{ id: string; documentId: string; chunkId: string }> {
-  const seen = new Set<string>()
-  const evidence: Array<{ id: string; documentId: string; chunkId: string }> = []
-  for (const r of results) {
-    const key = `${r.chunk.documentId}\0${r.chunk.id}`
-    if (seen.has(key)) continue
-    seen.add(key)
-    evidence.push({
-      id: `ev_${r.chunk.documentId}_${r.chunk.id}`,
-      documentId: r.chunk.documentId,
-      chunkId: r.chunk.id,
-    })
-  }
-  return evidence
-}
-
-function citationIdsByChunkForLoop(
-  evidence: Array<{ id: string; documentId: string; chunkId: string }>
-): Map<string, string> {
-  const map = new Map<string, string>()
-  for (const e of evidence) {
-    map.set(`${e.documentId}\0${e.chunkId}`, e.id)
-  }
-  return map
-}
 
 function isKnownToolName(name: unknown): name is RetrievalToolName {
   return (
     name === "semantic_lexical_hybrid" ||
     name === "graph_navigation" ||
-    name === "pageindex_hierarchy"
+    name === "pageindex_hierarchy" || name === "wiki_search" || name === "wiki_read_page"
   )
 }
