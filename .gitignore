@@ -4,6 +4,7 @@
 !/.gitignore
 !/.gitattributes
 !/.dockerignore
+!/.github/
 !/.env.example
 !/AGENTS.md
 !/README.md
@@ -20,6 +21,12 @@
 !/frontend/
 !/scripts/
 !/docker/
+
+# Publish only the CI workflow from the GitHub configuration directory.
+/.github/*
+!/.github/workflows/
+/.github/workflows/*
+!/.github/workflows/ci.yml
 
 # Frontend and container inputs.
 /frontend/*
