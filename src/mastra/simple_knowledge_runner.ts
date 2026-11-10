@@ -82,7 +82,7 @@ import {
   toolToSearchOptions,
 } from "../retrieval/tool_selector"
 import type { Validator } from "../critic/validator/interface"
-import { bindAnswerBasis } from "./answer_basis"
+import { createKnowledgeAnswerMachine, type KnowledgeObservation } from "./answer_run_state"
 import type { RePlanner } from "../critic/replanner/interface"
 import type { ConversationStore, ConversationTurn } from "../answer/conversation_store"
 import type { Contextualizer } from "../answer/contextualizer"
@@ -113,8 +113,6 @@ import type {
   AgentMessage,
   AnswerDegradation,
   AnswerDegradationReason,
-  AnswerRunResult,
-  AnswerBasis,
   Evidence,
   Query,
   RetrievalResult,
@@ -463,6 +461,12 @@ export function createSimpleKnowledgeMastraRunner(
     const { signal, accessContext, sessionId, runId, retrievalScope, assistant } = input
     const tenantId = resolveTenantId ? resolveTenantId(accessContext) : "default"
     const preparedRoute = input.preparedRoute
+    const control = createKnowledgeAnswerMachine("simple")
+    const advance = (observation: KnowledgeObservation) => {
+      const result = control.advance(observation)
+      if (result.kind === "rejected") throw result.error
+      return result.state
+    }
 
     // -------------------------------------------------------------------------
     // Memory loading + pending clarification consumption (mirrors legacy
@@ -535,11 +539,10 @@ export function createSimpleKnowledgeMastraRunner(
       signal
     )
 
-    if (decision !== "simple") {
-      // T11 owns only the simple route. Throw RouteNotSimpleError so the
-      // route-dispatch layer can route direct/ambiguous to the T09 runner
-      // and complex to the legacy orchestrator (until T12).
-      throw new RouteNotSimpleError(decision)
+    const routed = control.advance({ type: "route_selected", route: decision })
+    if (routed.kind === "rejected") {
+      if (decision !== "simple") throw new RouteNotSimpleError(decision)
+      throw routed.error
     }
     if (!preparedRoute) input.onStageProgress?.("route", { status: "completed", data: { decision } })
     input.onStageProgress?.("retrieval", { round: 1 })
@@ -686,6 +689,7 @@ export function createSimpleKnowledgeMastraRunner(
 
     // Insufficient retrieval check (T11 #5: terminal insufficient_retrieval).
     if (retrievalAttempted && !retrievalAvailable) {
+      advance({ type: "retrieval_finished", result: "unavailable" })
       return {
         reply: INSUFFICIENT_RETRIEVAL_MESSAGE,
         status: "insufficient_retrieval",
@@ -723,6 +727,7 @@ export function createSimpleKnowledgeMastraRunner(
 
     // Empty Evidence check (T11 #3: cannot complete without usable Evidence).
     if (evidence.length === 0) {
+      advance({ type: "retrieval_finished", result: "empty" })
       const evidenceReason: AnswerDegradationReason =
         allResults.length === 0 ? "no_results" : "no_context_evidence"
       return {
@@ -741,6 +746,8 @@ export function createSimpleKnowledgeMastraRunner(
         validationTrace: {},
       }
     }
+
+    advance({ type: "retrieval_finished", result: "usable" })
 
     // -------------------------------------------------------------------------
     // GATE 2: context assembly (T11 #2: bounded Context representation).
@@ -836,6 +843,7 @@ export function createSimpleKnowledgeMastraRunner(
       }),
       signal
     )
+    advance({ type: "context_prepared" })
     context = initial.context
     material = initial.material
     compression = initial.compression
@@ -887,6 +895,7 @@ export function createSimpleKnowledgeMastraRunner(
     try {
       referencesForReply(initialAnswer, evidence)
     } catch {
+      advance({ type: "draft_checked", draft: { reply: initialAnswer, tokens: initialTokens, evidence }, citations: "invalid" })
       return {
         reply: publicTerminalCopy("invalid_citation"),
         status: "invalid_citation",
@@ -910,37 +919,24 @@ export function createSimpleKnowledgeMastraRunner(
       initialCitationIds,
       initialOrdering ? [initialOrdering] : []
     )
-    let fullAnswer = initialAnswer
-    let draftTokens: string[] = [...initialTokens]
+    advance({ type: "draft_checked", draft: { reply: initialAnswer, tokens: initialTokens, evidence }, citations: "valid" })
     let validationTrace: ValidationTraceData = {}
 
     // -------------------------------------------------------------------------
     // GATE 4: validation loop (≤3 rounds, with correction retrieval).
     // -------------------------------------------------------------------------
     const seenGapQueries = new Set<string>()
-    let approved = false
-    let approvedBasis: AnswerBasis | undefined
-    let terminalStatus: AnswerRunResult["status"] | null = null
-    let terminalReply = ""
-    let terminalReferences: AnswerRunResult["references"] = []
-    // PL-01: an unapproved draft is never the published reply. The public text
-    // and the citation set follow the BUSINESS terminal, so a rejected draft
-    // cannot reappear through done.reply, JSON reply or references.
-    const setTerminal = (status: AnswerRunResult["status"]): void => {
-      terminalStatus = status
-      terminalReply = publicTerminalCopy(status)
-      terminalReferences = []
-    }
     let terminalDegradation: AnswerDegradation = {
       status: degradationWasObserved(unavailableChannels, retrievalTrace.degradedReasons) ? "partial" : "none",
       unavailableChannels: [...unavailableChannels],
     }
 
-    for (let round = 0; round < 3; round += 1) {
-      input.onStageProgress?.("validation", { round: round + 1, data: { round: round + 1 } })
+    while (control.state.kind === "validating") {
+      const { round, candidate } = control.state
+      input.onStageProgress?.("validation", { round, data: { round } })
       const verdict = await abortable(
         validator.validate(
-          fullAnswer,
+          candidate.reply,
           [
             { role: "user", content: effectiveMessage },
             { role: "system", content: context },
@@ -950,14 +946,11 @@ export function createSimpleKnowledgeMastraRunner(
         ),
         signal
       )
-      validationTrace = { round: round + 1, passed: verdict.passed }
-      input.onStageProgress?.("validation", { status: "completed", round: round + 1, data: validationTrace })
+      validationTrace = { round, passed: verdict.passed }
+      input.onStageProgress?.("validation", { status: "completed", round, data: validationTrace })
 
-      if (verdict.passed) {
-        approved = true
-        approvedBasis = verdict.answerBasis
-        break
-      }
+      const validated = advance({ type: "validation_finished", verdict })
+      if (validated.kind === "approved") break
 
       // Replan: produce gap queries for correction retrieval.
       const rawGapQueries = await abortable(replanner.replan(verdict), signal)
@@ -968,42 +961,12 @@ export function createSimpleKnowledgeMastraRunner(
         return true
       })
 
-      if (gapQueries.length === 0) {
-        // Gap queries exhausted → handoff_required (if enabled) or insufficient_evidence.
-        if (handoffStore && resolveTenantId) {
-          checkAbort(signal, "GATE 6 (before handoff persistence)")
-          const handoffCase = handoffStore.create({
-            runId,
-            tenantId,
-            subjectId: accessContext.subjectId,
-            sessionId,
-            reasonCode: "insufficient_evidence",
-            userRequest: effectiveMessage,
-            conversationSummary: summarizeConversationForHandoff(
-              recentTurns,
-              conversationSummary
-            ),
-            evidenceIds: evidence.map(({ id }) => id),
-            traceReference: runId,
-          })
-          // PL-01 AC04: "已转交人工" is only publishable when the case exists;
-          // a refused persistence stays honest as 证据不足.
-          setTerminal(handoffCase ? "handoff_required" : "insufficient_evidence")
-          terminalDegradation = {
-            status: degradationWasObserved(unavailableChannels, retrievalTrace.degradedReasons) ? "partial" : "none",
-            unavailableChannels: [...unavailableChannels],
-            reason: "coverage_not_met",
-          }
-        } else {
-          setTerminal("insufficient_evidence")
-          terminalDegradation = {
-            status: degradationWasObserved(unavailableChannels, retrievalTrace.degradedReasons) ? "partial" : "none",
-            unavailableChannels: [...unavailableChannels],
-            reason: "coverage_not_met",
-          }
-        }
-        break
-      }
+      const planned = advance({
+        type: "gaps_planned",
+        result: gapQueries.length > 0 ? "queries_available" : "exhausted",
+      })
+      if (planned.kind !== "retrieving") break
+      const correctionRound = planned.attempt.kind === "validate" ? planned.attempt.round : 4
 
       // Correction retrieval: run searcher.search for each gap query.
       let anyNewResults = false
@@ -1015,7 +978,7 @@ export function createSimpleKnowledgeMastraRunner(
       // tail of `accumulatedResults`, where the assembler's insertion-order
       // budget walk left them no tokens at all.
       const gapResultsForRound: RetrievalResult[] = []
-      input.onStageProgress?.("retrieval", { round: round + 2, data: { correction: true } })
+      input.onStageProgress?.("retrieval", { round: correctionRound, data: { correction: true } })
       for (const gapQuery of gapQueries) {
         const correctionOutcome = await abortable(
           searcher.search(gapQuery, {
@@ -1044,53 +1007,20 @@ export function createSimpleKnowledgeMastraRunner(
         gapResultsForRound.push(...correctionOutcome.results)
         anyNewResults = true
       }
-      input.onStageProgress?.("retrieval", { status: "completed", round: round + 2, data: { correction: true, resultCount: gapResultsForRound.length } })
+      input.onStageProgress?.("retrieval", { status: "completed", round: correctionRound, data: { correction: true, resultCount: gapResultsForRound.length } })
 
+      const retrieved = advance({
+        type: "retrieval_finished",
+        result: correctionInsufficient ? "unavailable" : anyNewResults ? "usable" : "empty",
+      })
       if (correctionInsufficient) {
-        setTerminal("insufficient_retrieval")
         terminalDegradation = {
           status: "insufficient",
           unavailableChannels: [...unavailableChannels],
         }
         break
       }
-
-      if (!anyNewResults) {
-        // No new evidence from any gap query → exhausted.
-        if (handoffStore && resolveTenantId) {
-          checkAbort(signal, "GATE 6 (before handoff persistence)")
-          const handoffCase = handoffStore.create({
-            runId,
-            tenantId,
-            subjectId: accessContext.subjectId,
-            sessionId,
-            reasonCode: "insufficient_evidence",
-            userRequest: effectiveMessage,
-            conversationSummary: summarizeConversationForHandoff(
-              recentTurns,
-              conversationSummary
-            ),
-            evidenceIds: evidence.map(({ id }) => id),
-            traceReference: runId,
-          })
-          // PL-01 AC04: "已转交人工" is only publishable when the case exists;
-          // a refused persistence stays honest as 证据不足.
-          setTerminal(handoffCase ? "handoff_required" : "insufficient_evidence")
-          terminalDegradation = {
-            status: degradationWasObserved(unavailableChannels, retrievalTrace.degradedReasons) ? "partial" : "none",
-            unavailableChannels: [...unavailableChannels],
-            reason: "coverage_not_met",
-          }
-        } else {
-          setTerminal("insufficient_evidence")
-          terminalDegradation = {
-            status: degradationWasObserved(unavailableChannels, retrievalTrace.degradedReasons) ? "partial" : "none",
-            unavailableChannels: [...unavailableChannels],
-            reason: "coverage_not_met",
-          }
-        }
-        break
-      }
+      if (retrieved.kind === "handoff_pending") break
 
       // Rebuild Evidence + Context from the accumulated results, then
       // regenerate the draft.
@@ -1107,7 +1037,7 @@ export function createSimpleKnowledgeMastraRunner(
       evidence = buildEvidence(accumulatedResults)
       const correctionCandidates = selection.candidates
       const correctionCitationIds = citationIdsByChunk(evidence)
-      input.onStageProgress?.("context", { round: round + 2, data: { phase: "assembly", evidenceCount: evidence.length } })
+      input.onStageProgress?.("context", { round: correctionRound, data: { phase: "assembly", evidenceCount: evidence.length } })
       // PT-04 AC06: even selected-first, a gap item longer than the whole
       // budget cannot be admitted. Record it as an explicit omission so no
       // layer can present the correction as covered — the existing validation
@@ -1149,6 +1079,7 @@ export function createSimpleKnowledgeMastraRunner(
         }),
         signal
       )
+      advance({ type: "context_prepared" })
       context = prepared.context
       material = prepared.material
       compression = prepared.compression
@@ -1187,8 +1118,8 @@ export function createSimpleKnowledgeMastraRunner(
         ...compressionTraceFields(prepared),
         ...(gapFactOmissions.length > 0 ? { gapFactOmissions } : {}),
       }
-      input.onStageProgress?.("context", { status: "completed", round: round + 2, data: { phase: "assembly", evidenceCount: evidence.length, contextLength: context.length } })
-      input.onStageProgress?.("context", { round: round + 2, data: { phase: "draft", evidenceCount: evidence.length } })
+      input.onStageProgress?.("context", { status: "completed", round: correctionRound, data: { phase: "assembly", evidenceCount: evidence.length, contextLength: context.length } })
+      input.onStageProgress?.("context", { round: correctionRound, data: { phase: "draft", evidenceCount: evidence.length } })
 
       // Regenerate draft from the rebuilt context.
       const regenMessages: AgentMessage[] = [
@@ -1215,12 +1146,12 @@ export function createSimpleKnowledgeMastraRunner(
       // final snapshot, and earlier rounds' evidence is never merged into it.
       describeGenerationContext()
       contextTrace.phase = "draft"
-      input.onStageProgress?.("context", { status: "completed", round: round + 2, data: { phase: "draft", evidenceCount: evidence.length } })
+      input.onStageProgress?.("context", { status: "completed", round: correctionRound, data: { phase: "draft", evidenceCount: evidence.length } })
       // Citation check on regenerated draft (T11 #4).
       try {
         referencesForReply(regenAnswer, evidence)
       } catch {
-        setTerminal("invalid_citation")
+        advance({ type: "draft_checked", draft: { reply: regenAnswer, tokens: regenTokens, evidence }, citations: "invalid" })
         terminalDegradation = {
           status: "insufficient",
           unavailableChannels: [...unavailableChannels],
@@ -1228,20 +1159,18 @@ export function createSimpleKnowledgeMastraRunner(
         }
         break
       }
-      fullAnswer = regenAnswer
-      draftTokens = [...regenTokens]
       // Ticket 01: the regenerated draft was accepted — commit its context as
       // the final generation context (overwrites the previous round).
       // PT-04: this list is the gap-first merge of two retrievals, so its
       // ordering label is the honest aggregation, never a dedicated rerank.
       commitFinalContext(correctionCandidates, correctionCitationIds, correctionOrderings, true)
+      advance({ type: "draft_checked", draft: { reply: regenAnswer, tokens: regenTokens, evidence }, citations: "valid" })
     }
 
     // -------------------------------------------------------------------------
     // GATE 5/6: publish or handoff.
     // -------------------------------------------------------------------------
-    if (!approved && terminalStatus === null) {
-      // 3 rounds expired without approval and without gap-query exhaustion.
+    if (control.state.kind === "handoff_pending") {
       if (handoffStore && resolveTenantId) {
         checkAbort(signal, "GATE 6 (before handoff persistence)")
         const handoffCase = handoffStore.create({
@@ -1258,14 +1187,14 @@ export function createSimpleKnowledgeMastraRunner(
           evidenceIds: evidence.map(({ id }) => id),
           traceReference: runId,
         })
-        setTerminal(handoffCase ? "handoff_required" : "insufficient_evidence")
+        advance({ type: "handoff_finished", result: handoffCase ? "created" : "unavailable" })
         terminalDegradation = {
           status: degradationWasObserved(unavailableChannels, retrievalTrace.degradedReasons) ? "partial" : "none",
           unavailableChannels: [...unavailableChannels],
           reason: "coverage_not_met",
         }
       } else {
-        setTerminal("insufficient_evidence")
+        advance({ type: "handoff_finished", result: "unavailable" })
         terminalDegradation = {
           status: degradationWasObserved(unavailableChannels, retrievalTrace.degradedReasons) ? "partial" : "none",
           unavailableChannels: [...unavailableChannels],
@@ -1274,12 +1203,12 @@ export function createSimpleKnowledgeMastraRunner(
       }
     }
 
-    if (!approved) {
+    if (control.state.kind === "resolved" && control.state.outcome.kind === "refused") {
       // Terminal non-completed path: do NOT save validated turns (T10 #2 invariant).
       return {
-        reply: terminalReply,
-        status: terminalStatus!,
-        references: terminalReferences,
+        reply: publicTerminalCopy(control.state.outcome.status),
+        status: control.state.outcome.status,
+        references: [],
         degradation: terminalDegradation,
         tokens: [],
         routeTrace: buildRouteTrace(),
@@ -1290,12 +1219,14 @@ export function createSimpleKnowledgeMastraRunner(
     }
 
     // Approved: final citation check (T11 #3: at least one valid Citation).
-    const finalReferences = referencesForReply(fullAnswer, evidence)
-    if (finalReferences.length === 0) {
+    if (control.state.kind !== "approved") throw new Error("Knowledge answer did not reach approval")
+    const finalReferences = referencesForReply(control.state.candidate.reply, [...control.state.candidate.evidence])
+    const publication = advance({ type: "publication_checked", references: finalReferences })
+    if (publication.kind === "resolved" && publication.outcome.kind === "refused") {
       return {
         reply: publicTerminalCopy("insufficient_evidence"),
-        status: "insufficient_evidence",
-        references: finalReferences,
+        status: publication.outcome.status,
+        references: [],
         degradation: {
           status: "insufficient",
           unavailableChannels: [...unavailableChannels],
@@ -1309,7 +1240,8 @@ export function createSimpleKnowledgeMastraRunner(
       }
     }
 
-    // Save validated turns + trigger summarization (T10 #2: only completed turns).
+    if (publication.kind !== "ready_to_commit") throw new Error("Knowledge answer is not ready to commit")
+    const { answer } = publication
     let summarization: SummarizationOutcome = { outcome: "skipped" }
     if (conversationStore) {
       checkAbort(signal, "GATE 5 (before validated turn persistence)")
@@ -1319,9 +1251,12 @@ export function createSimpleKnowledgeMastraRunner(
         tenantId,
         runId,
         effectiveMessage,
-        fullAnswer,
+        answer.reply,
         clock
       )
+    }
+    advance({ type: "answer_committed" })
+    if (conversationStore) {
       summarization = await triggerSummarization(
         conversationStore,
         summarizer,
@@ -1331,18 +1266,18 @@ export function createSimpleKnowledgeMastraRunner(
       )
     }
 
-    const answerBasis = bindAnswerBasis(approvedBasis, finalReferences)
+    const answerBasis = answer.answerBasis
     if (answerBasis) validationTrace = { ...validationTrace, answerBasis }
 
     return {
-      reply: fullAnswer,
+      reply: answer.reply,
       status: "completed",
-      references: finalReferences,
+      references: [...answer.references],
       degradation: {
         status: degradationWasObserved(unavailableChannels, retrievalTrace.degradedReasons) ? "partial" : "none",
         unavailableChannels: [...unavailableChannels],
       },
-      tokens: draftTokens,
+      tokens: [...answer.tokens],
       routeTrace: buildRouteTrace(),
       retrievalTrace,
       contextTrace,

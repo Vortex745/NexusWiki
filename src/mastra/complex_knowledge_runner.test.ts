@@ -400,6 +400,49 @@ function buildCitedAnswer(evidence: ReturnType<typeof buildEvidence>): string {
   return `According to the document [cite:${firstId}], the return policy is 30 days.`
 }
 
+for (const route of ["simple", "complex"] as const) {
+  for (const invalidLastCitation of [false, true]) {
+    test(`${route} preserves final regeneration after three rejected validations, invalid citation ${invalidLastCitation}`, async () => {
+      const results = Array.from({ length: 4 }, (_, index) => makeRetrievalResult({
+        chunk: { id: `round-${index}`, documentId: `doc-${index}`,
+          content: `Evidence for correction ${index}`, childrenIds: [], metadata: {} },
+      }))
+      const searcher = makeFakeSearcher(results.map((result) => ({
+        status: "ok" as const, results: [result], unavailableChannels: [],
+      })))
+      const validator = makeFakeValidator({ passed: false, hallucination: false,
+        completeness: false, missingGap: "missing policy detail" })
+      const replanner = makeFakeRePlanner([
+        [{ text: "first missing policy" }], [{ text: "second missing policy" }], [{ text: "third missing policy" }],
+      ])
+      const memory = makeFakeConversationStore()
+      let generations = 0
+      const streamAnswerDraft = async function* () {
+        generations += 1
+        yield invalidLastCitation && generations === 4
+          ? "Rejected final answer [cite:unknown-id]"
+          : buildCitedAnswer(buildEvidence([results[generations - 1]]))
+      }
+      const deps = { router: makeFakeRouter(route), createSearcher: () => searcher,
+        assembler: makeFakeAssembler(), validator, replanner, conversationStore: memory, streamAnswerDraft }
+      const runner = route === "simple"
+        ? createSimpleKnowledgeMastraRunner(deps)
+        : createComplexKnowledgeMastraRunner({ ...deps, planner: makeFakePlanner({ queries: [{ text: "initial policy" }] }) })
+      const output = await runner(makeRunnerInput())
+      assert.equal(generations, 4)
+      assert.equal(validator.calls, 3)
+      assert.equal(replanner.calls, 3)
+      assert.equal(searcher.calls.length, 4)
+      assert.equal(output.status, invalidLastCitation ? "invalid_citation" : "insufficient_evidence")
+      assert.equal(output.validationTrace.round, 3)
+      assert.equal(output.validationTrace.passed, false)
+      assert.deepEqual(output.tokens, [])
+      assert.deepEqual(output.references, [])
+      assert.deepEqual(memory.validatedTurns, [])
+    })
+  }
+}
+
 test("AP-02: complex runner reports real stages and publishes the final cited basis", async () => {
   const result = makeRetrievalResult()
   const evidence = buildEvidence([result])

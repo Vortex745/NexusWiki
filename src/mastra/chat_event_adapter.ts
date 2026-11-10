@@ -65,6 +65,7 @@ import {
   publicTerminalCopy,
 } from "../answer/terminal_copy"
 import { bindAnswerBasis } from "./answer_basis"
+import { createAnswerDeliveryMachine } from "./answer_run_state"
 
 /**
  * Transport-level event source signature — structurally identical to
@@ -397,7 +398,7 @@ export interface MastraChatEventAdapterOptions {
    * `input.signal` so every stage (route/retrieval/context/answer/
    * validation/publish) honors cancellation from BOTH the deadline timer
    * AND the external transport signal — converging to exactly one
-   * terminal event via the existing `terminalEmitted` guard.
+   * terminal event through the delivery state machine.
    *
    * When omitted: no deadline enforcement; the adapter passes
    * `AnswerRunOptions.signal` directly to the runner (pre-P7.2 behavior
@@ -455,7 +456,12 @@ export function createMastraChatEventAdapter(
 
     const runStartedAt = Date.now()
     let sequence = 0
-    let terminalEmitted = false
+    const delivery = createAnswerDeliveryMachine<MastraRunnerOutput>()
+    const advanceDelivery = (observation: Parameters<typeof delivery.advance>[0]) => {
+      const result = delivery.advance(observation)
+      if (result.kind === "rejected") throw result.error
+      return result.state
+    }
     let traceFailure: unknown
     let runContext: RunContext | undefined
     const stageRounds: Partial<Record<ProgressStage, number>> = {}
@@ -540,7 +546,6 @@ export function createMastraChatEventAdapter(
       //
       // When budgetMs is omitted: pass `signal` directly (pre-P7.2
       // behavior — backward compat).
-      let runnerOutput: MastraRunnerOutput
       // Live signal bridge: streaming runners publish tokens through
       // input.onAnswerDelta and settled stages through input.onStageProgress as
       // they happen; the adapter drains that queue and yields events while the
@@ -554,8 +559,6 @@ export function createMastraChatEventAdapter(
         | { kind: "stage"; stage: ProgressStage; details?: StageProgressDetails<ProgressStage> }
       const liveSignals: LiveSignal[] = []
       let deltasPublished = 0
-      let runnerSettled = false
-      let runnerFailed = false
       let runnerSignal = signal
       let wakeDrainer: (() => void) | null = null
       const wake = (): void => {
@@ -563,23 +566,19 @@ export function createMastraChatEventAdapter(
         wakeDrainer = null
       }
       const onAnswerDelta = (token: string): void => {
-        if (terminalEmitted || runnerSettled || runnerSignal.aborted) return
+        if (delivery.state.kind !== "running" || runnerSignal.aborted) return
         liveSignals.push({ kind: "delta", token })
         wake()
       }
       const onStageProgress: NonNullable<MastraRunnerInput["onStageProgress"]> = (
         stage, details
       ): void => {
-        if (terminalEmitted || runnerSettled || runnerSignal.aborted) return
+        if (delivery.state.kind !== "running" || runnerSignal.aborted) return
         // Only final business completion can publish a model basis. Copy the
         // payload now so a runner cannot mutate a queued validation record.
         const data = details?.data ? { ...details.data } : undefined
         if (data) delete (data as ValidationTraceData).answerBasis
         liveSignals.push({ kind: "stage", stage, details: { ...details, data } })
-        wake()
-      }
-      const markRunnerSettled = (): void => {
-        runnerSettled = true
         wake()
       }
       const invokeRunner = (ctxSignal: AbortSignal): Promise<MastraRunnerOutput> => {
@@ -613,7 +612,7 @@ export function createMastraChatEventAdapter(
 
       // Early route progress: lights up downstream thinking UIs during the
       // route/retrieval latency window instead of after the whole run.
-      if (!terminalEmitted) {
+      {
         const base = makeBaseEvent({
           runId,
           sessionId,
@@ -633,6 +632,7 @@ export function createMastraChatEventAdapter(
         yield event
       }
 
+      advanceDelivery({ type: "runner_started" })
       const runnerPromise = (async (): Promise<MastraRunnerOutput> => {
         if (budgetMs !== undefined || resourceBudget !== undefined) {
           const ctx: RunContext = createRunContext({
@@ -648,13 +648,30 @@ export function createMastraChatEventAdapter(
         }
         return invokeRunner(signal)
       })()
-      runnerPromise.then(markRunnerSettled, () => {
-        runnerFailed = true
-        markRunnerSettled()
-      })
+      runnerPromise.then(
+        output => {
+          advanceDelivery({ type: "runner_fulfilled", output })
+          wake()
+        },
+        err => {
+          const isAbort = err instanceof Error && err.name === "AbortError"
+          const resourceBudgetExceeded = isRunBudgetError(err) ||
+            (runContext !== undefined && hasRunResourceBudgetFailure(runContext))
+          advanceDelivery({
+            type: "runner_rejected",
+            failure: isAbort
+              ? { kind: "cancelled", resourceBudgetExceeded }
+              : { kind: "provider_error", resourceBudgetExceeded },
+          })
+          wake()
+        },
+      )
       // Drain live signals until the runner settles and the queue empties.
       while (true) {
-        if (runnerSignal.aborted && (!runnerSettled || runnerFailed)) {
+        if (runnerSignal.aborted && (
+          delivery.state.kind === "running" ||
+          (delivery.state.kind === "settled" && delivery.state.resolution.kind === "rejected")
+        )) {
           liveSignals.length = 0
           await runnerPromise
           checkAbort(runnerSignal, "live event publication")
@@ -703,13 +720,18 @@ export function createMastraChatEventAdapter(
           }
           continue
         }
-        if (runnerSettled) break
+        if (delivery.state.kind === "settled") break
         await new Promise<void>((resolve) => {
           wakeDrainer = resolve
         })
       }
 
-      runnerOutput = await runnerPromise
+      await runnerPromise
+      const settled = delivery.state
+      if (settled.kind !== "settled" || settled.resolution.kind !== "fulfilled") {
+        throw new Error("Answer runner did not fulfill delivery")
+      }
+      const runnerOutput = settled.resolution.output
 
       // The runner owns route/retrieval/context execution and persistence.
       // Once it returns, its output is authoritative: a later transport abort
@@ -760,50 +782,6 @@ export function createMastraChatEventAdapter(
         yield event
       }
 
-      // GATE 5 — publish (terminal done event).
-      // T05 #6: terminal-exactly-once. The `terminalEmitted` guard ensures
-      // we never emit a second done event even if the runner somehow returns
-      // twice (it shouldn't, but the guard is structural).
-      if (!terminalEmitted) {
-        terminalEmitted = true
-        const base = makeBaseEvent({
-          runId,
-          sessionId,
-          caseId,
-          sequence: nextSequence(),
-          stage: "done",
-          status: terminalStatusToRunStatus(runnerOutput.status),
-          runStartedAt,
-        })
-        const event = makeDoneEvent(base, {
-          runId,
-          // PL-01: the transport republishes nothing the runner did not approve.
-          // Any other business terminal (including one this protocol does not
-          // define) publishes the safe terminal text and no citations.
-          reply: isDraftPublishable(runnerOutput.status)
-            ? runnerOutput.reply
-            : publicTerminalCopy(runnerOutput.status),
-          status: runnerOutput.status,
-          references: isDraftPublishable(runnerOutput.status)
-            ? runnerOutput.references
-            : [],
-          degradation: runnerOutput.degradation,
-          summarizationUsage: runnerOutput.summarizationUsage,
-          summarizationDurationMs: runnerOutput.summarizationDurationMs,
-          summarizationCheckpoint: runnerOutput.summarizationCheckpoint,
-          summarizationOutcome: runnerOutput.summarizationOutcome,
-          ...(runnerOutput.faq ? { faq: runnerOutput.faq } : {}),
-          ...(runnerOutput.memoryUsed ? { memoryUsed: runnerOutput.memoryUsed } : {}),
-          // The request-side record: stamped from the run's own frozen choice
-          // on EVERY outcome (FAQ, clarification and pre-generation failures
-          // included), never inferred from the terminal status.
-          ...(runOptions?.reasoningEffort
-            ? { requestedReasoningEffort: runOptions.reasoningEffort }
-            : {}),
-        })
-        notifyObservers(event)
-        yield event
-      }
     } catch (err) {
       if (err === traceFailure) throw err
       // RouteNotSupportedError indicates an incomplete Mastra route map. All
@@ -815,53 +793,66 @@ export function createMastraChatEventAdapter(
       ) {
         throw err
       }
-      // T05 #5: abort → one cancelled terminal event, no late answer.
-      // T03 §7: late-event prohibition — after abort, only the terminal
-      // done event with status=cancelled is emitted; no further
-      // answer_delta or progress events.
-      if (!terminalEmitted) {
-        terminalEmitted = true
-        const isAbort =
-          err instanceof Error && err.name === "AbortError"
-        const isResourceBudgetError =
-          isRunBudgetError(err) ||
+      if (delivery.state.kind === "created" || delivery.state.kind === "running") {
+        const isAbort = err instanceof Error && err.name === "AbortError"
+        const resourceBudgetExceeded = isRunBudgetError(err) ||
           (runContext !== undefined && hasRunResourceBudgetFailure(runContext))
-        const base = makeBaseEvent({
-          runId,
-          sessionId,
-          caseId,
-          sequence: nextSequence(),
-          stage: "done",
-          status: isAbort ? "cancelled" : "failed",
-          runStartedAt,
+        advanceDelivery({
+          type: "runner_rejected",
+          failure: isAbort
+            ? { kind: "cancelled", resourceBudgetExceeded }
+            : { kind: "provider_error", resourceBudgetExceeded },
         })
-        const event = makeDoneEvent(base, {
-          runId,
-          // PL-01 AC04: a cancelled or provider-failed run publishes its own
-          // defined terminal copy here too — an empty reply left the streaming
-          // client with a placeholder that differed from the JSON transport.
-          reply: publicTerminalCopy(isAbort ? "cancelled" : "provider_error"),
-          status: isAbort ? "cancelled" : "provider_error",
-          references: [],
-          degradation: {
-            status: "insufficient",
-            unavailableChannels: [],
-            // DR-22: a provider failure is a provider failure. It used to be
-            // labelled `no_cited_claims`, which claims the answer was rejected
-            // for missing citations — something that never ran. The terminal
-            // status (`provider_error`) is the honest reason here.
-            reason: isResourceBudgetError
-              ? "resource_budget_exceeded"
-              : undefined,
-          },
-          ...(runOptions?.reasoningEffort
-            ? { requestedReasoningEffort: runOptions.reasoningEffort }
-            : {}),
-        })
-        notifyObservers(event)
-        yield event
       }
-      // Swallow the error — the terminal event is the contract.
     }
+
+    const terminal = advanceDelivery({ type: "terminal_claimed" })
+    if (terminal.kind !== "terminal") throw new Error("Answer delivery did not reach terminal")
+    const { resolution } = terminal
+    let result: AnswerRunResult
+    if (resolution.kind === "fulfilled") {
+      const output = resolution.output
+      result = {
+        runId,
+        reply: isDraftPublishable(output.status) ? output.reply : publicTerminalCopy(output.status),
+        status: output.status,
+        references: isDraftPublishable(output.status) ? output.references : [],
+        degradation: output.degradation,
+        summarizationUsage: output.summarizationUsage,
+        summarizationDurationMs: output.summarizationDurationMs,
+        summarizationCheckpoint: output.summarizationCheckpoint,
+        summarizationOutcome: output.summarizationOutcome,
+        ...(output.faq ? { faq: output.faq } : {}),
+        ...(output.memoryUsed ? { memoryUsed: output.memoryUsed } : {}),
+      }
+    } else {
+      const { failure } = resolution
+      const status = failure.kind === "cancelled" ? "cancelled" : "provider_error"
+      result = {
+        runId,
+        reply: publicTerminalCopy(status),
+        status,
+        references: [],
+        degradation: {
+          status: "insufficient",
+          unavailableChannels: [],
+          reason: failure.resourceBudgetExceeded
+            ? "resource_budget_exceeded"
+            : undefined,
+        },
+      }
+    }
+    if (runOptions?.reasoningEffort) result.requestedReasoningEffort = runOptions.reasoningEffort
+    const event = makeDoneEvent(makeBaseEvent({
+      runId,
+      sessionId,
+      caseId,
+      sequence: nextSequence(),
+      stage: "done",
+      status: terminalStatusToRunStatus(result.status),
+      runStartedAt,
+    }), result)
+    notifyObservers(event)
+    yield event
   }
 }
