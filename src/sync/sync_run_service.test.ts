@@ -114,6 +114,72 @@ function buildSetup(): Setup {
   }
 }
 
+for (const [recovery, lateStatus] of [
+  ["expired", 200], ["expired", 503],
+  ["startup", 200], ["startup", 503],
+  ["startup-backwards", 200], ["startup-backwards", 503],
+] as const) {
+  test(`a sync execution revoked by ${recovery} recovery cannot overwrite its replacement with HTTP ${lateStatus}`, async () => {
+    const setup = buildSetup()
+    let clock = new Date("2026-11-10T00:00:00.000Z")
+    let fetched!: () => void
+    const started = new Promise<void>((resolve) => { fetched = resolve })
+    let release!: (response: Response) => void
+    const pendingResponse = new Promise<Response>((resolve) => { release = resolve })
+    let fetchCount = 0
+    const runs = new SyncRunService({
+      db: setup.db,
+      lifecycle: setup.lifecycle,
+      now: () => clock,
+      leaseMs: 1_000,
+      fetchOptions: {
+        resolver: setup.fetchOptions.resolver,
+        fetchImpl: (async () => {
+          fetchCount += 1
+          if (fetchCount === 1) {
+            fetched()
+            return pendingResponse
+          }
+          return new Response("replacement content", { headers: { "content-type": "text/plain" } })
+        }) as typeof fetch,
+      },
+    })
+    const source = setup.sources.create({ tenantId: "demo", knowledgeBaseId: setup.kb.id,
+      kind: "url", uri: "https://example.com/lease" })
+    const run = runs.enqueue("demo", source.id, "manual")
+    const first = runs.claimNext()!
+    const staleExecution = runs.executeClaimed(first)
+    try {
+      await started
+      if (recovery === "expired") {
+        clock = new Date(clock.getTime() + 1_001)
+        assert.equal(runs.recoverExpiredLeases(), 1)
+      } else {
+        if (recovery === "startup-backwards") clock = new Date(clock.getTime() - 3_600_000)
+        assert.equal(runs.recoverOnStartup(), 1)
+      }
+      const replacement = runs.claimNext()!
+      const completed = await runs.executeClaimed(replacement)
+      assert.equal(completed.status, "completed")
+      const acceptedPages = runs.listRunPages(run.id)
+      const acceptedDocs = setup.db.prepare("SELECT doc_id, content FROM documents ORDER BY doc_id").all()
+      const acceptedSource = setup.db.prepare("SELECT * FROM sync_data_sources WHERE id = ?").get(source.id)
+      const acceptedLedger = setup.db.prepare("SELECT * FROM sync_source_pages WHERE source_id = ? ORDER BY uri").all(source.id)
+      release(new Response("late stale content", { status: lateStatus, headers: { "content-type": "text/plain" } }))
+      await staleExecution
+      assert.deepEqual(runs.getRun("demo", source.id, run.id), completed)
+      assert.deepEqual(runs.listRunPages(run.id), acceptedPages)
+      assert.deepEqual(setup.db.prepare("SELECT doc_id, content FROM documents ORDER BY doc_id").all(), acceptedDocs)
+      assert.deepEqual(setup.db.prepare("SELECT * FROM sync_data_sources WHERE id = ?").get(source.id), acceptedSource)
+      assert.deepEqual(setup.db.prepare("SELECT * FROM sync_source_pages WHERE source_id = ? ORDER BY uri").all(source.id), acceptedLedger)
+    } finally {
+      release(new Response("late response"))
+      await staleExecution
+      setup.db.close()
+    }
+  })
+}
+
 test("scheduled sources store next-run state; a sweep enqueues due sources and rolls the schedule", async () => {
   const setup = buildSetup()
   const source = setup.sources.create({
