@@ -1,0 +1,15 @@
+PASS repaired model. 8728 states generated, 2999 distinct states found, 0 states left on queue.
+PASS model negative control rejects baseline for NoCompleteAfterRetire. Trace C:\Users\14253\AppData\Local\Temp\ingestion-retirement-negative-NoCompleteAfterRetire.log
+PASS model negative control rejects baseline for NoActivateAfterRetire. Trace C:\Users\14253\AppData\Local\Temp\ingestion-retirement-negative-NoActivateAfterRetire.log
+PASS model negative control rejects baseline for NoWriteAfterCleanup. Trace C:\Users\14253\AppData\Local\Temp\ingestion-retirement-negative-NoWriteAfterCleanup.log
+PASS model negative control rejects baseline for CleanupDoesNotOvertakeWrite. Trace C:\Users\14253\AppData\Local\Temp\ingestion-retirement-negative-CleanupDoesNotOvertakeWrite.log
+Repair trace C:\Users\14253\AppData\Local\Temp\ingestion-retirement-repair.log
+{"scenario":"control","verdict":"pass","documentStatus":"completed","events":["write:chunk","write:wikify","write:storeChunks","write:storeGraph","cleanup:cleanup_es","cleanup:cleanup_neo4j","cleanup:cleanup_pageindex","cleanup:cleanup_images"]}
+{"scenario":"pending","verdict":"pass","documentStatus":"failed","events":["cleanup:cleanup_es","cleanup:cleanup_neo4j","cleanup:cleanup_pageindex","cleanup:cleanup_images"]}
+{"scenario":"before-stages","verdict":"pass","documentStatus":"failed","events":["cleanup:cleanup_es","cleanup:cleanup_neo4j","cleanup:cleanup_pageindex","cleanup:cleanup_images"]}
+{"scenario":"inside-write","verdict":"pass","documentStatus":"failed","events":["write:chunk","write:wikify","write:storeChunks","cleanup:cleanup_es","cleanup:cleanup_neo4j","cleanup:cleanup_pageindex","cleanup:cleanup_images"]}
+{"scenario":"before-completion","verdict":"pass","documentStatus":"failed","events":["write:chunk","write:wikify","write:storeChunks","write:storeGraph","cleanup:cleanup_es","cleanup:cleanup_neo4j","cleanup:cleanup_pageindex","cleanup:cleanup_images"]}
+{"scenario":"transient","verdict":"pass","documentStatus":"failed","events":["write:chunk","write:wikify","cleanup:cleanup_es","cleanup:cleanup_neo4j","cleanup:cleanup_pageindex","cleanup:cleanup_images"]}
+{"scenario":"direct-activation","verdict":"pass"}
+
+PASS seven real-code scenarios. Exit zero means the retirement repair holds.

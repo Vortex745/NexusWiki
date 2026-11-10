@@ -1,0 +1,20 @@
+PASS repaired model. 8728 states generated, 2999 distinct states found, 0 states left on queue.
+PASS model negative control rejects baseline for NoCompleteAfterRetire. Trace C:\Users\14253\AppData\Local\Temp\ingestion-retirement-negative-NoCompleteAfterRetire.log
+PASS model negative control rejects baseline for NoActivateAfterRetire. Trace C:\Users\14253\AppData\Local\Temp\ingestion-retirement-negative-NoActivateAfterRetire.log
+PASS model negative control rejects baseline for NoWriteAfterCleanup. Trace C:\Users\14253\AppData\Local\Temp\ingestion-retirement-negative-NoWriteAfterCleanup.log
+PASS model negative control rejects baseline for CleanupDoesNotOvertakeWrite. Trace C:\Users\14253\AppData\Local\Temp\ingestion-retirement-negative-CleanupDoesNotOvertakeWrite.log
+Repair trace C:\Users\14253\AppData\Local\Temp\ingestion-retirement-repair.log
+{"scenario":"control","verdict":"pass","documentStatus":"completed","events":["write:chunk","write:wikify","write:storeChunks","write:storeGraph","cleanup:cleanup_es","cleanup:cleanup_neo4j","cleanup:cleanup_pageindex","cleanup:cleanup_images"]}
+AssertionError [ERR_ASSERTION]: retired ingestion cannot complete
+
+true !== false
+
+    at main (C:\Users\14253\.codex\worktrees\explicit-state-machines\Agentic RAG\.worktrees\ingestion\.scratch\explicit-state-machines\verify-ingestion-retirement\probe\retire_inflight_probe.ts:67:16) {
+  generatedMessage: false,
+  code: 'ERR_ASSERTION',
+  actual: true,
+  expected: false,
+  operator: 'strictEqual',
+  diff: 'simple'
+}
+FAIL real-code retirement repair probe

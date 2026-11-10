@@ -1,0 +1,37 @@
+{"scenario":"control","verdict":"pass","documentStatus":"completed","events":["write:chunk","write:wikify","write:storeChunks","write:storeGraph","cleanup:cleanup_es","cleanup:cleanup_neo4j","cleanup:cleanup_pageindex","cleanup:cleanup_images"]}
+{"scenario":"pending","verdict":"pass","documentStatus":"failed","events":["cleanup:cleanup_es","cleanup:cleanup_neo4j","cleanup:cleanup_pageindex","cleanup:cleanup_images"]}
+{"scenario":"before-stages","verdict":"pass","documentStatus":"failed","events":["cleanup:cleanup_es","cleanup:cleanup_neo4j","cleanup:cleanup_pageindex","cleanup:cleanup_images"]}
+{"scenario":"inside-write","verdict":"pass","documentStatus":"failed","events":["write:chunk","write:wikify","write:storeChunks","cleanup:cleanup_es","cleanup:cleanup_neo4j","cleanup:cleanup_pageindex","cleanup:cleanup_images"]}
+{"scenario":"before-completion","verdict":"pass","documentStatus":"failed","events":["write:chunk","write:wikify","write:storeChunks","write:storeGraph","cleanup:cleanup_es","cleanup:cleanup_neo4j","cleanup:cleanup_pageindex","cleanup:cleanup_images"]}
+{"scenario":"transient","verdict":"pass","documentStatus":"failed","events":["write:chunk","write:wikify","cleanup:cleanup_es","cleanup:cleanup_neo4j","cleanup:cleanup_pageindex","cleanup:cleanup_images"]}
+AssertionError [ERR_ASSERTION]: repository activation rejects a retired source
++ actual - expected
+
++ {
++   allowedGroups: [],
++   content: 'content',
++   contentHash: 'ed7002b439e9ac845f22357d822bac1444730fbdb6016d3ec9432297b9ec9f73',
++   createdAt: 2026-11-10T14:16:01.629Z,
++   fileName: null,
++   id: '3926ea73-58f7-4f8d-8c32-e9168be5b3db',
++   knowledgeBaseId: 'kb-default-default',
++   metadata: {},
++   mimeType: null,
++   parserOverride: null,
++   rawContent: null,
++   source: 'probe://activation',
++   sourceId: 'daf35531-5f81-45aa-83ca-d8b8d3f4fa56',
++   tenantId: 'default',
++   title: 'Activation guard',
++   version: 1
++ }
+- null
+
+    at main (C:\Users\14253\.codex\worktrees\explicit-state-machines\Agentic RAG\.worktrees\ingestion\.scratch\explicit-state-machines\verify-ingestion-retirement\probe\retire_inflight_probe.ts:105:12) {
+  generatedMessage: false,
+  code: 'ERR_ASSERTION',
+  actual: [Object],
+  expected: null,
+  operator: 'strictEqual',
+  diff: 'simple'
+}

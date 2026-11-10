@@ -1,0 +1,16 @@
+{"scenario":"control","verdict":"pass","documentStatus":"completed","events":["write:chunk","write:wikify","write:storeChunks","write:storeGraph","cleanup:cleanup_es","cleanup:cleanup_neo4j","cleanup:cleanup_pageindex","cleanup:cleanup_images"]}
+{"scenario":"pending","verdict":"pass","documentStatus":"failed","events":["cleanup:cleanup_es","cleanup:cleanup_neo4j","cleanup:cleanup_pageindex","cleanup:cleanup_images"]}
+{"scenario":"before-stages","verdict":"pass","documentStatus":"failed","events":["cleanup:cleanup_es","cleanup:cleanup_neo4j","cleanup:cleanup_pageindex","cleanup:cleanup_images"]}
+{"scenario":"inside-write","verdict":"pass","documentStatus":"failed","events":["write:chunk","write:wikify","write:storeChunks","cleanup:cleanup_es","cleanup:cleanup_neo4j","cleanup:cleanup_pageindex","cleanup:cleanup_images"]}
+AssertionError [ERR_ASSERTION]: retired ingestion cannot complete
+
+true !== false
+
+    at main (C:\Users\14253\.codex\worktrees\explicit-state-machines\Agentic RAG\.worktrees\ingestion\.scratch\explicit-state-machines\verify-ingestion-retirement\probe\retire_inflight_probe.ts:67:16) {
+  generatedMessage: false,
+  code: 'ERR_ASSERTION',
+  actual: true,
+  expected: false,
+  operator: 'strictEqual',
+  diff: 'simple'
+}

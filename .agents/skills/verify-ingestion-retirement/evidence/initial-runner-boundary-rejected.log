@@ -1,0 +1,13 @@
+{"scenario":"control","verdict":"pass","documentStatus":"completed","events":["write:chunk","write:wikify","write:storeChunks","write:storeGraph","cleanup:cleanup_es","cleanup:cleanup_neo4j","cleanup:cleanup_pageindex","cleanup:cleanup_images"]}
+AssertionError [ERR_ASSERTION]: pending retired ingest never enters the runner
+
+1 !== 0
+
+    at main (C:\Users\14253\.codex\worktrees\explicit-state-machines\Agentic RAG\.worktrees\ingestion\.scratch\explicit-state-machines\verify-ingestion-retirement\probe\retire_inflight_probe.ts:74:41) {
+  generatedMessage: false,
+  code: 'ERR_ASSERTION',
+  actual: 1,
+  expected: 0,
+  operator: 'strictEqual',
+  diff: 'simple'
+}

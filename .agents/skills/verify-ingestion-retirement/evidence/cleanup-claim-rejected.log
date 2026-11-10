@@ -1,0 +1,21 @@
+{"scenario":"control","verdict":"pass","documentStatus":"completed","events":["write:chunk","write:wikify","write:storeChunks","write:storeGraph","cleanup:cleanup_es","cleanup:cleanup_neo4j","cleanup:cleanup_pageindex","cleanup:cleanup_images"]}
+{"scenario":"pending","verdict":"pass","documentStatus":"failed","events":["cleanup:cleanup_es","cleanup:cleanup_neo4j","cleanup:cleanup_pageindex","cleanup:cleanup_images"]}
+AssertionError [ERR_ASSERTION]: cleanup must wait for the outstanding execution
++ actual - expected
+
++ {
++   docId: '68fbefbc-7112-4a4c-851f-1a4524325154',
++   rootSpanId: '',
++   success: true,
++   taskId: 2
++ }
+- null
+
+    at main (C:\Users\14253\.codex\worktrees\explicit-state-machines\Agentic RAG\.worktrees\ingestion\.scratch\explicit-state-machines\verify-ingestion-retirement\probe\retire_inflight_probe.ts:66:16) {
+  generatedMessage: false,
+  code: 'ERR_ASSERTION',
+  actual: [Object],
+  expected: null,
+  operator: 'strictEqual',
+  diff: 'simple'
+}

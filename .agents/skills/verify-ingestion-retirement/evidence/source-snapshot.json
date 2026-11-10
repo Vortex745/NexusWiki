@@ -1,0 +1,17 @@
+{
+  "generatedAt": "2026-11-11",
+  "branch": "codex/explicit-state-machines",
+  "baseCommit": "748c73350d156f46fea90cc986b1e04d92534557",
+  "algorithm": "sha256",
+  "files": {
+    "src/ingestion/lifecycle.ts": "71cc49306e2c745c88d42ae5f9738564104dad4b9a5cd3a5ac9040a3f0434aca",
+    "src/ingestion/tracking/task_repo.ts": "2f6115915281056820a3ea6e414c5c54140d958395ecf4b64a4f61ebfd5201b5",
+    "src/ingestion/tracking/doc_repo.ts": "056faad6bef423e8b56d0668eb03b3552d010b46e41e8c0c230b59d5ce05d06d",
+    ".agents/skills/verify-ingestion-retirement/model/IngestionRetirement.tla": "3a9a3c99ca1c3033702cc0be14160804c7e90305e84819f0faa32a877b796941",
+    ".agents/skills/verify-ingestion-retirement/model/guards.cfg": "79631ce9f5318daa31b88728d109a9f7438948017cfce70eadf142711ab0e904",
+    ".agents/skills/verify-ingestion-retirement/model/findings.cfg": "f1a2de7b26d566ac0f55f6f59e269eeddb0085788c497ed3e64da4b28b6a3e19",
+    ".agents/skills/verify-ingestion-retirement/probe/retire_inflight_probe.ts": "829b131964d45351d01ed5c221a60f7b5f6381fca990fa015027870ec20c739b",
+    ".agents/skills/verify-ingestion-retirement/run.ps1": "d95ec6117d9440a137c251adc5e997418bb93f84e8f2ce0e2db3bac69139d1cf",
+    ".agents/skills/verify-ingestion-retirement/SKILL.md": "b91a4b73e52298367f0bcf2c7568fcbc82df0e6e72ff99908a70c2282577171c"
+  }
+}
