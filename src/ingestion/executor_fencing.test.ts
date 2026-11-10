@@ -16,6 +16,8 @@ import { TaskRepo } from "./tracking/task_repo"
 import { IngestionLifecycle, type IngestionStageRunner } from "./lifecycle"
 import { PipelineStageRunner } from "./pipeline"
 import type { IngestionStoreImpl } from "./storage"
+import { SqliteSourceLifecycleStore } from "../knowledge/source_lifecycle_store"
+import { RetirementServiceImpl } from "../knowledge/retirement"
 
 process.env.OPENAI_API_KEY = process.env.OPENAI_API_KEY || "test-key"
 // loadConfig() 是进程级 memoize：必须在任何 loadConfig 调用之前固定隔离库。
@@ -25,6 +27,59 @@ const ORIGINAL = Buffer.from(
   "UT-20 围栏样本。否定校验：不支持口头申请。结尾校验词：围栏-77。\n",
   "utf8"
 )
+
+for (const pauseAt of ["before-stages", "inside-write", "before-completion"] as const) {
+  test(`retirement fences ingestion and delays cleanup when paused ${pauseAt}`, async () => {
+    const db = openDb(":memory:")
+    const events: string[] = []
+    let release!: () => void
+    const paused = new Promise<void>((resolve) => { release = resolve })
+    let entered!: () => void
+    const started = new Promise<void>((resolve) => { entered = resolve })
+    const runner: IngestionStageRunner = {
+      close: async () => {},
+      async run(_document, execution) {
+        if (pauseAt === "before-stages") { entered(); await paused }
+        for (const stage of ["chunk", "wikify", "storeChunks", "storeGraph"] as const) {
+          await execution.runStage(stage, {}, async () => {
+            if (pauseAt === "inside-write" && stage === "storeChunks") { entered(); await paused }
+            events.push(`write:${stage}`)
+          }, () => ({ stage }))
+        }
+        if (pauseAt === "before-completion") { entered(); await paused }
+      },
+    }
+    const cleanup = { async run(op: string) { events.push(`cleanup:${op}`) } }
+    const lifecycle = new IngestionLifecycle(db, runner, () => new Date(), "auto", cleanup as never)
+    const docs = new DocumentRepo(db)
+    const tasks = new TaskRepo(db)
+    const sources = new SqliteSourceLifecycleStore(db)
+    const retirement = new RetirementServiceImpl(db, sources, tasks)
+    const submitted = lifecycle.submit({ title: "Retirement interleaving", content: "original content", source: "probe://retire" })
+    const document = docs.get(submitted.docId)!
+    const running = lifecycle.runNext()
+    try {
+      await started
+      retirement.retire(document.sourceId, document.tenantId ?? "default", "remove", "test")
+      const cleanupDuringIngestion = await lifecycle.runNext()
+      release()
+      const result = await running
+      while (await lifecycle.runNext()) {}
+      assert.equal(cleanupDuringIngestion, null, "cleanup waits for the outstanding ingest operation")
+      assert.equal(result?.success, false)
+      assert.notEqual(docs.getStatus(submitted.docId), "completed")
+      assert.equal(docs.getActive(document.sourceId), null)
+      assert.equal(sources.getSource(document.sourceId, document.tenantId ?? "default")?.lifecycleState, "retired")
+      assert.equal(events.filter((event) => event.startsWith("cleanup:")).length, 4)
+      const cleanupIndex = events.findIndex((event) => event.startsWith("cleanup:"))
+      assert.ok(events.slice(cleanupIndex).every((event) => event.startsWith("cleanup:")), "no writes after cleanup")
+    } finally {
+      release()
+      await running
+      db.close()
+    }
+  })
+}
 
 function makeWorkingStore() {
   return {

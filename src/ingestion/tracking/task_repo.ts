@@ -91,10 +91,15 @@ export class TaskRepo {
     const executionId = uuid()
     const tx = this.db.transaction(() => {
       const row = this.db.prepare(
-        `SELECT * FROM task_pending_ops
-         WHERE status = 'pending'
-           AND (next_attempt_at IS NULL OR next_attempt_at <= ?)
-         ORDER BY id ASC
+        `SELECT candidate.* FROM task_pending_ops candidate
+         WHERE candidate.status = 'pending'
+           AND (candidate.next_attempt_at IS NULL OR candidate.next_attempt_at <= ?)
+           AND (candidate.op = 'ingest' OR NOT EXISTS (
+             SELECT 1 FROM task_pending_ops ingestion
+             WHERE ingestion.doc_id = candidate.doc_id
+               AND ingestion.op = 'ingest' AND ingestion.status = 'running'
+           ))
+         ORDER BY candidate.id ASC
          LIMIT 1`
       ).get(now) as TaskRow | undefined
       if (!row) return null
