@@ -6,6 +6,8 @@ Agentic RAG 知识助手：Mastra 编排 + 向量/BM25/知识图谱/PageIndex �
 
 ## 架构设计
 
+回答的控制状态、校验轮次与其他业务生命周期见 [RAG 执行状态机](docs/state-machines.md)。
+
 ```mermaid
 flowchart TD
     classDef clientStyle fill:#e1f5fe,stroke:#0288d1,stroke-width:2px;
