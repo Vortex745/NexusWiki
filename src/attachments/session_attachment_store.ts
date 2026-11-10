@@ -183,49 +183,57 @@ export class SqliteSessionAttachmentStore {
     )
   }
 
-  /**
-   * Store the extracted text of a row that is still `parsing` — binary formats
-   * are extracted after the upload returns, so their text lands here. The
-   * `parsing` precondition is the same one `markStatus` uses: a retired row is
-   * never rewritten by a parse that finishes late.
-   */
-  setContent(
+  completeParsing(
     id: string,
     sessionId: string,
     tenantId: string,
     subjectId: string,
-    content: string,
-    now: string
+    result: {
+      content: string
+      chunks: Array<Pick<SessionAttachmentChunk, "position" | "content">>
+      now: string
+    }
   ): void {
-    this.db
-      .prepare(
-        `UPDATE session_attachments SET content = ?, updated_at = ?
-         WHERE id = ? AND session_id = ? AND tenant_id = ? AND subject_id = ?
-           AND status = 'parsing'`
+    const complete = this.db.transaction(() => {
+      const changed = this.db
+        .prepare(
+          `UPDATE session_attachments SET status = 'ready', content = ?, error = NULL, updated_at = ?
+           WHERE id = ? AND session_id = ? AND tenant_id = ? AND subject_id = ?
+             AND status = 'parsing'`
+        )
+        .run(result.content, result.now, id, sessionId, tenantId, subjectId).changes
+      if (changed === 0) return
+      this.db
+        .prepare(
+          `DELETE FROM session_attachment_chunks
+           WHERE attachment_id = ? AND session_id = ? AND tenant_id = ?`
+        )
+        .run(id, sessionId, tenantId)
+      const insert = this.db.prepare(
+        `INSERT INTO session_attachment_chunks (attachment_id, session_id, tenant_id, position, content)
+         VALUES (?, ?, ?, ?, ?)`
       )
-      .run(content, now, id, sessionId, tenantId, subjectId)
+      for (const chunk of result.chunks) {
+        insert.run(id, sessionId, tenantId, chunk.position, chunk.content)
+      }
+    })
+    complete()
   }
 
-  /**
-   * Settle a row that is still `parsing`. The precondition is what keeps a
-   * retired row dead: a parse that finishes after a removal must not resurrect
-   * the attachment into the session's live set.
-   */
-  markStatus(
+  markFailed(
     id: string,
     sessionId: string,
     tenantId: string,
     subjectId: string,
-    status: SessionAttachmentStatus,
     options: { error?: string | null; now: string }
   ): void {
     this.db
       .prepare(
-        `UPDATE session_attachments SET status = ?, error = ?, updated_at = ?
+        `UPDATE session_attachments SET status = 'failed', error = ?, updated_at = ?
          WHERE id = ? AND session_id = ? AND tenant_id = ? AND subject_id = ?
            AND status = 'parsing'`
       )
-      .run(status, options.error ?? null, options.now, id, sessionId, tenantId, subjectId)
+      .run(options.error ?? null, options.now, id, sessionId, tenantId, subjectId)
   }
 
   markPromoted(
@@ -312,30 +320,6 @@ export class SqliteSessionAttachmentStore {
       return changed
     })
     return retire()
-  }
-
-  saveChunks(
-    attachmentId: string,
-    sessionId: string,
-    tenantId: string,
-    chunks: Array<{ position: number; content: string }>
-  ): void {
-    const write = this.db.transaction(() => {
-      this.db
-        .prepare(
-          `DELETE FROM session_attachment_chunks
-           WHERE attachment_id = ? AND session_id = ? AND tenant_id = ?`
-        )
-        .run(attachmentId, sessionId, tenantId)
-      const insert = this.db.prepare(
-        `INSERT INTO session_attachment_chunks (attachment_id, session_id, tenant_id, position, content)
-         VALUES (?, ?, ?, ?, ?)`
-      )
-      for (const chunk of chunks) {
-        insert.run(attachmentId, sessionId, tenantId, chunk.position, chunk.content)
-      }
-    })
-    write()
   }
 
   /** Chunks of the given session (or of the given attachments of it) only. */

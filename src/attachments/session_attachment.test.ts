@@ -49,6 +49,45 @@ const file = (name: string, content: string | Buffer, mimeType?: string) => ({
   content: Buffer.isBuffer(content) ? content : Buffer.from(content, "utf8"),
 })
 
+test("removing a parsing attachment prevents its late content and chunks from returning", async () => {
+  const db = openDb(":memory:")
+  const lifecycle = createIngestionLifecycle(db, { stageRunner: fakeStageRunner() })
+  let release!: () => void
+  const paused = new Promise<void>((resolve) => { release = resolve })
+  const service = new SessionAttachmentService(db, {
+    lifecycle,
+    parserFor: () => ({
+      type: "docreader-pdf" as const,
+      async parse() {
+        await paused
+        return [{ id: "late", index: 0, type: "paragraph" as const,
+          text: "已删除附件的正文", sectionPath: [], metadata: {},
+          provenance: { parser: "docreader-pdf" as const, adapter: "grpc" as const } }]
+      },
+    }),
+  })
+  try {
+    const [outcome] = await service.submit("late-session", "t1", "alice", [
+      file("late.pdf", Buffer.from("%PDF-1.4")),
+    ])
+    assert.ok(outcome.ok)
+    service.remove(outcome.attachment.id, "late-session", "t1", "alice")
+    release()
+    await new Promise<void>((resolve) => setImmediate(resolve))
+    assert.equal(service.get(outcome.attachment.id, "late-session", "t1", "alice")?.status, "retired")
+    const row = db.prepare("SELECT content, raw_content FROM session_attachments WHERE id = ?")
+      .get(outcome.attachment.id) as { content: string; raw_content: Buffer | null }
+    assert.equal(row.content, "")
+    assert.equal(row.raw_content, null)
+    const chunks = db.prepare("SELECT content FROM session_attachment_chunks WHERE attachment_id = ?")
+      .all(outcome.attachment.id)
+    assert.deepEqual(chunks, [])
+  } finally {
+    release()
+    db.close()
+  }
+})
+
 /** Background extraction settles after the upload; poll the row like a client. */
 async function waitFor(check: () => boolean, timeoutMs = 1_000): Promise<void> {
   const started = Date.now()
