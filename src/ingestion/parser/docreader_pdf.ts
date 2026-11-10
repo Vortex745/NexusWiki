@@ -140,8 +140,14 @@ export class DocReaderPdfParser {
           maxMessageBytes: this.options.maxMessageBytes,
         })
     const warnings = new Set<string>()
-    let meta: NonNullable<ReadStreamResponse__Output["meta"]> | null = null
-    const images: DocReaderImageSummary[] = []
+    type StreamState =
+      | { phase: "awaiting_metadata" }
+      | {
+          phase: "receiving_images" | "awaiting_end"
+          meta: NonNullable<ReadStreamResponse__Output["meta"]>
+          images: DocReaderImageSummary[]
+        }
+    let streamState: StreamState = { phase: "awaiting_metadata" }
 
     try {
       const request: DocReaderReadRequest = {
@@ -159,14 +165,14 @@ export class DocReaderPdfParser {
         timeoutMs: Math.max(1, deadlineAt - Date.now()),
       })) {
         if (frame.meta) {
-          if (meta) {
+          if (streamState.phase !== "awaiting_metadata") {
             throw new DocReaderError(
               "DocReader sent more than one metadata frame",
               "permanent_input",
               "docreader_invalid_stream"
             )
           }
-          meta = frame.meta
+          const meta = frame.meta
           if (meta.error) {
             throw new DocReaderError(
               "DocReader reported a parse failure",
@@ -188,17 +194,32 @@ export class DocReaderPdfParser {
               "docreader_invalid_stream"
             )
           }
+          streamState = {
+            phase: meta.image_count === 0 ? "awaiting_end" : "receiving_images",
+            meta,
+            images: [],
+          }
           continue
         }
         if (frame.image) {
-          if (!meta) {
+          if (streamState.phase === "awaiting_metadata") {
             throw new DocReaderError(
               "DocReader sent an image before metadata",
               "permanent_input",
               "docreader_invalid_stream"
             )
           }
-          images.push(await this.consumeImage(frame.image, input, deadlineAt, warnings))
+          if (streamState.phase === "awaiting_end") {
+            throw new DocReaderError(
+              "DocReader sent more images than declared",
+              "permanent_input",
+              "docreader_invalid_stream"
+            )
+          }
+          streamState.images.push(await this.consumeImage(frame.image, input, deadlineAt, warnings))
+          if (streamState.images.length === streamState.meta.image_count) {
+            streamState = { ...streamState, phase: "awaiting_end" }
+          }
           continue
         }
         throw new DocReaderError(
@@ -208,21 +229,22 @@ export class DocReaderPdfParser {
         )
       }
 
-      if (!meta) {
+      if (streamState.phase === "awaiting_metadata") {
         throw new DocReaderError(
           "DocReader stream ended without metadata",
           "permanent_input",
           "docreader_invalid_stream"
         )
       }
-      if (images.length < meta.image_count) {
+      if (streamState.phase === "receiving_images") {
         throw new DocReaderError(
-          `DocReader stream ended before all declared images arrived (${images.length}/${meta.image_count})`,
+          `DocReader stream ended before all declared images arrived (${streamState.images.length}/${streamState.meta.image_count})`,
           "permanent_input",
           "docreader_image_missing"
         )
       }
 
+      const { meta, images } = streamState
       const sourceBlocks = parseSourceBlocks(meta.source_blocks)
       for (const warning of sourceBlocks.warnings) warnings.add(warning)
 

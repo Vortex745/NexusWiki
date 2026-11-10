@@ -72,6 +72,27 @@ function parser(
 
 const PDF = Buffer.from("%PDF-1.7\n")
 
+for (const declared of [0, 1]) {
+  test(`an image beyond the declared count ${declared} is rejected before processing`, async () => {
+    let ocrCalls = 0
+    const doc = parser([
+      metaFrame("native text", [], { imageCount: declared }),
+      ...Array.from({ length: declared + 1 }, (_, index) => imageFrame(`images/figure_${index}.jpg`)),
+    ], {
+      ocrPage: async () => {
+        ocrCalls += 1
+        throw new Error("unexpected OCR for a figure")
+      },
+    })
+    await assert.rejects(doc.parseRaw({ content: PDF, fileName: "extra.pdf" }), (error: unknown) => {
+      assert.ok(error instanceof DocReaderError)
+      assert.equal(error.reasonCode, "docreader_invalid_stream")
+      return true
+    })
+    assert.equal(ocrCalls, 0)
+  })
+}
+
 test("native markdown becomes page-aware blocks with ratio locators and no boundingBox", async () => {
   const markdown = [
     "# Title",
