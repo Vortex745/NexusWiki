@@ -1,0 +1,44 @@
+# Logs
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+node_modules
+dist
+dist-ssr
+*.local
+
+# Editor directories and files
+.vscode/*
+!.vscode/extensions.json
+.idea
+.DS_Store
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+out
+.env
+*.db
+
+
+# Python bytecode
+__pycache__/
+
+# TLA+ 工具 jar（下载地址与校验和见 formal/README.md）
+formal/vendor/
+formal/*_TTrace_*
+formal/states/
+
+# 会话工作态（scratch 跟踪、临时产物、计划页）
+.tmp/
+.scratch/
+.archify/
+decisions.tsv
+.zcode/plans/

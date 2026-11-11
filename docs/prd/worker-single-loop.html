@@ -1,0 +1,768 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Worker 单环化 PRD：保留 Router，改造 Worker</title>
+<style>
+  :root {
+    --bg: #f7f7f4;
+    --surface: #ffffff;
+    --ink: #1b1b19;
+    --muted: #66665f;
+    --line: #e2e2dc;
+    --accent: #1f5f5b;
+    --accent-soft: #e8f1ef;
+    --warn-soft: #f4efe3;
+    --warn-ink: #6b5a2b;
+    --radius: 12px;
+  }
+
+  * { box-sizing: border-box; }
+
+  html { scroll-behavior: smooth; }
+
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--ink);
+    font-family: "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Noto Sans SC", system-ui, -apple-system, "Segoe UI", sans-serif;
+    font-size: 15px;
+    line-height: 1.75;
+    text-rendering: optimizeLegibility;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  main {
+    max-width: 920px;
+    margin: 0 auto;
+    padding: 64px 32px 96px;
+  }
+
+  .doc-head {
+    border-top: 2px solid var(--ink);
+    padding-top: 22px;
+  }
+
+  .meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px 18px;
+    color: var(--muted);
+    font-size: 12px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+  }
+
+  h1 {
+    margin: 18px 0 10px;
+    font-size: clamp(30px, 4.6vw, 44px);
+    line-height: 1.2;
+    letter-spacing: -0.02em;
+    font-weight: 650;
+  }
+
+  .lede {
+    margin: 0;
+    max-width: 720px;
+    font-size: 18px;
+    line-height: 1.65;
+    color: var(--muted);
+  }
+
+  .source {
+    margin-top: 26px;
+    padding: 14px 16px;
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    font-size: 13px;
+    color: var(--muted);
+  }
+
+  .source a {
+    color: var(--accent);
+    text-decoration: none;
+    border-bottom: 1px solid color-mix(in srgb, var(--accent) 35%, transparent);
+  }
+
+  section {
+    margin-top: 58px;
+  }
+
+  h2 {
+    display: flex;
+    align-items: baseline;
+    gap: 14px;
+    margin: 0 0 22px;
+    font-size: 24px;
+    line-height: 1.35;
+    letter-spacing: -0.01em;
+    font-weight: 650;
+  }
+
+  h2 .num {
+    color: var(--accent);
+    font-size: 13px;
+    letter-spacing: 0.12em;
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+  }
+
+  h3 {
+    margin: 0;
+    font-size: 18px;
+    line-height: 1.4;
+    font-weight: 620;
+  }
+
+  p { margin: 0 0 14px; }
+
+  .tight p:last-child { margin-bottom: 0; }
+
+  ul, ol { margin: 0 0 16px; padding-left: 22px; }
+
+  li { margin-bottom: 7px; }
+
+  strong { font-weight: 620; }
+
+  .quiet { color: var(--muted); }
+
+  .note {
+    border-left: 3px solid var(--accent);
+    background: var(--accent-soft);
+    padding: 14px 18px;
+    border-radius: 0 var(--radius) var(--radius) 0;
+    margin: 18px 0;
+    font-size: 14px;
+  }
+
+  .note p:last-child { margin-bottom: 0; }
+
+  .decision {
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    padding: 18px 20px;
+    margin: 18px 0;
+  }
+
+  .decision p:last-child { margin-bottom: 0; }
+
+  /* flow */
+  .flow {
+    display: grid;
+    gap: 14px;
+    margin: 24px 0 8px;
+  }
+
+  .flow-row {
+    display: grid;
+    grid-template-columns: 1fr 26px 1fr 26px 1.25fr 26px 1fr;
+    align-items: center;
+    gap: 0;
+  }
+
+  .flow-row.second {
+    grid-template-columns: 1fr 26px 1.3fr 26px 1fr 26px 1fr;
+  }
+
+  .node {
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    padding: 11px 13px;
+    font-size: 13px;
+    line-height: 1.5;
+    text-align: center;
+  }
+
+  .node.accent {
+    border-color: color-mix(in srgb, var(--accent) 45%, var(--line));
+    background: var(--accent-soft);
+  }
+
+  .node.dark {
+    background: var(--ink);
+    color: #fff;
+    border-color: var(--ink);
+  }
+
+  .arrow {
+    text-align: center;
+    color: var(--muted);
+    font-size: 14px;
+  }
+
+  .flow-label {
+    margin-top: 4px;
+    font-size: 12px;
+    letter-spacing: 0.08em;
+    color: var(--muted);
+  }
+
+  /* table */
+  .table-wrap {
+    overflow-x: auto;
+    margin: 18px 0 22px;
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    background: var(--surface);
+  }
+
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 13.5px;
+    line-height: 1.6;
+  }
+
+  th, td {
+    text-align: left;
+    vertical-align: top;
+    padding: 12px 16px;
+    border-bottom: 1px solid var(--line);
+  }
+
+  th {
+    color: var(--muted);
+    font-weight: 560;
+    font-size: 12px;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    background: #fbfbf9;
+    white-space: nowrap;
+  }
+
+  tr:last-child td { border-bottom: none; }
+
+  /* FR cards */
+  .fr {
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    padding: 22px 24px;
+    margin: 18px 0;
+  }
+
+  .fr-head {
+    display: flex;
+    align-items: baseline;
+    gap: 12px;
+    margin-bottom: 16px;
+    padding-bottom: 14px;
+    border-bottom: 1px solid var(--line);
+  }
+
+  .fr-id {
+    color: var(--accent);
+    font-size: 12px;
+    letter-spacing: 0.1em;
+    font-weight: 650;
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+  }
+
+  dl {
+    display: grid;
+    grid-template-columns: 96px 1fr;
+    gap: 10px 18px;
+    margin: 0;
+  }
+
+  dt {
+    color: var(--muted);
+    font-size: 13px;
+    font-weight: 560;
+  }
+
+  dd {
+    margin: 0;
+    min-width: 0;
+  }
+
+  dd ul { margin: 0; padding-left: 18px; }
+
+  dd li { margin-bottom: 5px; }
+
+  .excluded {
+    background: var(--warn-soft);
+    border: 1px solid color-mix(in srgb, var(--warn-ink) 18%, var(--line));
+    border-radius: var(--radius);
+    padding: 16px 18px;
+    font-size: 14px;
+  }
+
+  .excluded h3 { color: var(--warn-ink); margin-bottom: 8px; }
+
+  .excluded ul { margin: 0; }
+
+  footer {
+    margin-top: 64px;
+    padding-top: 18px;
+    border-top: 1px solid var(--line);
+    color: var(--muted);
+    font-size: 12px;
+    display: flex;
+    justify-content: space-between;
+    gap: 16px;
+    flex-wrap: wrap;
+  }
+
+  @media (max-width: 720px) {
+    main { padding: 44px 18px 72px; }
+    .flow-row, .flow-row.second { grid-template-columns: 1fr; }
+    .arrow { transform: rotate(90deg); }
+    dl { grid-template-columns: 1fr; gap: 4px; }
+    dd { margin-bottom: 10px; }
+    th, td { padding: 10px 12px; }
+  }
+
+  @media print {
+    body { background: #fff; }
+    main { max-width: none; padding: 0; }
+    .fr, .decision, .table-wrap, .source { break-inside: avoid; }
+    a { color: var(--ink); }
+  }
+</style>
+</head>
+<body>
+<main>
+
+  <header class="doc-head">
+    <div class="meta">
+      <span>PRD</span>
+      <span>待评审</span>
+      <span>v0.3</span>
+      <span>2026-11-04</span>
+    </div>
+    <h1>Worker 单环化 PRD</h1>
+    <p class="lede">保留当前 Router，把 Worker 改成文章里的单环执行形态。不合并 Router 和 Worker。</p>
+    <div class="source">
+      依据：Claude 官方文章
+      <a href="https://claude.com/resources/articles/building-agents-when-to-fold-subagents-into-your-main-agent-loop">Building agents: When to fold subagents into your main agent loop</a>。
+      文中关于单 Agent 与 subagent 的对比结论来自 Anthropic 的内部工程经验，不是本项目的实测数据。
+    </div>
+  </header>
+
+  <section id="background">
+    <h2><span class="num">01</span>背景与决策</h2>
+
+    <p>当前主 Agent 循环只做意图判断。它没有文件读写和命令执行工具。任何需要动文件或跑命令的请求，都会被 <code>dispatch_task</code> 交给一个独立 Worker 会话。Worker 在自己的上下文里执行，结束后用一段文本汇报，Router 再把这段文本转述给用户。</p>
+
+    <p>文章的核心建议是把这类通用 subagent 折叠进主循环。折叠的条件是：单循环没有上下文膨胀导致的退化，任务不需要并行和可丢弃的新上下文，单循环能选对工具。文章同时说明，需要并行且上下文可以丢弃时，可以保留 subagent。</p>
+
+    <div class="note">
+      <p><strong>产品决策：不合并。</strong>Router 继续负责对话、判断和调度。Worker 继续作为独立执行上下文。保留的原因是后台执行和对话连续性。用户派发任务后可以继续聊天，Worker 在自己的上下文里跑完再汇报。这对应文章的第二个保留条件。</p>
+      <p>代价是 Router 看不到执行过程，只能依赖 Worker 的汇报。本 PRD 用三件事降低这个代价：Worker 写计划并在执行中修改，汇报工具在代码里校验产物，汇报改成固定结构。文章里的折叠步骤不采用。</p>
+    </div>
+
+    <div class="decision">
+      <p><strong>可行性判断。</strong>技术实现没有硬阻塞，置信度 0.9。产品可行性 0.7。两个未知项决定成败：改造后质量是否不降，置信度 0.55；12 回合预算是否够用，置信度 0.5。前置探针和 10 任务评测负责回答这两个问题。下面是本次评审给出的判断估算，不是实测数据。</p>
+    </div>
+
+    <p><strong>目标。</strong>把 Worker 从“能读写文件的会话”改成有纪律的单环执行 Agent。一个模型、一个上下文窗口、开放工具循环，带回合预算。流程放进技能，动作放进工具，参考资料通过任务输入或检索工具提供。Worker 仍然是通用执行器，不按领域拆分。</p>
+
+    <p><strong>可观察结果。</strong>Worker 汇报时带上产物清单，清单由汇报工具在代码里校验。任务超过回合预算时，Worker 先收到一次收尾提醒，仍不汇报则停止并生成失败汇报，不静默停止。流程知识按需加载，不堆在系统提示词里。Router 的派发、任务行、叫停和恢复行为保持不变。</p>
+  </section>
+
+  <section id="scope">
+    <h2><span class="num">02</span>范围</h2>
+
+    <h3>P0</h3>
+    <ul>
+      <li>Worker 的单环执行纪律：计划写在上下文里，工具结果原样回到同一上下文。</li>
+      <li>渐进披露：流程进技能，动作进工具，参考资料走任务输入或检索工具。</li>
+      <li>工具治理：按用户意图分组，工具定义保持在 30 个以内，不新增专家 Worker。</li>
+      <li>回合预算与收尾提醒。</li>
+      <li>结构化汇报与代码校验产物。</li>
+      <li>任务上下文隔离：Worker 只接收任务指令，不继承主会话历史。</li>
+      <li>三个前置探针。</li>
+      <li>Worker 改造的评测门禁。</li>
+    </ul>
+
+    <h3>P1</h3>
+    <ul>
+      <li>多个后台任务并行。现有能力，不新增界面。</li>
+      <li>Router 的知识检索。现有 <code>search_knowledge</code> 行为不变。</li>
+    </ul>
+
+    <div class="excluded" style="margin-top:24px">
+      <h3>不做</h3>
+      <ul>
+        <li>不合并 Router 和 Worker。</li>
+        <li>不给 Router 增加文件或命令执行工具，也不加核对工具。</li>
+        <li>不为每个领域新增一个 Worker。领域能力用技能或工具表达。</li>
+        <li>不改任务状态机和聊天时间线。running、done、failed、aborted、interrupted 保持原样。</li>
+        <li>不新增审批门。当前 Worker 没有审批门，改造后保持一致。</li>
+        <li>不先建技能库。首批只做两个技能，验证路径后再扩。</li>
+      </ul>
+    </div>
+  </section>
+
+  <section id="model">
+    <h2><span class="num">03</span>核心流程</h2>
+
+    <p>对外流程不变。变化只发生在 Worker 会话内部。</p>
+
+    <div class="flow">
+      <div class="flow-row">
+        <div class="node dark">用户消息</div>
+        <div class="arrow">→</div>
+        <div class="node">Router 判断</div>
+        <div class="arrow">→</div>
+        <div class="node">直接回答<br><span class="quiet">闲聊与问答</span></div>
+        <div class="arrow">→</div>
+        <div class="node">回复</div>
+      </div>
+      <div class="flow-row second">
+        <div class="node dark">dispatch_task</div>
+        <div class="arrow">→</div>
+        <div class="node accent">Worker 单环<br><span class="quiet">计划 → 工具批次 → 代码校验</span></div>
+        <div class="arrow">→</div>
+        <div class="node">结构化汇报</div>
+        <div class="arrow">→</div>
+        <div class="node">Router 转述</div>
+      </div>
+    </div>
+
+    <p class="flow-label">Router 仍然决定回答还是派发。Worker 仍然在独立目录和独立上下文里执行。</p>
+
+    <h3 style="margin-top:30px">Router 与 Worker 的分工</h3>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr><th>职责</th><th>Router</th><th>Worker</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>对话</td>
+            <td>拥有用户会话，负责理解和回复</td>
+            <td>不直接面对用户</td>
+          </tr>
+          <tr>
+            <td>任务</td>
+            <td>判断是否派发，创建任务记录，转述结果</td>
+            <td>执行单个任务，写文件和跑命令</td>
+          </tr>
+          <tr>
+            <td>上下文</td>
+            <td>保留跨轮次对话</td>
+            <td>只拿任务指令，任务结束后丢弃</td>
+          </tr>
+          <tr>
+            <td>控制</td>
+            <td>叫停、查询状态、恢复中断任务</td>
+            <td>响应叫停，汇报终态</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section id="requirements">
+    <h2><span class="num">04</span>Worker 功能需求</h2>
+
+    <article class="fr" id="fr-01">
+      <div class="fr-head"><span class="fr-id">FR-01</span><h3>单环执行</h3></div>
+      <dl>
+        <dt>触发</dt>
+        <dd>Router 调用 <code>dispatch_task</code>，启动一个 Worker 会话。</dd>
+
+        <dt>处理</dt>
+        <dd>
+          <ul>
+            <li>Worker 在一个模型、一个上下文窗口里运行开放工具循环。</li>
+            <li>首个回合写下计划，后续按工具结果修改计划。</li>
+            <li>每个回合可以发出多个工具调用。独立调用并行执行，有依赖的调用串行等待。</li>
+            <li>工具结果原样回到同一上下文，不经过摘要层。</li>
+            <li>不跑固定多步流水线，不靠意图分类器决定下一步。</li>
+          </ul>
+        </dd>
+
+        <dt>结果与状态</dt>
+        <dd>
+          <ul>
+            <li>任务完成后调用 <code>report_result</code>，汇报结果。</li>
+            <li>会话结束但没有调用汇报工具时，按失败处理，沿用现有行为。</li>
+          </ul>
+        </dd>
+
+        <dt>例外</dt>
+        <dd>
+          <ul>
+            <li>工具失败。Worker 在同一上下文里读取错误，重试或换方案。</li>
+            <li>模型调用失败。汇报失败原因，沿用现有的错误落账。</li>
+            <li>达到预算。按 FR-04 收尾。</li>
+          </ul>
+        </dd>
+      </dl>
+    </article>
+
+    <article class="fr" id="fr-02">
+      <div class="fr-head"><span class="fr-id">FR-02</span><h3>渐进披露</h3></div>
+      <dl>
+        <dt>系统提示词</dt>
+        <dd>只写执行范围、工具使用规则和汇报契约。保持短小，不堆放领域流程。</dd>
+
+        <dt>技能</dt>
+        <dd>
+          <ul>
+            <li>步骤、规则和判断标准写进技能。系统提示词只放一句描述。</li>
+            <li>完整内容在需要时加载，不常驻上下文。</li>
+            <li>技能由 Worker 自己按任务需要使用，不由 Router 预先拼进提示词。</li>
+            <li>首批只做两个技能。一个管文件修改，一个管命令执行。先验证加载和命中，再扩技能库。</li>
+          </ul>
+        </dd>
+
+        <dt>工具</dt>
+        <dd>需要执行动作、读取实时数据或返回固定结构时，做成工具。工具描述写清触发条件，不写长篇说明。</dd>
+
+        <dt>参考资料</dt>
+        <dd>任务需要的参考资料由 Router 写进任务指令，或由 Worker 调用检索工具获取。不把整段资料粘进系统提示词。</dd>
+
+        <dt>禁止</dt>
+        <dd>不把领域流程写成新 Worker 类型。领域能力用技能或工具表达。</dd>
+      </dl>
+    </article>
+
+    <article class="fr" id="fr-03">
+      <div class="fr-head"><span class="fr-id">FR-03</span><h3>工具治理</h3></div>
+      <dl>
+        <dt>分组</dt>
+        <dd>工具按用户意图分组，不按单个 API 拆分。一个工具可以覆盖同一类动作。</dd>
+
+        <dt>数量</dt>
+        <dd>Worker 可用的工具定义保持在 30 个以内。文章的经验值是超过 30 到 50 个后工具选择开始退化。</dd>
+
+        <dt>当前工具面</dt>
+        <dd>Worker 使用现有文件读写、编辑和命令执行工具，加上 <code>report_result</code>。新增工具必须对应真实任务需求，不为假设场景预留。</dd>
+
+        <dt>扩展方式</dt>
+        <dd>需要新能力时，先判断它属于技能还是工具。两者都不适合时，再讨论是否保留独立上下文。不新增专家 Worker。</dd>
+      </dl>
+    </article>
+
+    <article class="fr" id="fr-04">
+      <div class="fr-head"><span class="fr-id">FR-04</span><h3>回合预算与收尾提醒</h3></div>
+      <dl>
+        <dt>预算</dt>
+        <dd>每个任务最多执行 12 个模型回合。一个回合可以包含一批并行工具调用。数值是起点，评测后校准。<span class="quiet">[Assumption, TBD]</span></dd>
+
+        <dt>计数</dt>
+        <dd>按模型回合计数，不按单个工具调用计数。一个回合里并发多个工具，仍算一个回合。</dd>
+
+        <dt>收尾回合</dt>
+        <dd>
+          <ul>
+            <li>第 12 回合作为收尾回合。进入收尾回合前，runner 发一次提醒，要求 Worker 调用 <code>report_result</code>。</li>
+            <li>Worker 可以在收尾回合里完成最后的写入和汇报。</li>
+            <li>收尾回合结束仍未汇报，runner 调用 <code>session.abort()</code>，不再开新回合。</li>
+          </ul>
+        </dd>
+
+        <dt>abort 后的汇报</dt>
+        <dd>
+          <ul>
+            <li>runner 生成一条失败汇报，包含最后一条 assistant 文本和任务目录中的文件清单。</li>
+            <li>汇报摘要写明“未完成：达到 12 回合预算”。</li>
+            <li>不得静默停止，不得把未完成说成完成。</li>
+          </ul>
+        </dd>
+
+        <dt>提前判断</dt>
+        <dd>计划阶段判断任务无法在预算内完成时，先汇报需要拆分，不要先做一半再停下。</dd>
+      </dl>
+    </article>
+
+    <article class="fr" id="fr-05">
+      <div class="fr-head"><span class="fr-id">FR-05</span><h3>结构化汇报与代码校验产物</h3></div>
+      <dl>
+        <dt>汇报字段</dt>
+        <dd>
+          <code>report_result</code> 包含三项：
+          <ul>
+            <li><code>status</code>：ok 或 failed。</li>
+            <li><code>summary</code>：给用户看的一句话结果。</li>
+            <li><code>artifacts</code>：产生或修改的文件路径列表，可以为空。</li>
+          </ul>
+        </dd>
+
+        <dt>校验位置</dt>
+        <dd>
+          <ul>
+            <li>校验写在 <code>report_result</code> 的 execute 里，用文件系统检查，不靠提示词自觉。</li>
+            <li>相对路径按任务目录解析。绝对路径必须落在任务目录内，越界路径按无效处理。</li>
+            <li>status 为 ok 时，每个 artifact 必须存在、可读，并且是文件。</li>
+            <li>任一 artifact 缺失、不可读或越界时，工具返回错误，不记录汇报。Worker 可以在同一回合修正，或改报 failed。</li>
+            <li>status 为 ok 且 artifacts 为空时允许，summary 必须说明没有产生文件。</li>
+            <li>status 为 failed 时不做产物校验，允许列出部分产物。</li>
+          </ul>
+        </dd>
+
+        <dt>Router 的处理</dt>
+        <dd>Router 继续按现有方式把汇报转成用户消息。汇报文本里带上产物清单。Router 不读文件，也不做二次核对。</dd>
+
+        <dt>用户看到</dt>
+        <dd>任务行只显示标题和状态。最终结果只在 Router 的回复里出现一次，不重复。</dd>
+      </dl>
+    </article>
+
+    <article class="fr" id="fr-06">
+      <div class="fr-head"><span class="fr-id">FR-06</span><h3>任务上下文隔离</h3></div>
+      <dl>
+        <dt>输入</dt>
+        <dd>Worker 只接收任务指令，不继承主会话历史。任务需要的背景由 Router 写进任务指令。</dd>
+
+        <dt>输出</dt>
+        <dd>任务结束后只保留汇报和产物文件。Worker 的中间上下文丢弃。</dd>
+
+        <dt>原因</dt>
+        <dd>保持新上下文，避免主会话膨胀。任务之间不共享隐式状态。下一次任务需要前一次结果时，由 Router 把结果写进新任务指令。</dd>
+
+        <dt>边界</dt>
+        <dd>Worker 不读 Router 的会话文件，不改任务表，不碰模型凭据和应用数据库。</dd>
+      </dl>
+    </article>
+
+    <article class="fr" id="fr-07">
+      <div class="fr-head"><span class="fr-id">FR-07</span><h3>前置探针</h3></div>
+      <dl>
+        <dt>目的</dt>
+        <dd>在全量改造前，用三个小实验验证技术判断里置信度最低的三处。任何一个探针失败，先修复或调整 PRD，不进入全量改造。</dd>
+
+        <dt>探针 A</dt>
+        <dd>
+          预算截断。
+          <ul>
+            <li>监听 <code>turn_start</code> 和 <code>turn_end</code>，按回合计数。</li>
+            <li>收尾回合前发一次提醒，收尾回合结束仍未汇报则 abort。</li>
+            <li>通过标准：<code>prompt()</code> 正常结束，任务落 failed，失败汇报里包含最后一条 assistant 文本和文件清单。</li>
+          </ul>
+        </dd>
+
+        <dt>探针 B</dt>
+        <dd>
+          技能加载。
+          <ul>
+            <li>把两个技能放进独立目录，用显式路径加载，不扫描用户目录。</li>
+            <li>通过标准：系统提示词只出现短描述，完整内容只在 Worker 调用 read 时加载。</li>
+          </ul>
+        </dd>
+
+        <dt>探针 C</dt>
+        <dd>
+          汇报校验与 Router 兼容。
+          <ul>
+            <li>给 <code>report_result</code> 加 <code>artifacts</code>，用假 Worker 写一个文件。</li>
+            <li>通过标准：文件存在时接受汇报，文件缺失时返回错误，注入 Router 的文本仍可用，任务行状态不变。</li>
+          </ul>
+        </dd>
+      </dl>
+    </article>
+
+    <article class="fr" id="fr-08">
+      <div class="fr-head"><span class="fr-id">FR-08</span><h3>评测门禁</h3></div>
+      <dl>
+        <dt>金标任务</dt>
+        <dd>
+          三个探针通过后，建 10 个端到端任务，覆盖以下场景：
+          <ul>
+            <li>单文件创建。</li>
+            <li>单文件修改。</li>
+            <li>多文件修改。</li>
+            <li>执行命令并读取输出。</li>
+            <li>前序修改后的连续追问。</li>
+            <li>知识库检索后执行。</li>
+            <li>两个并行后台任务。</li>
+            <li>后台任务失败。</li>
+            <li>后台任务叫停。</li>
+            <li>超过回合预算的长任务。</li>
+          </ul>
+        </dd>
+
+        <dt>执行规则</dt>
+        <dd>
+          <ul>
+            <li>金标任务覆盖生产中会一起运行的每条链路，以及每条不能破的规则。</li>
+            <li>每个任务跑两次。文章提到，某些回退只在两次中的一次出现。</li>
+            <li>对比基线（当前 Worker）和改造后的 Worker。</li>
+            <li>记录完成正确性、产物准确性、模型回合数、端到端延迟和工具选择。</li>
+            <li>一次只改一类东西。顺序为汇报结构、技能加载、预算、并行工具调用。</li>
+            <li>只要某个任务从通过变为失败，就先修复或回退这次改动，再进入下一项。</li>
+            <li>不要只看总分。记录哪些任务发生翻转。</li>
+          </ul>
+        </dd>
+
+        <dt>切换条件</dt>
+        <dd>改造后的 Worker 在 10 个任务上完成正确性不低于基线，且没有出现新的禁止行为，才作为默认 Worker。评测未通过时，保留现有 Worker 行为。</dd>
+
+        <dt>用户可见性</dt>
+        <dd>评测是迁移门禁，不是产品功能。用户不需要看到评测面板。</dd>
+      </dl>
+    </article>
+  </section>
+
+  <section id="rules">
+    <h2><span class="num">05</span>共享规则与边界</h2>
+
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr><th>规则</th><th>定义</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Router 不变</td>
+            <td>派发、任务状态、叫停、恢复和结果注入保持现有行为。Router 不获得文件或命令工具，也不加核对工具。</td>
+          </tr>
+          <tr>
+            <td>执行位置</td>
+            <td>Worker 是唯一执行文件和命令的地方。执行范围限任务目录。</td>
+          </tr>
+          <tr>
+            <td>返回通道</td>
+            <td>Worker 的汇报是唯一结果通道。中间过程不回传，除非写进 summary。</td>
+          </tr>
+          <tr>
+            <td>代码强制</td>
+            <td>预算计数、收尾提醒和产物校验由 runner 与汇报工具执行，不靠提示词自觉。</td>
+          </tr>
+          <tr>
+            <td>完成证据</td>
+            <td>artifacts 是完成证据。没有产物时，summary 必须说明。产物缺失或越界时不得报 ok。</td>
+          </tr>
+          <tr>
+            <td>任务状态</td>
+            <td>沿用 running、done、failed、aborted、interrupted。预算耗尽按 failed 落账，摘要写明未完成。</td>
+          </tr>
+          <tr>
+            <td>技能</td>
+            <td>技能放独立目录，描述短，按需加载。首批两个，验证后再扩。不把领域流程写进 Worker 系统提示词。</td>
+          </tr>
+          <tr>
+            <td>上下文</td>
+            <td>Router 拥有对话，Worker 拥有任务。两者不共享隐式状态。</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section id="open">
+    <h2><span class="num">06</span>开放问题</h2>
+
+    <ol>
+      <li><strong>回合预算默认值。</strong>12 个回合是起点，评测后校准。<span class="quiet">[Assumption, TBD]</span></li>
+      <li><strong>首批技能的内容边界。</strong>文件修改和命令执行这两个技能，具体收哪些规则，等内容。建议只写最容易出错的步骤和验收动作，不写通用编程常识。<span class="quiet">[TBD]</span></li>
+    </ol>
+  </section>
+
+  <footer>
+    <span>Worker 单环化 PRD</span>
+    <span>待评审 · v0.3 · 2026-11-04</span>
+  </footer>
+
+</main>
+</body>
+</html>

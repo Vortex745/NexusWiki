@@ -1,0 +1,426 @@
+@import "tailwindcss";
+
+@source "../../../node_modules/streamdown/dist/*.js";
+
+@custom-variant dark (&:is(.dark *));
+
+@theme inline {
+    --font-heading: var(--font-sans);
+    --font-sans: var(--td-font-family, sans-serif);
+    --color-sidebar-ring: var(--sidebar-ring);
+    --color-sidebar-border: var(--sidebar-border);
+    --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+    --color-sidebar-accent: var(--sidebar-accent);
+    --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+    --color-sidebar-primary: var(--sidebar-primary);
+    --color-sidebar-foreground: var(--sidebar-foreground);
+    --color-sidebar: var(--sidebar);
+    --color-chart-5: var(--chart-5);
+    --color-chart-4: var(--chart-4);
+    --color-chart-3: var(--chart-3);
+    --color-chart-2: var(--chart-2);
+    --color-chart-1: var(--chart-1);
+    --color-ring: var(--ring);
+    --color-input: var(--input);
+    --color-border: var(--border);
+    --color-destructive: var(--destructive);
+    --color-accent-foreground: var(--accent-foreground);
+    --color-accent: var(--accent);
+    --color-muted-foreground: var(--muted-foreground);
+    --color-muted: var(--muted);
+    --color-secondary-foreground: var(--secondary-foreground);
+    --color-secondary: var(--secondary);
+    --color-primary-foreground: var(--primary-foreground);
+    --color-primary: var(--primary);
+    --color-popover-foreground: var(--popover-foreground);
+    --color-popover: var(--popover);
+    --color-card-foreground: var(--card-foreground);
+    --color-card: var(--card);
+    --color-foreground: var(--foreground);
+    --color-background: var(--background);
+    --radius-sm: calc(var(--radius) * 0.6);
+    --radius-md: calc(var(--radius) * 0.8);
+    --radius-lg: var(--radius);
+    --radius-xl: calc(var(--radius) * 1.4);
+    --radius-2xl: calc(var(--radius) * 1.8);
+    --radius-3xl: calc(var(--radius) * 2.2);
+    --radius-4xl: calc(var(--radius) * 2.6);
+}
+
+:root {
+    --background: #fcfcfc;
+    --foreground: oklch(0.145 0 0);
+    --card: oklch(1 0 0);
+    --card-foreground: oklch(0.145 0 0);
+    --popover: oklch(1 0 0);
+    --popover-foreground: oklch(0.145 0 0);
+    --primary: oklch(0.205 0 0);
+    --primary-foreground: oklch(0.985 0 0);
+    --secondary: oklch(0.97 0 0);
+    --secondary-foreground: oklch(0.205 0 0);
+    --muted: oklch(0.97 0 0);
+    --muted-foreground: oklch(0.556 0 0);
+    --accent: oklch(0.97 0 0);
+    --accent-foreground: oklch(0.205 0 0);
+    --destructive: oklch(0.577 0.245 27.325);
+    --border: oklch(0.922 0 0);
+    --input: oklch(0.922 0 0);
+    --ring: oklch(0.708 0 0);
+    --chart-1: oklch(0.87 0 0);
+    --chart-2: oklch(0.556 0 0);
+    --chart-3: oklch(0.439 0 0);
+    --chart-4: oklch(0.371 0 0);
+    --chart-5: oklch(0.269 0 0);
+    --radius: 0.625rem;
+    --sidebar: oklch(0.985 0 0);
+    --sidebar-foreground: oklch(0.145 0 0);
+    --sidebar-primary: oklch(0.205 0 0);
+    --sidebar-primary-foreground: oklch(0.985 0 0);
+    --sidebar-accent: oklch(0.97 0 0);
+    --sidebar-accent-foreground: oklch(0.205 0 0);
+    --sidebar-border: oklch(0.922 0 0);
+    --sidebar-ring: oklch(0.708 0 0);
+}
+
+.dark {
+    --background: oklch(0.145 0 0);
+    --foreground: oklch(0.985 0 0);
+    --card: oklch(0.205 0 0);
+    --card-foreground: oklch(0.985 0 0);
+    --popover: oklch(0.205 0 0);
+    --popover-foreground: oklch(0.985 0 0);
+    --primary: oklch(0.922 0 0);
+    --primary-foreground: oklch(0.205 0 0);
+    --secondary: oklch(0.269 0 0);
+    --secondary-foreground: oklch(0.985 0 0);
+    --muted: oklch(0.269 0 0);
+    --muted-foreground: oklch(0.708 0 0);
+    --accent: oklch(0.269 0 0);
+    --accent-foreground: oklch(0.985 0 0);
+    --destructive: oklch(0.704 0.191 22.216);
+    --border: oklch(1 0 0 / 10%);
+    --input: oklch(1 0 0 / 15%);
+    --ring: oklch(0.556 0 0);
+    --chart-1: oklch(0.87 0 0);
+    --chart-2: oklch(0.556 0 0);
+    --chart-3: oklch(0.439 0 0);
+    --chart-4: oklch(0.371 0 0);
+    --chart-5: oklch(0.269 0 0);
+    --sidebar: oklch(0.205 0 0);
+    --sidebar-foreground: oklch(0.985 0 0);
+    --sidebar-primary: oklch(0.488 0.243 264.376);
+    --sidebar-primary-foreground: oklch(0.985 0 0);
+    --sidebar-accent: oklch(0.269 0 0);
+    --sidebar-accent-foreground: oklch(0.985 0 0);
+    --sidebar-border: oklch(1 0 0 / 10%);
+    --sidebar-ring: oklch(0.556 0 0);
+}
+
+@layer base {
+  /* 收敛到自有容器，避免 .t-* 与挂到 body 的 Portal 浮层吃到 Nova 的 border 与 ring。 */
+  .app-ui :where(*) {
+    @apply border-border outline-ring/50;
+    }
+  .titlebar {
+    -webkit-app-region: drag;
+    }
+  .titlebar [data-no-drag] {
+    -webkit-app-region: no-drag;
+    }
+  /* WCO 未启用时 env 回退 100vw，margin-right = 0，布局与无 overlay 时一致 */
+  .titlebar-controls {
+    margin-right: calc(100vw - env(titlebar-area-width, 100vw));
+    }
+  body {
+    @apply bg-background text-foreground;
+    }
+  html {
+    @apply font-sans;
+    }
+}
+
+/* 记忆卡片液态玻璃：体积投影 + 轻模糊高透 + 边缘折射（SVG 位移贴图，#memory-glass-lens
+   由 memory-card.tsx 随卡片尺寸生成）+ 白着色 + 边缘光 + 正片叠底墨色 */
+.memory-glass {
+  background-color: rgb(255 255 255 / 22%);
+  background-image: radial-gradient(at 0 0, rgb(255 255 255 / 50%), transparent 55%);
+  box-shadow:
+    0 0 0 0.5px rgb(0 0 0 / 6%),
+    0 6px 24px rgb(0 0 0 / 8%),
+    inset 1.5px 1.5px 1px -1px #fff,
+    inset -1.5px -1.5px 1px -1px rgb(255 255 255 / 55%);
+  backdrop-filter: url(#memory-glass-lens) blur(2px) saturate(1.8) brightness(1.06);
+}
+/* 位移贴图未就绪（首帧 / 卡片过小）时的回落：只保留模糊提亮，不带折射 */
+.memory-glass-fallback {
+  backdrop-filter: blur(2px) saturate(1.8) brightness(1.06);
+}
+.memory-glass-ink {
+  color: rgb(0 0 0 / 86%);
+  mix-blend-mode: multiply;
+}
+.memory-glass .memory-glass-sub {
+  color: rgb(60 60 67 / 78%);
+}
+
+.dark .memory-glass {
+  background-color: rgb(20 20 24 / 30%);
+  background-image: radial-gradient(at 0 0, rgb(255 255 255 / 18%), transparent 55%);
+  box-shadow:
+    0 0 0 0.5px rgb(255 255 255 / 12%),
+    0 6px 24px rgb(0 0 0 / 45%),
+    inset 1.5px 1.5px 1px -1px rgb(255 255 255 / 70%),
+    inset -1.5px -1.5px 1px -1px rgb(255 255 255 / 28%);
+  backdrop-filter: url(#memory-glass-lens) blur(2px) saturate(1.6) brightness(0.8);
+}
+.dark .memory-glass-fallback {
+  backdrop-filter: blur(2px) saturate(1.6) brightness(0.8);
+}
+.dark .memory-glass-ink {
+  color: rgb(255 255 255 / 94%);
+  mix-blend-mode: screen;
+}
+.dark .memory-glass .memory-glass-sub {
+  color: rgb(235 235 245 / 60%);
+}
+/* 正文滚轮仍可滚，但不出原生滚动条（卡片高度由尺寸决定） */
+.memory-scroll {
+  scrollbar-width: none;
+}
+.memory-scroll::-webkit-scrollbar {
+  display: none;
+}
+/* 右下角缩放手柄：16px 热区 + 两道 8px 边线做抓角暗示 */
+.memory-resize {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  width: 16px;
+  height: 16px;
+  cursor: nwse-resize;
+  touch-action: none;
+}
+.memory-resize::before {
+  content: '';
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  width: 8px;
+  height: 8px;
+  border-right: 1.5px solid rgb(0 0 0 / 22%);
+  border-bottom: 1.5px solid rgb(0 0 0 / 22%);
+  border-radius: 0 0 4px 0;
+}
+.dark .memory-resize::before {
+  border-color: rgb(255 255 255 / 28%);
+}
+
+.chat-process-group {
+  display: flex;
+  flex-direction: column;
+}
+
+.chat-process-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: fit-content;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--muted-foreground);
+  font-size: 12px;
+  line-height: 20px;
+  cursor: pointer;
+}
+.chat-process-head:hover {
+  color: var(--foreground);
+}
+.chat-process-group .chat-thread-row {
+  margin-top: 4px;
+}
+.chat-process-group .chat-thread-row:first-of-type {
+  margin-top: 2px;
+}
+
+.chat-step {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.chat-step-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--muted-foreground);
+  font-size: 12px;
+  line-height: 20px;
+  text-align: left;
+  cursor: pointer;
+}
+.chat-step-label {
+  color: var(--foreground);
+}
+.chat-step-status {
+  color: var(--muted-foreground);
+}
+.chat-step-failed {
+  color: var(--destructive);
+}
+.chat-step-body {
+  max-height: 240px;
+  overflow-y: auto;
+  padding: 4px 0 4px 22px;
+}
+.chat-step-pre {
+  margin: 0;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--muted-foreground);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.chat-step-pre + .chat-step-pre {
+  margin-top: 6px;
+  padding-top: 6px;
+  border-top: 1px solid var(--border);
+}
+
+.delegation-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 260px;
+  height: 24px;
+  padding: 0 10px;
+  border: 1px solid var(--border);
+  border-radius: 9999px;
+  background: var(--card);
+  color: var(--muted-foreground);
+  font-size: 12px;
+  line-height: 20px;
+  cursor: pointer;
+}
+.delegation-chip:hover {
+  color: var(--foreground);
+  border-color: var(--ring);
+}
+.delegation-chip-failed {
+  color: var(--destructive);
+}
+
+.chat-input-form {
+  position: relative;
+  z-index: 50;
+  background: var(--background);
+}
+
+.subagent-drawer {
+  position: fixed;
+  top: 48px;
+  right: 0;
+  bottom: 0;
+  z-index: 40;
+  display: flex;
+  flex-direction: column;
+  width: min(420px, 90vw);
+  border-left: 1px solid var(--border);
+  background: var(--background);
+  box-shadow: -12px 0 24px rgb(0 0 0 / 6%);
+}
+.subagent-drawer-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 16px;
+  font-size: 13px;
+}
+.subagent-drawer-close {
+  margin-left: auto;
+  display: inline-flex;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--muted-foreground);
+  cursor: pointer;
+}
+.subagent-drawer-close:hover {
+  color: var(--foreground);
+}
+.subagent-drawer-task {
+  padding: 0 16px 12px;
+  color: var(--muted-foreground);
+  font-size: 12px;
+  line-height: 18px;
+  word-break: break-word;
+}
+.subagent-drawer-scroll {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 10px;
+  overflow-y: auto;
+  padding: 0 16px 120px;
+}
+.subagent-drawer-meta {
+  display: flex;
+  gap: 12px;
+  color: var(--muted-foreground);
+  font-size: 12px;
+}
+.subagent-live {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--muted-foreground);
+  font-size: 12px;
+  line-height: 18px;
+}
+.subagent-live-tool {
+  overflow: hidden;
+  color: var(--foreground);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.subagent-live-line {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.subagent-steps {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.subagent-step {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.subagent-step-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--muted-foreground);
+  font-size: 12px;
+  line-height: 20px;
+}
+.subagent-note {
+  color: var(--muted-foreground);
+  font-size: 12px;
+  opacity: 0.7;
+}
+.subagent-final {
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+

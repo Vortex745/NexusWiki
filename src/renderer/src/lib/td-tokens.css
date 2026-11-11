@@ -1,0 +1,397 @@
+/* Nova 令牌 -> TDesign 桌面端令牌。
+   TDesign 的 :root.dark 特异性为 0,2,0，故覆盖块用 :root:root 保证后写生效。
+   交互态别名在包内已指向色阶索引，覆盖原语即自动跟随。 */
+
+:root:root {
+  --td-brand-color-1: color-mix(in oklch, var(--primary) 4%, white);
+  --td-brand-color-2: color-mix(in oklch, var(--primary) 14%, white);
+  --td-brand-color-3: color-mix(in oklch, var(--primary) 26%, white);
+  --td-brand-color-4: color-mix(in oklch, var(--primary) 40%, white);
+  --td-brand-color-5: color-mix(in oklch, var(--primary) 56%, white);
+  --td-brand-color-6: color-mix(in oklch, var(--primary) 72%, white);
+  --td-brand-color-7: color-mix(in oklch, var(--primary) 88%, white);
+  --td-brand-color-8: var(--primary);
+  --td-brand-color-9: color-mix(in oklch, var(--primary) 88%, black);
+  --td-brand-color-10: color-mix(in oklch, var(--primary) 72%, black);
+
+  --td-error-color-1: color-mix(in oklch, var(--destructive) 6%, white);
+  --td-error-color-2: color-mix(in oklch, var(--destructive) 18%, white);
+  --td-error-color-3: color-mix(in oklch, var(--destructive) 32%, white);
+  --td-error-color-4: color-mix(in oklch, var(--destructive) 48%, white);
+  --td-error-color-5: color-mix(in oklch, var(--destructive) 66%, white);
+  --td-error-color-6: var(--destructive);
+  --td-error-color-7: color-mix(in oklch, var(--destructive) 86%, black);
+  --td-error-color-8: color-mix(in oklch, var(--destructive) 70%, black);
+  --td-error-color-9: color-mix(in oklch, var(--destructive) 55%, black);
+  --td-error-color-10: color-mix(in oklch, var(--destructive) 40%, black);
+
+  --td-text-color-primary: var(--foreground);
+  --td-text-color-secondary: var(--muted-foreground);
+  --td-text-color-placeholder: var(--muted-foreground);
+  --td-text-color-anti: var(--primary-foreground);
+  --td-bg-color-page: var(--background);
+  --td-bg-color-container: var(--card);
+  --td-bg-color-container-hover: var(--accent);
+  --td-bg-color-container-active: var(--accent);
+  --td-bg-color-container-select: var(--accent);
+  --td-bg-color-secondarycontainer: var(--muted);
+  --td-bg-color-component: var(--secondary);
+  --td-border-level-1-color: var(--border);
+  --td-border-level-2-color: var(--border);
+  --td-component-stroke: var(--border);
+  --td-component-border: var(--border);
+  --td-radius-default: var(--radius);
+  --td-mask-background: color-mix(in oklch, var(--foreground) 55%, transparent);
+  /* 包内骨架渐变只有 theme-mode 选择器、无 .dark 别名；用跟随前景色的表达式一次覆盖明暗两套。 */
+  --skeleton-animation-gradient: color-mix(in oklch, var(--foreground) 6%, transparent);
+}
+
+/* ---- 聊天时间线（@tdesign-react/chat 的 Omi web components）----
+   ::part 选择器依赖 WC 的 exportparts 逐级转发（t-chat-item / t-chat-sender 已实测导出）。 */
+
+/* 行距：WC 自带 --td-chat-item-gap 38px，归零——行距由 Aqua 的组节奏（4/16px）接管。 */
+.chat-message-row {
+  --td-chat-item-gap: 0;
+}
+
+/* 操作条只留图标本体：套件默认是灰底描边圆角容器（--td-bg-color-secondarycontainer），
+   这里把容器底色/描边/内边距归零，图标间距收到紧凑；单项 hover 反馈保留。
+   margin-top 给正文与图标之间留呼吸（容器 margin token 只在 chat-item 的 shadow 里定义、
+   穿不进 actionbar 的 shadow，必须落在宿主上才生效）。 */
+.chat-message-actions {
+  --td-chat-item-actions-list-bg: transparent;
+  --td-chat-item-actions-list-border: none;
+  --td-chat-item-actions-list-padding: 0;
+  --td-chat-item-actions-list-gap: 2px;
+  --td-chat-item-actions-item-padding: 2px 4px;
+  margin-top: 10px;
+}
+
+/* 思考档位贴到发送键左侧：sender 的 footer 是 space-between，让左格吃掉剩余宽度并右对齐 */
+.chat-input-shell t-chat-sender::part(t-chat__input__footer__left) {
+  display: flex;
+  flex: 1;
+  justify-content: flex-end;
+  padding-right: 8px;
+}
+
+/* 思考档位 Select：borderless 融进输入壳，12px 静音字，悬停/展开提亮；
+   聚焦环与浮底压平（展开态由箭头转向表达），文字色穿透 .t-input__inner 的显式 color */
+.tier-select {
+  font-size: 12px;
+  color: var(--muted-foreground);
+}
+.tier-select .t-select-input .t-input,
+.tier-select .t-select-input .t-input:hover,
+.tier-select .t-select-input .t-input.t-is-focused {
+  background: transparent;
+  border-color: transparent;
+  box-shadow: none;
+  font-size: 12px;
+  color: var(--muted-foreground);
+}
+.tier-select .t-select-input .t-input:hover,
+.tier-select .t-select-input .t-input.t-is-focused {
+  color: var(--foreground);
+}
+.tier-select .t-input__inner {
+  color: inherit;
+}
+
+/* 发送/停止键：32px 圆钮，animateicons 动画图标（悬停触发纸飞机飞出 / 停止框脉冲内旋），
+   禁用态静音；流式期间保持可点（点击=叫停当前流） */
+.chat-send-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border: 0;
+  border-radius: 9999px;
+  background: transparent;
+  color: var(--foreground);
+  cursor: pointer;
+}
+.chat-send-btn:hover:not(:disabled) {
+  background: var(--secondary);
+}
+.chat-send-btn:disabled {
+  color: var(--muted-foreground);
+  opacity: 0.45;
+  cursor: default;
+}
+.chat-send-btn svg {
+  display: block;
+}
+
+/* 思考行：紧凑单行，头部整行可点，正文仅展开时出现 */
+.chat-thinking-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--muted-foreground);
+  font-size: 12px;
+  line-height: 20px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.chat-thinking-body {
+  padding: 4px 0 4px 22px;
+  color: var(--muted-foreground);
+  font-size: 12px;
+  line-height: 19px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* ---- 卷云材质（第 1/2 节 Cirrus，浅底定稿）----
+   用户定稿：页面底色 #fcfcfc，不要天空。天空没了，玻璃可"凝视"的东西也没了，
+   留下的材质本征是无边、无影、颗粒噪点 + 蓝色 tint + 白字。
+   #fcfcfc 比原参考的天空亮得多，tint 用深色才有白字对比度：me 4.84:1，满足正文 4.5。
+   助手回复已改为直排无气泡（.cirrus-plain），tint 只服务用户气泡。
+   平底上 backdrop blur 没有可采样像素，气泡不再挂 backdrop-filter（FLIP 每帧省一次
+   全屏重采样）；菜单浮在气泡与文字之上，模糊仍有意义，保留。
+   线程自底向上（第 3 节），滚动锚定交给钉底单例，关掉浏览器滚动锚定防打架。 */
+
+:root {
+  /* 160px SVG 瓦片：feTurbulence fractalNoise 0.9/2 阶 + feColorMatrix 中灰 9% alpha（规格原值） */
+  --cirrus-grain: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix values='0 0 0 0 0.5 0 0 0 0 0.5 0 0 0 0 0.5 0 0 0 0.09 0'/%3E%3C/filter%3E%3Crect width='160' height='160' filter='url(%23n)'/%3E%3C/svg%3E");
+}
+
+.chat-thread-scroll {
+  overflow-anchor: none;
+  background: transparent;
+}
+
+.chat-thread {
+  min-height: 100%;
+  justify-content: flex-end;
+  max-width: 776px; /* 气泡 680 + 两侧 48 */
+}
+
+.chat-thread > * + * {
+  margin-top: 12px;
+}
+
+.chat-thread > :first-child {
+  margin-top: 0;
+}
+
+.chat-thread-row {
+  position: relative;
+}
+
+/* 组内 4px、组间 16px（特异性压过上面的 12px 通配） */
+.chat-thread-row[data-gpos='mid'],
+.chat-thread-row[data-gpos='last'] {
+  margin-top: 4px;
+}
+
+.chat-thread-row[data-gpos='single'],
+.chat-thread-row[data-gpos='first'] {
+  margin-top: 16px;
+}
+
+/* WC 内容盒归零：气泡盒由 light-DOM 插槽（text-0 / markdown-0）自绘 */
+.chat-message-row t-chat-item::part(t-chat__item__content) {
+  padding: 0;
+  border: 0;
+  background: none;
+  max-width: none;
+  gap: 0;
+}
+
+/* 薄霜玻璃气泡：border 透明、无底色无投影，文字位于 ::before（颗粒 + tint）之上。
+   浅底定稿去掉了 backdrop blur（平底无可采样像素），材质由颗粒与 tint 承载 */
+.cirrus-bubble {
+  position: relative;
+  isolation: isolate;
+  box-sizing: border-box;
+  width: fit-content;
+  /* 正常桌面聊天比例（Jev 裁决 15/24 + 8/14 + r22 + max 560）：单行 44px 高=完整胶囊 */
+  max-width: 560px;
+  padding: 8px 14px;
+  border: 2px solid transparent;
+  border-radius: 22px;
+  background: none;
+  box-shadow: none;
+  font-family: 'Inter', 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+  font-size: 15px;
+  line-height: 24px;
+  letter-spacing: -0.01em;
+  color: rgb(255 255 255);
+  transition:
+    border-radius 200ms ease,
+    opacity 200ms ease;
+}
+
+.cirrus-bubble::before {
+  content: '';
+  position: absolute;
+  z-index: -1;
+  inset: -2px;
+  border-radius: inherit;
+  background: var(--cirrus-grain), var(--cirrus-tint);
+  pointer-events: none;
+}
+
+.cirrus-me {
+  --cirrus-tint: rgb(33 108 199 / 0.96);
+}
+
+/* 助手正文直接排在页面上：无气泡底、无内边距 */
+.cirrus-plain {
+  width: 100%;
+  max-width: 680px;
+  font-size: 15px;
+  line-height: 24px;
+  letter-spacing: -0.01em;
+  color: var(--foreground);
+}
+
+/* 组内相接处发送者一侧角收紧（随正常比例从 10px 收到 6px） */
+.cirrus-me[data-gpos='first'],
+.cirrus-me[data-gpos='mid'] {
+  border-bottom-right-radius: 6px;
+}
+
+.cirrus-me[data-gpos='mid'],
+.cirrus-me[data-gpos='last'] {
+  border-top-right-radius: 6px;
+}
+
+/* 长按（第 6 节）：菜单开着时其余气泡变暗至 40%，按住的气泡豁免 */
+.cirrus-dimming .cirrus-bubble:not(.cirrus-pressed),
+.cirrus-dimming .cirrus-plain:not(.cirrus-pressed) {
+  opacity: 0.4;
+}
+
+/* markdown 继承气泡字面（15px/24px/-0.01em） */
+.cirrus-md {
+  font-size: inherit;
+  line-height: inherit;
+  letter-spacing: inherit;
+  color: inherit;
+}
+
+.cirrus-md p {
+  margin: 0;
+}
+
+.cirrus-md p + p {
+  margin-top: 6px;
+}
+
+.cirrus-md pre {
+  max-width: 100%;
+}
+
+/* 渐霜入场（第 4 节发送）：::before 颗粒/色调 0→满值 560ms */
+.cirrus-frosting::before {
+  animation: cirrus-frost-before 560ms ease-out both;
+}
+
+@keyframes cirrus-frost-before {
+  from {
+    opacity: 0;
+  }
+}
+
+/* 点阵（第 5 节卷云）：6x6 约 48px，平坦暖点，静止时淡 */
+.cirrus-dots {
+  display: grid;
+  grid-template-columns: repeat(6, 6px);
+  gap: 2px;
+  width: fit-content;
+  align-self: flex-start;
+  padding: 1px;
+}
+
+.cirrus-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 2px;
+  /* 浅底上暖色要压深一档，否则亮起也看不见（原天空版 rgb(255 219 166)） */
+  background: rgb(190 132 72);
+  opacity: 0.05;
+  will-change: opacity;
+}
+
+/* Cirrus 菜单（第 6 节）：渐霜进入（WAAPI），180ms ease-in 离开；
+   颗粒 + 深海蓝灰（浅底适配），blur(36px)，白字，删除 rgb(255 138 126) */
+.cirrus-menu {
+  position: fixed;
+  z-index: 70;
+  display: flex;
+  flex-direction: column;
+  min-width: 148px;
+  padding: 6px;
+  border: 2px solid transparent;
+  border-radius: 16px;
+  /* 浅底适配：0.52 的蓝灰叠在 #fcfcfc 上撑不住白字，加深到 0.94 */
+  background: var(--cirrus-grain), rgb(52 72 98 / 0.94);
+  backdrop-filter: blur(36px) saturate(1.3);
+  -webkit-backdrop-filter: blur(36px) saturate(1.3);
+}
+
+.cirrus-menu-left {
+  transform-origin: top left;
+}
+
+.cirrus-menu-right {
+  transform-origin: top right;
+}
+
+.cirrus-menu-closing {
+  animation: cirrus-menu-out 180ms ease-in both;
+}
+
+@keyframes cirrus-menu-out {
+  to {
+    opacity: 0;
+  }
+}
+
+.cirrus-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 34px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 10px;
+  background: none;
+  font-size: 13px;
+  color: rgb(255 255 255);
+  text-align: left;
+  cursor: pointer;
+}
+
+.cirrus-menu-item:hover {
+  background: rgb(255 255 255 / 0.12);
+}
+
+.cirrus-menu-danger {
+  color: rgb(255 138 126);
+}
+
+.cirrus-menu-danger:hover {
+  background: rgb(255 138 126 / 0.12);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  /* 第 7 节：保留淡入，移除移动、缩放和模糊 */
+  .cirrus-menu-closing {
+    animation-duration: 1ms;
+  }
+
+  .cirrus-bubble {
+    transition: none;
+  }
+}
