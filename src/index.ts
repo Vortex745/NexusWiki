@@ -108,16 +108,29 @@ async function main() {
   )
 
   // createAnswerRuntime owns shared SQLite, ES, Neo4j and OpenAI adapters.
-  // Langfuse export activates only when both LANGFUSE_* keys are set —
-  // createRealLangfuseClient returns undefined otherwise (Noop disabled mode).
+  // One trace export path only: when OTLP tracing is on it already covers the
+  // Answer run (HTTP root → stages → generations), so the legacy
+  // AnswerRunObserver SDK exporter is disabled to avoid duplicate traces.
+  const langfuseSdkClient = tracingConfig.enabled
+    ? undefined
+    : createRealLangfuseClient({
+        publicKey: cfg.langfusePublicKey,
+        secretKey: cfg.langfuseSecretKey,
+        ...(cfg.langfuseBaseUrl ? { baseUrl: cfg.langfuseBaseUrl } : {}),
+      })
+  // The Answer runtime refuses a complete Langfuse config without an injected
+  // client. Suppress that config when OTLP owns export, otherwise startup
+  // fails after we deliberately skip the SDK client.
+  const answerRuntimeConfig = tracingConfig.enabled
+    ? { ...cfg, langfusePublicKey: undefined, langfuseSecretKey: undefined, langfuseBaseUrl: undefined }
+    : cfg
+  if (tracingConfig.enabled) {
+    console.log("[kefu-RAG] Langfuse SDK exporter disabled — OTLP tracing is authoritative")
+  }
   const answerRuntime = createAnswerRuntime(
-    cfg,
+    answerRuntimeConfig,
     undefined,
-    createRealLangfuseClient({
-      publicKey: cfg.langfusePublicKey,
-      secretKey: cfg.langfuseSecretKey,
-      ...(cfg.langfuseBaseUrl ? { baseUrl: cfg.langfuseBaseUrl } : {}),
-    }),
+    langfuseSdkClient,
     tracingRuntime,
   )
 

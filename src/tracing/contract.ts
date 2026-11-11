@@ -15,7 +15,7 @@
  * on them (LG-04-AC10).
  */
 
-export type TracingAttributeValue = string | number | boolean
+export type TracingAttributeValue = string | number | boolean | readonly string[]
 
 export type TracingAttributes = Record<string, TracingAttributeValue | undefined>
 
@@ -74,8 +74,8 @@ export interface ModelCallInput {
   /** Full messages/prompt as sent to the provider. */
   input: unknown
   stream: boolean
-  /** Langfuse observation type; embeddings are not generations (LO-11). */
-  type?: "generation" | "embedding"
+  /** Langfuse observation type; retrieval models are not generations. */
+  type?: "generation" | "embedding" | "retriever" | "evaluator" | "chain" | "tool" | "agent" | "event"
   attributes?: TracingAttributes
 }
 

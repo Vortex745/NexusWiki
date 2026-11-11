@@ -42,6 +42,14 @@
 !/scripts/migrate-chunk-index.ts
 !/scripts/release-promotion-check.ts
 
+# Local planning documents and ticket scratch state: kept on disk, never published.
+/plans/
+/docs/
+/.scratch/
+/HANDOFF.md
+/HINTS.md
+/MEMORY.md
+
 # Development-only sources and reports remain on this machine.
 **/*.test.*
 **/*.spec.*

@@ -174,6 +174,7 @@ export interface MastraRunnerInput {
    * stay authoritative; live validation details never publish answerBasis.
    */
   onStageProgress?: <S extends ProgressStage>(stage: S, details?: StageProgressDetails<S>) => void
+  runInAnswerStage?: AnswerRunOptions["runInAnswerStage"]
 }
 
 /** The four stages a progress event can report on. */
@@ -608,6 +609,9 @@ export function createMastraChatEventAdapter(
             : {}),
           onAnswerDelta,
           onStageProgress,
+          ...(runOptions?.runInAnswerStage
+            ? { runInAnswerStage: runOptions.runInAnswerStage }
+            : {}),
         })
       }
 

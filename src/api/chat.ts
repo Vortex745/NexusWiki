@@ -347,6 +347,19 @@ export function createChatRouter(
       return
     }
 
+    // Langfuse trace context: the end-user and the conversation are trace-wide;
+    // the user message is the only meaningful root input (not the whole
+    // request body). Tenant and scope size are metadata, not trace input.
+    requestScope(res)?.setAttributes({
+      "langfuse.user.id": accessContext.subjectId,
+      "langfuse.session.id": sessionId,
+      "langfuse.observation.input": message,
+      "langfuse.trace.metadata.tenant_id": accessContext.tenantId,
+      "langfuse.trace.metadata.knowledge_base_count": String(
+        retrievalScope?.knowledgeBaseIds.length ?? 0,
+      ),
+    })
+
     // Ticket 19 (AST-01B): resolve the assistant overlay SERVER-side. The
     // request supplies only an id — the prompt, knowledge binding, rerank
     // binding and tool policy come from the stored immutable version, so raw
@@ -683,6 +696,14 @@ export function createChatRouter(
         streamFailed = true
         if (!clientGone.value) console.error("[chat] Error:", err)
       }
+      if (streamTerminal) {
+        // Root observation output = the assistant response, which is what a
+        // reviewer/evaluator reads at a glance in Langfuse.
+        requestScope(res)?.setAttributes({
+          "langfuse.observation.output": streamTerminal.result.reply,
+          "langfuse.trace.metadata.terminal_status": streamTerminal.result.status,
+        })
+      }
       // A foreign terminal means this request produced no terminal of its own;
       // recording one would invent a run, and it was never published.
       if (streamTerminal || !sawForeignTerminal) {
@@ -720,6 +741,10 @@ export function createChatRouter(
           if (event.type === "done") terminal = event
         }
         if (!terminal) throw new Error("Answer run ended without a terminal event")
+        requestScope(res)?.setAttributes({
+          "langfuse.observation.output": terminal.result.reply,
+          "langfuse.trace.metadata.terminal_status": terminal.result.status,
+        })
         recordTerminal(terminal, false, abortController.signal.aborted)
         void contextCompaction?.maybeCompact(accessContext, sessionId)
         res.json({

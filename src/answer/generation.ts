@@ -1,6 +1,6 @@
 import type OpenAI from "openai"
 import type { AccessContext } from "../access/context"
-import type { AgentMessage, AnswerRunEvent, ReasoningEffort } from "../types"
+import type { AgentMessage, AnswerRunEvent, AnswerRunStage, ReasoningEffort } from "../types"
 import type { AssistantRunSnapshot } from "../assistants/assistant_service"
 import type { RetrievalScope } from "../types/retrieval_scope"
 
@@ -28,6 +28,8 @@ export interface AnswerRunObserver {
 export interface AnswerRunOptions {
   runId?: string
   sessionId?: string
+  /** Internal tracing bridge for runner work that starts before its event is yielded. */
+  runInAnswerStage?: <T>(stage: Exclude<AnswerRunStage, "done">, round: number, fn: () => T) => T
   /**
    * Eval refactor Ticket 01: optional evaluation-case correlation id. When
    * set, it is stamped on every emitted AnswerRunEvent (base.caseId) so

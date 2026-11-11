@@ -1,4 +1,4 @@
-import type { AnswerRunEvent } from "../types/answer"
+import type { AnswerRunEvent, AnswerRunStage } from "../types/answer"
 import type { AnswerEventsSource } from "../api/chat"
 import type { OperationScope, OperationOutcome } from "./contract"
 
@@ -33,6 +33,12 @@ export class AnswerScopeTracker {
   private round: OperationScope | undefined
   private roundNumber: number | undefined
   private closed = false
+  /**
+   * Stages already closed in the current round. A late duplicate progress
+   * event (the runtime emits route/retrieval completion twice on some paths)
+   * must not reopen a one-millisecond duplicate span in the trace tree.
+   */
+  private readonly completedStages = new Set<string>()
 
   constructor(
     private readonly parent: OperationScope,
@@ -51,6 +57,18 @@ export class AnswerScopeTracker {
     this.syncRound(event.round)
     if (event.type === "progress") {
       this.openStage(event.stage)
+      if (event.stage === "route" && event.data.decision) {
+        this.stage?.setAttributes({ "route.decision": event.data.decision })
+      }
+      if (event.stage === "retrieval" && event.status === "completed") {
+        const data = event.data
+        this.stage?.setAttributes({
+          ...(typeof data.resultCount === "number" ? { "retrieval.result_count": data.resultCount } : {}),
+          ...(data.degradedReasons?.length
+            ? { "retrieval.degraded_reasons": data.degradedReasons.join(",") }
+            : {}),
+        })
+      }
       if (event.stage === "retrieval") this.observeRetrieval(event as RetrievalProgress)
       return
     }
@@ -74,11 +92,30 @@ export class AnswerScopeTracker {
     return this.roundNumber
   }
 
+  runInStageContext<T>(stage: Exclude<AnswerRunStage, "done">, round: number, fn: () => T): T {
+    if (this.closed) return fn()
+    this.syncRound(round)
+    this.openStage(stage)
+    return (this.stage ?? this.round ?? this.parent).runInContext(fn)
+  }
+
+  /**
+   * Run `fn` with the CURRENT stage as the active tracing parent. The event
+   * stream is advanced inside this context, so model calls made while the
+   * runner produces the next event nest under the stage that caused them
+   * instead of becoming siblings at the trace root.
+   */
+  runInContext<T>(fn: () => T): T {
+    const scope = this.stage ?? this.round ?? this.parent
+    return scope.runInContext(fn)
+  }
+
   private syncRound(round: number): void {
     if (!Number.isFinite(round) || round <= 0) return
     if (this.roundNumber === round) return
     this.closeStage("ok")
     this.closeRound("ok")
+    this.completedStages.clear()
     this.roundNumber = round
     this.round = this.parent.startChild(`round.${round}`, {
       ...this.runAttributes,
@@ -88,6 +125,7 @@ export class AnswerScopeTracker {
 
   private openStage(name: string): void {
     if (this.stageName === name) return
+    if (this.completedStages.has(name)) return
     this.closeStage("ok")
     this.stageName = name
     const parent = this.round ?? this.parent
@@ -114,6 +152,7 @@ export class AnswerScopeTracker {
     }
     const failed = event.status === "failed"
     const child = this.stage.startChild(`tool.${tool}`, {
+      "langfuse.observation.type": "tool",
       "tool.name": tool,
       ...(data.iteration !== undefined ? { "tool.iteration": data.iteration } : {}),
       ...(data.complexLoop === true ? { "tool.loop": "complex" } : {}),
@@ -130,9 +169,11 @@ export class AnswerScopeTracker {
       this.stageName = undefined
       return
     }
+    const closedName = this.stageName
     this.stage.end(endOptionsFor(outcome))
     this.stage = undefined
     this.stageName = undefined
+    if (closedName) this.completedStages.add(closedName)
   }
 
   private closeRound(outcome: AnswerScopeOutcome): void {
@@ -182,15 +223,35 @@ export function tracedAnswerSource(
       "answer.message_length": message.length,
       "answer.session_id": options.sessionId ?? "",
     })
+    // Manual iteration (instead of `for await`) so each `next()` runs with the
+    // current stage's span active. That is what nests a generation under
+    // `stage.route` / `stage.retrieval` / `stage.context` rather than leaving
+    // every model call as a sibling at the root.
+    const tracedOptions = {
+      ...options,
+      runInAnswerStage: <T>(stage: Exclude<AnswerRunStage, "done">, round: number, fn: () => T) =>
+        tracker.runInStageContext(stage, round, fn),
+    }
+    const iterator = source(message, tracedOptions)[Symbol.asyncIterator]()
     try {
-      for await (const event of source(message, options)) {
-        tracker.observe(event)
-        yield event
+      let step = await tracker.runInContext(() => iterator.next())
+      while (!step.done) {
+        tracker.observe(step.value)
+        yield step.value
+        step = await tracker.runInContext(() => iterator.next())
       }
       tracker.finish("ok")
     } catch (error) {
       tracker.finish("error")
       throw error
+    } finally {
+      // A consumer that stopped early (client disconnect) must still release
+      // the source's own resources; there is no terminal event to close on.
+      try {
+        await iterator.return?.()
+      } catch {
+        // Cleanup failure must not replace the original stream outcome.
+      }
     }
   }
 }

@@ -128,6 +128,18 @@ export function createRunBudgetedOpenAIClient(client: OpenAI, tracing?: TracingR
   })
 }
 
+/** Generation settings Langfuse can display and compare across runs. */
+const MODEL_PARAMETER_KEYS = [
+  "temperature",
+  "max_tokens",
+  "top_p",
+  "frequency_penalty",
+  "presence_penalty",
+  "reasoning_effort",
+  "seed",
+  "stop",
+] as const
+
 function startObservation(
   tracing: TracingRuntime | undefined,
   streaming: boolean,
@@ -136,12 +148,19 @@ function startObservation(
 ): ModelCallScope | undefined {
   if (!tracing) return undefined
   try {
+    const parameters: Record<string, unknown> = {}
+    for (const key of MODEL_PARAMETER_KEYS) {
+      if (request[key] !== undefined) parameters[key] = request[key]
+    }
     return tracing.observeModel({
       name: streaming ? "chat.completions.stream" : "chat.completions",
       model,
       provider: "openai",
       input: request["messages"] ?? request["prompt"] ?? null,
       stream: streaming,
+      ...(Object.keys(parameters).length > 0
+        ? { attributes: { "langfuse.observation.model.parameters": JSON.stringify(parameters) } }
+        : {}),
     })
   } catch {
     // Observation must never break a model call.

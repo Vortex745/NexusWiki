@@ -149,6 +149,8 @@ export class DedicatedReranker implements Reranker {
       name: "rerank",
       model: this.model,
       provider: "rerank",
+      // A cross-encoder rerank is retrieval work, not text generation.
+      type: "retriever",
       input: {
         query,
         // Full query, bounded previews: the request can carry 60 candidates

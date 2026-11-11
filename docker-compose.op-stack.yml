@@ -165,7 +165,8 @@ services:
       # Browser-facing media endpoint: LANGFUSE_S3_MEDIA_UPLOAD_ENDPOINT must
       # use the host side (localhost:9090) because the UI uploads directly.
       - "127.0.0.1:${LANGFUSE_MEDIA_HOST_PORT:-9090}:9000"
-      - "127.0.0.1:9091:9001"
+      # Host 9091 is taken by an unrelated local Milvus stack.
+      - "127.0.0.1:${LANGFUSE_MINIO_CONSOLE_HOST_PORT:-9092}:9001"
     volumes:
       - op-langfuse-minio-data:/data
     healthcheck:

@@ -593,6 +593,12 @@ export function createSimpleKnowledgeMastraRunner(
     // GATE 1: retrieval (single query for simple route).
     // -------------------------------------------------------------------------
     const searcher = createSearcher(assistant)
+    const searchInStage = (query: Query, options: SearchOptions, round: number) => {
+      const run = () => searcher.search(query, options)
+      return input.runInAnswerStage
+        ? input.runInAnswerStage("retrieval", round, run)
+        : run()
+    }
     const query: Query = { text: contextualizedQuery }
     const unavailableChannels = new Set<RetrievalResult["source"]>()
     let retrievalAttempted = false
@@ -601,7 +607,7 @@ export function createSimpleKnowledgeMastraRunner(
 
     retrievalAttempted = true
     const outcome = await abortable(
-      searcher.search(query, {
+      searchInStage(query, {
         ...perQueryOptions,
         accessContext,
         // Ticket 05 (KB-03A): carry the server-computed knowledge scope into
@@ -614,7 +620,7 @@ export function createSimpleKnowledgeMastraRunner(
         // of links pasted into the message never need the flag.
         ...(input.useWeb === true ? { webRequested: true } : {}),
         signal,
-      }),
+      }, 1),
       signal
     )
     outcome.unavailableChannels.forEach((channel) => unavailableChannels.add(channel))
@@ -643,14 +649,14 @@ export function createSimpleKnowledgeMastraRunner(
     ) {
       toolFallbackReason = `${toolFallbackReason ? toolFallbackReason + "; " : ""}selected tool ${selectedTool} returned 0 results; retried with default hybrid retrieval`
       const fallbackOutcome = await abortable(
-        searcher.search(query, {
+        searchInStage(query, {
           channels: ["vector", "bm25"],
           accessContext,
           ...(retrievalScope ? { retrievalScope } : {}),
           ...(sessionId ? { attachments: { sessionId } } : {}),
           ...(input.useWeb === true ? { webRequested: true } : {}),
           signal,
-        }),
+        }, 1),
         signal
       )
       fallbackOutcome.unavailableChannels.forEach((channel) => unavailableChannels.add(channel))
@@ -1018,7 +1024,7 @@ export function createSimpleKnowledgeMastraRunner(
       input.onStageProgress?.("retrieval", { round: round + 2, data: { correction: true } })
       for (const gapQuery of gapQueries) {
         const correctionOutcome = await abortable(
-          searcher.search(gapQuery, {
+          searchInStage(gapQuery, {
             accessContext,
             // Ticket 05 (KB-03A): a correction gap query stays inside the run's
             // server-computed knowledge scope — a retry never widens the read.
@@ -1029,7 +1035,7 @@ export function createSimpleKnowledgeMastraRunner(
             // as the first retrieval — an opt-in must not lapse mid-correction.
             ...(input.useWeb === true ? { webRequested: true } : {}),
             signal,
-          }),
+          }, round + 2),
           signal
         )
         correctionOutcome.unavailableChannels.forEach((channel) =>

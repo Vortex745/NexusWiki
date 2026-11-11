@@ -1,4 +1,4 @@
-import { SpanKind, SpanStatusCode, context, trace, type Span, type Tracer } from "@opentelemetry/api"
+import { SpanKind, SpanStatusCode, context, isSpanContextValid, trace, type Span, type Tracer } from "@opentelemetry/api"
 import { AsyncLocalStorageContextManager } from "@opentelemetry/context-async-hooks"
 import type { SpanExporter } from "@opentelemetry/sdk-trace-base"
 import { ParentBasedSampler, TraceIdRatioBasedSampler } from "@opentelemetry/sdk-trace-base"
@@ -51,6 +51,27 @@ const CONTENT_ATTRIBUTE_KEYS = new Set([
   "langfuse.observation.cost_details",
 ])
 
+/**
+ * Langfuse trace-level attributes. Per the OTLP ingestion contract these must
+ * be present on EVERY span in a trace, otherwise filtering and aggregation by
+ * session, user, tag or trace name silently misses observations.
+ */
+const TRACE_LEVEL_ATTRIBUTE_KEYS = new Set([
+  "langfuse.trace.name",
+  "langfuse.user.id",
+  "user.id",
+  "langfuse.session.id",
+  "session.id",
+  "langfuse.trace.tags",
+  "langfuse.version",
+  "langfuse.release",
+  "langfuse.environment",
+])
+
+function isTraceLevelAttribute(key: string): boolean {
+  return TRACE_LEVEL_ATTRIBUTE_KEYS.has(key) || key.startsWith("langfuse.trace.metadata.")
+}
+
 const TRUNCATION_SUFFIX = "…[truncated]"
 
 function truncateUtf8(value: string, limitBytes: number): { text: string; truncated: boolean } {
@@ -69,8 +90,8 @@ function truncateUtf8(value: string, limitBytes: number): { text: string; trunca
 function sanitiseAttributes(
   attributes: TracingAttributes,
   limitBytes: number,
-): Record<string, string | number | boolean> {
-  const sanitized: Record<string, string | number | boolean> = {}
+): Record<string, string | number | boolean | string[]> {
+  const sanitized: Record<string, string | number | boolean | string[]> = {}
   for (const [key, value] of Object.entries(attributes)) {
     if (value === undefined) continue
     if (typeof value === "number") {
@@ -82,7 +103,18 @@ function sanitiseAttributes(
       sanitized[key] = value
       continue
     }
-    sanitized[key] = truncateUtf8(value, limitBytes).text
+    if (typeof value === "string") {
+      const content = CONTENT_ATTRIBUTE_KEYS.has(key) ? scrubText(value) : value
+      sanitized[key] = truncateUtf8(content, limitBytes).text
+      continue
+    }
+    if (Array.isArray(value)) {
+      // Langfuse tags are a string array; every element goes through the
+      // same byte ceiling as a scalar attribute.
+      sanitized[key] = value
+        .filter((item): item is string => typeof item === "string")
+        .map((item) => truncateUtf8(item, limitBytes).text)
+    }
   }
   return sanitized
 }
@@ -107,6 +139,16 @@ class OtelOperationScope implements OperationScope {
     parentContext: ReturnType<typeof context.active>,
     private readonly limits: { attributeBytes: number; contentBytes: number },
     private readonly onTruncate: () => void,
+    /**
+     * Trace-level attributes captured on this scope. Children and model
+     * observations inherit them so Langfuse can aggregate by session/user/tag
+     * on every observation, not only the root span.
+     */
+    private readonly traceAttributes: TracingAttributes = {},
+    /** Root scopes publish their attributes here for model observations. */
+    private readonly traceRegistry?: Map<string, TracingAttributes>,
+    /** Set on roots only: removes the registry entry when the trace ends. */
+    private readonly rootTraceId?: string,
   ) {
     this.childContext = trace.setSpan(parentContext, span)
   }
@@ -130,16 +172,28 @@ class OtelOperationScope implements OperationScope {
   setAttributes(attributes: TracingAttributes): void {
     if (this.ended) return
     this.span.setAttributes(this.sanitize(attributes))
+    this.captureTraceAttributes(attributes)
   }
 
   startChild(name: string, attributes?: TracingAttributes): OperationScope {
     if (this.ended) return noopOperationScope()
+    const merged = { ...this.traceAttributes, ...(attributes ?? {}) }
     const span = this.tracer.startSpan(
       name,
-      { kind: SpanKind.INTERNAL, attributes: attributes ? this.sanitize(attributes) : undefined },
+      {
+        kind: SpanKind.INTERNAL,
+        attributes: Object.keys(merged).length > 0 ? this.sanitize(merged) : undefined,
+      },
       this.childContext,
     )
-    return new OtelOperationScope(this.tracer, span, this.childContext, this.limits, this.onTruncate)
+    return new OtelOperationScope(
+      this.tracer,
+      span,
+      this.childContext,
+      this.limits,
+      this.onTruncate,
+      merged,
+    )
   }
 
   runInContext<T>(fn: () => T): T {
@@ -159,10 +213,27 @@ class OtelOperationScope implements OperationScope {
       this.span.setStatus({ code: SpanStatusCode.OK })
     }
     this.span.end()
+    if (this.rootTraceId) this.traceRegistry?.delete(this.rootTraceId)
   }
 
-  private sanitize(attributes: TracingAttributes): Record<string, string | number | boolean> {
-    const sanitized: Record<string, string | number | boolean> = {}
+  private captureTraceAttributes(attributes: TracingAttributes): void {
+    let changed = false
+    for (const [key, value] of Object.entries(attributes)) {
+      if (!isTraceLevelAttribute(key)) continue
+      if (value === undefined) {
+        delete this.traceAttributes[key]
+      } else {
+        this.traceAttributes[key] = value
+      }
+      changed = true
+    }
+    if (changed && this.traceRegistry && this.rootTraceId) {
+      this.traceRegistry.set(this.rootTraceId, { ...this.traceAttributes })
+    }
+  }
+
+  private sanitize(attributes: TracingAttributes): Record<string, string | number | boolean | string[]> {
+    const sanitized: Record<string, string | number | boolean | string[]> = {}
     for (const [key, value] of Object.entries(attributes)) {
       if (value === undefined) continue
       if (typeof value === "number") {
@@ -174,10 +245,23 @@ class OtelOperationScope implements OperationScope {
         sanitized[key] = value
         continue
       }
-      const limit = CONTENT_ATTRIBUTE_KEYS.has(key) ? this.limits.contentBytes : this.limits.attributeBytes
-      const { text, truncated } = truncateUtf8(value, limit)
-      if (truncated) this.onTruncate()
-      sanitized[key] = text
+      if (typeof value === "string") {
+        const limit = CONTENT_ATTRIBUTE_KEYS.has(key) ? this.limits.contentBytes : this.limits.attributeBytes
+        const content = CONTENT_ATTRIBUTE_KEYS.has(key) ? scrubText(value) : value
+        const { text, truncated } = truncateUtf8(content, limit)
+        if (truncated) this.onTruncate()
+        sanitized[key] = text
+        continue
+      }
+      if (Array.isArray(value)) {
+        sanitized[key] = value
+          .filter((item): item is string => typeof item === "string")
+          .map((item) => {
+            const { text, truncated } = truncateUtf8(item, this.limits.attributeBytes)
+            if (truncated) this.onTruncate()
+            return text
+          })
+      }
     }
     return sanitized
   }
@@ -309,6 +393,13 @@ export class OtelTracingRuntime implements TracingRuntime {
   private closing = false
   private closed = false
   private truncatedAttributes = 0
+  /**
+   * Trace id → trace-level attributes captured on the root span. Model calls
+   * are created from the active OTel context, which carries the span but not
+   * the neutral attribute bag, so this registry is what lets a generation
+   * inherit session/user/tag metadata.
+   */
+  private readonly traceAttributesByTrace = new Map<string, TracingAttributes>()
 
   constructor(options: OtelRuntimeOptions) {
     ensureContextManager()
@@ -344,11 +435,19 @@ export class OtelTracingRuntime implements TracingRuntime {
           isRemote: true,
         })
       : context.active()
+    const parentSpanContext = trace.getSpanContext(parentContext)
+    const isRoot = !parentSpanContext || !isSpanContextValid(parentSpanContext)
     const span = this.tracer.startSpan(
       name,
-      { root: task === undefined, kind: SpanKind.INTERNAL },
+      { root: isRoot, kind: SpanKind.INTERNAL },
       parentContext,
     )
+    const sampled = (span.spanContext().traceFlags & 0x1) === 0x1
+    const rootTraceId = isRoot && sampled ? span.spanContext().traceId : undefined
+    const traceAttributes =
+      !isRoot && parentSpanContext
+        ? { ...(this.traceAttributesByTrace.get(parentSpanContext.traceId) ?? {}) }
+        : {}
     const scope = new OtelOperationScope(
       this.tracer,
       span,
@@ -357,8 +456,12 @@ export class OtelTracingRuntime implements TracingRuntime {
       () => {
         this.truncatedAttributes += 1
       },
+      traceAttributes,
+      this.traceAttributesByTrace,
+      rootTraceId,
     )
-    if (attributes) scope.setAttributes(attributes)
+    const initialAttributes = { ...traceAttributes, ...(attributes ?? {}) }
+    if (Object.keys(initialAttributes).length > 0) scope.setAttributes(initialAttributes)
     return scope
   }
 
@@ -382,11 +485,17 @@ export class OtelTracingRuntime implements TracingRuntime {
   observeModel(input: ModelCallInput): ModelCallScope | undefined {
     if (this.closing) return undefined
     const parent = context.active()
+    // Trace-level context travels with every observation, not only the root.
+    const activeSpan = trace.getSpan(parent)
+    const traceAttributes = activeSpan
+      ? this.traceAttributesByTrace.get(activeSpan.spanContext().traceId)
+      : undefined
     const span = this.tracer.startSpan(
       input.name,
       {
         kind: SpanKind.CLIENT,
         attributes: {
+          ...(traceAttributes ? sanitiseAttributes(traceAttributes, this.attributeBytes) : {}),
           "langfuse.observation.type": input.type ?? "generation",
           "langfuse.observation.model.name": input.model,
           "gen_ai.request.model": input.model,
