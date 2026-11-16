@@ -851,6 +851,9 @@ export class SearcherImpl implements Searcher {
   async search(query: Query, options?: SearchOptions): Promise<SearchOutcome> {
     const operation = this.tracing?.startOperation("retrieval.search", {
       "retrieval.query_length": query.text.length,
+      // A retrieval is a `retriever`, not a generic span: Langfuse evaluators
+      // and dashboards can then target retrieval steps directly.
+      "langfuse.observation.type": "retriever",
     })
     operation?.setAttributes({ "langfuse.observation.input": query.text })
     try {
@@ -860,6 +863,13 @@ export class SearcherImpl implements Searcher {
         attributes: {
           "retrieval.status": outcome.status,
           "retrieval.result_count": outcome.results.length,
+          // Retrieval metadata is filterable in Langfuse; the full text stays
+          // in the bounded preview below.
+          "langfuse.observation.metadata.result_count": String(outcome.results.length),
+          "langfuse.observation.metadata.status": outcome.status,
+          ...((outcome.degradationReasons?.length ?? 0) > 0
+            ? { "langfuse.observation.metadata.degradation_reasons": (outcome.degradationReasons ?? []).join(",") }
+            : {}),
           // Bounded preview: 25 results × 160 chars, never the full corpus.
           "langfuse.observation.output": JSON.stringify(retrievalPreview(outcome.results)),
         },

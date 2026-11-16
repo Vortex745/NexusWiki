@@ -223,6 +223,13 @@ export function createHttpLogLifecycle(logger: Logger, options: HttpLogLifecycle
             "http.request.method": req.method,
             "http.route": path,
             "http.request_id": requestId,
+            // Langfuse trace shape: stable, low-cardinality names/tags set at
+            // creation, plus request correlation for cross-system debugging.
+            "langfuse.trace.name": decision.operation,
+            "langfuse.trace.tags": [decision.operation.split(".")[0]],
+            "langfuse.environment": process.env.NODE_ENV ?? "development",
+            "langfuse.trace.metadata.request_id": requestId,
+            "langfuse.trace.metadata.http_route": path,
           })
         : undefined
     if (operation) {

@@ -630,6 +630,10 @@ export function createComplexKnowledgeMastraRunner(
     // GATE 1: retrieval (dual-path — complex loop OR planner.decompose).
     // -------------------------------------------------------------------------
     const searcher = createSearcher(assistant)
+    const inRetrievalStage = <T>(round: number, fn: () => T): T =>
+      input.runInAnswerStage
+        ? input.runInAnswerStage("retrieval", round, fn)
+        : fn()
     // Ticket 34 (TOOL-01A): tool calls run through the invocation boundary,
     // allowlisted by the run's own policy snapshot (legacy/default assistant
     // = read-only allowlist; "none" = no tools at all).
@@ -719,7 +723,7 @@ export function createComplexKnowledgeMastraRunner(
         : undefined
       try {
         complexLoopResult = await abortable(
-          runComplexLoop(
+          inRetrievalStage(1, () => runComplexLoop(
             {
               controller: complexLoopController,
               searcher,
@@ -740,7 +744,7 @@ export function createComplexKnowledgeMastraRunner(
               ...(input.useWeb === true ? { webRequested: true } : {}),
               signal,
             }
-          ),
+          )),
           signal
         )
       } catch (err) {
@@ -899,7 +903,7 @@ export function createComplexKnowledgeMastraRunner(
       // Execute retrieval per rewritten sub-query.
       for (let i = 0; i < rewrittenQueries.length; i += 1) {
         const outcome = await abortable(
-          searcher.search(rewrittenQueries[i], {
+          inRetrievalStage(1, () => searcher.search(rewrittenQueries[i], {
             ...complexOptions[i],
             accessContext,
             // Ticket 05 (KB-03A): every decomposed sub-query shares the run's
@@ -912,7 +916,7 @@ export function createComplexKnowledgeMastraRunner(
             // pasted into the message is fetched regardless of the flag.
             ...(input.useWeb === true ? { webRequested: true } : {}),
             signal,
-          }),
+          })),
           signal
         )
         outcome.unavailableChannels.forEach((ch) => unavailableChannels.add(ch))
@@ -1403,7 +1407,7 @@ export function createComplexKnowledgeMastraRunner(
           let correctionLoopResult: ComplexLoopResult
           try {
             correctionLoopResult = await abortable(
-              runComplexLoop(
+              inRetrievalStage(round + 2, () => runComplexLoop(
                 {
                   controller: complexLoopController,
                   searcher,
@@ -1427,7 +1431,7 @@ export function createComplexKnowledgeMastraRunner(
                   remainingToolCalls: sharedRemainingToolCalls,
                   priorToolCalls: sharedPriorToolCalls,
                 }
-              ),
+              )),
               signal
             )
           } catch (err) {
@@ -1481,7 +1485,7 @@ export function createComplexKnowledgeMastraRunner(
             correctionLoopResult.stopReason !== "evidence-sufficient"
           if (needsDeterministicFallback) {
             const fallbackOutcome = await abortable(
-              searcher.search(gapQuery, {
+              inRetrievalStage(round + 2, () => searcher.search(gapQuery, {
                 accessContext,
                 // Ticket 05 (KB-03A): the deterministic fallback stays inside
                 // the run's server-computed knowledge scope.
@@ -1491,7 +1495,7 @@ export function createComplexKnowledgeMastraRunner(
                 // Ticket 36 (WEB-01) / PT-03 AC06: same web intent, too.
                 ...(input.useWeb === true ? { webRequested: true } : {}),
                 signal,
-              }),
+              })),
               signal
             )
             fallbackOutcome.unavailableChannels.forEach((ch) =>
@@ -1521,7 +1525,7 @@ export function createComplexKnowledgeMastraRunner(
           // T11 correction retrieval + legacy L1580-L1648.
           // ---------------------------------------------------------------
           const correctionOutcome = await abortable(
-            searcher.search(gapQuery, {
+            inRetrievalStage(round + 2, () => searcher.search(gapQuery, {
               accessContext,
               // Ticket 05 (KB-03A): a legacy correction search stays inside
               // the run's server-computed knowledge scope.
@@ -1531,7 +1535,7 @@ export function createComplexKnowledgeMastraRunner(
               // Ticket 36 (WEB-01) / PT-03 AC06: and the same web intent.
               ...(input.useWeb === true ? { webRequested: true } : {}),
               signal,
-            }),
+            })),
             signal
           )
           correctionOutcome.unavailableChannels.forEach((ch) =>
