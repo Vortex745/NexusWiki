@@ -155,6 +155,7 @@ export class WorkspaceAnswerEntries {
       return this.options.sharedEntry.eventsSource(message, runOptions)
     }
     const tenantId = ctx.tenantId
+    // oxlint-disable-next-line typescript/no-this-alias -- the async generator below cannot be an arrow function, so it needs a captured this
     const self = this
     return (async function* () {
       const entry = await self.entryFor(tenantId)

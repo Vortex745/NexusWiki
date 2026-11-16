@@ -655,6 +655,7 @@ export class ContextAssemblerImpl {
  * counts consistent with the assembler's budget enforcement.
  */
 export function modelTokenCount(text: string): number {
+  // oxlint-disable-next-line eslint/no-control-regex -- the regex targets non-ASCII text on purpose, to choose the byte-length path
   if (/[^\x00-\x7f]/.test(text)) return Buffer.byteLength(text, "utf8")
   return MODEL_TOKENIZER.encode(text).length
 }

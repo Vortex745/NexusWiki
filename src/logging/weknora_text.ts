@@ -88,6 +88,7 @@ export function toSnakeCase(key: string): string {
  * (< 32) are dropped. Guarantees a value cannot start a new physical line.
  */
 export function cleanText(text: string): string {
+  // oxlint-disable-next-line eslint/no-control-regex -- the regex deliberately strips ASCII control characters from ingested text
   return text.replace(/[\n\r\t]/g, " ").replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f]/g, "")
 }
 

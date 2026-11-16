@@ -137,6 +137,7 @@ export function validateLocalId(id: unknown): string | null {
   if (typeof id !== "string" || id.length === 0) return "请输入账号 ID"
   const normalized = id.normalize("NFKC")
   if (!ID_PATTERN.test(normalized)) return "ID 只能包含中文或英文字母"
+  // oxlint-disable-next-line typescript/no-misused-spread -- spreading counts Unicode code points, so CJK characters and emoji each count as one
   if ([...normalized].length > LOCAL_USER_ID_MAX_LENGTH) {
     return `ID 最多 ${LOCAL_USER_ID_MAX_LENGTH} 个字符`
   }
@@ -146,6 +147,7 @@ export function validateLocalId(id: unknown): string | null {
 /** Returns a human-readable reason, or null when the password is acceptable. */
 export function validateLocalPassword(password: unknown): string | null {
   if (typeof password !== "string" || password.length === 0) return "请输入密码"
+  // oxlint-disable-next-line typescript/no-misused-spread -- spreading counts Unicode code points, so CJK characters and emoji each count as one
   if ([...password].length !== LOCAL_USER_PASSWORD_LENGTH) {
     return `密码必须是 ${LOCAL_USER_PASSWORD_LENGTH} 位`
   }
