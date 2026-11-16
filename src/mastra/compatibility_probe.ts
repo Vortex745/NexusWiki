@@ -212,7 +212,7 @@ export async function runCompatibilityProbe(
       signal: input.signal,
     });
 
-    for await (const chunk of iterateStream(streamResult)) {
+    for await (const _chunk of iterateStream(streamResult)) {
       chunkCount += 1;
       if (chunkCount === 1) {
         result.streamedAtLeastOneChunk = true;

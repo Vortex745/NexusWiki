@@ -1,4 +1,3 @@
-import { type Client } from "@elastic/elasticsearch"
 import type { TracingRuntime } from "../../tracing/contract"
 import { type OpenAI } from "openai"
 import type { Chunk, Entity, Wikilink } from "../../types"

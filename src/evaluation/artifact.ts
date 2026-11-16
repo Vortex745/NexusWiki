@@ -38,7 +38,7 @@ const REGRESSION_THRESHOLD = 1.20 // spec L1560: "more than 20%"
 export function p95Latency(results: CaseResult[]): number {
   const n = results.length
   if (n === 0) return 0
-  const sorted = [...results.map((r) => r.durationMs)].sort((a, b) => a - b)
+  const sorted = results.map((r) => r.durationMs).sort((a, b) => a - b)
   const rank = Math.ceil(0.95 * n) // 1-indexed rank
   return sorted[rank - 1]
 }

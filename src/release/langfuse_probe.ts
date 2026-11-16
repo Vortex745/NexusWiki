@@ -208,7 +208,7 @@ class RecordingLangfuseClient implements LangfuseClient {
         return {
           end: (endParams) => {
             if (endParams?.metadata) {
-              span.metadata = { ...(span.metadata || {}), ...endParams.metadata }
+              span.metadata = { ...span.metadata, ...endParams.metadata }
             }
             if (endParams?.level) span.level = endParams.level
             if (endParams?.statusMessage) span.statusMessage = endParams.statusMessage
@@ -217,7 +217,7 @@ class RecordingLangfuseClient implements LangfuseClient {
           },
           update: (updateParams) => {
             if (updateParams.metadata) {
-              span.metadata = { ...(span.metadata || {}), ...updateParams.metadata }
+              span.metadata = { ...span.metadata, ...updateParams.metadata }
             }
             if (updateParams.level) span.level = updateParams.level
             if (updateParams.statusMessage) span.statusMessage = updateParams.statusMessage
@@ -237,7 +237,7 @@ class RecordingLangfuseClient implements LangfuseClient {
         return {
           end: (endParams) => {
             if (endParams?.metadata) {
-              gen.metadata = { ...(gen.metadata || {}), ...endParams.metadata }
+              gen.metadata = { ...gen.metadata, ...endParams.metadata }
             }
             if (endParams?.usage) gen.usage = endParams.usage
             if (endParams?.level) gen.level = endParams.level
@@ -247,7 +247,7 @@ class RecordingLangfuseClient implements LangfuseClient {
           },
           update: (updateParams) => {
             if (updateParams.metadata) {
-              gen.metadata = { ...(gen.metadata || {}), ...updateParams.metadata }
+              gen.metadata = { ...gen.metadata, ...updateParams.metadata }
             }
             if (updateParams.usage) gen.usage = updateParams.usage
             if (updateParams.level) gen.level = updateParams.level
@@ -257,7 +257,7 @@ class RecordingLangfuseClient implements LangfuseClient {
       },
       update: (params) => {
         if (params.metadata) {
-          recorded.metadata = { ...(recorded.metadata || {}), ...params.metadata }
+          recorded.metadata = { ...recorded.metadata, ...params.metadata }
         }
       },
     }

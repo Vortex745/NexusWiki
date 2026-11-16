@@ -28,7 +28,7 @@
  */
 
 import { resolveChunkIndexName, DEFAULT_ES_CHUNK_INDEX } from "../config"
-import type { Client } from "@elastic/elasticsearch"
+
 import type { DB } from "../ingestion/tracking/db"
 import { EVAL_TENANT_PREFIX } from "../evaluation/isolated_resources"
 import { DEMO_TENANT_ID as DEMO_NAMESPACE_TENANT } from "../identity/demo_accounts"

@@ -158,7 +158,7 @@ function stageRecordOf(source: DualStageSource, envelope: DualStageEvidenceEnvel
   return envelope.stages[source]
 }
 
-function missingRecord(source: DualStageSource): DualStageRecord {
+function missingRecord(_source: DualStageSource): DualStageRecord {
   return Object.freeze({ state: "missing", candidateId: null, audits: Object.freeze([]) })
 }
 

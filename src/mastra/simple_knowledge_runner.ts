@@ -564,7 +564,7 @@ export function createSimpleKnowledgeMastraRunner(
     let toolFallbackReason: string | undefined
     let perQueryOptions: SearchOptions = {}
     const buildRouteTrace = (): RouteTraceData => ({
-      ...(preparedRoute?.routeTrace ?? {}),
+      ...preparedRoute?.routeTrace,
       decision: "simple",
       ...(selectedTool ? { selectedTool } : {}),
       ...(toolFallbackReason ? { toolFallbackReason } : {}),

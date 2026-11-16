@@ -45,7 +45,7 @@ export function resolveStoredSourceIdentity(
   const storedSource = source.trim()
   const isAbsoluteFilePath = path.isAbsolute(storedSource) ||
     /^[a-z]:[\\/]/i.test(storedSource) ||
-    /^\\\\/.test(storedSource)
+    storedSource.startsWith("\\\\")
   if (storedSource !== "api" && isAbsoluteFilePath) {
     return resolveSourceIdentity(
       { kind: "file", uriOrExternalId: storedSource, namespace: "local" },

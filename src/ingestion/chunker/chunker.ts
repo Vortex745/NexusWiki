@@ -121,7 +121,7 @@ export class RecursiveChunker {
 
       const imageChildren = group.flatMap((block, blockIndex) => {
         if (block.type !== "image") return []
-        const previous = [...group.slice(0, blockIndex)]
+        const previous = group.slice(0, blockIndex)
           .reverse()
           .find(({ type }) => type !== "image")
         const next = group.slice(blockIndex + 1).find(({ type }) => type !== "image")

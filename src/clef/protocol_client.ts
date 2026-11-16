@@ -66,9 +66,7 @@ export interface ClefSendOptions {
 }
 
 function providerFault(code: ClefProviderFaultCode, label: string, status?: number): ClefProtocolError {
-  return new ClefProtocolError(code, clefFaultMessage(code, label, status === undefined ? {} : { status }), {
-    ...(status === undefined ? {} : { status }),
-  })
+  return new ClefProtocolError(code, clefFaultMessage(code, label, status === undefined ? {} : { status }), status === undefined ? {} : { status })
 }
 
 export class ClefProtocolClient {

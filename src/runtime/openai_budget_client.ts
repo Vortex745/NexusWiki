@@ -187,8 +187,6 @@ function observeResult(
   return result
 }
 
-const MAX_TEXT_CHARS_PER_CHUNK = 20_000
-
 interface StreamAccumulator {
   text: string
   reasoning: string

@@ -1,7 +1,7 @@
 import { Router, type Request, type Response } from "express"
 import type { SqliteAdminAuditStore } from "../identity/admin_audit"
 import type { LocalAuthService, AdminUserRow, SqliteLocalUserStore } from "../identity/local_users"
-import { accessContext, requireOperator } from "./operator_guard"
+import { requireOperator } from "./operator_guard"
 
 /**
  * AC-03/04/05 (admin console): the operator's account management surface.

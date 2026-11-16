@@ -461,7 +461,7 @@ export class SyncDataSourceService {
     const fetchOptions: FetchOptions = {
       timeoutMs: SYNC_FETCH_TIMEOUT_MS,
       maxBytes: SYNC_FETCH_MAX_BYTES,
-      ...(this.options.fetchOptions ?? {}),
+      ...this.options.fetchOptions,
     }
     const maxPages = this.options.maxPagesPerRun ?? SYNC_MAX_PAGES_PER_RUN
     const pages: SyncPageOutcome[] = []

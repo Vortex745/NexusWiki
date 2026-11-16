@@ -3,7 +3,7 @@
   "plugins": ["unicorn", "typescript", "oxc"],
   "categories": { "correctness": "warn" },
   "ignorePatterns": ["src/ingestion/parser/docreader_types/**"],
-  "options": { "typeAware": true, "maxWarnings": 114 },
+  "options": { "typeAware": true, "maxWarnings": 44 },
   "rules": {
     "no-unused-vars": ["warn", { "argsIgnorePattern": "^_", "varsIgnorePattern": "^_", "caughtErrorsIgnorePattern": "^_" }],
     "no-explicit-any": "warn",

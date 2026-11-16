@@ -976,7 +976,7 @@ export class IngestionLifecycle {
         if (
           !this.spanRepo.markDone(
             rootSpanId,
-            { stages: [...INGESTION_STAGE_NAMES], ...(summary ?? {}) },
+            { stages: [...INGESTION_STAGE_NAMES], ...summary },
             finishedAt.toISOString(),
             finishedAt.getTime() - rootStartedAt.getTime()
           )

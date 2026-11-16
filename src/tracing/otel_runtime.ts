@@ -177,7 +177,7 @@ class OtelOperationScope implements OperationScope {
 
   startChild(name: string, attributes?: TracingAttributes): OperationScope {
     if (this.ended) return noopOperationScope()
-    const merged = { ...this.traceAttributes, ...(attributes ?? {}) }
+    const merged = { ...this.traceAttributes, ...attributes }
     const span = this.tracer.startSpan(
       name,
       {
@@ -446,7 +446,7 @@ export class OtelTracingRuntime implements TracingRuntime {
     const rootTraceId = isRoot && sampled ? span.spanContext().traceId : undefined
     const traceAttributes =
       !isRoot && parentSpanContext
-        ? { ...(this.traceAttributesByTrace.get(parentSpanContext.traceId) ?? {}) }
+        ? { ...this.traceAttributesByTrace.get(parentSpanContext.traceId) }
         : {}
     const scope = new OtelOperationScope(
       this.tracer,
@@ -460,7 +460,7 @@ export class OtelTracingRuntime implements TracingRuntime {
       this.traceAttributesByTrace,
       rootTraceId,
     )
-    const initialAttributes = { ...traceAttributes, ...(attributes ?? {}) }
+    const initialAttributes = { ...traceAttributes, ...attributes }
     if (Object.keys(initialAttributes).length > 0) scope.setAttributes(initialAttributes)
     return scope
   }

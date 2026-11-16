@@ -70,7 +70,7 @@ export class PinoLogger implements Logger {
 
   constructor(options: PinoLoggerOptions, bindings: LogFields = {}, shared?: SharedState) {
     this.level = options.level
-    this.bindings = { ...(options.bindings ?? {}), ...bindings }
+    this.bindings = { ...options.bindings, ...bindings }
     this.format = shared?.format ?? options.format ?? "json"
     this.shared =
       shared ??
@@ -125,7 +125,7 @@ export class PinoLogger implements Logger {
       counters.skippedAfterClose += 1
       return
     }
-    const merged: LogFields = { ...this.bindings, ...(fields ?? {}) }
+    const merged: LogFields = { ...this.bindings, ...fields }
     const sanitized = sanitizeFields(merged, this.shared.sanitize)
     counters.redacted = this.shared.sanitize.redacted
 

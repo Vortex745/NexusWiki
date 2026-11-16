@@ -14,9 +14,6 @@ import {
   compressionMaterialFromContextMaterial,
   compressionSourceText,
   formatCompressedBlock,
-  formatEvidenceBlock,
-  type CompressionMaterialByEvidenceId,
-  type ContextBudgetBreakdown,
   type MaterialBudgetBreakdown,
 } from "../retrieval/context/budget"
 

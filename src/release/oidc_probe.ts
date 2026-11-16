@@ -22,8 +22,7 @@
 // runtime behavior changes (per Ticket 16/17 rollback spec).
 
 import { JoseIdentityAdapter } from "../identity/jose_adapter"
-import type { AccessContext } from "../access/context"
-import type { ProbeContext, ProbeImplementation, ProbeResult } from "./smoke_harness"
+import type { ProbeImplementation } from "./smoke_harness"
 
 // ---------------------------------------------------------------------------
 // Fixture contract

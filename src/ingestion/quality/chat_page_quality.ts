@@ -4,7 +4,7 @@ import type { DecisionCallExecutor, TokenUsage } from "../../types"
 import { ClefProtocolError, tagClefErrorCode } from "../../clef/protocol_errors"
 import { QUALITY_RULE_VERSION, QualityContractError } from "./contract"
 import { validateQualityPages, type QualityPageEvidence } from "./evidence"
-import { qualityJointCriteria, qualityVerdictInstructions, type QualityRequestInput } from "./request"
+import { qualityVerdictInstructions, type QualityRequestInput } from "./request"
 import { parseQualityAnswers } from "./response"
 import type { QualityBatchOutcome } from "./clef_page_quality"
 

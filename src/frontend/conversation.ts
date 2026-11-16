@@ -714,7 +714,7 @@ export class ConversationImpl implements Conversation {
     this.storage.save({
       threads: this.threads.map((thread) => ({
         ...thread,
-        messages: thread.messages.map(({ prompt, ...rest }) => rest),
+        messages: thread.messages.map(({ prompt: _prompt, ...rest }) => rest),
       })),
       activeThreadId: this.activeThreadId,
       streamEnabled: this.streamEnabled,

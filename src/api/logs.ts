@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process"
-import { existsSync, readdirSync, statSync } from "node:fs"
+import { readdirSync, statSync } from "node:fs"
 import { basename, resolve } from "node:path"
 import { Router, type Request, type Response } from "express"
 import { requireOperator } from "./operator_guard"

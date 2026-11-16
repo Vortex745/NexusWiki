@@ -1,5 +1,4 @@
 import { Router, type Request, type Response } from "express"
-import type { AccessContext } from "../access/context"
 import { accessContext, requireOperator } from "./operator_guard"
 import type { DB } from "../ingestion/tracking/db"
 import type { KnowledgeBaseService } from "../knowledge/knowledge_base_service"

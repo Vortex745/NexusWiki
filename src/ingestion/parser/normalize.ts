@@ -138,7 +138,7 @@ export function normalizeMarkItDown(
       index < lines.length &&
       lines[index].trim() &&
       !/^(#{1,6})\s+/.test(lines[index]) &&
-      !/^```/.test(lines[index]) &&
+      !lines[index].startsWith("```") &&
       !isTableStart(lines, index)
     ) {
       paragraph.push(lines[index].trim())

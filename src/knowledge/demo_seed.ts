@@ -32,7 +32,7 @@ import { DEMO_TENANT_ID } from "../identity/demo_accounts"
 import { FaqConflictError, FaqEntryServiceImpl } from "../faq/faq_entry_service"
 import { SqliteFaqEntryRepo } from "../faq/faq_entry_repo"
 import { SqliteKnowledgeBaseRepo } from "./knowledge_base_repo"
-import { normalizeFaqQuestion } from "../types/faq"
+
 
 export { DEMO_TENANT_ID as DEMO_NAMESPACE_TENANT }
 

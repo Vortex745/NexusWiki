@@ -399,7 +399,7 @@ export const markitdownProbe: ProbeImplementation = async (
     })
     await ingestionFixture.lifecycle.runNext()
 
-    const v1ActiveBefore = ingestionFixture.lifecycle.getStatus(v1.docId)
+    const _v1ActiveBefore = ingestionFixture.lifecycle.getStatus(v1.docId)
       ?.documentVersion.active
 
     const v2 = ingestionFixture.ingestBounded({

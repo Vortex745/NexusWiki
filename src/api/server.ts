@@ -228,7 +228,7 @@ export function createApp(options: {
   if (options.logger) {
     app.use(
       createHttpLogLifecycle(options.logger, {
-        ...(options.httpLog ?? {}),
+        ...options.httpLog,
         ...(options.tracing ? { tracing: options.tracing } : {}),
       }),
     )
@@ -750,9 +750,7 @@ export async function startServer(
   // Ticket 08 (KB-04): ONE production knowledge-base service shared by the
   // retrieval-scope resolver and the workspace routes, so a base an admin just
   // archived is refused by the very next chat selection.
-  const workspaceProfiles = new WorkspaceModelProfileStore(processRuntime.db, config, {
-    ...(options.envFilePath ? { envPath: options.envFilePath } : {}),
-  })
+  const workspaceProfiles = new WorkspaceModelProfileStore(processRuntime.db, config, options.envFilePath ? { envPath: options.envFilePath } : {})
   // Long-term memory (2026-10-30): the profile store and the summarizer share
   // the one history store the routes read. The summarizer resolves the same
   // chat model a run would use, so a private account never spends the

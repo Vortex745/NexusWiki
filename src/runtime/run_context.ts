@@ -381,7 +381,7 @@ export function hasRunResourceBudgetFailure(ctx: RunContext): boolean {
 function createResourceBudgetAuthority(
   options: RunResourceBudgetOptions = {}
 ): RunResourceBudgetAuthority {
-  const limits = Object.freeze({ ...(options.limits ?? {}) })
+  const limits = Object.freeze({ ...options.limits })
   validateLimits(limits)
   let authority: RunResourceBudgetAuthority
   authority = Object.freeze({

@@ -679,13 +679,13 @@ export function createComplexKnowledgeMastraRunner(
     const orderings: RetrievalOrdering[] = []
     let coverageCriteria: string[] | undefined
     let complexLoopResult: ComplexLoopResult | undefined
-    let complexLoopDurationMs: number | undefined
+    let _complexLoopDurationMs: number | undefined
     let plannerModelCalls: number | undefined
     let plannerTokens: number | undefined
     let subQueryTrace: RouteSubQuery[] | undefined
     let plannerQueryCount: number | undefined
     const buildRouteTrace = (): RouteTraceData => ({
-      ...(preparedRoute?.routeTrace ?? {}),
+      ...preparedRoute?.routeTrace,
       decision: "complex",
       ...(complexLoopResult
         ? {
@@ -778,7 +778,7 @@ export function createComplexKnowledgeMastraRunner(
           validationTrace: {},
         }
       }
-      complexLoopDurationMs = Date.now() - loopStartedAt
+      _complexLoopDurationMs = Date.now() - loopStartedAt
 
       // Populate retrieval tracking from loop result. The loop already
       // deduplicated results by chunk ID (criterion #4), so this is a

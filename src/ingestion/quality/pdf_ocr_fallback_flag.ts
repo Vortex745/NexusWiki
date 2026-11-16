@@ -159,7 +159,7 @@ export interface PdfQualityGate {
  * counts use the same protection.
  */
 export function messageSafeCode(code: string): string {
-  return code.trim().slice(0, 64).replace(/[^A-Za-z0-9_:.\-]/g, "_").replace(/\d+/g, (digits) => `n${digits}`)
+  return code.trim().slice(0, 64).replace(/[^A-Za-z0-9_:.-]/g, "_").replace(/\d+/g, (digits) => `n${digits}`)
 }
 
 export const PDF_QUALITY_REJECTION_CODE = "pdf_quality_gate_rejected"
