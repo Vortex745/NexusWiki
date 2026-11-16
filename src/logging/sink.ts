@@ -130,6 +130,7 @@ export class BackpressureSink implements LogSink {
     this.closed = true
     this.counters.closed = true
     // Release any waiter that outlived the budget so callers do not hang.
+    // oxlint-disable-next-line unicorn/no-useless-spread -- release(waiter) deletes from this.waiters, so the loop walks a snapshot copy
     for (const waiter of [...this.waiters]) {
       this.release(waiter)
     }
@@ -140,6 +141,7 @@ export class BackpressureSink implements LogSink {
     this.drainHooked = true
     this.destination.once("drain", () => {
       this.drainHooked = false
+      // oxlint-disable-next-line unicorn/no-useless-spread -- release(waiter) deletes from this.waiters, so the loop walks a snapshot copy
       for (const waiter of [...this.waiters]) {
         this.release(waiter)
       }

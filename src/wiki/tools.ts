@@ -84,7 +84,7 @@ export function registerWikiTools(registry: ToolRegistry, db: DB): ToolRegistry 
       if (kbs.length !== 1) throw new Error("writing requires one active Wiki knowledge base")
       const existing = store.get(env.accessContext.tenantId, kbs[0], args.slug)
       if (existing && args.expectedVersion === undefined) throw new Error("expectedVersion required for existing page")
-      const page = store.save({ ...(existing ?? {}), tenantId: env.accessContext.tenantId,
+      const page = store.save({ ...existing, tenantId: env.accessContext.tenantId,
         knowledgeBaseId: kbs[0], slug: args.slug, title: args.title, content: args.content,
         summary: args.summary, pageType: existing?.pageType ?? "concept", status: "published",
         aliases: existing?.aliases ?? [], folderId: existing?.folderId ?? "",

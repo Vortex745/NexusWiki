@@ -38,7 +38,7 @@ import type { ContextAssembler } from "../retrieval/context/interface"
 import type { Validator } from "../critic/validator/interface"
 import type { RePlanner } from "../critic/replanner/interface"
 import type { AccessContext } from "../access/context"
-import type { ProbeContext, ProbeImplementation } from "./smoke_harness"
+import type { ProbeImplementation } from "./smoke_harness"
 import type {
   AgentMessage,
   AnswerReference,
@@ -381,7 +381,7 @@ export const hybridRetrievalProbe: ProbeImplementation = async (ctx) => {
     // chunk has non-empty childrenIds (the parent-expanded chunk). buildEvidence
     // creates one Evidence per RetrievalResult, so this confirms the fixture
     // includes parent-expandable chunks that exercise the parent-expansion seam.
-    const hasParentExpansion = expectedSearchResults.some((r) => r.chunk.childrenIds.length > 0)
+    const _hasParentExpansion = expectedSearchResults.some((r) => r.chunk.childrenIds.length > 0)
 
     // --- Build the Answer runner via the public seam ---
     const runner = createSimpleKnowledgeMastraRunner({

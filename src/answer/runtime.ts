@@ -24,10 +24,10 @@ import {
 import { AnswerTraceRepository } from "./trace_repository"
 
 export interface AnswerClientFactory {
-  createChatClient(options: OpenAIClientOptions): OpenAI
-  createEmbeddingClient(options: OpenAIClientOptions): OpenAI
-  createElasticsearchClient(options: ElasticsearchNodeOptions): Client
-  createNeo4jDriver?(options: {
+  createChatClient(this: void, options: OpenAIClientOptions): OpenAI
+  createEmbeddingClient(this: void, options: OpenAIClientOptions): OpenAI
+  createElasticsearchClient(this: void, options: ElasticsearchNodeOptions): Client
+  createNeo4jDriver?(this: void, options: {
     uri: string
     user: string
     password: string

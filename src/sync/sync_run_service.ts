@@ -375,9 +375,7 @@ export class SyncRunService {
     }
     const execute = async (): Promise<SyncRun> => {
       try {
-        const report = await this.dataSourceService().runOnce(run.tenantId, run.sourceId, {
-          ...(scope ? { trace: taskTraceFromScope(scope) } : {}),
-        })
+        const report = await this.dataSourceService().runOnce(run.tenantId, run.sourceId, scope ? { trace: taskTraceFromScope(scope) } : {})
         await this.drainLifecycle()
         this.persistRunPages(run.id, report.pages, report.missing ?? [])
         const failedPages = report.pages.filter((page) => page.status === "failed")

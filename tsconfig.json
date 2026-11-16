@@ -16,13 +16,12 @@
     "types": [
       "node"
     ],
-    "baseUrl": ".",
     "paths": {
       "@/*": [
-        "frontend/src/*"
+        "./frontend/src/*"
       ],
       "@core/*": [
-        "src/frontend/*"
+        "./src/frontend/*"
       ]
     }
   },

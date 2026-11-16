@@ -260,9 +260,7 @@ async function main() {
     db: answerRuntime.processRuntime.db,
   })
 
-  const webOperations = createWebEvidenceOperations({
-    ...(cfg.tavilyApiKey ? { tavilyApiKey: cfg.tavilyApiKey } : {}),
-  })
+  const webOperations = createWebEvidenceOperations(cfg.tavilyApiKey ? { tavilyApiKey: cfg.tavilyApiKey } : {})
   // ONE read-only tool runtime for every entry: a private workspace must not
   // spawn another MCP capability child just because its model settings differ.
   const sharedRegistry = registerBuiltinTools(new ToolRegistry(), {

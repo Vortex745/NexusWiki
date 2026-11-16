@@ -32,7 +32,6 @@
 import type {
   CaseResult,
   GoldenCase,
-  QualityMetricKey,
   QualityMetricResult,
 } from "./types"
 import { QUALITY_THRESHOLDS } from "./types"

@@ -259,7 +259,7 @@ export function createWebEvidenceOperations(
           const fetched = await fetchSingleUrl(url, {
             timeoutMs: 12_000,
             maxBytes: 2 * 1024 * 1024,
-            ...(options.fetchOptions ?? {}),
+            ...options.fetchOptions,
           })
           const fetchedAt = now().toISOString()
           const mimeType = fetched.mimeType.toLowerCase()

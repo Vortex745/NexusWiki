@@ -49,7 +49,6 @@ import type { AccessContext } from "../access/context"
 import type { ProbeContext, ProbeResult } from "./smoke_harness"
 import type {
   AgentMessage,
-  AnswerReference,
   CriticVerdict,
   Evidence,
   Query,

@@ -39,7 +39,6 @@
  *   kid not in cache) → null (→ 401 at the middleware).
  */
 
-import type { Request } from "express"
 import type { AccessContext, IdentityAdapter, Scope } from "../access/context"
 import type { OidcConfig, ClaimMapping } from "./oidc_config"
 import { decodeJwtUnsafe, validateClaims, type JwtClaims } from "./claims"

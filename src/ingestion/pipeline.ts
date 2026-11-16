@@ -207,7 +207,7 @@ function recordParserMetadata(
       // UT-10: extraction-level provenance (e.g. the faithful TXT path's
       // decode evidence) lands beside the parser decision, keyed by the
       // producer ("decode" for direct-txt).
-      ...(extractionMetadata ?? {}),
+      ...extractionMetadata,
       source: document.source,
       fileName: document.fileName,
       mimeType: document.mimeType,
@@ -607,7 +607,7 @@ export class PipelineStageRunner implements IngestionStageRunner {
         (stored) => ({
           chunkCount: stored.chunks.length,
           indexName: this.ensureStore(document.knowledgeBaseId).chunkIndexName,
-          ...(stored.metrics ?? {}),
+          ...stored.metrics,
         })
       )
 

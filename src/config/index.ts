@@ -193,7 +193,7 @@ export const DEFAULT_ES_CHUNK_INDEX = "kefu-rag-chunks"
 export function resolveChunkIndexName(indexName?: string, config?: Pick<AppConfig, "esChunkIndexName">): string {
   const name = indexName?.trim() || config?.esChunkIndexName?.trim() || DEFAULT_ES_CHUNK_INDEX
   if (name !== name.toLowerCase() || name === "." || name === ".." ||
-    /^[\-+_]/.test(name) || /[\\/*?"<>|\s,#:]/.test(name) || Buffer.byteLength(name, "utf8") > 255) {
+    /^[-+_]/.test(name) || /[\\/*?"<>|\s,#:]/.test(name) || Buffer.byteLength(name, "utf8") > 255) {
     throw new Error("ES_CHUNK_INDEX must be a valid single lowercase physical index name")
   }
   return name

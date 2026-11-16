@@ -134,7 +134,7 @@ class CloseableRegistry {
   }
 }
 
-export const gracefulShutdownProbe: ProbeImplementation = async (ctx) => {
+export const gracefulShutdownProbe: ProbeImplementation = async (_ctx) => {
   const start = Date.now()
 
   const registry = new CloseableRegistry()
@@ -197,7 +197,7 @@ export const gracefulShutdownProbe: ProbeImplementation = async (ctx) => {
 // the hard invariant `unknown_citation_count_zero`.
 // ---------------------------------------------------------------------------
 
-export const citationIntegrityProbe: ProbeImplementation = async (ctx) => {
+export const citationIntegrityProbe: ProbeImplementation = async (_ctx) => {
   const start = Date.now()
 
   // Bounded fixture: known evidence IDs
@@ -250,7 +250,7 @@ export const citationIntegrityProbe: ProbeImplementation = async (ctx) => {
 // Budget exhaustion produces one terminal and no later provider call.
 // ---------------------------------------------------------------------------
 
-export const wholeRunBudgetProbe: ProbeImplementation = async (ctx) => {
+export const wholeRunBudgetProbe: ProbeImplementation = async (_ctx) => {
   const start = Date.now()
   let limitsTested = 0
   let allEnforced = true

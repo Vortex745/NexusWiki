@@ -197,7 +197,7 @@ export class RetirementServiceImpl implements RetirementService {
     tenantId: string,
     reason: string,
     actor: string,
-    trace?: TaskTraceContext
+    _trace?: TaskTraceContext
   ): KnowledgeBaseRetirementResult {
     // Deterministic order so a repeat call walks the sources the same way.
     const rows = this.db.prepare(

@@ -42,7 +42,7 @@ export function createServerLogger(
     bindings: {
       service: options.service ?? "kefu-rag",
       pid: process.pid,
-      ...(options.bindings ?? {}),
+      ...options.bindings,
     },
   })
 }
@@ -105,7 +105,7 @@ export function createProcessLoggers(
   const bindings = {
     service: options.service ?? "kefu-rag",
     pid: process.pid,
-    ...(options.bindings ?? {}),
+    ...options.bindings,
   }
   const build = (counters: LogCounters, destination: LogDestination, format: LogFormat): Logger => {
     const sink: LogSink = new BackpressureSink(

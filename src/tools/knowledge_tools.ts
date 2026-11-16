@@ -24,7 +24,6 @@ import type { DB } from "../ingestion/tracking/db"
 import { registerWikiTools } from "../wiki/tools"
 import {
   boundedQuery,
-  type ToolDefinition,
   type ToolEnvironment,
   type ToolRegistry,
 } from "./invocation"

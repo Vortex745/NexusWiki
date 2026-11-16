@@ -6,8 +6,6 @@ import type { AnswerRunEvent, ReasoningCapability, ReasoningEffort } from "../ty
 import { singleTenantAccessContext, type AccessContext } from "../access/context"
 import type { SqliteSessionBinder } from "../access/session_binder"
 import {
-  AssistantArchivedError,
-  AssistantNotFoundError,
   defaultAssistantId,
   type AssistantRunSnapshot,
   type AssistantService,

@@ -188,6 +188,7 @@ function longestCommonSubsequencePairs(
   const columns = right.length
   const table: number[][] = Array.from(
     { length: rows + 1 },
+    // oxlint-disable-next-line unicorn/no-new-array -- fixed-length matrix row allocation, immediately filled with zeros
     () => new Array<number>(columns + 1).fill(0)
   )
   for (let i = rows - 1; i >= 0; i -= 1) {

@@ -41,7 +41,7 @@ import type { ContextAssembler } from "../retrieval/context/interface"
 import type { Validator } from "../critic/validator/interface"
 import type { RePlanner } from "../critic/replanner/interface"
 import type { AccessContext } from "../access/context"
-import type { ProbeContext, ProbeImplementation } from "./smoke_harness"
+import type { ProbeImplementation } from "./smoke_harness"
 import type {
   AgentMessage,
   AnswerReference,
@@ -401,7 +401,7 @@ export const retrievalAclOutageProbe: ProbeImplementation = async (ctx) => {
   }
   const authorizedSearcher = makeAclSearcher(allChunks, new Set())
   const authorizedExpected = filterByAcl(allChunks, authorizedAc)
-  const authorizedRun = await runAnswerScenario(
+  const _authorizedRun = await runAnswerScenario(
     fixture.query,
     authorizedSearcher,
     authorizedExpected,
@@ -427,7 +427,7 @@ export const retrievalAclOutageProbe: ProbeImplementation = async (ctx) => {
   }
   const unauthorizedSearcher = makeAclSearcher(allChunks, new Set())
   const unauthorizedExpected = filterByAcl(allChunks, unauthorizedAc)
-  const unauthorizedRun = await runAnswerScenario(
+  const _unauthorizedRun = await runAnswerScenario(
     fixture.query,
     unauthorizedSearcher,
     unauthorizedExpected,

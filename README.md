@@ -157,10 +157,13 @@ npm run demo:reset
 安装后可执行以下检查，均不需要测试票据或本地开发记录：
 
 ```bash
+npm run lint
 npm run build
 npm run typecheck:web
 npm run build:web
 ```
+
+`npm run lint` 只检查 `src/` 下的后端与 agent 代码。存量告警以 `.oxlintrc.json` 里的额度为上限，超出即失败，因此新增违规会被拦下。
 
 `npm run docreader:check` 用于检查已启动的 DocReader；`npm run migrate:chunks -- --source OLD --target NEW --report .tmp/chunk-migration.json` 默认仅预览索引迁移。添加 `--apply` 才执行迁移。`npm run release:promotion-check -- ARTIFACT REVISION` 只校验已有发布凭据；生产启动门禁仍然保留。
 

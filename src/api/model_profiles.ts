@@ -35,7 +35,6 @@ import {
   type ModelProfileId,
 } from "../models/profiles"
 import {
-  WorkspaceModelProfileStore,
   WorkspaceProfileError,
   type WorkspaceProfileView,
 } from "../models/workspace_profiles"
