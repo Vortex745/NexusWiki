@@ -12,6 +12,7 @@
 !/package-lock.json
 !/tsconfig.json
 !/tsconfig.web.json
+!/.oxlintrc.json
 !/vite.config.ts
 !/Dockerfile
 !/docker-compose.yml

@@ -31,6 +31,8 @@ jobs:
         run: npm ci
       - name: Check SQLite native binding
         run: node -e "require('better-sqlite3')(':memory:').close()"
+      - name: Lint backend and agent
+        run: npm run lint
       - name: Build backend
         run: npm run build
       - name: Typecheck frontend
