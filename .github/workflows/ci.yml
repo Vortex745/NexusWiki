@@ -4,7 +4,13 @@ on:
   push:
     branches: [main]
   pull_request:
+  merge_group:
+    types: [checks_requested]
   workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.event_name }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read
@@ -28,14 +34,25 @@ jobs:
           node --version
           npm --version
       - name: Install dependencies
-        run: npm ci
+        id: install
+        run: npm ci --prefer-offline
       - name: Check SQLite native binding
         run: node -e "require('better-sqlite3')(':memory:').close()"
       - name: Lint backend and agent
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         run: npm run lint
-      - name: Build backend
-        run: npm run build
-      - name: Typecheck frontend
-        run: npm run typecheck:web
+      - name: Build backend and typecheck frontend
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        shell: bash
+        run: |
+          npm run typecheck:web > "$RUNNER_TEMP/web-types.log" 2>&1 &
+          types_pid=$!
+          result=0
+          npm run build || result=1
+          wait "$types_pid" || result=1
+          cat "$RUNNER_TEMP/web-types.log"
+          exit "$result"
+      # Vite empties dist/frontend, which is also written by the backend compiler.
       - name: Build frontend
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         run: npm run build:web
