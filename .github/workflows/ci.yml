@@ -41,18 +41,18 @@ jobs:
       - name: Lint backend and agent
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         run: npm run lint
-      - name: Build backend and typecheck frontend
+      - name: Build and typecheck in parallel
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         shell: bash
         run: |
           npm run typecheck:web > "$RUNNER_TEMP/web-types.log" 2>&1 &
           types_pid=$!
+          # Vite otherwise empties dist/frontend, which tsc also writes.
+          npm run build:web -- --outDir "$RUNNER_TEMP/web-dist" > "$RUNNER_TEMP/web-build.log" 2>&1 &
+          web_pid=$!
           result=0
           npm run build || result=1
           wait "$types_pid" || result=1
-          cat "$RUNNER_TEMP/web-types.log"
+          wait "$web_pid" || result=1
+          cat "$RUNNER_TEMP/web-types.log" "$RUNNER_TEMP/web-build.log"
           exit "$result"
-      # Vite empties dist/frontend, which is also written by the backend compiler.
-      - name: Build frontend
-        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
-        run: npm run build:web
