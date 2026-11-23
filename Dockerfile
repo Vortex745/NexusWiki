@@ -20,16 +20,17 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 COPY package.json package-lock.json ./
 RUN --mount=type=cache,target=/root/.npm npm ci --no-audit --no-fund
-COPY tsconfig.json tsconfig.web.json vite.config.ts ./
+COPY tsconfig.json tsconfig.web.json vite.config.mts drizzle.config.ts ./
 COPY src ./src
 COPY frontend ./frontend
+COPY drizzle ./drizzle
 COPY scripts/copy-docreader-proto.cjs ./scripts/copy-docreader-proto.cjs
 RUN npm run build && npm run build:web
 RUN npm prune --omit=dev --ignore-scripts --no-audit --no-fund
 
 FROM nginx:1.28-alpine AS web
 COPY docker/nginx.conf /etc/nginx/conf.d/default.conf
-COPY --from=build /app/dist/frontend /usr/share/nginx/html
+COPY --from=build /app/frontend/dist/client /usr/share/nginx/html
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
     CMD wget -q -O /dev/null http://127.0.0.1/ || exit 1
 
@@ -44,6 +45,7 @@ ENV NODE_ENV=production \
 COPY --from=build --chown=node:node /app/package.json /app/package-lock.json ./
 COPY --from=build --chown=node:node /app/node_modules ./node_modules
 COPY --from=build --chown=node:node /app/dist ./dist
+COPY --from=build --chown=node:node /app/drizzle ./drizzle
 COPY --chown=node:node scripts/builtin_pdf_extract.py scripts/builtin_pdf_preview.py ./scripts/
 RUN mkdir -p /app/data /app/logs && chown node:node /app/data /app/logs
 USER node

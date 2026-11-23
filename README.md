@@ -21,10 +21,10 @@ NexusWiki 是一个基于大模型的 RAG 知识助手平台。它将 **向量�
 
 | 层 | 技术 |
 | --- | --- |
-| 前端 | React 19 · Vite · Tailwind CSS · Radix UI |
+| 前端 | React 19 · TanStack Start（SPA）· TanStack Router · TanStack Query · Vite · Tailwind CSS · Radix UI |
 | 后端 | Node.js · TypeScript · Express · Mastra · MCP |
 | 检索 | 向量 · BM25 · RRF 融合排序 · Rerank · PageIndex |
-| 存储 | Elasticsearch · Neo4j · SQLite |
+| 存储 | Elasticsearch · Neo4j · SQLite · Drizzle（认证表）· Better Auth |
 | 文档解析 | WeKnora DocReader · PyMuPDF · MarkItDown · 火山引擎 OCR（可选） |
 | 可观测 | OpenTelemetry · Langfuse（可选）· Pino |
 | 部署 | Docker Compose · Nginx |

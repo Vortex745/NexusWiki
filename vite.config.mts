@@ -1,13 +1,21 @@
 import { fileURLToPath } from "node:url"
 import tailwindcss from "@tailwindcss/vite"
+import { tanstackStart } from "@tanstack/react-start/plugin/vite"
 import react from "@vitejs/plugin-react"
 import { defineConfig } from "vite"
 
 const repoRoot = fileURLToPath(new URL(".", import.meta.url))
+const frontendRoot = fileURLToPath(new URL("./frontend", import.meta.url))
 
 export default defineConfig({
-  root: "frontend",
-  plugins: [react(), tailwindcss()],
+  root: frontendRoot,
+  plugins: [
+    tanstackStart({
+      spa: { enabled: true, prerender: { outputPath: "/index.html" } },
+    }),
+    react(),
+    tailwindcss(),
+  ],
   resolve: {
     alias: {
       "@": fileURLToPath(new URL("./frontend/src", import.meta.url)),
@@ -31,8 +39,9 @@ export default defineConfig({
       allow: [repoRoot],
     },
   },
+  preview: { host: "127.0.0.1" },
   build: {
-    outDir: "../dist/frontend",
+    outDir: fileURLToPath(new URL("./frontend/dist", import.meta.url)),
     emptyOutDir: true,
   },
 })

@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react"
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 
 import { Button as UiButton } from "../ui/Button"
 import { ConfirmDialog, Dialog } from "../ui/Dialog"
@@ -13,20 +14,19 @@ import { EmptyState, Select, TextInput } from "../ui/Controls"
 import { useAppShell } from "../../runtime/AppShellContext"
 import { formatLastLogin } from "../../lib/lastLogin"
 import {
-  fetchAdminUsers,
   resetUserPassword,
   setUserDisabled,
   type AdminUserItem,
-  type AdminUsersPage,
 } from "../../lib/adminApi"
+import { adminKeys, adminUsersQueryOptions } from "../../lib/queries/admin"
 
 /**
  * AC-03/04/05 (admin console): the operator's user directory.
  *
  * Everything on screen comes from `GET /api/admin/users` — server-side
  * paging, case-insensitive ID search, status filter, newest first. The
- * console holds no local copy of the registry: every action re-reads the
- * current view, so the table can never drift from what the server enforces.
+ * console holds no local copy of the registry: every action invalidates the
+ * cached reads, so the table can never drift from what the server enforces.
  * Disabling asks first (one dialog, one account); enabling is a direct
  * action; a reset always goes through a typed confirmation with the same
  * eight-character rule the server enforces. The table itself is Arc's
@@ -52,15 +52,24 @@ function formatDateTime(iso: string | null): string {
   return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`
 }
 
-export function UserDirectory() {
+export function UserDirectory({
+  q,
+  status,
+  page,
+  onSearchChange,
+  onStatusChange,
+  onPageChange,
+}: {
+  q: string
+  status: "all" | "active" | "disabled"
+  page: number
+  onSearchChange: (q: string) => void
+  onStatusChange: (status: "all" | "active" | "disabled") => void
+  onPageChange: (page: number) => void
+}) {
   const { showToast } = useAppShell()
-  const [query, setQuery] = useState("")
-  const [status, setStatus] = useState<"all" | "active" | "disabled">("all")
-  const [page, setPage] = useState(1)
-  const [result, setResult] = useState<AdminUsersPage | null>(null)
-  const [loading, setLoading] = useState(true)
-  const [error, setError] = useState<string | null>(null)
-  const [reloadToken, setReloadToken] = useState(0)
+  const queryClient = useQueryClient()
+  const [query, setQuery] = useState(q)
   // AC-04: exactly one pending mutation, and one disable awaiting its
   // confirmation. Closing the dialog never fires the request.
   const [busyId, setBusyId] = useState<string | null>(null)
@@ -71,59 +80,69 @@ export function UserDirectory() {
   const [resetTarget, setResetTarget] = useState<AdminUserItem | null>(null)
   const [resetDraft, setResetDraft] = useState("")
   const [resetError, setResetError] = useState<string | null>(null)
-  const [resetBusy, setResetBusy] = useState(false)
   // The search box debounces: typing never fires one request per keystroke,
   // and every accepted query resets paging to the first page.
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
-  const [debouncedQuery, setDebouncedQuery] = useState("")
+
+  // Back/forward and external search changes flow back into the input.
+  useEffect(() => {
+    setQuery(q)
+  }, [q])
 
   useEffect(() => {
     if (debounceRef.current) clearTimeout(debounceRef.current)
     debounceRef.current = setTimeout(() => {
-      setDebouncedQuery(query.trim())
-      setPage(1)
+      const next = query.trim()
+      if (next !== q) onSearchChange(next)
     }, 250)
     return () => {
       if (debounceRef.current) clearTimeout(debounceRef.current)
     }
-  }, [query])
+  }, [query, q, onSearchChange])
 
-  useEffect(() => {
-    let cancelled = false
-    setLoading(true)
-    setError(null)
-    fetchAdminUsers({
-      ...(debouncedQuery ? { q: debouncedQuery } : {}),
+  const usersQuery = useQuery(
+    adminUsersQueryOptions({
+      ...(q ? { q } : {}),
       status,
       page,
       pageSize: 20,
-    })
-      .then((payload) => {
-        if (!cancelled) setResult(payload)
-      })
-      .catch((reason: unknown) => {
-        if (!cancelled) {
-          setError(reason instanceof Error ? reason.message : "读取用户目录失败")
-        }
-      })
-      .finally(() => {
-        if (!cancelled) setLoading(false)
-      })
-    return () => {
-      cancelled = true
-    }
-  }, [debouncedQuery, status, page, reloadToken])
+    }),
+  )
+
+  const disableMutation = useMutation({
+    mutationFn: ({ id, disabled }: { id: string; disabled: boolean }) =>
+      setUserDisabled(id, disabled),
+    onSuccess: (fresh, variables) => {
+      showToast(
+        variables.disabled
+          ? `已禁用「${fresh.displayId}」`
+          : `已启用「${fresh.displayId}」`,
+      )
+      void queryClient.invalidateQueries({ queryKey: adminKeys.all })
+    },
+    onError: (reason: unknown) => {
+      showToast(reason instanceof Error ? reason.message : "操作失败", "error")
+    },
+  })
+
+  const resetMutation = useMutation({
+    mutationFn: ({ id, password }: { id: string; password: string }) =>
+      resetUserPassword(id, password),
+    onSuccess: (_result, variables) => {
+      showToast(`已重置「${resetTarget?.displayId ?? variables.id}」的密码，旧密码立即失效`)
+      setResetTarget(null)
+      setResetDraft("")
+      void queryClient.invalidateQueries({ queryKey: adminKeys.all })
+    },
+    onError: (reason: unknown) => {
+      setResetError(reason instanceof Error ? reason.message : "重置密码失败")
+    },
+  })
 
   const mutateDisabled = async (row: AdminUserItem, disabled: boolean) => {
     setBusyId(row.id)
     try {
-      const fresh = await setUserDisabled(row.id, disabled)
-      showToast(disabled ? `已禁用「${fresh.displayId}」` : `已启用「${fresh.displayId}」`)
-      // The server is the source: re-read the current view instead of
-      // patching a local row.
-      setReloadToken((token) => token + 1)
-    } catch (reason) {
-      showToast(reason instanceof Error ? reason.message : "操作失败", "error")
+      await disableMutation.mutateAsync({ id: row.id, disabled })
     } finally {
       setBusyId(null)
     }
@@ -131,28 +150,25 @@ export function UserDirectory() {
 
   const submitPasswordReset = async () => {
     if (!resetTarget) return
-    setResetBusy(true)
     setResetError(null)
     try {
-      await resetUserPassword(resetTarget.id, resetDraft)
-      showToast(`已重置「${resetTarget.displayId}」的密码，旧密码立即失效`)
-      setResetTarget(null)
-      setResetDraft("")
-    } catch (reason) {
-      setResetError(reason instanceof Error ? reason.message : "重置密码失败")
+      await resetMutation.mutateAsync({ id: resetTarget.id, password: resetDraft })
     } finally {
-      setResetBusy(false)
+      // The dialog stays open on failure so the error is visible.
     }
   }
 
-  const users = result?.items ?? []
+  const users = usersQuery.data?.items ?? []
   const rows: DirectoryRow[] = users.map((user) => ({
     ...user,
     status: user.disabledAt ? "已禁用" : "启用",
   }))
-  const total = result?.total ?? 0
-  const pageSize = result?.pageSize ?? 20
+  const total = usersQuery.data?.total ?? 0
+  const pageSize = usersQuery.data?.pageSize ?? 20
   const pageCount = Math.max(1, Math.ceil(total / pageSize))
+  const loading = usersQuery.isPending || usersQuery.isFetching
+  const error =
+    usersQuery.error instanceof Error ? usersQuery.error.message : null
 
   const columns: DataColumn<DirectoryRow>[] = [
     {
@@ -240,8 +256,7 @@ export function UserDirectory() {
             aria-label="按状态筛选"
             value={status}
             onChange={(event: React.ChangeEvent<HTMLSelectElement>) => {
-              setStatus(event.target.value as "all" | "active" | "disabled")
-              setPage(1)
+              onStatusChange(event.target.value as "all" | "active" | "disabled")
             }}
             wrapperClassName="w-28 flex-none"
             size="sm"
@@ -275,7 +290,7 @@ export function UserDirectory() {
             variant="ghost"
             size="sm"
             type="button"
-            onClick={() => setReloadToken((token) => token + 1)}
+            onClick={() => void usersQuery.refetch()}
           >
             重试
           </UiButton>
@@ -285,7 +300,7 @@ export function UserDirectory() {
       ) : rows.length === 0 ? (
         <EmptyState
           icon={Users}
-          message={debouncedQuery ? "没有匹配的账号" : "还没有注册账号"}
+          message={q ? "没有匹配的账号" : "还没有注册账号"}
         />
       ) : (
         <>
@@ -319,7 +334,7 @@ export function UserDirectory() {
                 size="sm"
                 type="button"
                 disabled={page <= 1 || loading}
-                onClick={() => setPage((current) => Math.max(1, current - 1))}
+                onClick={() => onPageChange(Math.max(1, page - 1))}
               >
                 上一页
               </UiButton>
@@ -331,7 +346,7 @@ export function UserDirectory() {
                 size="sm"
                 type="button"
                 disabled={page >= pageCount || loading}
-                onClick={() => setPage((current) => Math.min(pageCount, current + 1))}
+                onClick={() => onPageChange(Math.min(pageCount, page + 1))}
               >
                 下一页
               </UiButton>
@@ -343,79 +358,66 @@ export function UserDirectory() {
       <ConfirmDialog
         open={confirmDisable !== null}
         onClose={() => setConfirmDisable(null)}
-        title={confirmDisable ? `禁用「${confirmDisable.displayId}」` : "禁用账号"}
-        titleId="admin-disable-user-title"
-        confirmLabel="确认禁用"
-        busy={busyId !== null}
-        onConfirm={async () => {
-          if (!confirmDisable) return
-          const row = confirmDisable
+        title={`禁用「${confirmDisable?.displayId ?? ""}」？`}
+        confirmLabel="禁用账号"
+        confirmTone="danger"
+        busy={disableMutation.isPending}
+        confirmDisabled={confirmDisable === null}
+        onConfirm={() => {
+          const target = confirmDisable
           setConfirmDisable(null)
-          await mutateDisabled(row, true)
+          if (target) void mutateDisabled(target, true)
         }}
       >
-        <p>
-          禁用后该账号无法再登录，但它的工作区、文档、对话和知识库都原样保留，随时可以重新启用。
-        </p>
+        <p>禁用后该账号立即无法登录，已有数据不受影响；可以随时重新启用。</p>
       </ConfirmDialog>
 
       <Dialog
         open={resetTarget !== null}
         onClose={() => {
-          if (resetBusy) return
+          if (resetMutation.isPending) return
           setResetTarget(null)
-          setResetDraft("")
           setResetError(null)
         }}
-        title={resetTarget ? `重置「${resetTarget.displayId}」的密码` : "重置密码"}
-        titleId="admin-reset-password-title"
-        tier="confirm"
+        title={`重置「${resetTarget?.displayId ?? ""}」的密码`}
+        tier="form"
         footer={
           <div className="flex justify-end gap-2">
             <UiButton
-              variant="outline"
+              variant="ghost"
               size="sm"
-              disabled={resetBusy}
+              type="button"
+              disabled={resetMutation.isPending}
               onClick={() => {
                 setResetTarget(null)
-                setResetDraft("")
                 setResetError(null)
               }}
             >
               取消
             </UiButton>
             <UiButton
+              variant="default"
               size="sm"
-              disabled={resetBusy || resetDraft.length !== 8}
+              type="button"
+              disabled={resetMutation.isPending || resetDraft.length !== 8}
               onClick={() => void submitPasswordReset()}
             >
-              确认重置
+              {resetMutation.isPending ? "正在重置…" : "确认重置"}
             </UiButton>
           </div>
         }
       >
-        <p className="text-xs text-faint">
-          新密码恰好 8 位、区分大小写。保存后旧密码立即失效，请把新密码告知该账号的使用者。
-        </p>
-        <TextInput
-          aria-label="新密码"
-          type="password"
-          autoFocus
-          disabled={resetBusy}
-          value={resetDraft}
-          maxLength={8}
-          onChange={(event: React.ChangeEvent<HTMLInputElement>) => {
-            setResetDraft(event.target.value)
-            setResetError(null)
-          }}
-          onKeyDown={(event: React.KeyboardEvent<HTMLInputElement>) => {
-            if (event.key === "Enter" && resetDraft.length === 8 && !resetBusy) {
-              event.preventDefault()
-              void submitPasswordReset()
+        <label className="flex flex-col gap-1.5 text-xs text-faint">
+          新密码（恰好 8 位）
+          <TextInput
+            type="password"
+            value={resetDraft}
+            onChange={(event: React.ChangeEvent<HTMLInputElement>) =>
+              setResetDraft(event.target.value)
             }
-          }}
-          placeholder="恰好 8 位"
-        />
+            autoComplete="new-password"
+          />
+        </label>
         {resetError ? <p className="text-xs text-danger">{resetError}</p> : null}
       </Dialog>
     </section>

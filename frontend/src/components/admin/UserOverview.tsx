@@ -1,12 +1,9 @@
-import { useEffect, useState } from "react"
+import { useQuery } from "@tanstack/react-query"
 
 import { Button as UiButton } from "../ui/Button"
 import { EmptyState } from "../ui/Controls"
 import { BarChart, type BarChartDatum } from "../arc/bar-chart/bar-chart"
-import {
-  fetchAdminOverview,
-  type AdminOverviewPayload,
-} from "../../lib/adminApi"
+import { adminOverviewQueryOptions } from "../../lib/queries/admin"
 
 /**
  * AC-06 (admin console): the account overview.
@@ -40,26 +37,10 @@ function periodText(dates: string[]): string {
 }
 
 export function UserOverview() {
-  const [overview, setOverview] = useState<AdminOverviewPayload | null>(null)
-  const [error, setError] = useState<string | null>(null)
-  const [reloadToken, setReloadToken] = useState(0)
-
-  useEffect(() => {
-    let cancelled = false
-    setError(null)
-    fetchAdminOverview()
-      .then((payload) => {
-        if (!cancelled) setOverview(payload)
-      })
-      .catch((reason: unknown) => {
-        if (!cancelled) {
-          setError(reason instanceof Error ? reason.message : "读取账号概览失败")
-        }
-      })
-    return () => {
-      cancelled = true
-    }
-  }, [reloadToken])
+  const overviewQuery = useQuery(adminOverviewQueryOptions())
+  const overview = overviewQuery.data ?? null
+  const error =
+    overviewQuery.error instanceof Error ? overviewQuery.error.message : null
 
   if (error) {
     return (
@@ -70,7 +51,7 @@ export function UserOverview() {
             variant="ghost"
             size="sm"
             type="button"
-            onClick={() => setReloadToken((token) => token + 1)}
+            onClick={() => void overviewQuery.refetch()}
           >
             重试
           </UiButton>

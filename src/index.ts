@@ -1,5 +1,4 @@
 import "dotenv/config"
-import { dirname, join } from "node:path"
 import { createAnswerRuntime } from "./answer/runtime"
 import { startConversationGc } from "./answer/conversation_gc"
 import { SqliteConversationStore } from "./answer/conversation_store"
@@ -13,14 +12,14 @@ import {
 import {
   loadOidcConfig,
   JoseIdentityAdapter,
-  DEFAULT_CLAIM_MAPPING,
-  DEFAULT_CLOCK_SKEW_SECONDS,
   DEMO_TENANT_ID,
-  startDemoOidcIssuer,
-  type DemoOidcIssuerHandle,
 } from "./identity"
-import { LocalAuthService, SqliteLocalUserStore } from "./identity/local_users"
+import { createAuthBridge } from "./auth/bridge"
+import { createBetterAuth } from "./auth/better_auth"
+import { createAuthDb } from "./db/client"
+import { runAuthMigrations } from "./db/migrate"
 import type { LocalAuthOptions } from "./api/session"
+import type { AdminUserDirectory } from "./identity/local_users"
 import { SqliteKnowledgeBaseRepo } from "./knowledge/knowledge_base_repo"
 import { KnowledgeBaseServiceImpl } from "./knowledge/knowledge_base_service"
 import { knowledgeBaseEmbeddingProfile } from "./types/knowledge_base"
@@ -161,46 +160,35 @@ async function main() {
   // trust boundary. Remote JWKS caching, cooldown, and key rotation are
   // handled by jose internally — no manual cache warming needed.
   //
-  // Ticket 01 (IAM-01): when DEMO_OIDC=1 the local issuer takes over. It
-  // starts on loopback, mints tokens only for the administrator's special ID
-  // and the users registered into this process's database, and the adapter
-  // verifies against ITS JWKS. `loadConfig` already reports the demo as
-  // enforced access mode (the demo flag wins over ACCESS_MODE on purpose: a
-  // demo that silently fell back to single-tenant would defeat the security
-  // flow), so the enforced identity path is what the server mounts. The auth
-  // service is created here, next to the runtime, so the sign-in proxy and
-  // the issuer share ONE user registry.
-  let demoIssuer: DemoOidcIssuerHandle | undefined
+  // Ticket 01 (IAM-01): when DEMO_OIDC=1, Better Auth owns registration,
+  // login, password storage and JWT issuance. Its RS256 JWKS feed the SAME
+  // JoseIdentityAdapter the demo issuer used to feed, so the access
+  // middleware and its claims contract stay unchanged.
   let demoAuth: LocalAuthOptions | undefined
+  let betterAuthJwks: (() => Promise<unknown>) | undefined
+  let localUsers: AdminUserDirectory | undefined
   let oidcConfig = loadOidcConfig(process.env, cfg.accessMode)
   if (cfg.demoOidc) {
-    const localAuth = new LocalAuthService(
-      new SqliteLocalUserStore(answerRuntime.processRuntime.db),
-      { adminId: cfg.adminLoginId, adminPassword: cfg.adminLoginPassword },
-    )
-    demoIssuer = await startDemoOidcIssuer({
-      port: cfg.demoOidcPort,
-      audience: cfg.demoOidcAudience,
-      // Keep the signing key beside the process database: cached browser
-      // sessions survive a backend restart instead of expiring every deploy.
-      keyPath: join(dirname(cfg.sqlitePath), "local-oidc-key.json"),
-      resolveClaims: (account) => localAuth.claimsForAccount(account),
+    const authDb = createAuthDb(answerRuntime.processRuntime.db)
+    runAuthMigrations(authDb)
+    const better = createBetterAuth({
+      db: authDb,
+      baseURL: cfg.betterAuthUrl,
+      secret: cfg.betterAuthSecret,
     })
-    oidcConfig = {
-      kind: "active",
-      issuer: demoIssuer.issuer,
-      audience: cfg.demoOidcAudience,
-      jwksEndpoint: demoIssuer.jwksEndpoint,
-      claimMapping: DEFAULT_CLAIM_MAPPING,
-      clockSkewSeconds: DEFAULT_CLOCK_SKEW_SECONDS,
-    }
-    demoAuth = {
-      tokenEndpoint: demoIssuer.tokenEndpoint,
-      tokenAuth: demoIssuer.tokenAuth,
-      localAuth,
-    }
+    const bridge = await createAuthBridge({
+      db: authDb,
+      baseURL: cfg.betterAuthUrl,
+      auth: better.auth,
+      adminId: cfg.adminLoginId,
+      adminPassword: cfg.adminLoginPassword,
+    })
+    demoAuth = { localAuth: bridge }
+    betterAuthJwks = () => bridge.jwks()
+    localUsers = bridge
+    oidcConfig = better.oidcConfig
     console.log(
-      `[kefu-RAG] Local sign-in ready on ${demoIssuer.issuer} — admin ID: ${cfg.adminLoginId}, registered users can sign in with their own ID`
+      `[kefu-RAG] Local sign-in ready via Better Auth on ${cfg.betterAuthUrl} — admin ID: ${cfg.adminLoginId}, registered users can sign in with their own ID`
     )
   }
   let identityAdapter: IdentityAdapter | undefined
@@ -346,6 +334,8 @@ async function main() {
       // spread leaked the three fields as top-level options and the sign-in
       // flow never came up (the root cause recorded in TD-24-01).
       ...(demoAuth ? { demoAuth } : {}),
+      ...(betterAuthJwks ? { betterAuthJwks } : {}),
+      ...(localUsers ? { localUsers } : {}),
       // LF-05: the system logger built above is the process's only log runtime;
       // without this injection startServer would build a stdout-only logger.
       logger: logs.system,
@@ -396,7 +386,6 @@ async function main() {
     worker,
     conversationGc,
     server,
-    ...(demoIssuer ? { demoIssuer } : {}),
     runtime: {
       close: async () => {
         // T12 (spec issue #12 criterion #6): flush pending Langfuse events
