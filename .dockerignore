@@ -6,6 +6,10 @@
 !tsconfig.json
 !tsconfig.web.json
 !vite.config.ts
+!vite.config.mts
+!drizzle.config.ts
+!drizzle/
+!drizzle/**
 !src/
 !src/**
 !frontend/

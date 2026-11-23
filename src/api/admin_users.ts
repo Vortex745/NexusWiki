@@ -1,7 +1,9 @@
 import { Router, type Request, type Response } from "express"
 import type { SqliteAdminAuditStore } from "../identity/admin_audit"
-import type { LocalAuthService, AdminUserRow, SqliteLocalUserStore } from "../identity/local_users"
-import { accessContext, requireOperator } from "./operator_guard"
+import type { AdminUserDirectory, AdminUserRow } from "../identity/local_users"
+import type { AuthBridge } from "../auth/bridge"
+import { adminUsersQuerySchema, requestObjectSchema } from "./schemas/auth"
+import { requireOperator } from "./operator_guard"
 
 /**
  * AC-03/04/05 (admin console): the operator's account management surface.
@@ -18,14 +20,14 @@ import { accessContext, requireOperator } from "./operator_guard"
  * shapes stay here.
  */
 export function createAdminUsersRouter(options: {
-  localUsers: SqliteLocalUserStore
+  localUsers: AdminUserDirectory
   audit: SqliteAdminAuditStore
   /**
    * AC-05: the credential authority behind reset-password. Absent in bare
    * mounts without local sign-in — the route then answers 503, since there
    * is no credential store to reset against.
    */
-  localAuth?: LocalAuthService
+  localAuth?: AuthBridge
 }): Router {
   const router = Router()
 
@@ -50,21 +52,15 @@ export function createAdminUsersRouter(options: {
 
   router.get("/admin/users", (req: Request, res: Response) => {
     if (!requireOperator(res)) return
-    const page = parsePageInt(req.query.page, 1, Number.MAX_SAFE_INTEGER)
-    const pageSize = parsePageInt(req.query.pageSize, 20, 100)
-    if (page === null || pageSize === null) {
+    const parsed = adminUsersQuerySchema.safeParse(req.query)
+    if (!parsed.success) {
       res.status(400).json({ error: "page must be a positive integer; pageSize must be 1-100" })
       return
     }
-    const rawStatus = typeof req.query.status === "string" ? req.query.status : "all"
-    if (rawStatus !== "all" && rawStatus !== "active" && rawStatus !== "disabled") {
-      res.status(400).json({ error: "status must be all, active or disabled" })
-      return
-    }
-    const q = typeof req.query.q === "string" ? req.query.q : ""
+    const { q, status, page, pageSize } = parsed.data
     const result = options.localUsers.pageUsers({
       q,
-      status: rawStatus,
+      status,
       page,
       pageSize,
     })
@@ -108,8 +104,12 @@ export function createAdminUsersRouter(options: {
       res.status(503).json({ error: "local sign-in is not enabled" })
       return
     }
-    const body = (req.body ?? {}) as { password?: unknown }
-    const result = options.localAuth.resetPassword(String(req.params.id), body.password)
+    const parsed = requestObjectSchema.safeParse(req.body ?? {})
+    if (!parsed.success) {
+      res.status(400).json({ error: "invalid_password", message: "请输入密码" })
+      return
+    }
+    const result = options.localAuth.resetPassword(String(req.params.id), parsed.data.password)
     if (!result.ok) {
       const status = result.code === "invalid_password" ? 400 : result.code === "disabled" ? 409 : 404
       res.status(status).json({ error: result.code, message: result.message })
@@ -127,16 +127,5 @@ export function createAdminUsersRouter(options: {
   })
 
   return router
-}
-
-/**
- * Strict positive-integer query param with an inclusive ceiling, or null
- * when malformed. One parser for every paging field.
- */
-function parsePageInt(raw: unknown, fallback: number, max: number): number | null {
-  if (raw === undefined || raw === "") return fallback
-  const value = Number(raw)
-  if (!Number.isInteger(value) || value < 1 || value > max) return null
-  return value
 }
 

@@ -16,8 +16,9 @@ const API_BASE = "/api"
 const ACCESS_TOKEN_STORAGE_KEY = "nexusrag.accessToken"
 
 function readStoredAccessToken(): string | null {
+  if (typeof window === "undefined") return null
   try {
-    return (globalThis as { localStorage?: Storage }).localStorage?.getItem(ACCESS_TOKEN_STORAGE_KEY) ?? null
+    return window.localStorage.getItem(ACCESS_TOKEN_STORAGE_KEY)
   } catch {
     return null
   }
@@ -56,7 +57,7 @@ export async function apiFetch(path: string, init: RequestInit = {}): Promise<Re
   // Only a rejected TOKEN means the session is gone. A 401 on a request that
   // carried no token is simply "not signed in yet" — reporting that would make
   // the session probe below re-enter itself without end.
-  if (response.status === 401 && sentToken) onUnauthorized?.()
+  if (response.status === 401 && sentToken && sentToken === accessToken) onUnauthorized?.()
   return response
 }
 

@@ -11,7 +11,9 @@
 !/package-lock.json
 !/tsconfig.json
 !/tsconfig.web.json
-!/vite.config.ts
+!/vite.config.mts
+!/drizzle.config.ts
+!/drizzle/
 !/Dockerfile
 !/docker-compose.yml
 !/docker-compose.docreader.yml
@@ -23,7 +25,7 @@
 
 # Frontend and container inputs.
 /frontend/*
-!/frontend/index.html
+!/frontend/package.json
 !/frontend/src/
 !/frontend/public/
 /docker/*

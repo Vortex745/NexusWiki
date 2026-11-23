@@ -3,6 +3,7 @@
  *
  *   GET  /api/session        who the caller is, as the server resolved them
  *   GET  /api/auth/config    whether local sign-in / registration is available
+ *   GET  /api/auth/jwks      Better Auth's public keys for the JWT verifier
  *   POST /api/auth/register  create a local account (ID + 8-character password)
  *   POST /api/auth/login     exchange an ID + password for a token
  *
@@ -12,12 +13,9 @@
  * single-tenant mode no identity middleware runs and the deterministic local
  * context applies, which keeps the legacy path working without a token.
  *
- * The sign-in route is a thin server-side proxy to the local issuer: the
- * browser sends an ID and a password, the server verifies them against the
- * administrator credential or the registered-user table, and asks the issuer
- * for that identity's token. The issuer URL, passwords and signing key never
- * reach the browser, and neither the password nor the issued token is ever
- * logged or echoed back.
+ * Local sign-in now delegates credential storage, login and token issuance to
+ * Better Auth. The browser still sees the same ID/password contract; the
+ * Better Auth session cookie and JWT endpoints never reach it.
  */
 
 import { Router, type Request, type Response } from "express"
@@ -26,19 +24,18 @@ import {
   singleTenantAccessContext,
   type AccessContext,
 } from "../access/context"
-import type { LocalAuthService } from "../identity/local_users"
+import type { AuthBridge } from "../auth/bridge"
+import { requestObjectSchema } from "./schemas/auth"
 
 export interface LocalAuthOptions {
-  /** The demo issuer's `/token` endpoint (loopback). */
-  tokenEndpoint: string
-  /** Shared secret proving this proxy — and not another local process — is calling. */
-  tokenAuth: string
-  /** Administrator credential + registered-user store. */
-  localAuth: LocalAuthService
+  /** Better Auth-backed credential authority. */
+  localAuth: AuthBridge
 }
 
 export interface SessionRouterOptions {
   demoAuth?: LocalAuthOptions
+  /** Better Auth JWKS for the existing Jose identity verifier. */
+  betterAuthJwks?: () => Promise<unknown>
   /** True when this private workspace still has to configure embedding. */
   requiresEmbeddingSetup?: (ctx: AccessContext) => boolean
 }
@@ -79,13 +76,26 @@ export function createSessionRouter(options: SessionRouterOptions): Router {
     })
   })
 
-  router.post("/auth/register", (req: Request, res: Response) => {
+  router.get("/auth/jwks", async (_req: Request, res: Response) => {
+    if (!options.betterAuthJwks) {
+      res.status(404).json({ error: "local sign-in is not enabled" })
+      return
+    }
+    res.json(await options.betterAuthJwks())
+  })
+
+  router.post("/auth/register", async (req: Request, res: Response) => {
     if (!demoAuth) {
       res.status(404).json({ error: "local sign-in is not enabled" })
       return
     }
-    const body = (req.body ?? {}) as { id?: unknown; password?: unknown }
-    const result = demoAuth.localAuth.register(body.id, body.password)
+    const parsed = requestObjectSchema.safeParse(req.body ?? {})
+    if (!parsed.success) {
+      res.status(400).json({ error: "invalid_request", message: "请求格式无效" })
+      return
+    }
+    const body = parsed.data
+    const result = await demoAuth.localAuth.register(body.id, body.password)
     if (!result.ok) {
       const status = result.code === "id_taken" ? 409 : 400
       res.status(status).json({ error: result.code, message: result.message })
@@ -102,39 +112,25 @@ export function createSessionRouter(options: SessionRouterOptions): Router {
       res.status(404).json({ error: "local sign-in is not enabled" })
       return
     }
-    const body = (req.body ?? {}) as { id?: unknown; password?: unknown }
-    const identity = demoAuth.localAuth.authenticate(body.id, body.password)
+    const parsed = requestObjectSchema.safeParse(req.body ?? {})
+    if (!parsed.success) {
+      res.status(400).json({ error: "invalid_request", message: "请求格式无效" })
+      return
+    }
+    const body = parsed.data
+    const result = await demoAuth.localAuth.signIn(body.id, body.password, req.ip)
+    if (result.kind === "rate_limited") {
+      if (result.retryAfter !== null) res.set("Retry-After", result.retryAfter)
+      res.status(429).json({ error: "rate_limited", message: "登录尝试过于频繁，请稍后再试" })
+      return
+    }
     // One response for an unknown ID and a wrong password: the endpoint never
     // reveals which accounts exist.
-    if (!identity) {
+    if (result.kind === "invalid_credentials") {
       res.status(401).json({ error: "invalid credentials" })
       return
     }
-    try {
-      const response = await fetch(demoAuth.tokenEndpoint, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${demoAuth.tokenAuth}`,
-        },
-        body: JSON.stringify({ account: identity.idKey }),
-      })
-      if (!response.ok) {
-        res.status(502).json({ error: "identity provider rejected the request" })
-        return
-      }
-      const payload = (await response.json()) as { access_token?: unknown }
-      if (typeof payload.access_token !== "string" || payload.access_token.length === 0) {
-        res.status(502).json({ error: "identity provider returned no token" })
-        return
-      }
-      // AC-03: 最近登录 stamps a login that actually produced a token — a
-      // credential pass that died at the issuer is not a successful sign-in.
-      demoAuth.localAuth.noteSuccessfulLogin(identity.idKey)
-      res.json({ accessToken: payload.access_token })
-    } catch {
-      res.status(502).json({ error: "identity provider unavailable" })
-    }
+    res.json({ accessToken: result.accessToken })
   })
 
   return router

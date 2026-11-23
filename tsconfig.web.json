@@ -20,5 +20,5 @@
       "@core/*": ["src/frontend/*"]
     }
   },
-  "include": ["frontend/src/**/*", "src/frontend/**/*", "vite.config.ts"]
+  "include": ["frontend/src/**/*", "src/frontend/**/*", "vite.config.mts"]
 }

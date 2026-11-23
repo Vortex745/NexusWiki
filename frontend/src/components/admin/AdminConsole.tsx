@@ -1,10 +1,12 @@
 import { useEffect, useRef } from "react"
+import { useNavigate, useSearch } from "@tanstack/react-router"
 
 import { Button as UiButton } from "../ui/Button"
 import { Icon } from "../ui/Icon"
 import { Shield, X } from "../ui/icons"
 import { UserMenu } from "../arc/user-menu/user-menu"
 import { useSignedInSession, useSession } from "../../runtime/SessionContext"
+import type { AdminSearch } from "../../lib/adminSearch"
 import { UserDirectory } from "./UserDirectory"
 import { UserOverview } from "./UserOverview"
 
@@ -14,28 +16,33 @@ import { UserOverview } from "./UserOverview"
  * here directly — this is the app's home view for `session.operator`, not an
  * extra entry inside the chat.
  *
- * The chat shell stays mounted underneath the fixed overlay, so 「进入对话」
- * returns to an untouched chat (layout, scroll, theme, composer) and the
- * sidebar entry switches back. The header carries the account menu, so the
- * operator can sign out without ever visiting the chat. Every API this
+ * The chat workspace stays mounted underneath the route outlet, so
+ * 「进入对话」 returns to an untouched chat (layout, scroll, theme, composer)
+ * and the sidebar entry switches back. The header carries the account menu,
+ * so the operator can sign out without ever visiting the chat. Every API this
  * console calls is rejected server-side for anyone else.
  */
-export function AdminConsole({
-  open,
-  onClose,
-}: {
-  open: boolean
-  onClose: () => void
-}) {
+export function AdminConsole() {
   const closeRef = useRef<HTMLButtonElement>(null)
   const session = useSignedInSession()
   const { signOut } = useSession()
+  const navigate = useNavigate()
+  const search = useSearch({ from: "/_shell/admin" })
+
   // Fullscreen takeover: put focus on the way out, so keyboard users are not
   // dropped into a hidden focus order behind the overlay.
   useEffect(() => {
-    if (open) closeRef.current?.focus()
-  }, [open])
-  if (!open) return null
+    closeRef.current?.focus()
+  }, [])
+
+  const updateSearch = (next: Partial<AdminSearch>) => {
+    void navigate({
+      to: "/admin",
+      search: (previous) => ({ ...previous, ...next }),
+      replace: true,
+    })
+  }
+
   return (
     <div
       role="dialog"
@@ -62,7 +69,7 @@ export function AdminConsole({
             variant="outline"
             size="sm"
             type="button"
-            onClick={onClose}
+            onClick={() => void navigate({ to: "/chat" })}
             title="离开后台，进入对话工作区"
           >
             <Icon data-icon="inline-start" icon={X} />
@@ -73,7 +80,14 @@ export function AdminConsole({
       <div className="min-h-0 flex-1 overflow-y-auto">
         <div className="mx-auto flex w-full max-w-4xl flex-col gap-6 px-4 py-6 md:px-6">
           <UserOverview />
-          <UserDirectory />
+          <UserDirectory
+            q={search.q ?? ""}
+            status={search.status ?? "all"}
+            page={search.page ?? 1}
+            onSearchChange={(q) => updateSearch({ q: q || undefined, page: undefined })}
+            onStatusChange={(status) => updateSearch({ status, page: undefined })}
+            onPageChange={(page) => updateSearch({ page: page === 1 ? undefined : page })}
+          />
         </div>
       </div>
     </div>

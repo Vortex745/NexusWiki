@@ -180,13 +180,17 @@ export function createApp(options: {
    */
   contextCompaction?: ContextCompactionService
   /**
-   * AC-03 (admin console): the local-user registry behind the operator
-   * directory. Omitted → one is built over `db` (the same database the
-   * sign-in proxy's registry lives in).
+   * AC-03 (admin console): the account directory behind the operator
+   * surface. Omitted → the legacy SQLite store is built over `db`.
    */
-  localUsers?: SqliteLocalUserStore
+  localUsers?: import("../identity/local_users").AdminUserDirectory
   /** AC-04: the account-action audit trail; built over `db` when omitted. */
   audit?: SqliteAdminAuditStore
+  /**
+   * Better Auth JWKS for the existing Jose identity verifier. Absent in bare
+   * mounts and single-tenant deployments.
+   */
+  betterAuthJwks?: () => Promise<unknown>
   /**
    * Ticket 22 (ATT-01): temporary session attachments; omitted → routes not
    * mounted and no run can read attachment evidence.
@@ -479,6 +483,7 @@ export function createApp(options: {
     "/api",
     createSessionRouter({
       ...(options.demoAuth ? { demoAuth: options.demoAuth } : {}),
+      ...(options.betterAuthJwks ? { betterAuthJwks: options.betterAuthJwks } : {}),
       ...(options.workspaceProfiles
         ? { requiresEmbeddingSetup: (ctx) => options.workspaceProfiles!.requiresEmbeddingSetup(ctx.tenantId) }
         : {}),
@@ -646,6 +651,10 @@ export async function startServer(
   /** Ticket 01: enables the local demo sign-in when the demo issuer is running. */
   options: {
     demoAuth?: LocalAuthOptions
+    /** Better Auth JWKS for the JOSE verifier; forwarded to the session router. */
+    betterAuthJwks?: () => Promise<unknown>
+    /** Better Auth-backed operator directory; omitted → legacy SQLite store. */
+    localUsers?: import("../identity/local_users").AdminUserDirectory
     /**
      * Ticket 22 (ATT-01): the SAME session attachment service the shared
      * answer entry reads its attachment channel from — one instance, so a
@@ -838,6 +847,8 @@ export async function startServer(
     ...(ingestAccessMiddleware ? { ingestAccessMiddleware } : {}),
     ...(managementAccessMiddleware ? { managementAccessMiddleware } : {}),
     ...(options.demoAuth ? { demoAuth: options.demoAuth } : {}),
+    ...(options.betterAuthJwks ? { betterAuthJwks: options.betterAuthJwks } : {}),
+    ...(options.localUsers ? { localUsers: options.localUsers } : {}),
     sessionBinder,
     retrievalScopeResolver,
     knowledgeBaseService,

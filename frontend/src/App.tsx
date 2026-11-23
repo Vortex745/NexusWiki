@@ -1,6 +1,7 @@
-import { useCallback, useEffect, useMemo, useState } from "react"
+import { useCallback, useEffect, useMemo, useRef, useState } from "react"
+import { useNavigate } from "@tanstack/react-router"
+import { QueryClientProvider, useQueryClient } from "@tanstack/react-query"
 
-import { AdminConsole } from "./components/admin/AdminConsole"
 import { AppShell } from "./components/AppShell"
 import { Alert } from "./components/arc/alert/alert"
 import { Skeleton } from "./components/arc/skeleton/skeleton"
@@ -28,6 +29,7 @@ import {
   type SessionAttachmentPayload,
 } from "./lib/api"
 import { knowledgeStore } from "./runtime/knowledgeStore"
+import { createQueryClient } from "./lib/queryClient"
 import { useTheme } from "./lib/theme"
 import { IMPORT_POLL_MS } from "./lib/constants"
 import {
@@ -38,9 +40,10 @@ import {
 import { MemoryProvider } from "./runtime/MemoryContext"
 import { PromptComposerProvider } from "./runtime/PromptComposerContext"
 import { ConversationRuntimeProvider } from "./runtime/ConversationRuntimeProvider"
-import { SessionProvider, useSession, useSignedInSession } from "./runtime/SessionContext"
+import { SessionProvider, useSession } from "./runtime/SessionContext"
 
-export function App() {
+export function AppProviders({ children }: { children: React.ReactNode }) {
+  const [queryClient] = useState(() => createQueryClient())
   useEffect(() => {
     const root = document.documentElement
     const previous = root.getAttribute("data-motion-input")
@@ -57,10 +60,27 @@ export function App() {
     }
   }, [])
   return (
-    <SessionProvider>
-      <SessionGate />
-    </SessionProvider>
+    <QueryClientProvider client={queryClient}>
+      <SessionProvider>
+        <SessionQueryReset />
+        <SessionBoundary>{children}</SessionBoundary>
+      </SessionProvider>
+    </QueryClientProvider>
   )
+}
+
+/** Drop cached server reads when the signed-in identity changes. */
+function SessionQueryReset() {
+  const queryClient = useQueryClient()
+  const { state } = useSession()
+  const identity = state.status === "signed-in" ? state.session.subjectId : state.status
+  const previous = useRef(identity)
+  useEffect(() => {
+    if (previous.current === identity) return
+    previous.current = identity
+    queryClient.clear()
+  }, [identity, queryClient])
+  return null
 }
 
 /**
@@ -68,7 +88,7 @@ export function App() {
  * the caller is. While the session is unresolved there is no application UI,
  * and an anonymous caller only ever sees the sign-in screen.
  */
-function SessionGate() {
+function SessionBoundary({ children }: { children: React.ReactNode }) {
   const { state, signIn } = useSession()
 
   if (state.status === "loading") {
@@ -96,11 +116,7 @@ function SessionGate() {
     )
   }
 
-  return (
-    <MemoryProvider>
-      <AppRoot />
-    </MemoryProvider>
-  )
+  return <MemoryProvider>{children}</MemoryProvider>
 }
 
 /** Ticket 22 (ATT-01): a server attachment row in the composer's chip shape. */
@@ -115,19 +131,13 @@ function toChipAttachment(attachment: SessionAttachmentPayload): Attachment {
   }
 }
 
-function AppRoot() {
+export function ChatWorkspace() {
   const { isDark, toggleTheme } = useTheme()
-  const session = useSignedInSession()
+  const navigate = useNavigate()
 
   const [attachments, setAttachments] = useState<Attachment[]>([])
   const [toast, setToast] = useState<ToastMessage | null>(null)
   const [memoryOpen, setMemoryOpen] = useState(false)
-  // AC-02 (admin console), user decision 2026-10-31: signing in AS the
-  // operator lands DIRECTLY in the back-office console — a separate
-  // interface, not the chat with an extra entry. 「进入对话」 exposes the
-  // chat shell (which stays mounted underneath, so nothing is lost); the
-  // sidebar entry switches back. Everyone else lands in the chat as before.
-  const [adminOpen, setAdminOpen] = useState(() => session?.operator === true)
   const [importOpen, setImportOpen] = useState(false)
   // Ticket 08: import rows still owing an outcome — the sidebar 导入中 N badge.
   const [activeImportCount, setActiveImportCount] = useState(0)
@@ -170,7 +180,7 @@ function AppRoot() {
   const openKnowledge = useCallback(() => setKnowledgeOpen(true), [])
   const openSettings = useCallback(() => setSettingsOpen(true), [])
   const openAssistants = useCallback(() => setAssistantsOpen(true), [])
-  const openAdmin = useCallback(() => setAdminOpen(true), [])
+  const openAdmin = useCallback(() => void navigate({ to: "/admin" }), [navigate])
   const openDocument = useCallback(
     (target: DocumentViewTarget) => setDocumentView({ open: true, target }),
     [],
@@ -347,7 +357,6 @@ function AppRoot() {
               onPromote: handlePromoteAttachment,
             }}
           />
-          <AdminConsole open={adminOpen} onClose={() => setAdminOpen(false)} />
           <MemoryDialog
             open={memoryOpen}
             onClose={() => setMemoryOpen(false)}

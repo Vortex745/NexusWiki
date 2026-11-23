@@ -101,6 +101,19 @@ export interface AdminUserPage {
   total: number
 }
 
+/** The operator-facing reads shared by the legacy store and Better Auth. */
+export interface AdminUserDirectory {
+  overview(now?: Date): AdminOverview
+  pageUsers(params: {
+    q?: string
+    status?: "all" | "active" | "disabled"
+    page: number
+    pageSize: number
+  }): AdminUserPage
+  setDisabled(idKey: string, disabledAt: Date | null): AdminUserRow | null
+  rowByIdKey(idKey: string): AdminUserRow | null
+}
+
 /** AC-06: the account overview behind the operator's chart. */
 export interface AdminOverview {
   total: number
@@ -171,7 +184,7 @@ interface StoredLocalUser {
 }
 
 /** SQLite-backed registry of registered users. Synchronous by design. */
-export class SqliteLocalUserStore {
+export class SqliteLocalUserStore implements AdminUserDirectory {
   constructor(private readonly db: DB) {
     db.exec(`
       CREATE TABLE IF NOT EXISTS local_users (

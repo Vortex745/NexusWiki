@@ -39,6 +39,10 @@ export interface AppConfig {
   neo4jUser: string
   neo4jPassword: string
   sqlitePath: string
+  /** Better Auth signing secret; required only when DEMO_OIDC=1. */
+  betterAuthSecret: string
+  /** Stable issuer/audience/JWKS base for the local JWT verifier. */
+  betterAuthUrl: string
   pollIntervalMs: number
   claimedTimeoutMs: number
   markitdownCommand?: string
@@ -344,6 +348,10 @@ export function loadConfig(): AppConfig {
     neo4jUser: process.env.NEO4J_USER || "neo4j",
     neo4jPassword: process.env.NEO4J_PASSWORD || "",
     sqlitePath: process.env.SQLITE_PATH || "./data/kefu-rag.db",
+    betterAuthSecret: process.env.BETTER_AUTH_SECRET?.trim() || "",
+    betterAuthUrl:
+      process.env.BETTER_AUTH_URL?.trim().replace(/\/+$/, "") ||
+      `http://127.0.0.1:${process.env.API_PORT || "3001"}`,
     pollIntervalMs: Number(process.env.POLL_INTERVAL_MS) || 2000,
     claimedTimeoutMs: Number(process.env.CLAIMED_TIMEOUT_MS) || 600000,
     markitdownCommand: process.env.MARKITDOWN_COMMAND || "markitdown",
