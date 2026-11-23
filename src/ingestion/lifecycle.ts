@@ -299,7 +299,7 @@ function readFailureRecord(document: Document | null): IngestionFailureRecord | 
 }
 
 class TrackedStageExecution implements StageExecution {
-  private nextStageIndex = 0
+  private nextStage: IngestionStageName | "complete" = INGESTION_STAGE_NAMES[0]
 
   constructor(
     private spanRepo: SpanRepo,
@@ -310,6 +310,8 @@ class TrackedStageExecution implements StageExecution {
     // cannot persist stage results.
     private taskRepo: TaskRepo,
     private taskId: number,
+    private docRepo: DocumentRepo,
+    private sourceId: string,
     readonly executionId: string,
     readonly signal: AbortSignal
   ) {}
@@ -320,10 +322,10 @@ class TrackedStageExecution implements StageExecution {
     operation: () => Promise<T>,
     summarize: (result: T) => Record<string, unknown>
   ): Promise<T> {
-    const expectedStage = INGESTION_STAGE_NAMES[this.nextStageIndex]
+    const expectedStage = this.nextStage
     if (name !== expectedStage) {
       throw new Error(
-        expectedStage
+        expectedStage !== "complete"
           ? `Expected ingestion stage ${expectedStage}, received ${name}`
           : `Ingestion stage ${name} was already completed`
       )
@@ -334,14 +336,7 @@ class TrackedStageExecution implements StageExecution {
       throw new Error(`Unknown ingestion stage: ${name}`)
     }
 
-    // Ticket 25: fence before any span or downstream write — cancellation
-    // first (cooperative abort), then execution identity (stale run).
-    this.signal.throwIfAborted()
-    if (!this.taskRepo.owns(this.taskId, this.executionId)) {
-      throw new Error(
-        `Ingestion execution ${this.executionId} no longer owns task ${this.taskId}`
-      )
-    }
+    this.assertRunnable()
 
     const startedAt = this.now()
     if (!this.spanRepo.markRunning(spanId, input, startedAt.toISOString())) {
@@ -349,6 +344,7 @@ class TrackedStageExecution implements StageExecution {
     }
     try {
       const result = await operation()
+      this.assertRunnable()
       const finishedAt = this.now()
       if (
         !this.spanRepo.markDone(
@@ -360,7 +356,7 @@ class TrackedStageExecution implements StageExecution {
       ) {
         throw new Error(`Ingestion stage ${name} could not be completed`)
       }
-      this.nextStageIndex += 1
+      this.nextStage = INGESTION_STAGE_NAMES[INGESTION_STAGE_NAMES.indexOf(name) + 1] ?? "complete"
       return result
     } catch (error) {
       const finishedAt = this.now()
@@ -376,10 +372,23 @@ class TrackedStageExecution implements StageExecution {
   }
 
   assertComplete(): void {
-    if (this.nextStageIndex !== INGESTION_STAGE_NAMES.length) {
+    this.assertRunnable()
+    if (this.nextStage !== "complete") {
       throw new Error(
-        `Ingestion execution stopped before ${INGESTION_STAGE_NAMES[this.nextStageIndex]}`
+        `Ingestion execution stopped before ${this.nextStage}`
       )
+    }
+  }
+
+  assertRunnable(): void {
+    this.signal.throwIfAborted()
+    if (!this.taskRepo.owns(this.taskId, this.executionId)) {
+      throw new Error(
+        `Ingestion execution ${this.executionId} no longer owns task ${this.taskId}`
+      )
+    }
+    if (this.docRepo.getSourceLifecycleState(this.sourceId) === "retired") {
+      throw new Error("Ingestion source is retired")
     }
   }
 }
@@ -964,14 +973,17 @@ export class IngestionLifecycle {
         this.now,
         this.taskRepo,
         task.id,
+        this.docRepo,
+        document.sourceId,
         task.executionId ?? "unowned",
         abortController.signal
       )
+      execution.assertRunnable()
       // The stage runner's provider calls must land in the task scope.
       const runStages = () => this.stageRunner.run(document, execution)
       const summary = taskScope ? await taskScope.runInContext(runStages) : await runStages()
-      execution.assertComplete()
       this.db.transaction(() => {
+        execution.assertComplete()
         const finishedAt = this.now()
         if (
           !this.spanRepo.markDone(
@@ -988,9 +1000,7 @@ export class IngestionLifecycle {
         }
         this.docRepo.updateStatus(task.docId, "completed")
         recordPolicyCompletion(this.docRepo, task.docId, finishedAt)
-        // A technically complete candidate activates directly. Version order
-        // remains the only protection: an older candidate cannot displace a
-        // newer active version.
+        // Version order keeps an older candidate from displacing a newer one.
         this.docRepo.activate(task.docId)
         this.docRepo.clearActivationBlock(task.docId)
         if (this.docRepo.getActive(document.sourceId)?.id === document.id) {
@@ -1027,8 +1037,12 @@ export class IngestionLifecycle {
       // retry. Capability-missing and permanent-input errors terminate
       // immediately; only evidence-backed transient errors enter the bounded
       // 2s/4s/8s budget; cancellation keeps its own semantics.
-      const classification = classifyIngestionError(error)
-      const message = error instanceof Error ? error.message : String(error)
+      const retired = this.docRepo.getSourceLifecycleState(document.sourceId) === "retired"
+      const classification = retired
+        ? { category: "cancelled" as const, reasonCode: "source_retired", retryable: false }
+        : classifyIngestionError(error)
+      const message = retired ? "Ingestion source is retired"
+        : error instanceof Error ? error.message : String(error)
       const errorStack = error instanceof Error ? error.stack ?? null : null
       const finishedAt = this.now()
       const retryDelay = classification.retryable ? RETRY_DELAYS_MS[task.failCount] : undefined

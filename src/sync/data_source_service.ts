@@ -451,8 +451,13 @@ export class SyncDataSourceService {
   async runOnce(
     tenantId: string,
     id: string,
-    runOptions: { signal?: AbortSignal; trace?: TaskTraceContext } = {}
+    runOptions: {
+      signal?: AbortSignal
+      trace?: TaskTraceContext
+      assertCurrentClaim?: () => void
+    } = {}
   ): Promise<SyncRunReport> {
+    runOptions.assertCurrentClaim?.()
     const source = this.get(tenantId, id)
     if (source.state !== "active") {
       throw new InvalidSyncSourceError("a paused data source cannot be synced")
@@ -475,6 +480,7 @@ export class SyncDataSourceService {
     const submitPage = async (pageUrl: URL): Promise<void> => {
       try {
         const fetched = await fetchSingleUrl(pageUrl, fetchOptions)
+        runOptions.assertCurrentClaim?.()
         const mimeType = fetched.mimeType.toLowerCase()
         const raw = fetched.buffer.toString("utf8")
         const isHtml = mimeType.includes("html")
@@ -518,6 +524,7 @@ export class SyncDataSourceService {
         pageOutcomeByUri.set(pageUrl.toString(), pages[pages.length - 1])
         pageOutcomeByUri.set(fetched.url.toString(), pages[pages.length - 1])
       } catch (error) {
+        runOptions.assertCurrentClaim?.()
         if (runOptions.signal?.aborted) {
           throw new Error("sync cancelled")
         }
@@ -539,11 +546,13 @@ export class SyncDataSourceService {
     try {
       if (source.kind === "url") {
         await submitPage(new URL(source.uri))
+        runOptions.assertCurrentClaim?.()
       } else {
         const sitemap = await fetchSitemapUrls(new URL(source.uri), {
           ...fetchOptions,
           maxPages,
         })
+        runOptions.assertCurrentClaim?.()
         // Honest truncation: the listing is capped only when the sitemap
         // parsed MORE than the window (length === maxPages alone is not
         // truncation).
@@ -556,6 +565,7 @@ export class SyncDataSourceService {
         }
         for (const page of sitemap.urls) {
           await submitPage(page.url)
+          runOptions.assertCurrentClaim?.()
         }
         // Ticket 41 (SYNC-02): the sitemap read SUCCEEDED — this is the only
         // moment missing pages are observable. Pages seen before but absent
@@ -565,6 +575,7 @@ export class SyncDataSourceService {
         // NOT a complete listing — folding it into the ledger would count
         // pages beyond the window as missing (review B-1), so it is skipped.
         if (!truncated) {
+          runOptions.assertCurrentClaim?.()
           missing = this.recordPageObservations(
             source,
             sitemap.urls.map((p) => p.url.toString()),
@@ -573,6 +584,7 @@ export class SyncDataSourceService {
         }
       }
     } finally {
+      runOptions.assertCurrentClaim?.()
       this.recordSyncOutcome(source.id, summarizePages(pages, missing))
     }
 

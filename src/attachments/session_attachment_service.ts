@@ -403,15 +403,15 @@ export class SessionAttachmentService implements AttachmentSearchOperations {
   ): Promise<void> {
     try {
       const content = await extract()
-      this.store.setContent(id, sessionId, tenantId, subjectId, content, this.now().toISOString())
       const chunks = await chunkText(id, name, content)
-      this.store.saveChunks(id, sessionId, tenantId, chunks)
-      this.store.markStatus(id, sessionId, tenantId, subjectId, "ready", {
+      this.store.completeParsing(id, sessionId, tenantId, subjectId, {
+        content,
+        chunks,
         now: this.now().toISOString(),
       })
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
-      this.store.markStatus(id, sessionId, tenantId, subjectId, "failed", {
+      this.store.markFailed(id, sessionId, tenantId, subjectId, {
         // Bounded and single-line: a parse failure is reported, not dumped.
         error: message.replace(/\s+/g, " ").slice(0, 300),
         now: this.now().toISOString(),

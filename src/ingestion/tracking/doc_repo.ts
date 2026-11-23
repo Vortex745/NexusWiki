@@ -515,6 +515,7 @@ export class DocumentRepo {
        SET active_doc_id = ?, updated_at = ?
        WHERE source_id = (SELECT source_id FROM documents WHERE doc_id = ?)
          AND canonical_source_id IS NULL
+         AND lifecycle_state <> 'retired'
          AND (
            active_doc_id IS NULL OR
            (SELECT activation_order FROM documents WHERE doc_id = active_doc_id) <

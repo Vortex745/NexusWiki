@@ -38,6 +38,7 @@ import {
   type SyncPageOutcome,
   type SyncPageFailureKind,
   type SyncMissingPage,
+  type SyncRunReport,
 } from "./data_source_service"
 
 export type SyncRunStatus = "pending" | "running" | "completed" | "failed"
@@ -53,6 +54,22 @@ export interface SyncRun {
   error: string | null
   createdAt: string
   updatedAt: string
+}
+
+interface SyncRunClaim {
+  readonly runId: string
+  readonly claimedAt: string
+}
+
+type SyncRunOutcome =
+  | { status: "completed"; summary: string }
+  | { status: "failed"; error: string }
+
+class SyncRunClaimRevokedError extends Error {
+  constructor() {
+    super("sync run claim was revoked")
+    this.name = "SyncRunClaimRevokedError"
+  }
 }
 
 export class SyncRunConflictError extends Error {
@@ -239,7 +256,7 @@ export class SyncRunService {
     const now = this.now().toISOString()
     const result = this.options.db
       .prepare(
-        `UPDATE sync_runs SET status = 'pending', lease_expires_at = NULL, updated_at = ?
+        `UPDATE sync_runs SET status = 'pending', lease_expires_at = NULL, updated_at = MAX(updated_at, ?)
          WHERE status = 'running'`
       )
       .run(now)
@@ -251,7 +268,7 @@ export class SyncRunService {
     const now = this.now().toISOString()
     const result = this.options.db
       .prepare(
-        `UPDATE sync_runs SET status = 'pending', lease_expires_at = NULL, updated_at = ?
+        `UPDATE sync_runs SET status = 'pending', lease_expires_at = NULL, updated_at = MAX(updated_at, ?)
          WHERE status = 'running' AND (lease_expires_at IS NULL OR lease_expires_at <= ?)`
       )
       .run(now, now)
@@ -291,9 +308,9 @@ export class SyncRunService {
   }
 
   /**
-   * Transactional claim of the oldest pending run. `changes === 1` is the
-   * whole claim — two concurrent claimers can never both win because the
-   * UPDATE only matches the row while it is still 'pending'.
+   * Claim the oldest pending run transactionally. The updated_at stamp
+   * advances even when the clock does not, so a recovered run has a new
+   * owner. Only a pending row can transition to running.
    */
   claimNext(): SyncRun | null {
     const now = this.now()
@@ -307,13 +324,16 @@ export class SyncRunService {
         )
         .get() as SyncRunRow | undefined
       if (!row) return null
+      const claimedAt = new Date(
+        Math.max(now.getTime(), Date.parse(row.updated_at) + 1)
+      ).toISOString()
       const result = this.options.db
         .prepare(
           `UPDATE sync_runs
            SET status = 'running', lease_expires_at = ?, updated_at = ?
            WHERE id = ? AND status = 'pending'`
         )
-        .run(leaseExpires, now.toISOString(), row.id)
+        .run(leaseExpires, claimedAt, row.id)
       if (result.changes !== 1) return null
       const claimed = this.options.db
         .prepare(`SELECT * FROM sync_runs WHERE id = ?`)
@@ -333,6 +353,21 @@ export class SyncRunService {
    * and invalid URL from generic failures without re-reading pages.
    */
   async executeClaimed(run: SyncRun): Promise<SyncRun> {
+    const claim: SyncRunClaim = { runId: run.id, claimedAt: run.updatedAt }
+    const currentClaim = this.options.db.prepare(
+      `SELECT id FROM sync_runs WHERE id = ? AND status = 'running' AND updated_at = ?`
+    )
+    const assertCurrentClaim = (): void => {
+      if (!currentClaim.get(claim.runId, claim.claimedAt)) {
+        throw new SyncRunClaimRevokedError()
+      }
+    }
+    const currentRun = (): SyncRun => {
+      const row = this.options.db
+        .prepare(`SELECT * FROM sync_runs WHERE id = ?`)
+        .get(claim.runId) as SyncRunRow
+      return rowToRun(row)
+    }
     // LO-15: the run row's own handoff. A manual trigger continues the HTTP
     // trace; a scheduled run has none and opens a root. Reads only the
     // durable record — never a global context left by the submitter.
@@ -355,31 +390,37 @@ export class SyncRunService {
       },
       trace,
     )
-    const finalize = (status: SyncRunStatus, fields: { summary?: string; error?: string }) => {
-      this.options.db
-        .prepare(
-          `UPDATE sync_runs SET status = ?, summary = ?, error = ?, updated_at = ?
-           WHERE id = ?`
-        )
-        .run(
-          status,
-          fields.summary ?? null,
-          fields.error ?? null,
-          this.now().toISOString(),
-          run.id
-        )
-      const row = this.options.db
-        .prepare(`SELECT * FROM sync_runs WHERE id = ?`)
-        .get(run.id) as SyncRunRow
-      return rowToRun(row)
+    const finalize = (outcome: SyncRunOutcome, report?: SyncRunReport): SyncRun => {
+      return this.options.db.transaction(() => {
+        const result = this.options.db
+          .prepare(
+            `UPDATE sync_runs SET status = ?, summary = ?, error = ?, updated_at = ?
+             WHERE id = ? AND status = 'running' AND updated_at = ?`
+          )
+          .run(
+            outcome.status,
+            outcome.status === "completed" ? outcome.summary : null,
+            outcome.status === "failed" ? outcome.error : null,
+            this.now().toISOString(),
+            claim.runId,
+            claim.claimedAt
+          )
+        if (result.changes === 1 && report) {
+          this.persistRunPages(claim.runId, report.pages, report.missing ?? [])
+        }
+        return currentRun()
+      })()
     }
     const execute = async (): Promise<SyncRun> => {
       try {
+        assertCurrentClaim()
         const report = await this.dataSourceService().runOnce(run.tenantId, run.sourceId, {
+          assertCurrentClaim,
           ...(scope ? { trace: taskTraceFromScope(scope) } : {}),
         })
-        await this.drainLifecycle()
-        this.persistRunPages(run.id, report.pages, report.missing ?? [])
+        assertCurrentClaim()
+        await this.drainLifecycle(assertCurrentClaim)
+        assertCurrentClaim()
         const failedPages = report.pages.filter((page) => page.status === "failed")
         const summary = summarizePages(report.pages, report.missing)
         if (failedPages.length > 0) {
@@ -389,12 +430,14 @@ export class SyncRunService {
             .join("; ")
             .slice(0, 300)
           return report.pages.every((page) => page.status === "failed")
-            ? finalize("failed", { error: `${summary} — ${detail}` })
-            : finalize("completed", { summary: `${summary} — ${detail}` })
+            ? finalize({ status: "failed", error: `${summary} — ${detail}` }, report)
+            : finalize({ status: "completed", summary: `${summary} — ${detail}` }, report)
         }
-        return finalize("completed", { summary })
+        return finalize({ status: "completed", summary }, report)
       } catch (error) {
-        return finalize("failed", {
+        if (error instanceof SyncRunClaimRevokedError) return currentRun()
+        return finalize({
+          status: "failed",
           error: (error instanceof Error ? error.message : String(error)).slice(0, 300),
         })
       }
@@ -437,32 +480,30 @@ export class SyncRunService {
          run_id, uri, status, failure_kind, detail, document_id, version, created_at
        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
     )
-    this.options.db.transaction(() => {
-      for (const page of pages) {
-        insert.run(
-          runId,
-          page.uri,
-          page.status,
-          page.failureKind ?? null,
-          page.detail ?? null,
-          page.documentId ?? null,
-          page.version ?? null,
-          createdAt
-        )
-      }
-      for (const miss of missing) {
-        insert.run(
-          runId,
-          miss.uri,
-          "missing",
-          null,
-          `missing from sitemap (consecutive miss ${miss.missCount}${miss.pendingRetirement ? ", pending retirement" : ""})`,
-          null,
-          null,
-          createdAt
-        )
-      }
-    })()
+    for (const page of pages) {
+      insert.run(
+        runId,
+        page.uri,
+        page.status,
+        page.failureKind ?? null,
+        page.detail ?? null,
+        page.documentId ?? null,
+        page.version ?? null,
+        createdAt
+      )
+    }
+    for (const miss of missing) {
+      insert.run(
+        runId,
+        miss.uri,
+        "missing",
+        null,
+        `missing from sitemap (consecutive miss ${miss.missCount}${miss.pendingRetirement ? ", pending retirement" : ""})`,
+        null,
+        null,
+        createdAt
+      )
+    }
   }
 
   /** Ticket 41 (SYNC-02): one run of this source, tenant-scoped. */
@@ -487,9 +528,12 @@ export class SyncRunService {
   }
 
   /** The worker path: drain ingested sync output to ACTIVE. */
-  private async drainLifecycle(): Promise<void> {
-    while (await this.options.lifecycle.runNext()) {
-      // keep draining
+  private async drainLifecycle(assertCurrentClaim: () => void): Promise<void> {
+    for (;;) {
+      assertCurrentClaim()
+      const executed = await this.options.lifecycle.runNext()
+      assertCurrentClaim()
+      if (!executed) return
     }
   }
 
@@ -510,16 +554,25 @@ export class SyncRunService {
     const leaseExpires = new Date(
       now.getTime() + (this.options.leaseMs ?? SYNC_RUN_LEASE_MS)
     ).toISOString()
-    const result = this.options.db
-      .prepare(
-        `UPDATE sync_runs
-         SET status = 'running', lease_expires_at = ?, updated_at = ?
-         WHERE id = ? AND status = 'pending'`
-      )
-      .run(leaseExpires, now.toISOString(), id)
-    if (result.changes !== 1) return null
-    const row = this.options.db.prepare(`SELECT * FROM sync_runs WHERE id = ?`).get(id) as SyncRunRow
-    return rowToRun(row)
+    return this.options.db.transaction((): SyncRun | null => {
+      const row = this.options.db
+        .prepare(`SELECT * FROM sync_runs WHERE id = ? AND status = 'pending'`)
+        .get(id) as SyncRunRow | undefined
+      if (!row) return null
+      const claimedAt = new Date(
+        Math.max(now.getTime(), Date.parse(row.updated_at) + 1)
+      ).toISOString()
+      const result = this.options.db
+        .prepare(
+          `UPDATE sync_runs
+           SET status = 'running', lease_expires_at = ?, updated_at = ?
+           WHERE id = ? AND status = 'pending'`
+        )
+        .run(leaseExpires, claimedAt, id)
+      if (result.changes !== 1) return null
+      const claimed = this.options.db.prepare(`SELECT * FROM sync_runs WHERE id = ?`).get(id) as SyncRunRow
+      return rowToRun(claimed)
+    })()
   }
 
   /**
